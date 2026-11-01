@@ -2,9 +2,8 @@
 //
 // The slave GDC's SCROLL parameter block, its START/STOP display latch, and the byte
 // address of the raster line being scanned (gfx_line_addr) that pc9821_gvram_scan's
-// line fetch consumes. It is the part of the old pc9821_gdc_text that the graphics
-// scanout asks about; the raster and the text render are pc9821_crtc's now, and the
-// glyph path is pc9821_cg's.
+// line fetch consumes: the part of the GDC that the graphics scanout asks about. The
+// raster and the text render are pc9821_crtc's, and the glyph path is pc9821_cg's.
 //
 // One clock: clk_sys gated by pixel_ce, the same enable the raster counts on. There is
 // no second video clock.
@@ -39,6 +38,11 @@ module pc9821_gdc2 (
     // The PEGC 256-colour select (pc9821_crtc's mode2_256col): the packed display walks
     // its partitions as NP2kai's makegrphex does (see the walker below).
     input wire        pegc_256,
+    // The GDC clock is 5 MHz: BOTH FF2 clock bits set (0x6A dat 0x83 and 0x85, pc9821_crtc's
+    // gdc_clock == 2'b11). NP2kai's packed walk steps PITCH words there and 2 x PITCH at
+    // 2.5 MHz (vram/makegrex.c:287-291 `if (!(gdc.clock & 0x80)) mg.pitch <<= 1;`; its 0x80
+    // flag follows `gdc.clock == 0x03` at the frame, pccore.c:1550-1551).
+    input wire        gdc_5m,
     input wire        stat_blank,    // ~de_ff[1]: status bit 6
     input wire        stat_vsync,    // vs_sync_ff[1]: status bit 5
 
@@ -155,8 +159,7 @@ module pc9821_gdc2 (
   // CSRFORM block (para[9..11]) is deliberately NOT kept: nothing reads it back,
   // only byte 0's low five bits have a consumer (the line repeat above), and
   // 0xC0 LPEN does NOT answer it - LPEN is para[GDC_LPEN..2] = para[29..31]
-  // (io/gdc_cmd.h:34,38: GDC_CSRFORM = 9, GDC_LPEN = 29 - the old "share slots
-  // 29-31" claim was false), slots no command writes (no gdc_cmd.tbl row stores
+  // (io/gdc_cmd.h:34,38: GDC_CSRFORM = 9, GDC_LPEN = 29), slots no command writes (no gdc_cmd.tbl row stores
   // to pos 29) which gdc_reset zero-fills (io/gdc.c:1160): 00 00 00.
   reg [7:0] gdc2_csrw[0:2];
   // The armed parameter capture (a command arms one block; a new command discards it,
@@ -165,9 +168,14 @@ module pc9821_gdc2 (
   // (0x4A) two, and the WRITE family's data bytes land in GDC_CODE - NP2kai's
   // `item->ptr = GDC_CODE; item->rcv = 2/1/0` in the `(data & 0x60) == 0x20` arm
   // (io/gdc.c gdc_work).
+  // RCV_PITCH is PITCH (0x47): one byte (io/gdc_cmd.tbl row 0x47, pos GDC_PITCH).
   localparam [2:0] RCV_NONE = 3'd0, RCV_CSRW = 3'd1, RCV_CSRFORM = 3'd2,
-                   RCV_VECTW = 3'd3, RCV_CODE = 3'd4, RCV_MASK = 3'd5;
+                   RCV_VECTW = 3'd3, RCV_CODE = 3'd4, RCV_MASK = 3'd5,
+                   RCV_ZOOM = 3'd6, RCV_PITCH = 3'd7;
   reg [3:0] gdc2_recv_left;  // parameter bytes the armed block still owes (0..11)
+  // The PITCH command's byte (gdc.s.para[GDC_PITCH]); its reset value is NP2kai
+  // gdc_biosreset's `gdc.s.para[GDC_PITCH] = 40` (io/gdc.c:1107). Both display walks read it.
+  reg [7:0] gdc2_pitch;
   reg [2:0] gdc2_recv_tgt;   // which block
   reg [3:0] gdc2_recv_ptr;
   // The slave's parameter read-back queue (gdc.s.snd/para): loaded by gdc_cmd.tbl's
@@ -194,11 +202,9 @@ module pc9821_gdc2 (
   reg [7:0] gdc2_mask[0:1];  // MASK's two parameter bytes
   // The WRITE trigger below (`draw_fire_w`) is combinational and consumed in this
   // module's one sequential block alone, so the one-shot's set and clear cannot collide
-  // by source order (the single-cycle event discipline R1/R2). `draw_drops` counts the
-  // jobs dropped for want of a queue: a WRITE completing while a draw is still walking
-  // snapshots its job into the engine's pending slot, and a THIRD in flight is the
-  // command FIFO this slice does not model (the conformance capture's FIFO_TURN/STATE rows).
-  reg [3:0]  draw_drops;   // bench-visible telemetry, not guest-visible
+  // by source order (the single-cycle event discipline R1/R2). A trigger only ever finds
+  // the engine empty: while a job is queued or walking the parser is held and later bytes
+  // wait in the command FIFO (cf_hold_w below), so no job is dropped and none overtakes.
 
   // ---- The WRITE engine's job (the GDC2 WRITE slice) ----
   // The job is SNAPSHOTTED at the trigger into `pend` (the parse's registers are free
@@ -208,14 +214,16 @@ module pc9821_gdc2 (
   // VRAM_G} (io/gdc_sub.c), so in the plane-lane order the GVRAM uses (0 = B at
   // 0xA8000, 1 = R, 2 = G, 3 = E) the map is GDC plane n -> lane n-1 (mod 4).
   localparam [2:0] D_IDLE = 3'd0, D_RD = 3'd1, D_RDW = 3'd2,
-                   D_WR = 3'd3, D_NEXT = 3'd4;
+                   D_WR = 3'd3, D_NEXT = 3'd4,
+                   D_FSTEP = 3'd5, D_FADV = 3'd6;   // the figure engine's step and advance
   reg [2:0]  d_state;
   reg [15:0] d_left;      // units still to paint AFTER the current one: VECTW[1..2], i.e. NP2kai's leng - 1
                           // (leng is 1..65536; counting it down to 0 instead of 1 saves the +1 and a bit)
-  reg [13:0] d_waddr;     // the word in the plane: CSRW's low 14 bits
+                          // A FIGURE counts its steps here too (see the figure engine below).
+  reg [15:0] d_waddr;     // CSRW's low 16 bits: {plane, word}. A WRITE keeps the plane; a figure carries into it
   reg  [1:0] d_rop;       // the command byte's low two bits
-  reg  [2:0] d_ope;       // VECTW byte 0's low three bits: the direction (vectdir[])
-  reg [15:0] d_color;     // INTERNAL-domain write pattern
+  reg  [2:0] d_ope;       // VECTW byte 0's low three bits: the direction (vectdir[]); a figure's turning direction
+  reg [15:0] d_color;     // INTERNAL-domain write pattern; a figure's rotating line pattern
   reg [15:0] d_mask;      // INTERNAL-domain write mask (the dot positions painted)
   reg        d_route_egc, d_route_grcg;   // LATCHED at the trigger (gdcpset_prepare)
   // The queued job, byte-exact snapshots of the parse's registers at the trigger -
@@ -229,6 +237,68 @@ module pc9821_gdc2 (
   reg  [7:0] pend_vect1, pend_vect2;
   reg        pend_egc, pend_grcg, pend_page;
   reg        pend_valid;
+
+  // ---- The figure engine (FIGS/FIGD/GCHRD: dot, line, arc, rectangle, character) ----
+  // The oracle is the Xe10's own conformance capture (docs/probes/gdc-conformance/
+  // xe10-2.5MHz): GDCDRAW's dot, 288 canonical and 12 raw-DDA lines and the rectangles,
+  // GDCGCHR's 512 one-hot characters, area fills, zoom, slant and PRAM rows, GDCROP's
+  // FIGD ROP/pattern rows. The step rules below reproduce every one of those rows (pixels
+  // AND the cursor the CURD read-back reports); they are MAME upd7220.cpp's draw_line,
+  // draw_rectangle, draw_char and next_pixel, which the capture confirms. NP2kai's
+  // gdcsub_vectl divides (d1 * i) / dc and ignores D and D2, which the machine REFUTES:
+  // GDCDRAW RAW_DDA_00 and RAW_DDA_01 differ only in D (-7 / -1) and the Xe10 draws
+  // different pixels. Where the capture is silent the order is NP2kai (one dot for a
+  // plain FIGD - gdcsub_vectp; four rectangle sides whatever DC - gdcsub_vectr; the
+  // pattern advancing once per plotted dot - gdcpset; the VECTW reset after the draw -
+  // gdc_vectreset) and then the uPD7220 datasheet's parameter set (the arc, below).
+  //
+  // The engine walks ONE STEP per visit, the WRITE engine's own visit protocol, and paces
+  // each step to the device: a step takes FIG_PACE + 1 dot clocks of pixel_ce, which follows
+  // the raster's dot clock and so the video mode, not the GDC clock: 14 dot clocks are 0.665 us
+  // at the 24 kHz 21.0526 MHz dot and 0.556 us at the 31 kHz 25.168 MHz one. The Xe10 draws a
+  // dot per 1.40 us at its 2.5 MHz GDC clock
+  // (GDCTIME LINE_N1025/LINE_N2049: (7069000 - 3542000) / 1024 = 3444 milli-ticks of the
+  // 2.4576 MHz PIT per dot) and NP2kai charges 0.72 us per dot (gdc_sub.c
+  // calc_gdcslavewait: `clk *= 27648; ... clk /= 15625;` base clocks), so the engine is at
+  // least as fast as either - the 5 MHz chip included - and its busy time is a dot-clock
+  // count, never a clk_sys count.
+  localparam [3:0] FIG_PACE = 4'd13;
+  localparam [2:0] T_DOT = 3'd0, T_LINE = 3'd1, T_ARC = 3'd2, T_RECT = 3'd3, T_CHAR = 3'd4;
+  reg        fig_pend;    // FIGD/GCHRD parsed, the engine not yet started
+  reg        fig_gc;      // ...and it was GCHRD (0x68)
+  reg        d_fig;       // the engine is drawing a figure
+  reg  [2:0] f_type;
+  reg        f_slant;     // FIGS P1 bit 7 (SL): the slanted character's turns
+  reg [13:0] f_d;         // line D / arc decision / character rows still to draw
+  reg [13:0] f_d1;        // line and arc D1 / rectangle side A
+  reg [13:0] f_d2;        // line and arc D2 / rectangle side B / character width
+  reg [13:0] f_dm;        // arc: steps still to skip before the first plotted dot (DM)
+  reg  [1:0] f_side;      // rectangle: the side being drawn
+  reg        f_sstart;    // rectangle: this step is a side's first (the corner turn)
+  reg  [3:0] f_zd, f_zdc; // character: the dot and pass repeats (ZOOM)
+  reg  [2:0] f_row;       // character: the PRAM row (i & 7)
+  reg        f_par;       // character: the pass parity (odd passes walk back)
+  reg  [3:0] f_pace;
+  // GCHRD's zoom: ZOOM (0x46) takes one parameter byte whose low nibble is the
+  // graphics-character magnification - 1 (NP2kai gdc_cmd.tbl row 0x46 `{GDC_ZOOM, 1, 0, 1}`
+  // and gdc_sub.c `multiple = (gdc.s.para[GDC_ZOOM] & 15) + 1`; GDCGCHR ZOOM_01..ZOOM_16).
+  reg  [3:0] gdc2_zoom;
+
+  // ---- The command FIFO (the uPD7220's 16-entry FIFO) ----
+  // While a draw (a WRITE or a figure) is queued or running, the chip keeps taking command
+  // and parameter bytes into its FIFO and executes them after the draw: the Xe10 reads the
+  // status as 0x0C all through a draw (GDCFIFO DRAW_BURST - FIFO EMPTY and DRAWING both
+  // set), so a guest does not wait before writing its next CSRW/FIGS/FIGD/WDAT. The bytes
+  // written while the engine holds the parser are queued here IN ORDER and replayed through
+  // the same parser afterwards, one every other clk_sys, so each command sees the cursor
+  // the draw before it left (NP2kai gdc_work runs each WRITE to completion before it parses
+  // the next byte, io/gdc.c:347-349 `if ((!(item->rcv)) && (id == GDCWORK_SLAVE) &&`). With
+  // no draw in flight nothing is queued and every byte reaches the parser in its own cycle.
+  (* ramstyle = "M10K" *) reg [8:0] cf_mem [0:15];   // {0xA2 command, byte}
+  reg  [8:0] cf_q;        // the popped entry (the memory's read register: no reset)
+  reg  [3:0] cf_wp, cf_rp;
+  reg  [4:0] cf_cnt;
+  reg        cf_pop_v;    // cf_q holds a popped entry the parser takes this cycle
 
   // The GDC's bit order is the uPD7220's: bit 0 of a word is the LEFTMOST pixel, so a
   // GDC word read by the CPU arrives with each byte's bits reversed. Machine-pinned:
@@ -272,7 +342,31 @@ module pc9821_gdc2 (
   // (NP2kai gdc_work: `(!(item->rcv)) && (((item->cmd) & 0xe4) == 0x20)` after a data
   // byte, so the 8'h08-width and 0x24-bit commands never fire). Combinational, consumed
   // in this block alone - the one-shot's set and clear are the same assignment.
-  wire draw_fire_w = io_wr && (io_addr == 8'hA0) && !gdc2_sync_pend &&
+  // The parser's byte: the bus write itself (bypass), or the FIFO's popped entry. The two
+  // never coincide: a bypass needs the FIFO empty with no pop in flight (cf_busy_w).
+  // The hold: a figure armed or drawing, or a WRITE job queued or walking. A command that
+  // does not depend on the draw (SCROLL, PITCH, START) waits behind it as on the chip,
+  // whose FIFO executes in order; NP2kai runs such a command at once but holds DRAWING
+  // for its own 0.72 us per unit (io/gdc_sub.c calc_gdcslavewait `clk *= 27648;`), and the
+  // core's clk_sys-rate walk ends well inside either figure.
+  wire cf_hold_w = fig_pend || d_fig || pend_valid || (d_state != D_IDLE);
+  wire cf_busy_w = (cf_cnt != 5'd0) || cf_pop_v;
+  wire wr_gdc_w  = io_wr && ((io_addr == 8'hA0) || (io_addr == 8'hA2));
+  wire byp_w     = wr_gdc_w && !cf_hold_w && !cf_busy_w;
+  // A byte arriving while the FIFO is full is lost, as on the chip (status bit 1 says FULL).
+  wire cf_push_w = wr_gdc_w && !byp_w && (cf_cnt != 5'd16);
+  // One pop every other cycle, never while held: the cycle after a pop the parser takes
+  // the byte, and a FIGD/GCHRD it takes has raised the hold before the next pop could issue.
+  wire cf_pop_w  = !cf_hold_w && (cf_cnt != 5'd0) && !cf_pop_v;
+  // The popped byte waits out a guest 0xA2 read in the same cycle: that read pops the
+  // read-back queue a command byte would reload, and the read is the earlier event
+  // (the byte was queued behind the draw). So the two never share a cycle (R4).
+  wire cf_take_w = cf_pop_v && !(io_rd && (io_addr == 8'hA2));
+  wire       p_cmd = byp_w ? (io_addr == 8'hA2) : (cf_take_w && cf_q[8]);
+  wire       p_par = byp_w ? (io_addr == 8'hA0) : (cf_take_w && !cf_q[8]);
+  wire [7:0] p_din = byp_w ? io_din : cf_q[7:0];
+
+  wire draw_fire_w = p_par && !gdc2_sync_pend &&
                      (gdc2_recv_tgt == RCV_CODE) && (gdc2_recv_left == 4'd1) &&
                      ((gdc2_wcmd & 8'hE4) == 8'h20);
 
@@ -312,24 +406,35 @@ module pc9821_gdc2 (
   // dot ADVANCE below is a shift, which only works in the internal numbering).
   wire d_plain_w = !d_route_egc && !d_route_grcg;
   wire d_need_rd_w = d_plain_w && !((d_rop == 2'd00) && (d_mask == 16'hFFFF));
+  // A figure paints its dot with the pattern's current bit, all ones or all zeros through
+  // the one-hot cursor mask (MAME upd7220.cpp get_pattern `((m_pattern >> (cycle & 0xf))
+  // & 1) * 0xffff` into write_vram; the Xe10's FIGD_ROP rows are this word ROP).
+  wire [15:0] d_col_w = d_fig ? {16{d_color[0]}} : d_color;
   wire [3:0]  d_be_w = d_waddr[0] ? 4'b1100 : 4'b0011;
-  wire [31:0] d_din_w = d_waddr[0] ? {rev16(d_color & d_mask), 16'h0000}
-                                   : {16'h0000, rev16(d_color & d_mask)};
+  wire [31:0] d_din_w = d_waddr[0] ? {rev16(d_col_w & d_mask), 16'h0000}
+                                   : {16'h0000, rev16(d_col_w & d_mask)};
   // The plain path's merge read, ROPped in the cycle its datum answers (no d_old
   // register: the strobe's datum is consumed exactly once, by this wire's capture).
   wire [15:0] d_rd_i = rev16(d_waddr[0] ? mem_rdata[31:16] : mem_rdata[15:0]);
-  wire [15:0] d_res_i = gdc_rop16(d_rop, d_rd_i, d_color, d_mask);
+  wire [15:0] d_res_i = gdc_rop16(d_rop, d_rd_i, d_col_w, d_mask);
   wire [31:0] d_din_merge_w = d_waddr[0] ? {rev16(d_res_i), 16'h0000}
                                          : {16'h0000, rev16(d_res_i)};
   // The engine takes the job when idle; `pend_valid` is written once per cycle below.
   wire d_load_w = pend_valid && (d_state == D_IDLE);
 
-  // The slave GDC's PITCH: 40 words, one 640-dot line, and a constant because nothing in
-  // the target changes it (no 0x47 reaches 0xA2; 40 is the chip's reset value - NP2kai
-  // io/gdc.c:1107). The address step per display line is the SCROLL length word's "im"
-  // bit (bit 14), which is the display-address increment select and is PER PARTITION:
-  // im clear doubles the pitch, im set uses it as programmed (NP2kai
-  // vram/makegrph.c:146-148 `if (!(remain & (1 << 14))) pitch <<= 1; pitch &= 0xfe;`,
+  // The slave GDC's PITCH as the figure-drawing WRITE path uses it: 40 words, one 640-dot
+  // line, a constant (40 is the reset value - NP2kai io/gdc.c:1107 `gdc.s.para[GDC_PITCH] =
+  // 40;`). The DISPLAY walks (planar and packed) read the guest's PITCH command instead
+  // (gdc2_pitch below): the firmware's 5 MHz tables send PITCH 80 with the clock at 5 MHz
+  // (BANK3@0x1E40 `a1 47 50`, its row opening `68 21 01 83 85` at 0x1E25), NP2kai's BIOS
+  // 5 MHz mode set does the same and sets the SCROLL im bit (bios/bios18.c:483-487
+  // `gdc.s.para[GDC_PITCH] = 80;` .. `gdc.s.para[GDC_SCROLL+3] = 0x40;`), and the Win95
+  // PC-9821 256-colour driver sends PITCH 0x80 (PEGCV8.DRV seg 2 @0x0B2D `out 0xa2,0x47` /
+  // `out 0xa0,0x80`). The planar address step per display line is PITCH selected by the
+  // SCROLL length word's "im" bit (bit 14), which is the display-address increment select
+  // and is PER PARTITION: im clear doubles the pitch, im set uses it as programmed, and the
+  // result is masked to an even byte (NP2kai vram/makegrph.c:147-151 `pitch =
+  // gdc.s.para[GDC_PITCH]; if (!(remain & (1 << 14))) pitch <<= 1; pitch &= 0xfe;`,
   // read from `para[GDC_SCROLL + gpos + 2]`; MAME upd7220.cpp:611/624 `*im =
   // BIT(m_ra[index * 4 + 3], 6)` and pc9821.cpp:103-106 `pitch << (im ^ 1)` - the two
   // references agree on both the bit and its effect).
@@ -337,11 +442,12 @@ module pc9821_gdc2 (
   // So the stride is whatever the GUEST programs, which is the authentic path: the games
   // build im from BIOS work-area 0000:054D bit 2 - clear is 2.5 MHz, set is 5 MHz
   // (rec98/th01/hardware/scrollup.cpp:22-27, libs/master.lib/graph_400line.asm) - and
-  // this machine's own state is that bit clear, where the im bit is 0 and the step is
-  // 2 x PITCH. The doubling is therefore this machine's DEFAULT, not a hard-wired
-  // constant: a guest that programs im = 1 (a 5 MHz machine) gets PITCH.
+  // this machine's own state is that bit clear, where the im bit is 0, PITCH is 40 and the
+  // step is 2 x 40 = 80 bytes; the 5 MHz state (PITCH 80, im = 1) is the same 80 bytes. A
+  // 5 MHz im = 1 partition walked with the reset PITCH 40 instead steps 40 bytes, half a
+  // line, and shows each 640-dot line's halves side by side (a 640x400 16-colour driver's
+  // desktop doubled).
   localparam [7:0] GDC2_PITCH    = 8'd40;
-  localparam [8:0] GDC2_PITCH_X2 = {GDC2_PITCH, 1'b0};
   // The FOUR partitions' fields, decoded per partition k from para[GDC_SCROLL + 4k ..]
   // (NP2kai vram/makegrph.c grphput_*: `vad = LOADINTELWORD(gdc.s.para + GDC_SCROLL + gpos +
   // 0); vad = LOW15(vad << 1); remain = LOADINTELWORD(... + gpos + 2)`, gpos = 0, 4, 8, 12).
@@ -376,10 +482,13 @@ module pc9821_gdc2 (
   // {-1,0},{-1,1}). Those rows are the suite's INFO class (it claims no model) but they
   // are the machine's OBSERVED pixels and win over NP2kai per the evidence hierarchy;
   // a WDAT-STEP slice would re-derive them formally.
-  wire        adv_xp_w = (d_ope == 3'd1) || (d_ope == 3'd2) || (d_ope == 3'd3);
-  wire        adv_xm_w = (d_ope == 3'd5) || (d_ope == 3'd6) || (d_ope == 3'd7);
-  wire        adv_yp_w = (d_ope == 3'd0) || (d_ope == 3'd1) || (d_ope == 3'd7);
-  wire        adv_ym_w = (d_ope == 3'd3) || (d_ope == 3'd4) || (d_ope == 3'd5);
+  // A figure steps in the direction its own rule picks this step (f_eff_w, below).
+  wire  [2:0] f_eff_w;
+  wire  [2:0] adv_dir_w = d_fig ? f_eff_w : d_ope;
+  wire        adv_xp_w = (adv_dir_w == 3'd1) || (adv_dir_w == 3'd2) || (adv_dir_w == 3'd3);
+  wire        adv_xm_w = (adv_dir_w == 3'd5) || (adv_dir_w == 3'd6) || (adv_dir_w == 3'd7);
+  wire        adv_yp_w = (adv_dir_w == 3'd0) || (adv_dir_w == 3'd1) || (adv_dir_w == 3'd7);
+  wire        adv_ym_w = (adv_dir_w == 3'd3) || (adv_dir_w == 3'd4) || (adv_dir_w == 3'd5);
   // The dot step in the INTERNAL numbering (bit 0 = the leftmost pixel): +x shifts the
   // mask one dot up, wrapping into the neighbouring word's opposite end at the word's
   // edge - the same fold the unit walk's wrap gives (NP2kai's `(adrs + 2) & 0x7ffe`).
@@ -388,26 +497,100 @@ module pc9821_gdc2 (
   wire [15:0] adv_mask_w = adv_xp_w ? (d_mask[15] ? 16'h0001 : {d_mask[14:0], 1'b0}) :
                            adv_xm_w ? (d_mask[0]  ? 16'h8000 : {1'b0, d_mask[15:1]}) :
                            d_mask;
-  wire [13:0] adv_pitch_w = {6'd0, GDC2_PITCH};
+  wire [15:0] adv_pitch_w = {8'd0, GDC2_PITCH};
   // ONE adder: the row step (+/-PITCH) and the word-edge wrap (+/-1) are summed first, so the
   // address takes a single carry chain (the two-adder form added them in series).
-  wire [13:0] adv_delta_w = (adv_yp_w ? adv_pitch_w :
-                             adv_ym_w ? (14'd0 - adv_pitch_w) : 14'd0) +
-                            (adv_wrap_p_w ? 14'd1 :
-                             adv_wrap_m_w ? (14'd0 - 14'd1) : 14'd0);
-  wire [13:0] adv_waddr_w = d_waddr + adv_delta_w;
+  wire [15:0] adv_delta_w = (adv_yp_w ? adv_pitch_w :
+                             adv_ym_w ? (16'd0 - adv_pitch_w) : 16'd0) +
+                            (adv_wrap_p_w ? 16'd1 :
+                             adv_wrap_m_w ? (16'd0 - 16'd1) : 16'd0);
+  wire [15:0] adv_sum_w   = d_waddr + adv_delta_w;
+  // A WRITE wraps inside its plane (the pre-figure engine's 14-bit walk, unchanged); a FIGURE
+  // carries into the plane bits: the Xe10's runaway rectangles (GDCDRAW RECT_1x1_D*, D = 0,
+  // 16384-dot sides) change exactly the R-plane word counts (2944, 12324, ...) a 16-bit
+  // {plane, word} walk predicts, and a plane-local wrap does not.
+  wire [15:0] adv_waddr_w = d_fig ? adv_sum_w : {d_waddr[15:14], adv_sum_w[13:0]};
   // The cursor write-back: the machine advances CSRW's EAD and the MASK register (the
   // CURD rows read both back after a draw), so the NEXT command starts from the
-  // advanced cursor. A guest CSRW/MASK parameter write during the draw (or landing in
-  // the SAME clk_sys as the final advance - `wb_*_w` below) WINS: it is the later
-  // intent, and the draw leaves that register alone. Named here rather than resolved
-  // by assignment order (the single-cycle event discipline R2/R3); the same-cycle
-  // guard is the combinational term because the sticky flag cannot see its own cycle.
-  reg  d_csrw_touch, d_mask_touch;
-  wire wb_csrw_w = io_wr && (io_addr == 8'hA0) && !gdc2_sync_pend &&
-                   (gdc2_recv_tgt == RCV_CSRW) && (gdc2_recv_left != 4'd0);
-  wire wb_mask_w = io_wr && (io_addr == 8'hA0) && !gdc2_sync_pend &&
-                   (gdc2_recv_tgt == RCV_MASK) && (gdc2_recv_left != 4'd0);
+  // advanced cursor. No guest CSRW/MASK write can meet it: the parser is held from the
+  // trigger to the walk's end (cf_hold_w), so the write-back has the two registers to
+  // itself - the R8 assertion `(p_cmd || p_par) && cf_hold_w` below pins that.
+
+  // ---- The figure engine's decode ----
+  // FIGD (0x6C) / GCHRD (0x68) arm the engine; it starts when the WRITE engine is idle and
+  // holds no job, so a WRITE issued before the figure lands first (the FIFO's order).
+  wire p_fig_w   = p_cmd && ((p_din == 8'h6C) || (p_din == 8'h68));
+  wire f_start_w = fig_pend && (d_state == D_IDLE) && !pend_valid;
+  // FIGS P1 is {SL, R, A, GC, L, DIR[2:0]} (uPD7220; MAME upd7220.cpp COMMAND_FIGS
+  // `m_figure_type = (m_pr[1] & 0xf8) >> 3`). GCHRD with GC draws the character; any
+  // other combination draws ONE figure, the first of line, arc, rectangle in NP2kai
+  // vectdraw's test order (io/gdc.c:211-225 `if (vect->ope & 0x08) ... 0x20 ... 0x40`;
+  // NP2kai draws every flagged figure in turn, a combination no capture or guest uses),
+  // and no flag at all is the single dot (gdcsub_vectp).
+  wire [7:0]  v0_w = gdc2_vect[0];
+  wire [2:0]  f_ntype_w = (fig_gc && v0_w[4]) ? T_CHAR :
+                          v0_w[3] ? T_LINE : v0_w[5] ? T_ARC : v0_w[6] ? T_RECT : T_DOT;
+  wire [13:0] v_dc_w = {gdc2_vect[2][5:0], gdc2_vect[1]};
+  wire [13:0] v_d_w  = {gdc2_vect[4][5:0], gdc2_vect[3]};
+  wire [13:0] v_d2_w = {gdc2_vect[6][5:0], gdc2_vect[5]};
+  wire [13:0] v_d1_w = {gdc2_vect[8][5:0], gdc2_vect[7]};
+  wire [13:0] v_dm_w = {gdc2_vect[10][5:0], gdc2_vect[9]};
+
+  // ---- One step's rules (applied at D_FADV when the pace allows) ----
+  // LINE (MAME draw_line, the capture's 300 line rows): the octant's axial step when D < 0
+  // and then D += D1, else the diagonal step and D += D2; an even octant's axial step is the
+  // octant itself, an odd octant's the next one. ARC: the same octant rule, radius r = D + 1
+  // (the datasheet's parameter set: DC = r sin(phi), D = r - 1, D2 = 2(r - 1), D1 = -1,
+  // DM = r sin(theta); MAME draw_arc `d = m_figs.m_d + 1`), run as the midpoint circle with
+  // D1 and D2 starting at those values - axial while D > 0 with D += D1 - 2, else diagonal
+  // with D += D2 + D1 - 2 and D2 -= 2; D1 -= 2 every step. It plots round(r - sqrt(r^2 - i^2))
+  // at every step i: exactly the circle NP2kai's gdcsub_vectc tabulates (gdc_rt[],
+  // `1 - sqrt(1 - x^2)`), where NP2kai's 4096-entry table misrounds a dot on most radii and
+  // takes r = D (one less; its own BIOS sends D = r - 1, bios18.c `GBCIR) - 1`). NO arc
+  // capture exists (GDCDRAW's ARC rows ERRORed on the Xe10): item 126.
+  wire        f_axial_w = (f_type == T_LINE) ? f_d[13] : (!f_d[13] && (f_d != 14'd0));
+  wire  [2:0] f_ldir_w  = d_ope + {2'd0, d_ope[0] ? f_axial_w : !f_axial_w};
+  wire [13:0] f_d1m_w   = f_d1 - 14'd2;
+  wire [13:0] f_dsum_w  = f_d + ((f_type == T_LINE) ? (f_axial_w ? f_d1 : f_d2) : f_d1m_w) +
+                          (((f_type == T_ARC) && !f_axial_w) ? f_d2 : 14'd0);
+  // RECTANGLE (MAME draw_rectangle, the capture's RECT rows): sides of D, D2, D, D2 dots,
+  // each side's first step turning +90 degrees (DIR + 2) - four sides whatever DC (NP2kai
+  // gdcsub_vectr). A zero side length is 16384 dots: the 14-bit count wraps (RECT_1x1_*'s
+  // runaway sweeps are that length).
+  // CHARACTER (MAME draw_char, the capture's GCHR rows): DC + 1 rows of the PRAM pattern
+  // RA15, RA14, ... RA8, RA15 ... (one row byte each, `m_ra[15 - (i & 7)]`), each row a pass
+  // of D dots, every dot and every pass repeated ZOOM + 1 times, the passes walking back and
+  // forth: at a pass end the step turns by +2 (slanted +1) on even passes and -2 (slanted -3)
+  // on odd ones, and the next pass runs the opposite way (DIR + 4) reading its row byte
+  // from the other end.
+  wire        f_zd_end_w   = (f_zd == gdc2_zoom);
+  wire        f_pix_last_w = (d_left[13:0] == 14'd1);
+  wire        f_pass_end_w = f_zd_end_w && f_pix_last_w;
+  wire  [2:0] f_c0_w = f_par ? (f_slant ? 3'd5 : 3'd6) : (f_slant ? 3'd1 : 3'd2);
+  assign f_eff_w = ((f_type == T_LINE) || (f_type == T_ARC)) ? f_ldir_w :
+                   (f_type == T_RECT) ? (f_sstart ? d_ope + 3'd2 : d_ope) :
+                   ((f_type == T_CHAR) && f_pass_end_w) ? d_ope + f_c0_w :
+                   d_ope;
+  // The next pass's row byte (the same row again while its ZOOM repeats last), read the
+  // other way round on an odd pass.
+  wire  [2:0] f_nrow_w = (f_zdc == gdc2_zoom) ? f_row + 3'd1 : f_row;
+  wire  [7:0] f_rb_w   = gdc2_scr[4'd15 - {1'b0, f_nrow_w}];
+  wire [15:0] f_rpat_w = f_par ? {f_rb_w, f_rb_w} : {rev8(f_rb_w), rev8(f_rb_w)};
+  // The figure's last step.
+  wire        f_last_w = (f_type == T_DOT) ||
+                         (((f_type == T_LINE) || (f_type == T_ARC)) && (d_left[13:0] == 14'd0)) ||
+                         ((f_type == T_RECT) && f_pix_last_w && (f_side == 2'd3)) ||
+                         ((f_type == T_CHAR) && f_pass_end_w && f_zd_end_w &&
+                          (f_zdc == gdc2_zoom) && (f_d == 14'd0));
+  // Does this step paint? An arc paints from step DM on; a 0 pattern bit paints only on the
+  // plain path's REPLACE (it clears the dot) - the other ROPs and the GRCG/EGC routes do
+  // nothing for it (NP2kai psettbl `{_nop, _complemnt}` ... and gdcpset_prepare's
+  // `func[0] = _nop`; the Xe10's FIGD_PATTERN rows).
+  wire        f_plot_w  = !((f_type == T_ARC) && (f_dm != 14'd0));
+  wire        f_visit_w = f_plot_w && (d_color[0] || (d_plain_w && (d_rop == 2'd0)));
+  // A step advances ON a dot clock, FIG_PACE dot clocks after the previous one advanced:
+  // FIG_PACE + 1 dot clocks a step at any clk_sys.
+  wire        f_adv_go_w = (d_state == D_FADV) && (f_pace == 4'd0) && pixel_ce;
 
   integer i;
   always @(posedge clk_sys) begin
@@ -418,6 +601,7 @@ module pc9821_gdc2 (
       gdc2_grph_start <= 1'b0;   // graphics display off until GDC2 says START
       gdc2_recv_left <= 4'd0;
       gdc2_recv_tgt <= RCV_NONE;
+      gdc2_pitch <= 8'd40;
       gdc2_recv_ptr <= 4'd0;
       gdc2_snd_cnt <= 3'd0;
       gdc2_snd_ptr <= 3'd0;
@@ -449,12 +633,9 @@ module pc9821_gdc2 (
       pend_egc <= 1'b0;
       pend_grcg <= 1'b0;
       pend_page <= 1'b0;
-      draw_drops <= 4'd0;
-      d_csrw_touch <= 1'b0;
-      d_mask_touch <= 1'b0;
       d_state <= D_IDLE;
       d_left <= 16'd0;
-      d_waddr <= 14'd0;
+      d_waddr <= 16'd0;
       d_rop <= 2'd0;
       d_ope <= 3'd0;
       d_color <= 16'd0;
@@ -470,6 +651,27 @@ module pc9821_gdc2 (
       mem_offset <= 15'd0;
       mem_din <= 32'd0;
       mem_be <= 4'd0;
+      gdc2_zoom <= 4'd0;
+      fig_pend <= 1'b0;
+      fig_gc <= 1'b0;
+      d_fig <= 1'b0;
+      f_type <= T_DOT;
+      f_slant <= 1'b0;
+      f_d <= 14'd0;
+      f_d1 <= 14'd0;
+      f_d2 <= 14'd0;
+      f_dm <= 14'd0;
+      f_side <= 2'd0;
+      f_sstart <= 1'b0;
+      f_zd <= 4'd0;
+      f_zdc <= 4'd0;
+      f_row <= 3'd0;
+      f_par <= 1'b0;
+      f_pace <= 4'd0;
+      cf_wp <= 4'd0;
+      cf_rp <= 4'd0;
+      cf_cnt <= 5'd0;
+      cf_pop_v <= 1'b0;
     end else begin
       // The parameter read-back pop (NP2kai gdc_ia2: `if (gdc.s.snd) { snd--;
       // return para[ptr++]; } return 0xff;`, io/gdc.c:813-820). One byte per read.
@@ -480,28 +682,31 @@ module pc9821_gdc2 (
           gdc2_snd_cnt <= gdc2_snd_cnt - 3'd1;
         end else gdc2_snd_q <= 8'hFF;
       end
-    if (io_wr && (io_addr == 8'hA2)) begin
+    if (p_cmd) begin
       // GDC2 command port SCROLL (0x70..0x77): the low nibble is the byte of the
       // parameter block the command starts at, so 0x70 writes all sixteen bytes and
       // 0x74 the last twelve (gdc_cmd.tbl).
       // Nothing is "executed": the scanout reads the block continuously (NP2kai
       // vram/makegrph.c:145-148 reads gdc.s.para[] every line), so bytes take effect as
-      // they arrive - there is deliberately no completion event to wait for, which is
-      // also why the FIFO-empty bit below never has to go clear.
+      // they reach the parser - there is deliberately no completion event to wait for.
       // Every command ALSO replaces the parameter read-back queue (NP2kai gdc_work:
-      // `item->snd = gdc_cmd[data].indatas`, io/gdc.c:327): 0xE0 CSRR answers five
-      // bytes {CSRW0, CSRW1, CSRW2&3, 0, 0} and 0xC0 LPEN the three light-pen
+      // `item->snd = gdc_cmd[data].indatas`, io/gdc.c:327): 0xE0 CSRR answers the Xe10's five
+      // bytes {EAD, 0xF0|..., MASK} (below) and 0xC0 LPEN the three light-pen
       // slots para[29..31] (gdc_cmd.tbl:214) - never written, so gdc_reset's
       // zeros (io/gdc.c:1160), NOT the CSRFORM bytes (GDC_CSRFORM = 9,
       // GDC_LPEN = 29, io/gdc_cmd.h:34,38).
       gdc2_snd_ptr <= 3'd0;
-      case (io_din)
+      case (p_din)
         8'hE0: begin
           gdc2_snd[0] <= gdc2_csrw[0];
           gdc2_snd[1] <= gdc2_csrw[1];
-          gdc2_snd[2] <= gdc2_csrw[2] & 8'h03;
-          gdc2_snd[3] <= 8'h00;
-          gdc2_snd[4] <= 8'h00;
+          // The Xe10's five CURD bytes are {EAD[7:0], EAD[15:8], 0xF0 | WG<<3 | EAD[17:16],
+          // MASK[7:0], MASK[15:8]} (docs/probes/gdc-conformance/xe10-2.5MHz/GDCCURS.CSV
+          // raw_curd `00-00-F0-01-00`, GDCWG.CSV `28-88-F8-FF-FF` with WG set); NP2kai
+          // gdc.c:328-337 answers {CSRW0, CSRW1, CSRW2 & 3, 0, 0} and is refuted.
+          gdc2_snd[2] <= {4'hF, gdc2_csrw[2][3], 1'b0, gdc2_csrw[2][1:0]};
+          gdc2_snd[3] <= gdc2_mask[0];
+          gdc2_snd[4] <= gdc2_mask[1];
           gdc2_snd_cnt <= 3'd5;
         end
         8'hC0: begin
@@ -516,13 +721,13 @@ module pc9821_gdc2 (
       // (NP2kai gdc_work reloads ptr/rcv from the new command's row, io/gdc.c), so a
       // cut-short SYNC cannot swallow the next command's parameters into AL/VBP. One
       // assignment per command write (R2): armed by 0x0E/0x0F, cleared by the rest.
-      gdc2_sync_pend <= (io_din == 8'h0F) || (io_din == 8'h0E);
+      gdc2_sync_pend <= (p_din == 8'h0F) || (p_din == 8'h0E);
       gdc2_sync_cnt  <= 3'd0;
-      if (io_din[7:4] == 4'h7) begin
+      if (p_din[7:4] == 4'h7) begin
         // SCROLL 0x70-0x77 and TEXTW 0x78-0x7F: one 16-byte parameter RAM (gdc_cmd.tbl
         // rows 0x70-0x7F: pos GDC_SCROLL + k, 16 - k bytes)
-        gdc2_ptr  <= io_din[3:0];
-        gdc2_left <= 5'd16 - {1'b0, io_din[3:0]};
+        gdc2_ptr  <= p_din[3:0];
+        gdc2_left <= 5'd16 - {1'b0, p_din[3:0]};
         gdc2_recv_left <= 4'd0;   // a SCROLL command discards a pending parameter count
       end else begin
         // The display commands, deliberately the SAME bytes the text GDC takes on
@@ -531,12 +736,12 @@ module pc9821_gdc2 (
         // SYNC_ON/OFF take EIGHT parameter bytes (io/gdc_cmd.tbl:24-25), captured on
         // 0xA0 below and dropped: the raster is the master's block's (see
         // gdc2_sync_pend).
-        if (io_din == 8'h0D || io_din == 8'h6B) begin
+        if (p_din == 8'h0D || p_din == 8'h6B) begin
           gdc2_grph_start <= 1'b1;   // START / BCTRL on
-        end else if (io_din == 8'h0C || io_din == 8'h05) begin
+        end else if (p_din == 8'h0C || p_din == 8'h05) begin
           gdc2_grph_start <= 1'b0;   // STOP / BCTRL off
-        end else if (io_din == 8'h0F || io_din == 8'h0E) begin
-          gdc2_grph_start <= io_din[0];   // SYNC on (0x0F) / off (0x0E)
+        end else if (p_din == 8'h0F || p_din == 8'h0E) begin
+          gdc2_grph_start <= p_din[0];   // SYNC on (0x0F) / off (0x0E)
         end
         // The rest of the command space has no display customer. A command byte
         // discards an unfulfilled parameter count (NP2kai's gdc_work takes the
@@ -546,38 +751,49 @@ module pc9821_gdc2 (
         // byte is also the display line step (the firmware sends one byte,
         // BANK6@0x787e-0x788c); NP2kai takes three and the rest of the count is
         // discarded by the next command exactly as here.
-        if (io_din == 8'h49) begin
+        if (p_din == 8'h49) begin
           gdc2_recv_tgt  <= RCV_CSRW;
           gdc2_recv_left <= 4'd3;
           gdc2_recv_ptr  <= 4'd0;
-        end else if (io_din == 8'h4B) begin
+        end else if (p_din == 8'h4B) begin
           gdc2_recv_tgt  <= RCV_CSRFORM;
           gdc2_recv_left <= 4'd3;
           gdc2_recv_ptr  <= 4'd0;
-        end else if (io_din == 8'h4C) begin
-          // VECTW: eleven parameter bytes (io/gdc_cmd.tbl row 0x4c). Only the
-          // second and third have a consumer in this slice - they are the unit
-          // count the WRITE command walks (NP2kai gdcsub_write's
-          // `leng = LOADINTELWORD(gdc.s.para + GDC_VECTW + 1) + 1`).
+        end else if (p_din == 8'h4C) begin
+          // VECTW (FIGS): eleven parameter bytes (io/gdc_cmd.tbl row 0x4c): P1
+          // {SL, R, A, GC, L, DIR}, then DC, D, D2, D1, DM as 14-bit words. The WRITE
+          // command walks bytes 1-2 as its unit count (NP2kai gdcsub_write's
+          // `leng = LOADINTELWORD(gdc.s.para + GDC_VECTW + 1) + 1`); the figure
+          // engine takes them all.
           gdc2_recv_tgt  <= RCV_VECTW;
           gdc2_recv_left <= 4'd11;
           gdc2_recv_ptr  <= 4'd0;
-        end else if (io_din == 8'h4A) begin
+        end else if (p_din == 8'h47) begin
+          // PITCH: one parameter byte (io/gdc_cmd.tbl row 0x47), the packed walk's stride.
+          gdc2_recv_tgt  <= RCV_PITCH;
+          gdc2_recv_left <= 4'd1;
+          gdc2_recv_ptr  <= 4'd0;
+        end else if (p_din == 8'h4A) begin
           // MASK: two parameter bytes, the write mask the WRITE command paints
           // through (io/gdc_cmd.tbl row 0x4a, NP2kai gdcsub_write's GDC_MASK).
           gdc2_recv_tgt  <= RCV_MASK;
           gdc2_recv_left <= 4'd2;
           gdc2_recv_ptr  <= 4'd0;
-        end else if ((io_din & 8'h60) == 8'h20) begin
+        end else if (p_din == 8'h46) begin
+          // ZOOM: one parameter byte, the GCHRD magnification in its low nibble.
+          gdc2_recv_tgt  <= RCV_ZOOM;
+          gdc2_recv_left <= 4'd1;
+          gdc2_recv_ptr  <= 4'd0;
+        end else if ((p_din & 8'h60) == 8'h20) begin
           // The WRITE family (NP2kai gdc_work's `(data & 0x60) == 0x20` arm): the
           // command byte keeps the ROP in its low two bits and the transfer width
           // in bits 4:3, and its data bytes go to GDC_CODE. The 8'h08 width takes
           // no data byte (and never executes - NP2kai's rcv = 0 arm never reaches
           // its gdcsub_write call), 8'h00 takes two, the byte widths one.
-          gdc2_wcmd      <= io_din;
+          gdc2_wcmd      <= p_din;
           gdc2_recv_tgt  <= RCV_CODE;
           gdc2_recv_ptr  <= 4'd0;
-          case (io_din & 8'h18)
+          case (p_din & 8'h18)
             8'h00:   gdc2_recv_left <= 4'd2;
             8'h08:   gdc2_recv_left <= 4'd0;
             default: gdc2_recv_left <= 4'd1;
@@ -585,30 +801,41 @@ module pc9821_gdc2 (
         end else gdc2_recv_left <= 4'd0;
         gdc2_left <= 5'd0;
       end
-    end else if (io_wr && (io_addr == 8'hA0)) begin
+    end else if (p_par) begin
       if (gdc2_sync_pend) begin
         // The slave's SYNC block byte: AL and VBP are kept (see gdc2_sal), the rest consumed.
-        if (gdc2_sync_cnt == 3'd6) gdc2_sal[7:0] <= io_din;
+        if (gdc2_sync_cnt == 3'd6) gdc2_sal[7:0] <= p_din;
         if (gdc2_sync_cnt == 3'd7) begin
-          gdc2_sal[9:8] <= io_din[1:0];
-          gdc2_svbp     <= io_din[7:2];
+          gdc2_sal[9:8] <= p_din[1:0];
+          gdc2_svbp     <= p_din[7:2];
           gdc2_sync_pend <= 1'b0;
           gdc2_sync_cnt  <= 3'd0;
         end else gdc2_sync_cnt <= gdc2_sync_cnt + 3'd1;
       end else if (gdc2_recv_left != 4'd0) begin
         case (gdc2_recv_tgt)
-          RCV_CSRW:    gdc2_csrw[gdc2_recv_ptr[1:0]] <= io_din;
+          RCV_CSRW: begin
+            gdc2_csrw[gdc2_recv_ptr[1:0]] <= p_din;
+            // The third byte's dAD (bits 7:4) loads the mask with its one-hot dot
+            // (uPD7220 CURS; the Xe10's DOT_DAD00..15 rows start each dot at the
+            // CURS dAD and read MASK = 1 << dAD back, GDCCURS CURS_MASK/MASK_ORDER).
+            if (gdc2_recv_ptr[1:0] == 2'd2) begin
+              gdc2_mask[0] <= (p_din[7] == 1'b0) ? (8'h01 << p_din[6:4]) : 8'h00;
+              gdc2_mask[1] <= (p_din[7] == 1'b1) ? (8'h01 << p_din[6:4]) : 8'h00;
+            end
+          end
           RCV_CSRFORM: if (gdc2_recv_ptr == 4'd0)
-                         gdc2_lr <= io_din[4:0];   // CSRFORM[4:0] = lr-1 (NP2kai vram/makegrph.c:362)
-          RCV_VECTW:   gdc2_vect[gdc2_recv_ptr[3:0]] <= io_din;
-          RCV_CODE:    gdc2_code[gdc2_recv_ptr[0]] <= io_din;
-          RCV_MASK:    gdc2_mask[gdc2_recv_ptr[0]] <= io_din;
+                         gdc2_lr <= p_din[4:0];   // CSRFORM[4:0] = lr-1 (NP2kai vram/makegrph.c:362)
+          RCV_VECTW:   gdc2_vect[gdc2_recv_ptr[3:0]] <= p_din;
+          RCV_CODE:    gdc2_code[gdc2_recv_ptr[0]] <= p_din;
+          RCV_MASK:    gdc2_mask[gdc2_recv_ptr[0]] <= p_din;
+          RCV_ZOOM:    gdc2_zoom <= p_din[3:0];
+          RCV_PITCH:   gdc2_pitch <= p_din;
           default: ;
         endcase
         gdc2_recv_ptr  <= gdc2_recv_ptr + 4'd1;
         gdc2_recv_left <= gdc2_recv_left - 4'd1;
       end else if (gdc2_left != 5'd0) begin
-        gdc2_scr[gdc2_ptr] <= io_din;
+        gdc2_scr[gdc2_ptr] <= p_din;
         gdc2_ptr  <= gdc2_ptr + 4'd1;   // wraps at 16 with gdc2_left at 0
         gdc2_left <= gdc2_left - 5'd1;
       end
@@ -616,22 +843,21 @@ module pc9821_gdc2 (
 
     // ---------------------------------------------------------------
     // The WRITE engine (the GDC2 WRITE slice). One writer per register: each of
-    // pend_valid/draw_drops, the job registers and the visit registers is assigned in
+    // pend_valid, the job registers and the visit registers is assigned in
     // exactly one arm of this block per cycle (the single-cycle event discipline R1/R2;
     // the trigger's set and clear are one assignment each, never two arms racing).
     //
     // The job is SNAPSHOTTED at the trigger - the parse's registers are free to move
     // afterwards, so a later MASK/CSRW/VECTW cannot retarget a draw already queued.
-    // The fill wins over a same-cycle drain (`!pend_valid || d_load_w`), so a job is
-    // never dropped while a slot frees in that very cycle. A THIRD draw in flight is
-    // the command FIFO this slice does not model (the conformance capture's FIFO_TURN/STATE rows) and
-    // is dropped into `draw_drops`, which the bench reads over a hierarchical name.
+    // A trigger finds the slot empty and the engine idle (the parser is held while a job
+    // is queued or walking, so later bytes wait in the command FIFO), so the fill and the
+    // drain never share a cycle - the R8 assertion below pins it.
     // ---------------------------------------------------------------
-    if (draw_fire_w && (!pend_valid || d_load_w)) begin
+    if (draw_fire_w) begin
       pend_wctl  <= {gdc2_wcmd[4:3], gdc2_wcmd[1:0]};
       pend_wg    <= gdc2_csrw[2][3];
-      pend_code0 <= (gdc2_recv_ptr[0] == 1'b0) ? io_din : gdc2_code[0];
-      pend_code1 <= (gdc2_recv_ptr[0] == 1'b0) ? gdc2_code[1] : io_din;
+      pend_code0 <= (gdc2_recv_ptr[0] == 1'b0) ? p_din : gdc2_code[0];
+      pend_code1 <= (gdc2_recv_ptr[0] == 1'b0) ? gdc2_code[1] : p_din;
       pend_csrw0 <= gdc2_csrw[0];
       pend_csrw1 <= gdc2_csrw[1];
       pend_mask0 <= gdc2_mask[0];
@@ -648,14 +874,23 @@ module pc9821_gdc2 (
       pend_valid <= 1'b1;
     end else if (d_load_w) begin
       pend_valid <= 1'b0;
-    end else if (draw_fire_w) begin
-      draw_drops <= draw_drops + 4'd1;
     end
-    // The cursor write-back's touch flags: set by any guest cursor write, cleared when
-    // a job is taken. ONE assignment each per cycle (R1/R2), so the load's clear and a
-    // same-cycle guest write cannot collide by source order - the write wins.
-    d_csrw_touch <= wb_csrw_w || (d_csrw_touch && !d_load_w);
-    d_mask_touch <= wb_mask_w || (d_mask_touch && !d_load_w);
+
+    // The command FIFO's pointers and count: push and pop in one cycle are one merged
+    // update (R4), never two assignments.
+    if (cf_push_w) cf_wp <= cf_wp + 4'd1;
+    if (cf_pop_w)  cf_rp <= cf_rp + 4'd1;
+    cf_cnt   <= cf_cnt + {4'd0, cf_push_w} - {4'd0, cf_pop_w};
+    cf_pop_v <= cf_pop_w || (cf_pop_v && !cf_take_w);
+    // FIGD/GCHRD arm the engine; the start consumes the arm. The two cannot coincide: an
+    // armed figure holds the parser, so no command reaches it until the start (R3).
+    fig_pend <= p_fig_w || (fig_pend && !f_start_w);
+    if (p_fig_w) fig_gc <= (p_din == 8'h68);
+    // The pace: a step advances on the dot clock FIG_PACE dot clocks after the last advance
+    // (or the start), so the busy time is the device's, not clk_sys's.
+    f_pace <= (f_start_w || f_adv_go_w) ? FIG_PACE :
+              (pixel_ce && (f_pace != 4'd0)) ? f_pace - 4'd1 : f_pace;
+
 
     case (d_state)
       D_IDLE: if (d_load_w) begin
@@ -663,7 +898,7 @@ module pc9821_gdc2 (
         d_ope        <= pend_dir;
         d_color      <= pend_col_w;
         d_mask       <= pend_msk_w;
-        d_waddr      <= {pend_csrw1[5:0], pend_csrw0};
+        d_waddr      <= {pend_csrw1, pend_csrw0};
         d_route_egc  <= pend_egc;
         d_route_grcg <= pend_grcg;
         d_left       <= {pend_vect2, pend_vect1};   // NP2kai's leng - 1
@@ -677,6 +912,56 @@ module pc9821_gdc2 (
         mem_be         <= pend_be_w;
         mem_din        <= pend_need_rd_w ? 32'd0 : pend_din_w;
         d_state      <= pend_need_rd_w ? D_RD : D_WR;
+      end else if (f_start_w) begin
+        // The figure start: the engine's working registers load from the parameter RAM as it
+        // stands (nothing has changed it since the FIGD: the parser is held), and the FIGS
+        // block returns to its defaults - DC 0, D 8, D2 8, D1 and DM all ones - exactly NP2kai's
+        // gdc_vectreset after every vectdraw/textdraw (io/gdc.c:185-197). P1 is kept.
+        d_fig        <= 1'b1;
+        f_type       <= f_ntype_w;
+        f_slant      <= v0_w[7];
+        d_ope        <= v0_w[2:0];
+        d_rop        <= gdc2_wcmd[1:0];   // NP2kai vectdraw `ope = gdc.s.para[GDC_WRITE]`
+        d_waddr      <= {gdc2_csrw[1], gdc2_csrw[0]};
+        d_mask       <= {gdc2_mask[1], gdc2_mask[0]};
+        // FIGD's line pattern is PRAM bytes 8-9 (NP2kai vectdraw `textw =
+        // LOADINTELWORD(gdc.s.para + GDC_TEXTW)`; the Xe10's LINE_A53C rows), GCHRD's first
+        // row RA15 doubled (textdraw `textw = gdc.s.para[GDC_TEXTW + 7]`; draw_char's
+        // `m_ra[15 - (i & 7)]` at i = 0).
+        d_color      <= fig_gc ? {gdc2_scr[15], gdc2_scr[15]} : {gdc2_scr[9], gdc2_scr[8]};
+        d_route_egc  <= egc_mem_gate;     // gdcpset_prepare's once-per-draw route
+        d_route_grcg <= grcg_cg_gate;
+        mem_route_egc  <= egc_mem_gate;
+        mem_route_grcg <= grcg_cg_gate;
+        mem_page       <= access_page;
+        d_left <= {2'd0, ((f_ntype_w == T_RECT) || (f_ntype_w == T_CHAR)) ? v_d_w :
+                         (f_ntype_w == T_DOT) ? 14'd0 : v_dc_w};
+        f_d    <= (f_ntype_w == T_CHAR) ? v_dc_w : v_d_w;
+        // The arc's D1 and D2 start at their datasheet values from D alone (-1 and
+        // 2(r - 1) = 2D), as MAME's draw_arc and NP2kai's gdcsub_vectc both draw from D
+        // alone: NP2kai's own BIOS sends D2 = (r - 1) >> 1 (bios18.c `data >>= 1;
+        // STOREINTELWORD(vect.D2, data)`), which a D2-driven walk would turn into a spiral.
+        f_d1   <= (f_ntype_w == T_RECT) ? v_d_w : (f_ntype_w == T_ARC) ? 14'h3FFF : v_d1_w;
+        f_d2   <= (f_ntype_w == T_CHAR) ? v_d_w :
+                  (f_ntype_w == T_ARC) ? {v_d_w[12:0], 1'b0} : v_d2_w;
+        f_dm   <= v_dm_w;
+        f_side <= 2'd0;
+        f_sstart <= 1'b0;
+        f_zd   <= 4'd0;
+        f_zdc  <= 4'd0;
+        f_row  <= 3'd0;
+        f_par  <= 1'b0;
+        gdc2_vect[1]  <= 8'h00;
+        gdc2_vect[2]  <= 8'h00;
+        gdc2_vect[3]  <= 8'h08;
+        gdc2_vect[4]  <= 8'h00;
+        gdc2_vect[5]  <= 8'h08;
+        gdc2_vect[6]  <= 8'h00;
+        gdc2_vect[7]  <= 8'hFF;
+        gdc2_vect[8]  <= 8'hFF;
+        gdc2_vect[9]  <= 8'hFF;
+        gdc2_vect[10] <= 8'hFF;
+        d_state      <= D_FSTEP;
       end
       // A read visit: `mem_valid` holds to `mem_ready`, and the datum answers later on
       // `mem_resp` (the responder contract: never the ready's own cycle).
@@ -691,21 +976,20 @@ module pc9821_gdc2 (
         mem_din   <= d_din_merge_w;
         d_state   <= D_WR;
       end
-      D_WR: if (mem_ready) begin
+      D_WR: if (mem_ready && d_fig) begin
+        mem_valid <= 1'b0;
+        d_state   <= D_FADV;
+      end else if (mem_ready) begin
         mem_valid <= 1'b0;
         // Every painted unit advances the cursor one dot along the direction (the
         // advance block above), the last one included - the machine's CURD readback
         // shows it advanced after a one-unit draw (STEP_DC00_*).
         if (d_left == 16'd0) begin
           d_state <= D_IDLE;
-          if (!d_csrw_touch && !wb_csrw_w) begin
-            gdc2_csrw[0] <= adv_waddr_w[7:0];
-            gdc2_csrw[1] <= {gdc2_csrw[1][7:6], adv_waddr_w[13:8]};
-          end
-          if (!d_mask_touch && !wb_mask_w) begin
-            gdc2_mask[0] <= adv_mask_w[7:0];
-            gdc2_mask[1] <= adv_mask_w[15:8];
-          end
+          gdc2_csrw[0] <= adv_waddr_w[7:0];
+          gdc2_csrw[1] <= {gdc2_csrw[1][7:6], adv_waddr_w[13:8]};
+          gdc2_mask[0] <= adv_mask_w[7:0];
+          gdc2_mask[1] <= adv_mask_w[15:8];
         end else begin
           d_left  <= d_left - 16'd1;
           d_waddr <= adv_waddr_w;
@@ -723,13 +1007,117 @@ module pc9821_gdc2 (
         mem_write  <= !d_need_rd_w;
         mem_be     <= d_be_w;
         mem_din    <= d_need_rd_w ? 32'd0 : d_din_w;
-        mem_offset <= {d_waddr, 1'b0};
+        mem_offset <= {d_waddr[13:0], 1'b0};
         d_state    <= d_need_rd_w ? D_RD : D_WR;
+      end
+      // A figure step: one visit for a painted dot (the same protocol as a WRITE unit), or
+      // none, then the advance.
+      D_FSTEP: if (f_visit_w) begin
+        mem_valid  <= 1'b1;
+        mem_write  <= !d_need_rd_w;
+        mem_be     <= d_be_w;
+        mem_din    <= d_need_rd_w ? 32'd0 : d_din_w;
+        mem_plane  <= d_waddr[15:14] - 2'd1;   // GDC plane n -> lane n-1 (mod 4)
+        mem_offset <= {d_waddr[13:0], 1'b0};
+        d_state    <= d_need_rd_w ? D_RD : D_WR;
+      end else d_state <= D_FADV;
+      // The advance, once the pace allows: the cursor moves (the last step's too - the
+      // Xe10's CURD reads the cursor one step past the figure's last dot) and the figure's
+      // own counters step.
+      D_FADV: if (f_adv_go_w) begin
+        d_waddr <= adv_waddr_w;
+        d_mask  <= adv_mask_w;
+        case (f_type)
+          T_LINE: begin
+            f_d    <= f_dsum_w;
+            d_left <= d_left - 16'd1;
+            d_color <= {d_color[0], d_color[15:1]};
+          end
+          T_ARC: begin
+            f_d  <= f_dsum_w;
+            f_d1 <= f_d1m_w;
+            if (!f_axial_w) f_d2 <= f_d2 - 14'd2;
+            if (f_plot_w) d_color <= {d_color[0], d_color[15:1]};
+            else          f_dm <= f_dm - 14'd1;
+            d_left <= d_left - 16'd1;
+          end
+          T_RECT: begin
+            d_color  <= {d_color[0], d_color[15:1]};
+            if (f_sstart) d_ope <= d_ope + 3'd2;
+            f_sstart <= f_pix_last_w;
+            if (f_pix_last_w) begin
+              f_side <= f_side + 2'd1;
+              d_left <= {2'd0, f_side[0] ? f_d1 : f_d2};
+            end else d_left <= d_left - 16'd1;
+          end
+          T_CHAR: begin
+            if (!f_zd_end_w) f_zd <= f_zd + 4'd1;
+            else if (!f_pix_last_w) begin
+              f_zd    <= 4'd0;
+              d_left  <= d_left - 16'd1;
+              d_color <= {d_color[0], d_color[15:1]};
+            end else begin
+              f_zd    <= 4'd0;
+              d_left  <= {2'd0, f_d2};
+              d_ope   <= d_ope + 3'd4;
+              f_par   <= !f_par;
+              d_color <= f_rpat_w;
+              if (f_zdc != gdc2_zoom) f_zdc <= f_zdc + 4'd1;
+              else begin
+                f_zdc <= 4'd0;
+                f_row <= f_row + 3'd1;
+                f_d   <= f_d - 14'd1;
+              end
+            end
+          end
+          default: ;
+        endcase
+        if (f_last_w) begin
+          d_fig   <= 1'b0;
+          d_state <= D_IDLE;
+          // The cursor write-back, as the WRITE's (the parser is held while the
+          // figure draws, so no guest write meets it).
+          gdc2_csrw[0] <= adv_waddr_w[7:0];
+          gdc2_csrw[1] <= adv_waddr_w[15:8];
+          gdc2_mask[0] <= adv_mask_w[7:0];
+          gdc2_mask[1] <= adv_mask_w[15:8];
+        end else d_state <= D_FSTEP;
       end
       default: d_state <= D_IDLE;
     endcase
     end
   end
+
+  // The command FIFO's storage: a plain synchronous-read memory with no reset on its read
+  // register, so it builds as block RAM (a 16 x 9 array). A push never meets a pop at one
+  // address: a push needs a free slot, so the write pointer equals the read pointer only
+  // when the FIFO is empty, and a pop needs it nonempty.
+  always @(posedge clk_sys) begin
+    if (cf_push_w) cf_mem[cf_wp] <= {(io_addr == 8'hA2), io_din};
+    if (cf_pop_w)  cf_q <= cf_mem[cf_rp];
+  end
+
+`ifndef SYNTHESIS
+  // The contract (R8): one parser source per cycle; the FIFO-sourced byte never meets the
+  // guest's read-back pop; the figure arm and its start never share a cycle; nothing reaches
+  // the parser while a draw holds it (so the start's VECTW reset and the cursor
+  // write-back have the registers to themselves); a WRITE trigger finds the engine empty
+  // (so no job is dropped or overtaken).
+  always @(posedge clk_sys) if (rst_n_sys) begin
+    if (byp_w && cf_pop_v)
+      $fatal(1, "pc9821_gdc2: a bus byte and a FIFO byte reached the parser together");
+    if (cf_take_w && io_rd && (io_addr == 8'hA2))
+      $fatal(1, "pc9821_gdc2: a FIFO command met a read-back pop");
+    if (p_fig_w && f_start_w)
+      $fatal(1, "pc9821_gdc2: a figure was armed in its own start cycle");
+    if ((p_cmd || p_par) && cf_hold_w)
+      $fatal(1, "pc9821_gdc2: the parser took a byte while a draw held it");
+    if (draw_fire_w && (pend_valid || (d_state != D_IDLE)))
+      $fatal(1, "pc9821_gdc2: a WRITE fired while a job was queued or walking");
+    if (d_load_w && f_start_w)
+      $fatal(1, "pc9821_gdc2: a WRITE job and a figure started together");
+  end
+`endif
 
   // ---------------------------------------------------------------
   // Graphics display address: NP2kai's partition walk (vram/makegrph.c makegrph +
@@ -785,6 +1173,22 @@ module pc9821_gdc2 (
   reg [15:0] v_gstart1, v_gstart2, v_gstart3, v_gstart4;
   reg [9:0]  v_glines1, v_glines2, v_glines3, v_glines4;   // raster lines; 0 = never expires
   reg [3:0]  v_gim;         // each partition's im bit: its step is PITCH at 1, 2 x PITCH at 0
+  // THE PACKED WALK'S STRIDE, in 8-byte units: NP2kai makegrphex (vram/makegrex.c:286-291)
+  // `mg.pitch = gdc.s.para[GDC_PITCH]; if (!(gdc.clock & 0x80)) mg.pitch <<= 1;
+  // mg.pitch &= 0xfe;` - PITCH at 5 MHz, 2 x PITCH at 2.5 MHz, masked to an even BYTE (a
+  // 2.5 MHz PITCH of 0x80 is a stride of 0). The SCROLL "im" bit is NOT read there (it is
+  // the planar arm's select). The machine's defaults (PITCH 40, 2.5 MHz) give 80 units =
+  // 640 bytes; the firmware's 640x480 table (PITCH 80 at 5 MHz) the same 640; the Win95
+  // driver's PITCH 0x80 at 5 MHz 1024 bytes - its frame stride (PEGCV8.DRV's 640x480 mode
+  // row `31 00 01 00 04 01 80 00` at seg 2 @0x0BCC: bytes 3-4 a 0x0400-byte pitch; the PITCH
+  // byte it sends is seg 2 @0x0B37 `mov al,0x80`). MAME
+  // steps `pitch << (im ^ 1)` (pc9821.cpp:103-106) and is outranked. Latched at the frame
+  // boundary with the line repeat: NP2kai renders a frame from one PITCH.
+  reg [7:0]  v_pstride;
+  // THE PLANAR WALK'S PITCH: the guest's PITCH byte as it stands at the frame boundary
+  // (makegrph.c:147 `pitch = gdc.s.para[GDC_PITCH];`, one PITCH per rendered frame); each
+  // partition's im bit then picks PITCH or 2 x PITCH (w_gstep).
+  reg [7:0]  v_gpitch;
   reg [4:0]  v_lr2;         // slave CSRFORM[4:0] = lr-1, so lr = 1..32 raster lines per
                             // GDC line (makegrph.c:362 `mg.lr = (gdc.s.para[GDC_CSRFORM] &
                             // 0x1f) + 1`); lr = 2 is the 640x200 doubling - the ADDRESS step
@@ -796,10 +1200,15 @@ module pc9821_gdc2 (
       v_glines1 <= 10'd0; v_glines2 <= 10'd0; v_glines3 <= 10'd0; v_glines4 <= 10'd0;
       v_gim <= 4'd0;        // the power-on SCROLL block is the machine's im = 0
       v_lr2 <= 5'd0;        // the captured CSRFORM reset: lr = 1, one stride per raster line
+      v_pstride <= 8'd80;   // PITCH 40 at 2.5 MHz (the reset values above)
+      v_gpitch  <= 8'd40;   // gdc2_pitch's reset value
     end else begin
       // The CSRFORM line repeat is a single field with no multi-register coherence to
       // preserve, so it needs only a frame-boundary latch, not the cfg_dirty handshake.
       if (w_start || (pixel_ce && frame_end)) v_lr2 <= gdc2_lr;
+      if (w_start || (pixel_ce && frame_end))
+        v_pstride <= (gdc_5m ? gdc2_pitch : {gdc2_pitch[6:0], 1'b0}) & 8'hFE;
+      if (w_start || (pixel_ce && frame_end)) v_gpitch <= gdc2_pitch;
       if (snap_now) begin
         v_gstart1 <= g_start_w[0]; v_gstart2 <= g_start_w[1];
         v_gstart3 <= g_start_w[2]; v_gstart4 <= g_start_w[3];
@@ -815,8 +1224,10 @@ module pc9821_gdc2 (
   reg  [4:0]  w_mulc;     // NP2kai's mul - 1: raster lines left before the next step
   reg  [15:0] w_vad;      // NP2kai's vad, 16 bits (the packed walk's page is bit 15)
   reg         w_ph;       // the raster line's parity when the walker last stepped
+  reg         w_nz;       // the raster line was not line 0 when the walker last looked
   // The next partition's fields, and this one's step.
-  // THE PACKED (256-colour) WALK differs in two ways, both NP2kai vram/makegrex.c's:
+  // THE PACKED (256-colour) WALK differs in three ways, all NP2kai vram/makegrex.c's: its
+  // stride is v_pstride (the guest's PITCH and the GDC clock, not the im bit), and
   // makegrphex loops `grphput(&mg, 0)` / `grphput(&mg, 4)` only - partition 2 returns to
   // partition 1, the TEXTW slots are never a display partition - and grphput_all steps
   // `vad = LOW16(vad + mg.pitch)` on EVERY raster line, never reading the CSRFORM line
@@ -830,13 +1241,18 @@ module pc9821_gdc2 (
   wire [9:0]  w_nlines = w_pk2 ? v_glines1 :
                          (w_part == 2'd0) ? v_glines2 : (w_part == 2'd1) ? v_glines3 :
                          (w_part == 2'd2) ? v_glines4 : v_glines1;
-  wire [15:0] w_pitch  = v_gim[w_part] ? {8'd0, GDC2_PITCH} : {7'd0, GDC2_PITCH_X2};
+  wire [7:0]  w_gstep  = (v_gim[w_part] ? v_gpitch : {v_gpitch[6:0], 1'b0}) & 8'hFE;
+  wire [15:0] w_pitch  = pegc_256 ? {8'd0, v_pstride} : {8'd0, w_gstep};
   // One step of the walk to the next line (NP2kai's per-line tail).
   wire        w_s_next = (w_remain == 10'd1);
   wire [15:0] w_s_vad  = w_s_next ? w_nstart :
                          (w_mulc == 5'd0) ? w_vad + w_pitch : w_vad;
   // The raster advanced a line and the walker has not stepped for it yet.
-  wire        w_lag    = (vline[0] != w_ph);
+  // The parity alone misses the frame wrap of an ODD frame (VTOTAL-1 and 0 are both even):
+  // the BIOS 31 kHz blocks are 449 and 525 lines (NP2kai bios/bios18.c gdcmastersync[2..5]),
+  // and the walk then held one line across the wrap and showed every line below row 1 one
+  // raster line late. The wrap is the step into line 0 from any other line.
+  wire        w_lag    = (vline[0] != w_ph) || ((vline == 10'd0) && w_nz);
   // ...and the decode line is past the window's first line: above grph_vbp the walk waits
   // at its line 0 (makegrph starts at mg.liney = grph_vbp).
   wire        w_adv    = w_lag && (v_oline > {4'd0, v_gvbp});
@@ -845,10 +1261,11 @@ module pc9821_gdc2 (
   always @(posedge clk_sys) begin
     if (!rst_n_sys) begin
       v_wrap_d <= 1'b0;
-      w_part <= 2'd0; w_remain <= 10'd0; w_mulc <= 5'd0; w_vad <= 16'd0; w_ph <= 1'b0;
+      w_part <= 2'd0; w_remain <= 10'd0; w_mulc <= 5'd0; w_vad <= 16'd0; w_ph <= 1'b0; w_nz <= 1'b0;
     end else begin
       v_wrap_d <= v_wrap;
       w_ph     <= vline[0];
+      w_nz     <= (vline != 10'd0);
       if (w_start) begin
         w_part   <= 2'd0;
         w_vad    <= w_i_vad;
@@ -884,15 +1301,22 @@ module pc9821_gdc2 (
   // the queue nonempty (NP2kai gdc_ia0 `if (gdc.s.snd) ret |= 0x01;`,
   // io/gdc.c:764-765). The 2M-sample histogram's dead bit 0 at 0xA0
   // (docs/probes/GDC.TXT) does not refute that: the probe
-  // never arms a slave read-back (tools/hwprobe/probe2/probe2.s:1488-1540 samples
+  // never arms a slave read-back (tools/hwprobe/probe2/probe2.s:1684-1730 (`sec_gdc:`) samples
   // the bare status port), so the queue is empty all capture and "hardwired 0" is
   // indistinguishable from "empty". 0xA2 is NOT a second status byte: it pops the slave's parameter
   // read-back queue and answers 0xFF with nothing pending (NP2kai gdc_ia2,
   // io/gdc.c:813-820) - the machine agrees (probes/PROBE.TXT `GDC status 60 A0 A2:
-  // 05 04 ff`, i.e. 0xA2 = 0xFF while 0xA0 carried the status), which is what
-  // review readbacks.md P3 is about.
+  // 05 04 ff`, i.e. 0xA2 = 0xFF while 0xA0 carried the status).
   // ---------------------------------------------------------------
-  wire [7:0] gdc2_status = {1'b0, stat_blank, stat_vsync, 2'b00, 1'b1, 1'b0,
+  // Bit 2 (FIFO empty) is the same queue's complement: the Xe10 read the slave status as 0x04
+  // with nothing queued and 0x01 after arming a read-back (docs/probes/RDBACK.TXT:172
+  // `00A0 status before arm = 04 ; after 0xE0 arm = 01`; `after 0xC0 arm = 01`).
+  // Bit 3 is DRAWING: a WRITE or a figure in the engine, queued or armed - the Xe10 reads
+  // 0x0C through a draw and 0x04 after it (GDCFIFO DRAW_BURST/POST_DRAW). Bit 1 is the
+  // command FIFO full, and bit 2 also needs that FIFO empty (a byte queued behind a draw).
+  wire       gdc2_drawing = (d_state != D_IDLE) || pend_valid || fig_pend;
+  wire [7:0] gdc2_status = {1'b0, stat_blank, stat_vsync, 1'b0, gdc2_drawing,
+                            (gdc2_snd_cnt == 3'd0) && !cf_busy_w, (cf_cnt == 5'd16),
                             (gdc2_snd_cnt != 3'd0)};   // bit 0: read-back data available
   assign io_dout = (io_addr == 8'hA0) ? gdc2_status :
                    (io_addr == 8'hA2) ? gdc2_snd_q  : 8'hFF;

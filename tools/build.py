@@ -6,13 +6,13 @@ not wrong about the fit; it was wrong about being a shell, and each of the three
 incidents the tooling round was asked to fix shows up here:
 
   * THE BUILD MUST OUTLIVE ITS LAUNCHER. A fit ran under a launcher that was killed
-    (a timed-out agent tool), the SIGHUP reached the `podman run` child, and the
+    (a timed-out parent process), the SIGHUP reached the `podman run` child, and the
     artifacts were lost with the scratch. Here every long-running child is started
     with start_new_session=True, and `--detach` re-execs this whole program in its own
     session so even the copy-back and the status write happen with no launcher alive.
 
   * THE BUILD MUST SAY WHETHER IT SUCCEEDED, ONCE, RELIABLY. The old flow hid errors
-    in `>/dev/null` and left workers to invent `sleep N; tail log` polling. This prints
+    in `>/dev/null` and left callers to invent `sleep N; tail log` polling. This prints
     exactly one verdict line -- `BUILD: PASS` or `BUILD: FAIL <why>` -- exits 0/1, and
     records the same verdict in .build/quartus.status.json, which `tools/wait_build.py`
     reads. The RBF's existence is checked in the same place, so "the fit exited 0 but
@@ -33,9 +33,11 @@ Usage:
   tools/build.py --profile-file sweep.toml           # (any build_profile.py override)
 
 Environment (unchanged from container_build.sh): QUARTUS_IMAGE, CONTAINER_RUNTIME,
-QUARTUS_SCRATCH, QUARTUS_SEED, QUARTUS_AGGRESSIVE, QUARTUS_FIT_SETTINGS, and
+QUARTUS_NICE (the fit's CPU niceness, default 19 with idle I/O; 0 = normal priority), QUARTUS_SCRATCH, QUARTUS_SEED, QUARTUS_AGGRESSIVE, QUARTUS_FIT_SETTINGS, and
 QUARTUS_POST_STA_TCL: a quartus_sta Tcl script run against the fitted database after a
-successful flow, its output saved as output_files/post_sta.txt - so a seed sweep (which deletes
+successful flow, its output saved as output_files/post_sta.txt (tools/timing/sdram_io.tcl, the
+SDRAM pin interface at every corner into output_files/sdram_io.txt, runs after EVERY successful
+flow regardless) - so a seed sweep (which deletes
 each seed's tree) keeps the path detail the stock sta.rpt does not carry.
 
 The fitter-settings snippet is how a settings experiment reaches the scratch qsf without
@@ -119,6 +121,13 @@ class Build:
         self.env = env
         self.runtime = env.get("CONTAINER_RUNTIME", "podman")
         self.image = env.get("QUARTUS_IMAGE", "docker.io/raetro/quartus:mister")
+        # A fit is batch work on a shared machine: the container runs at the lowest CPU priority
+        # and idle I/O class, so an interactive or other workload on the same host goes first.
+        # Niceness is inherited across fork, and podman forks conmon and the container from this
+        # client, so the whole fit runs at it. Under CONTAINER_RUNTIME=docker it does NOT: the
+        # docker daemon starts the container, so nice/ionice reach only the client; set the
+        # priority on the daemon's side there. QUARTUS_NICE=0 runs at normal priority.
+        self.nice = int(env.get("QUARTUS_NICE", "19") or 0)
         self.project = opts.project
         self.scratch = Path(env.get("QUARTUS_SCRATCH") or (REPO_ROOT / ".build" / "quartus"))
         self.seed = opts.seed
@@ -352,6 +361,7 @@ class Build:
         def in_container(*cmd: str) -> int:
             code, out = run(
                 [
+                    *(["nice", "-n", str(self.nice), "ionice", "-c", "3"] if self.nice else []),
                     self.runtime, "run", "--rm", "--name", container,
                     "-e", "HOME=/tmp",
                     "-v", f"{self.scratch}:/work",
@@ -390,6 +400,19 @@ class Build:
             if fit_code == 0:
                 print("==> DTM fallback: fit, assembler and STA completed")
 
+        # The SDRAM pin interface at EVERY corner (tools/timing/sdram_io.tcl), always: the flow's
+        # STA summary is the slow corner's output paths only, and the read capture's window binds
+        # at the fast corner, so without this no fit records half of the window the deploy gate
+        # (seed_sweep.py --min-sdram-io) reads. Its failure is reported, never a build failure:
+        # the gate then sees no record, which it treats as not deployable.
+        if fit_code == 0 and not DRY:
+            shutil.copy2(TOOLS_DIR / "timing" / "sdram_io.tcl", self.scratch / "sdram_io.tcl")
+            run([self.runtime, "rm", "-f", container])
+            code = in_container("bash", "-lc",
+                                "/opt/intelFPGA/quartus/bin/quartus_sta -t sdram_io.tcl "
+                                "> output_files/sdram_io.log 2>&1")
+            print(f"==> SDRAM I/O corner STA: exit {code} (output_files/sdram_io.txt)")
+
         # The opt-in path report (QUARTUS_POST_STA_TCL): run while the database still exists,
         # into output_files so the copy below (and a sweep's per-seed copy) keeps it. Its
         # failure is reported but never fails the build - the fit's own verdict stands.
@@ -424,6 +447,22 @@ class Build:
             if not self.rbf.exists():
                 self.fail(f"{self.rbf} was not produced")
             self.digest = _sha256(self.rbf)
+            # Which register drives each SDRAM pin is decided by the fitter and invisible to every
+            # simulation (a build whose DQ output enable came from a DDIO_OE atom passed them all
+            # and was black on hardware): the fit's own pin tables must name the intended ones.
+            self.step(
+                [sys.executable, str(TOOLS_DIR / "check_sdram_pins.py"), "--reports", str(out),
+                 "--project", self.project],
+                "check the SDRAM pins' output and output-enable registers",
+            )
+            # The placement's own record, beside the RBF: which seed drew it and the pll_hdmi
+            # margin it drew. fit-source.sha256 above describes the SOURCE and is written before
+            # the fit; this is what tools/mister_load.sh gates the deploy on.
+            self.step(
+                [sys.executable, str(TOOLS_DIR / "fit_metrics.py"), "--write-artifact", str(out),
+                 *(["--seed", str(self.seed)] if self.seed is not None else [])],
+                "write the artifact timing record",
+            )
 
         tree_after = self.capture(
             [sys.executable, str(TOOLS_DIR / "check_fit.py"), "--rtl-hash-of", str(REPO_ROOT)],

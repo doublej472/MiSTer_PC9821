@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: BSD-2-Clause
+// Copyright (c) 2014, Aleksander Osman; Copyright (C) 2017-2020 Alexey Melnikov.
+// Derived from ao486_MiSTer rtl/soc/sound/sound.v, module sb_volume
+// (https://github.com/MiSTer-devel/ao486_MiSTer). Licence text: NOTICE, part 4.
+
 // N-channel audio volume attenuator for the PC-9821 core.
 //
-// The 5-bit table and the DSP-targeted multiply are unchanged except at code 0,
-// which is TRUE ZERO now (it used to be a -62 dB floor that leaked +-25/26 LSB
-// at full scale - review-audio-volume F1).
+// The 5-bit table and the DSP-targeted multiply; code 0 is TRUE ZERO (a -62 dB
+// floor there would leak +-25/26 LSB at full scale).
 `default_nettype none
 
 module pc9821_audio_volume
@@ -26,7 +30,7 @@ module pc9821_audio_volume
 // 2 dB steps. Code 0 is exact silence because NP2kai's volume-0 paths are exact
 // zeros - sound/beepg.c:161-163 gates the beeper generator on beepcfg.vol and
 // every OSD volume is a linear multiplier (sound/beepg.c:57/113,
-// cbus/ideio.c:1737-1745) - so 0 can never leak (review-audio-volume F1).
+// cbus/ideio.c:1737-1745) - so 0 can never leak.
 // 32 x 16 = 512 bits packed into one vector
 localparam [511:0] gain_lut = {
     16'hFFFF, //   0 dB (17'h10000 will be used for unity gain)
@@ -64,7 +68,7 @@ localparam [511:0] gain_lut = {
 };
 
 localparam [3:0] CH_LAST = 4'(NUM_CH-1);
-// Power-up state (review r2-resets F2): this module has no reset port - it runs
+// Power-up state: this module has no reset port - it runs
 // free on CLK_AUDIO - so the seeds below ARE its reset. `ch` is self-fed
 // (ch <= (ch == CH_LAST) ? 0 : ch + 1): unseeded it X-locks in 4-state sim and
 // poisons gain/sample, samples_out (the 10-channel master mix) and valid
@@ -94,11 +98,11 @@ reg         gain_valid = 1'b0;
 // The 32-entry gain table is a 32x17 M10K ROM, not a LUT-selected packed vector.
 // The synchronous read's capture register `gain_q` carries NO power-up value - a
 // seed or reset on the read-capture register makes Quartus refuse the RAM and
-// build the table out of LUTs (`Info 276007`) - so the startup-silence
-// seed `gain` used to carry is expressed as the one-clk `gain_valid` guard on the
-// wire instead, exactly as pc9821_kbd's `rom_valid` does. Unlike pc9821_kbd's ROM
-// the original `gain` was already a register captured one clk after `ch`, so the
-// registered read has the SAME latency and `sample`/`valid` need no extra stage.
+// build the table out of LUTs (`Info 276007`) - so the startup silence is the
+// one-clk `gain_valid` guard on the wire instead, exactly as pc9821_kbd's
+// `rom_valid` does. Unlike pc9821_kbd's ROM, a LUT-table `gain` is also a register
+// captured one clk after `ch`, so the registered read has the SAME latency and
+// `sample`/`valid` need no extra stage.
 // Measured module-alone (tools/res_exp_map.py): the M10K form is 128 ALMs /
 // 182 regs + 544 M10K bits vs the LUT form's 134 ALMs / 198 regs; the
 // `ramstyle = "MLAB"` spelling is silently ignored by Quartus 17.0.2 (the ROM

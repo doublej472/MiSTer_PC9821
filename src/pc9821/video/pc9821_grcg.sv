@@ -22,32 +22,29 @@ module pc9821_grcg (
 
     // Register write port, driven from the pc9821_iobus device bus. 0x7C is the
     // mode and resets the tile pointer; 0x7E is the next of four tile bytes
-    // B,R,G,E. The 0x7C READ is NOT answered from `mode_r` any more: the port is
+    // B,R,G,E. The 0x7C READ is not answered from the mode register: the port is
     // WRITE-ONLY on the machine and its byte read is open bus 0xFF (probe2
     // /RDBACK wrote 0x5A and read FF anyway, docs/probes/RDBACK.TXT:152).
-    // NP2kai's crtc_i7c returns grcg.modereg (io/crtc.c:46-50, the behaviour the
-    // iobus-tram review adjudicated as F2) and is the weaker source; the earlier
-    // reading of one as-found 0xFF byte as "the write-only model also produces it
-    // when modereg holds 0xFF" is refuted by that post-write read.
+    // NP2kai's crtc_i7c returns grcg.modereg (io/crtc.c:46-50) and is the weaker
+    // source: the post-write read shows no live register behind the port.
     // A WORD read at 0x7C answers 0x00FF - NP2kai's TERM_MINUS zero-extends the
     // 16-bit IN and never fetches 0x7D (io/iocore16.tbl:23-26, io/iocore.c:781-782),
     // so lane 1 is 0x00, and lane 0 is the 0xFF byte read above (the word form was
     // never machine-measured - TODO item 42). 0x7E is NOT in that table, so a word read at 0x7E
-    // byte-splits and its high byte is 0x7F's open bus (review-grcg F1's
-    // zero-extend claim covers 0x7C only). pc9821_iobus assembles both
+    // byte-splits and its high byte is 0x7F's open bus (the zero-extend covers 0x7C
+    // only). pc9821_iobus assembles both
     // (tb_pc9821_iobus pins them).
     input wire       port_we,
     input wire [7:0] port_addr,
     input wire [7:0] port_din,
 
-    // The live mode register. NOT a guest read-back: 0x7C is write-only and its
-    // byte read is open bus 0xFF (docs/probes/RDBACK.TXT:152), so this output's
-    // only consumer is pc9821_crtc's now-unconsumed grcg_mode_r input.
-    output wire [7:0] mode_r,
-
     // The GRCG's store gate (mode bit 7), exported so pc9821_gvram's dispatch can
     // ask before it hands over a store. This is the single definition of mode bit 7.
     output wire expand_gate,
+    // mode bit 7's NEXT state, exported so pc9821_system's pc9821_egc_mem_gate can register
+    // the EGC x GRCG memory gate from both sources' next state (a true pipeline relocate; the
+    // mode register below is loaded from THIS expression, so it is one definition, not a copy).
+    output wire expand_gate_nx,
 
     // The tile-compare read gate (mode bit 7 set, bit 6 clear), exported for the same
     // dispatch: NP2kai sends a read in exactly this mode to memtcr0/1_rd*, and a read
@@ -61,6 +58,10 @@ module pc9821_grcg (
     input  wire        cpu_write,
     input  wire [15:0] cpu_addr,
     input  wire [31:0] cpu_din,
+    // cpu_din's per-byte 0x00 / 0xFF flags, formed by pc9821_gvram_share on each of its operands
+    // before its select (gvr_din_z / gvr_din_f; docs/timing.md C7-dz)
+    input  wire [3:0]  cpu_din_z,
+    input  wire [3:0]  cpu_din_f,
     input  wire [3:0]  cpu_be,
     output wire [31:0] cpu_dout,
     output wire        cpu_ready,
@@ -106,6 +107,23 @@ module pc9821_grcg (
     output wire        cl_hold_rmw,         // rmw_q
     output wire  [3:0] cl_hold_datum0,      // cl_datum0_r
     output wire  [3:0] cl_hold_mergeable,   // cl_mergeable_r
+    // ... and the rest of both arms, whole (docs/timing.md, C7-tail): every muxed cl_* port above
+    // is `cl_cap ? cl_cap_* : cl_hold_*` of these (cl_valid/cl_write are 1 on the capture arm), so
+    // pc9821_gvram_arb forms its port-A presentation once per arm and cl_cap selects the result.
+    output wire        cl_cap_burst,        // tdw_burst
+    output wire        cl_cap_pair_high,    // pair_high: the TDW burst's high pair (cl_cap_addr[1] under a burst)
+    output wire [15:0] cl_cap_addr,
+    output wire  [3:0] cl_cap_wbe,
+    output wire [31:0] cl_cap_wdata,
+    output wire [63:0] cl_cap_wdata2,
+    output wire  [3:0] cl_cap_be,           // cpu_be
+    output wire        cl_hold_valid,       // cl_valid_r
+    output wire        cl_hold_write,       // cl_write_r
+    output wire        cl_hold_burst,       // cl_burst_r
+    output wire [15:0] cl_hold_addr,        // cl_addr_r
+    output wire  [3:0] cl_hold_wbe,         // cl_wbe_r
+    output wire [31:0] cl_hold_wdata,       // cl_wdata_r
+    output wire [63:0] cl_hold_wdata2,      // cl_wdata2_r
     input  wire [31:0] cl_rdata,
     input  wire        cl_done,
 
@@ -131,8 +149,12 @@ module pc9821_grcg (
   reg [1:0] tile_cnt;
 
   assign expand_gate = mode[7];
+  // mode[7]'s NEXT state: the register's own 0x7C update, exported for the EGC gate register.
+  // The reset term is the module's own `reset` (pc9821_memory_subsystem wires it as
+  // `reset || !cpu_run`), matching the mode register's `if (reset) mode <= 0`.
+  assign expand_gate_nx = reset ? 1'b0
+                        : ((port_we && (port_addr == 8'h7C)) ? port_din[7] : mode[7]);
   assign tcr_gate    = mode[7] & ~mode[6];
-  assign mode_r      = mode;
 
   // ---------------------------------------------------------------------------
   // Sequencer. The register file is written by 0x7C/0x7E and read at the walk's ACCEPT and
@@ -143,8 +165,7 @@ module pc9821_grcg (
   // are NOT latched there: the walk reads them live deep into its merge (G_RMWC), and they stay
   // put only because THIS module holds `rmw_q`/`cl_wbe_r`/`cl_wdata_r`/`be_q` until its next
   // capture and cannot capture again before its own `cl_done` (G_STW: `if (cl_done)`). That is
-  // an invariant, not a latch - pc9821_gvram_arb's assertion pins it (its check (7), gvram-arb
-  // review F6.3): if this module ever posts (advances on accept like the EGC's S_WR_B_ACC), the
+  // an invariant, not a latch - pc9821_gvram_arb's assertion pins it (its check (7)): if this module ever posts (advances on accept like the EGC's S_WR_B_ACC), the
   // merge inputs move mid-walk and G_RMWC corrupts the word. So a guest `out 0x7C`/`out 0x7E`
   // that lands while a store drains (the accept-and-decouple does not hold the CPU off for the
   // walk) cannot move the walk in flight. The TCR READ still holds the CPU (its `cpu_ready` is in
@@ -196,7 +217,15 @@ module pc9821_grcg (
   // The four tile bytes are per plane -- blue gets the blue tile, red the red
   // tile -- so the column word is {E,G,R,B} = {tile[3],tile[2],tile[1],tile[0]}.
   wire [31:0] tile_w = {tile[3], tile[2], tile[1], tile[0]};
-  assign cl_tile = tile_w;
+  // The walk's tile is the tile IN EFFECT AT THE CAPTURE: live in the capture cycle, then the
+  // copy latched beside it (`cl_wdata2_r`, which every store capture writes; the GVRAM reads
+  // its hold image only for a burst, so a walk's copy there is never presented as data).
+  // pc9821_gvram_arb latches `m_tile` at its ACCEPT, which is later than the capture whenever the
+  // previous store's period (GVRAM_GR_HOLD) is still running - and the guest's next instructions
+  // run in that wait: Viper CTR's column RLE (SGS386 0040:0298) issues `stosb` then four
+  // `out 0x7E` tile loads, and a live tile here wrote (part of) the NEXT tile. The 486 bus is in
+  // order and NP2kai memtdw/memrmw write grcg.tile at the store (tb_pc9821_grcg_tile_order).
+  // (the assign sits after `cap_store`'s declaration, below)
 
   // The TCR read's burst: the enabled lanes' run [first_lane, last_lane] is ONE request, and
   // the i-th returned word is the column first_lane + i.
@@ -213,11 +242,8 @@ module pc9821_grcg (
   // classifies the store the G_IDLE branch is about to present, so it reads the LIVE access and
   // needs no latch of its own.
   wire [3:0]  be_seen  = cpu_be;
-  wire [31:0] din_seen = cpu_din;
-  wire pair0_ok = (be_seen[1:0] == 2'b11) &&
-                  (!mode[6] || ((din_seen[7:0] == 8'hFF) && (din_seen[15:8] == 8'hFF)));
-  wire pair1_ok = (be_seen[3:2] == 2'b11) &&
-                  (!mode[6] || ((din_seen[23:16] == 8'hFF) && (din_seen[31:24] == 8'hFF)));
+  wire pair0_ok = (be_seen[1:0] == 2'b11) && (!mode[6] || (cpu_din_f[0] && cpu_din_f[1]));
+  wire pair1_ok = (be_seen[3:2] == 2'b11) && (!mode[6] || (cpu_din_f[2] && cpu_din_f[3]));
   // Only an access whose enables are EXACTLY whole pairs (0011 / 1100 / 1111) may take the
   // burst; any other set (a byte, or lanes spanning a pair) has no two-word request that
   // covers it and takes the client walk instead.
@@ -255,8 +281,8 @@ module pc9821_grcg (
   // ready once. There is no second ready at the walk's end: a ready z486 has already consumed
   // would be taken for the NEXT request's accept.
   //
-  // The guest's `out 0x7C`/`out 0x7E` can now run while the walk drains (it could not while the
-  // walk held the CPU), so the walk must not read the register file live: `cl_rmw`/`cl_wbe`/
+  // The guest's `out 0x7C`/`out 0x7E` can run while the walk drains (the walk does not hold
+  // the CPU), so the walk must not read the register file live: `cl_rmw`/`cl_wbe`/
   // `cl_wdata` are already latched at the capture, and pc9821_gvram latches the tile word at its
   // accept (`m_tile`).
   wire store_accept = (gstate == G_IDLE) && cpu_valid && expand_gate && cpu_write &&
@@ -269,53 +295,62 @@ module pc9821_grcg (
   // ---------------------------------------------------------------------------
   // THE PRESENTATION BUBBLE
   // ---------------------------------------------------------------------------
-  // The store the G_IDLE cycle captures is presented ON THAT CYCLE, not the next one. Before
-  // this, the capture latched `be_q`/`addr_q`/`rmw_q` and set the registered `cl_*` outputs, so
-  // the GVRAM saw the request one clk_sys later and resolved the walk's FIRST lane there: one
-  // clk_sys with the array idle in EVERY store, on exactly the shapes the sprite pass is made of
-  // (the GRCG RMW erase/draw). It is the same class of dead cycle removed on the GVRAM's
-  // own accept cycle, one level up in the client: there, the accepted access's accept cycle issued
-  // nothing; here, the captured store's capture cycle presented nothing.
+  // The store the G_IDLE cycle captures is presented ON THAT CYCLE, not the next one. Presented
+  // only from the registered `cl_*` outputs, the GVRAM would see the request one clk_sys later
+  // and resolve the walk's FIRST lane there: one clk_sys with the array idle in EVERY store, on
+  // exactly the shapes the sprite pass is made of (the GRCG RMW erase/draw). It is the same class
+  // of dead cycle the GVRAM's own accept cycle avoids, one level up in the client.
   //
   // The registered payload stays, and the walk still reads it for the cycles after the capture:
   // with the store's ready decoupled the guest's `out 0x7C`/`out 0x7E` can land while
   // the walk drains, so those fields MUST NOT be live. Only the CAPTURE cycle's own presentation
   // is live, and the GVRAM latches every field it needs (m_base/m_lane_be/m_tile) at its accept.
   wire cap_store = store_accept;
-  wire cap_tdw   = cap_store && tdw_burst;
-  wire [15:0] cap_addr = {cpu_addr[15], cpu_addr[14:2], cap_tdw && pair_high ? 2'b10 : 2'b00};
-  assign cl_valid  = cap_store | cl_valid_r;
+  assign cl_tile = cap_store ? tile_w : cl_wdata2_r[31:0];   // the walk's tile (see tile_w)
+  // The capture arm's own operands (the presentation's live side, read only under cap_store,
+  // where the capture's TDW class is tdw_burst itself) and the latched hold arm.
+  assign cl_cap_burst  = tdw_burst;
+  assign cl_cap_pair_high = pair_high;
+  assign cl_cap_addr   = {cpu_addr[15], cpu_addr[14:2], tdw_burst && pair_high ? 2'b10 : 2'b00};
+  // tdw_burst requires mode[3:0] == 0, where ~mode[3:0] is already 4'hF, so the burst's 4'hF
+  // and the walk's ~mode[3:0] are ONE function and the TDW class does not select it.
+  assign cl_cap_wbe    = ~mode[3:0];
+  assign cl_cap_wdata  = tdw_burst ? 32'hFFFF_FFFF : cpu_din;
+  assign cl_cap_wdata2 = {tile_w, tile_w};
+  assign cl_cap_be     = cpu_be;
+  assign cl_hold_valid  = cl_valid_r;
+  assign cl_hold_write  = cl_write_r;
+  assign cl_hold_burst  = cl_burst_r;
+  assign cl_hold_addr   = cl_addr_r;
+  assign cl_hold_wbe    = cl_wbe_r;
+  assign cl_hold_wdata  = cl_wdata_r;
+  assign cl_hold_wdata2 = cl_wdata2_r;
+  assign cl_valid  = cap_store | cl_hold_valid;
   // The registered presentation's next value, folded into ONE expression (R2): set by the
   // capture cycle above or by one of the FSM's later arms (the TDW second pair, the TCR
-  // read's first column), cleared by the accept. The clear used to sit after the case with
-  // a comment saying it wins "because it is LAST" - the position was the mechanism. As a
-  // boolean, the accept wins by construction: a presentation accepted in the cycle it is
+  // read's first column), cleared by the accept. As a boolean, the accept wins by
+  // construction, not by source position: a presentation accepted in the cycle it is
   // latched must not be re-presented after the walk.
   wire cl_valid_set = cap_store |
                       ((gstate == G_TDW) && cl_done && !tdw_p1 && p_both_q) |
                       (gstate == G_TB);
   wire cl_valid_clear = cl_valid && cl_ready;
-  assign cl_write  = cap_store ? 1'b1 : cl_write_r;
-  assign cl_burst  = cap_store ? cap_tdw : cl_burst_r;
-  assign cl_addr   = cap_store ? cap_addr : cl_addr_r;
-  assign cl_wbe    = cap_store ? (cap_tdw ? 4'hF : ~mode[3:0]) : cl_wbe_r;
-  assign cl_wdata  = cap_store ? (cap_tdw ? 32'hFFFF_FFFF : cpu_din) : cl_wdata_r;
+  assign cl_write  = cap_store ? 1'b1 : cl_hold_write;
+  assign cl_burst  = cap_store ? cl_cap_burst : cl_hold_burst;
+  assign cl_addr   = cap_store ? cl_cap_addr : cl_hold_addr;
+  assign cl_wbe    = cap_store ? cl_cap_wbe : cl_hold_wbe;
+  assign cl_wdata  = cap_store ? cl_cap_wdata : cl_hold_wdata;
   // The byte-zero image of cl_wdata (latched beside it as cl_datum0_r and exported on the
   // raw taps; the arbiter takes the capture cycle's own image as its cpu_din_datum0, the
-  // same function of the same datum). The TDW presentation's 4'b0000 override of the old
-  // muxed export was unobservable downstream (a TDW capture takes the burst arm, which
-  // never consults the flags) and is gone with it.
-  wire [3:0] cap_din0 = {(cpu_din[31:24] == 8'h00), (cpu_din[23:16] == 8'h00),
-                         (cpu_din[15:8]  == 8'h00), (cpu_din[7:0]   == 8'h00)};
+  // same function of the same datum). A TDW presentation needs no 4'b0000 override: a TDW
+  // capture takes the burst arm, which never consults the flags.
+  wire [3:0] cap_din0 = cpu_din_z;
   // The merge-eligible image (byte != 0x00 && != 0xFF): cl_mergeable_r is its latched form
-  wire [3:0] cap_dinmid = {(cpu_din[31:24] != 8'h00) && (cpu_din[31:24] != 8'hFF),
-                           (cpu_din[23:16] != 8'h00) && (cpu_din[23:16] != 8'hFF),
-                           (cpu_din[15:8]  != 8'h00) && (cpu_din[15:8]  != 8'hFF),
-                           (cpu_din[7:0]   != 8'h00) && (cpu_din[7:0]   != 8'hFF)};
-  assign cl_wdata2 = cap_store ? {tile_w, tile_w} : cl_wdata2_r;
+  wire [3:0] cap_dinmid = ~cpu_din_z & ~cpu_din_f;
+  assign cl_wdata2 = cap_store ? cl_cap_wdata2 : cl_hold_wdata2;
   // The walk's lane enables and its RMW class: live in the capture cycle (`cpu_be`/`mode[6]`, the
   // values the capture is about to latch), the latch after.
-  assign cl_be  = cap_store ? cpu_be : be_q;
+  assign cl_be  = cap_store ? cl_cap_be : be_q;
   assign cl_rmw = cap_store ? mode[6] : rmw_q;
   assign cl_cap = cap_store;
   assign cl_cap_rmw = mode[6];
@@ -420,6 +455,7 @@ module pc9821_grcg (
             cl_datum0_r <= cap_din0;
             cl_mergeable_r <= cap_dinmid;
             cl_wbe_r   <= ~mode[3:0];
+            cl_wdata2_r <= {tile_w, tile_w};   // the walk's tile, held for a delayed accept
             gstate   <= G_STW;
           end
         end

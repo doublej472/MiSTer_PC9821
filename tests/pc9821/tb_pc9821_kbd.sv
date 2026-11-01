@@ -1,4 +1,4 @@
-// tb_pc9821_kbd — focused MiSTer Set-2, uPD8251, command, and FIFO checks.
+// tb_pc9821_kbd - focused MiSTer Set-2, uPD8251, command, and FIFO checks.
 
 `timescale 1ns / 1ps
 
@@ -21,6 +21,9 @@ module tb_pc9821_kbd;
 
   // ==== DUT ====
   pc9821_kbd #(
+      // The presentation pace is shrunk so the bench's back-to-back keys and reads
+      // stay inside read_byte's budget; the real tick is SYS_CLOCK_HZ / 1280.
+      .XFER_TICK_CYCLES(26'd8),
       // Shrink the HELP hold window so the bench can observe its release.
       .HELP_HOLD_CYCLES(28'd2000)
   ) dut (
@@ -134,8 +137,8 @@ module tb_pc9821_kbd;
     send_key(1'b0, 1'b1, 8'h75);
     read_byte(8'hBA);
 
-    // The yen/backslash key. Set-2 0x5D is the number-row key right of '=' on a
-    // US keyboard, and on the PC-98 that position is the yen key, PC-98 key
+    // The yen/backslash key in the US layout (the default). Set-2 0x5D is the backslash key
+    // on a US keyboard, and on the PC-98 the yen key, PC-98 key
     // 0x0D -- whose BIOS translation (BANK7@0x632B index 0x0D) is 0x5C, '\'.
     // Without this the DOS prompt has no path separator at all (no `CD \`, no
     // `COPY A:\*.* C:`), which is the first defect a user meets.
@@ -144,7 +147,7 @@ module tb_pc9821_kbd;
     send_key(1'b0, 1'b0, 8'h5D);
     read_byte(8'h8D);
 
-    // F1 -> NEC F1 0x62 (NP2kai lrcnv106 F1->0x62, review M1): the old F1->HELP
+    // F1 -> NEC F1 0x62 (NP2kai lrcnv106 F1->0x62): the old F1->HELP
     // remap left NEC F1 unreachable. HELP keeps its two other routes: End
     // (E0 0x69 -> 0x3F, the raw key number the ITF's POST reads to enter SETUP,
     // BANK4@0x4C3F) and the OSD bios_setup injector below.
@@ -237,9 +240,9 @@ module tb_pc9821_kbd;
     send_key(1'b1, 1'b0, 8'h04);
     send_key(1'b1, 1'b0, 8'h0C);
     send_key(1'b1, 1'b0, 8'h03);
-    // The translation ROM's read is registered (r13/299), so the last key's event lands one
+    // The translation ROM's read is registered, so the last key's event lands one
     // clk_sys after its send_key. One settle cycle lets the pipeline drain before the count.
-    // RE-PINNED 1 -> 2 cycles by T6 (owner-approved 2026-09-25):
+    // RE-PINNED 1 -> 2 cycles by T6:
     // the dedup table's read is registered too now, so the DECISION is one clk deeper; the
     // bytes and their order are unchanged, only the clk the event lands on.
     @(posedge clk); @(posedge clk); #1;
@@ -296,7 +299,7 @@ module tb_pc9821_kbd;
     // INITIALISED from translate(), so the comparison could not fail: it proved the
     // initial block ran, not that the table was right.
     // The full 512-entry table has no specification source -- NP2kai takes PC-98
-    // codes directly and carries no PS/2 mapping (r12/77 s1.3) -- so the entries
+    // codes directly and carries no PS/2 mapping -- so the entries
     // asserted here are the ones with an external anchor, each of which the
     // event-path checks above also pin against the guest-visible byte: the ITF's
     // own POST key (End -> 0x3F, BANK4@0x4C3F) and NP2kai's lrcnv106 (F1 ->
@@ -307,14 +310,21 @@ module tb_pc9821_kbd;
     begin : kbd_lut
       integer sw_i;
       integer mapped_cnt;
+      integer mapped_jis;
+      // The ROM is {jis, extended, set2}: entries 0..511 are the US layout (the default,
+      // layout_jis = 0, which this bench leaves unconnected-low), 512..1023 the JIS one.
       mapped_cnt = 0;
-      for (sw_i = 0; sw_i < 512; sw_i = sw_i + 1)
+      mapped_jis = 0;
+      for (sw_i = 0; sw_i < 512; sw_i = sw_i + 1) begin
         if (dut.kbd_lut[sw_i] !== 8'hFF) mapped_cnt = mapped_cnt + 1;
+        if (dut.kbd_lut[512 + sw_i] !== 8'hFF) mapped_jis = mapped_jis + 1;
+      end
       if (dut.kbd_lut[9'h01C] !== 8'h1D) fail("kbd_lut: Set-2 0x1C (A) is not NEC 0x1D");
       if (dut.kbd_lut[9'h076] !== 8'h00) fail("kbd_lut: Set-2 0x76 (Esc) is not NEC 0x00");
       if (dut.kbd_lut[9'h005] !== 8'h62) fail("kbd_lut: F1 is not NEC 0x62 (NP2kai lrcnv106)");
       if (dut.kbd_lut[9'h169] !== 8'h3F) fail("kbd_lut: End is not NEC 0x3F (the ITF's SETUP key)");
-      if (dut.kbd_lut[9'h05D] !== 8'h0D) fail("kbd_lut: Set-2 0x5D (yen) is not NEC 0x0D");
+      if (dut.kbd_lut[9'h05D] !== 8'h0D) fail("kbd_lut: Set-2 0x5D (US backslash) is not NEC 0x0D");
+      if (dut.kbd_lut[10'h25D] !== 8'h28) fail("kbd_lut: JIS Set-2 0x5D (]) is not NEC 0x28 (NP2kai sdlcnv106)");
       if (dut.kbd_lut[9'h058] !== 8'h71) fail("kbd_lut: Caps Lock is not NEC 0x71");
       if (dut.kbd_lut[9'h015] !== 8'h10) fail("kbd_lut: Set-2 0x15 (Q) is not NEC 0x10");
       if (dut.kbd_lut[9'h175] !== 8'h3A) fail("kbd_lut: E0 0x75 (Up) is not NEC 0x3A");
@@ -325,14 +335,19 @@ module tb_pc9821_kbd;
       if (dut.kbd_lut[9'h114] !== 8'h73) fail("kbd_lut: RCtrl is not NEC 0x73 (GRPH)");
       if (dut.kbd_lut[9'h051] !== 8'h33) fail("kbd_lut: Set-2 0x51 (RO) is not NEC 0x33");
       if (dut.kbd_lut[9'h06A] !== 8'h0D) fail("kbd_lut: Set-2 0x6A (Yen) is not NEC 0x0D");
-      $display("KBD_LUT: %0d mapped keys; the cited entries match the firmware/BIOS", mapped_cnt);
-      // 104 = the 99 anchored entries plus the JIS RO/Yen, raw PrintScreen and the
-      // three Windows keys Round 3 added (NP2kai sdlcnv106 maps all six). Set-2 0x78
-      // (F11) was the 105th and is UNMAPPED now: it answered 0x60 (STOP), a phantom
-      // STOP make from an ordinary function key (tb_pc9821_kbd_stop, NP2kai sdl/kbtrans.c
-      // maps F11 to nothing). The count moved with that fix; do not re-add a STOP source.
-      if (mapped_cnt != 104) begin
-        $display("FAIL: expected 104 mapped keys, found %0d", mapped_cnt);
+      $display("KBD_LUT: %0d mapped keys (US), %0d (JIS); the cited entries match the firmware/BIOS",
+               mapped_cnt, mapped_jis);
+      // 110 = the 99 anchored entries, the JIS RO/Yen and the 102nd key, the three Windows
+      // keys, the US ` key (@), the JIS conversion keys (katakana/hiragana, henkan,
+      // muhenkan), F11/F12 as VF1/VF2 and NumLock/ScrollLock as keypad = and ,. The JIS half
+      // is one fewer: its half/full-width key (set-2 0x0E) maps to nothing (NP2kai sdlcnv106
+      // has no GRAVE row). F11 must never be STOP again (tb_pc9821_kbd_stop).
+      if (mapped_cnt != 110) begin
+        $display("FAIL: expected 110 mapped keys (US), found %0d", mapped_cnt);
+        errors = errors + 1;
+      end
+      if (mapped_jis != 109) begin
+        $display("FAIL: expected 109 mapped keys (JIS), found %0d", mapped_jis);
         errors = errors + 1;
       end
     end
@@ -344,8 +359,8 @@ module tb_pc9821_kbd;
     if (dout & 8'h10) fail("8251 error reset did not clear overrun");
 
     // ---- OSD "Enter BIOS setup (hold HELP)": the guest sees HELP HELD, not a tap,
-    //      and the OPTION IS SAMPLED AT MACHINE RESET ONLY (owner requirement, lane
-    //      dip-settings): a mid-run OSD flip must do NOTHING to the running machine.
+    //      and the OPTION IS SAMPLED AT MACHINE RESET ONLY:
+    //      a mid-run OSD flip must do NOTHING to the running machine.
     //
     // The hold is armed from reset: make 0x3F, and a RE-MAKE after the guest's own
     // bit-3 keyboard reset (the held key survives the ITF's 8251 re-init, which flushes

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The graphics GDC's WRITE command executes against the ITF's own GVRAM pattern test: the exact BANK4@0xFA70F stream (GRCG TDW tiles 0x33/0x55, VECTW then CSRW 00 40 08, WRITE FF FF) reads back the tile words 0x3333 at 0xA8000 and 0x5555 at 0xB0000 exactly as the Xe10 does - the test that SETS BIOS work-area 0000:054D bit 6, the FLAMEZAP boot check - and with the GRCG never armed those tile words are ABSENT, so the bit becomes correct because the test genuinely passes and never because it is forced. The write's data path is the machine's own WDAT_WORD/GDCWG rows: the uPD7220's internal bit order lands per-byte bit-reversed in CPU VRAM (GDCCURS's MASK_0001 reads expected-cpu=0080), CURS.WG - bit 3 of CSRW's third byte - selects the WDAT word directly or the 7220's bit-0 replication of it, and the four ROPs paint the mask bits with the pattern exactly as the STRICT capture rows say (W_0_FFFF_0000_0001 lands FF7F, W_2_FFFF_0001_A55A lands 5AA5, which refutes NP2kai gdcsub_write's clear formula; the capture wins) - fifteen capture vectors replayed byte for byte. Multi-unit draws walk ONE DOT along the VECTW direction per unit and advance the cursor, exactly WDAT_STEP's observed pixels (dir 0 paints word 0x0800 and leaves the cursor at 0x0828 = +40 words, dir 1 paints (0x0800,D7) and (0x0828,D8), dir 2 paints D7 then D8 inside word 0x0800, dir 3 paints (0x0800,D7) and (0x07D8,D8); directions 4-7 and the three-unit draws replay the same capture's STEP_DC01_D4..D7 and STEP_DC02_D1..D7 rows), with the cursor write-back readable over CSRR's first two bytes (the raw_curd EAD the machine reports); a second draw queued while the first walks lands its own capture outcome and nothing is dropped. The GRCG-RMW and EGC routes carry each unit as ONE store visit on the GVRAM port share - the route latched per draw exactly as NP2kai's gdcpset_prepare latches its pset functions (io/gdc_pset.c:117-137) - and are checked DIFFERENTIALLY against the CPU path's own store of the same word, so no expected pixel is ever derived from this repo's RTL. It does not cover the FIFO/drawing-busy timing (the conformance capture's FIFO_TURN/STATE rows), the CURD read-back's five-byte shape, or the FIGD/line/rect/arc command space.
+// The graphics GDC's WRITE command executes against the ITF's own GVRAM pattern test: the exact BANK4@0xFA70F stream (GRCG TDW tiles 0x33/0x55, VECTW then CSRW 00 40 08, WRITE FF FF) reads back the tile words 0x3333 at 0xA8000 and 0x5555 at 0xB0000 exactly as the Xe10 does - the test that SETS BIOS work-area 0000:054D bit 6, the FLAMEZAP boot check - and with the GRCG never armed those tile words are ABSENT, so the bit becomes correct because the test genuinely passes and never because it is forced. The write's data path is the machine's own WDAT_WORD/GDCWG rows: the uPD7220's internal bit order lands per-byte bit-reversed in CPU VRAM (GDCCURS's MASK_0001 reads expected-cpu=0080), CURS.WG - bit 3 of CSRW's third byte - selects the WDAT word directly or the 7220's bit-0 replication of it, and the four ROPs paint the mask bits with the pattern exactly as the STRICT capture rows say (W_0_FFFF_0000_0001 lands FF7F, W_2_FFFF_0001_A55A lands 5AA5, which refutes NP2kai gdcsub_write's clear formula; the capture wins) - fifteen capture vectors replayed byte for byte. Multi-unit draws walk ONE DOT along the VECTW direction per unit and advance the cursor, exactly WDAT_STEP's observed pixels (dir 0 paints word 0x0800 and leaves the cursor at 0x0828 = +40 words, dir 1 paints (0x0800,D7) and (0x0828,D8), dir 2 paints D7 then D8 inside word 0x0800, dir 3 paints (0x0800,D7) and (0x07D8,D8); directions 4-7 and the three-unit draws replay the same capture's STEP_DC01_D4..D7 and STEP_DC02_D1..D7 rows), with the cursor write-back readable over CSRR's first two bytes (the raw_curd EAD the machine reports); a second draw queued while the first walks lands its own capture outcome and nothing is dropped, and three WRITEs chained with no CSRW between them while the first still walks run in order on the cursor each one leaves (one 48-row dir-0 column from word 0x0800, every word 0x0001 as WDAT_STEP's rows paint it) with a CURD written behind them answering the advanced cursor 0x8F80, as the uPD7220's FIFO and NP2kai gdc_work's in-order execution (io/gdc.c:347-349) do. The GRCG-RMW and EGC routes carry each unit as ONE store visit on the GVRAM port share - the route latched per draw exactly as NP2kai's gdcpset_prepare latches its pset functions (io/gdc_pset.c:117-137) - and are checked DIFFERENTIALLY against the CPU path's own store of the same word, so no expected pixel is ever derived from this repo's RTL. It does not cover the FIFO/drawing-busy timing (the conformance capture's FIFO_TURN/STATE rows), the CURD read-back's five-byte shape, or the FIGD/line/rect/arc command space.
 
 module tb_pc9821_gdc2_write;
   reg clk_sys = 0;
@@ -40,8 +40,8 @@ module tb_pc9821_gdc2_write;
   reg  [3:0]  cpu_be = 0;
   reg         cpu_valid = 0, cpu_write = 0, cpu_line_read = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   // The GDC draw engine's visit port (pc9821_gdc2's own).
   wire        gdc_mem_valid, gdc_mem_ready, gdc_mem_write;
@@ -71,7 +71,7 @@ module tb_pc9821_gdc2_write;
       .mem_page(gdc_mem_page), .mem_plane(gdc_mem_plane),
       .mem_offset(gdc_mem_offset), .mem_din(gdc_mem_din), .mem_be(gdc_mem_be),
       .mem_resp(gdc_mem_resp), .mem_rdata(gdc_mem_rdata),
-      .gfx_line_addr(gfx_line_addr), .gfx_disp(gfx_disp), .pegc_256(1'b0)
+      .gfx_line_addr(gfx_line_addr), .gfx_disp(gfx_disp), .pegc_256(1'b0), .gdc_5m(1'b0)
   );
 
   pc9821_gvram_dut dut (
@@ -80,9 +80,9 @@ module tb_pc9821_gdc2_write;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .grcg_expand(grcg_expand),
       .egc_gate(egc_mem_gate_b),
@@ -219,7 +219,8 @@ module tb_pc9821_gdc2_write;
   task automatic gdc_wait_idle;
     begin
       @(negedge clk_sys);
-      while ((dut_gdc2.d_state !== 3'd0) || (dut_gdc2.pend_valid !== 1'b0))
+      while ((dut_gdc2.d_state !== 3'd0) || (dut_gdc2.pend_valid !== 1'b0) ||
+             (dut_gdc2.cf_cnt !== 5'd0) || (dut_gdc2.cf_pop_v !== 1'b0))
         @(negedge clk_sys);
       repeat (4) @(negedge clk_sys);
     end
@@ -244,8 +245,11 @@ module tb_pc9821_gdc2_write;
     end
   endtask
 
-  // A WDAT_WORD/GDCWG capture row replayed: seed the old word, program MASK/CSRW/
-  // WDAT exactly as the suite's `curd`/column bytes say, read the word back. The
+  // A WDAT_WORD/GDCWG capture row replayed: seed the old word, program CSRW/MASK/
+  // WDAT exactly as the suite's `curd`/column bytes say, read the word back. CSRW goes
+  // FIRST: its third byte loads the mask with the dAD one-hot, so a MASK written before
+  // it is lost - the machine's MASK_THEN_CURS_* rows (GDCCURS, STRICT) - and the rows
+  // whose mask is not a one-hot (MASK_A55A ... ) are the suite's CURS-then-MASK order. The
   // expected value is the CSV's `got` column - the machine's own, never this RTL's.
   task automatic w_case(input [1023:0] name, input [1:0] rop, input wg,
                         input [15:0] old, input [15:0] src, input [15:0] mask,
@@ -253,8 +257,8 @@ module tb_pc9821_gdc2_write;
     reg [15:0] w;
     begin
       cpu_wr_word(2'd1, 15'h0100, old);         // plane R at word 0x0080
-      gdc_mask(mask);
       gdc_csrw(16'h8080, wg ? 8'h08 : 8'h00);   // plane R, word 0x0080, WG bit
+      gdc_mask(mask);
       gdc_write2(8'h20 | {6'd0, rop}, src[7:0], src[15:8]);
       gdc_wait_idle;
       cpu_rd_word(2'd1, 15'h0100, w);
@@ -274,8 +278,8 @@ module tb_pc9821_gdc2_write;
     begin
       // Clear the painted region first (the rows are SET on old 0x0000).
       for (k = 0; k < nwords; k = k + 1) cpu_wr_word(2'd1, {exp_off[k][13:0], 1'b0}, 16'h0000);
-      gdc_mask(mask);
       gdc_csrw(ead, 8'h00);                     // WG = 0: the 7220 bit-0 replication
+      gdc_mask(mask);
       gdc_vectw(dir, dc);
       gdc_write2(8'h23, 8'hFF, 8'hFF);          // rop 3 = SET, WDAT = FFFF
       gdc_wait_idle;
@@ -383,7 +387,7 @@ module tb_pc9821_gdc2_write;
       off0[1] = 16'h0800; val0[1] = 16'h0001;
       step_case("STEP_DC01_D3", 3'd3, 16'h0001, 16'h0080, 16'h8800,
                 2, off0, val0, 16'h87B0);
-      // Directions 4-7, and the three-unit DC02 rows (bench-audit 2026-10-12): the same
+      // Directions 4-7, and the three-unit DC02 rows: the same
       // capture holds them (docs/probes/gdc-conformance/xe10-2.5MHz, the WDAT_STEP rows
       // STEP_DC01_D4..D7 and STEP_DC02_*), and with only directions 0-3 replayed a
       // direction table that stepped dir 6 like dir 7 still passed this bench.
@@ -442,12 +446,12 @@ module tb_pc9821_gdc2_write;
     cpu_wr_word(2'd1, 15'h0100, 16'h0000);   // A's unit 0 (word 0x0080)
     cpu_wr_word(2'd1, 15'h0150, 16'h0000);   // A's unit 1 (word 0x00A8)
     cpu_wr_word(2'd1, 15'h0200, 16'h0000);   // B (word 0x0100)
-    gdc_mask(16'h0080);
     gdc_csrw(16'h8080, 8'h00);            // A: plane R word 0x0080, WG 0
+    gdc_mask(16'h0080);
     gdc_vectw(3'd1, 16'h0001);            // A: dc=1 dir=1 (the STEP_DC01_D1 shape)
     gdc_write2(8'h23, 8'hFF, 8'hFF);      // A's trigger
-    gdc_mask(16'h0001);                   // B's setup, while A walks
     gdc_csrw(16'h8100, 8'h08);            // B: plane R word 0x0100, WG 1
+    gdc_mask(16'h0001);                   // B's setup, while A walks
     gdc_write2(8'h20, 8'h01, 8'h00);      // B: W_0_0000_0001_0001's own row
     gdc_wait_idle;
     cpu_rd_word(2'd1, 15'h0100, w);
@@ -456,8 +460,6 @@ module tb_pc9821_gdc2_write;
     check16(w, 16'h8000, "queued A unit 1 (STEP_DC01_D1)");
     cpu_rd_word(2'd1, 15'h0200, w);
     check16(w, 16'h0080, "queued B (W_0_0000_0001_0001)");
-    checks = checks + 1;
-    if (dut_gdc2.draw_drops !== 4'd0) fail("a queued draw was dropped (draw_drops != 0)");
 
     // ---- Section 6: the GRCG-RMW route, differential against the CPU path ----
     // NP2kai's withrmw (io/gdc_pset.c:63-77) merges (old & ~data) | (tile & data) at
@@ -484,8 +486,8 @@ module tb_pc9821_gdc2_write;
       reg [15:0] exp_r;
       cpu_rd_word(2'd1, 15'h0140, exp_r);   // R: the CPU-path result
       // The GDC's own draw of the same paint at word 0x0080.
-      gdc_mask(16'hFFFF);
       gdc_csrw(16'h8080, 8'h08);          // WG 1: the WDAT word IS the paint
+      gdc_mask(16'hFFFF);
       gdc_write2(8'h20, 8'hFF, 8'h00);    // WDAT 0x00FF
       gdc_wait_idle;
       grcg_wr(8'h7C, 8'h00);
@@ -511,8 +513,8 @@ module tb_pc9821_gdc2_write;
     egc_mem_gate_b = 1'b1;
     cpu_wr_word(2'd0, 15'h0140, 16'h5AA5);   // the CPU path's own EGC store
     cpu_rd_word(2'd0, 15'h0140, exp_cpu);
-    gdc_mask(16'hFFFF);
     gdc_csrw(16'h8080, 8'h08);            // WG 1: the WDAT word 5AA5 is the datum
+    gdc_mask(16'hFFFF);
     gdc_write2(8'h20, 8'hA5, 8'h5A);
     gdc_wait_idle;
     checks = checks + 1;
@@ -525,6 +527,55 @@ module tb_pc9821_gdc2_write;
     check16(w, exp_cpu, "EGC draw == CPU store through the EGC");
     egc_mem_gate_b = 1'b0;
     grcg_wr(8'h7C, 8'h00);
+
+    // ---- Section 8: WRITEs chained on the advancing cursor, a CURD behind them ----
+    // CSRW once, VECTW dir 0 DC 15, then THREE WDATs back to back with no CSRW between
+    // them, and a CURD (0xE0) right behind the third - every byte written while the first
+    // draw still walks. The chip queues those bytes in its FIFO and runs them in order
+    // after the draw (uPD7220), and NP2kai gdc_work runs each WRITE to completion before
+    // parsing the next byte (io/gdc.c:347-349 `if ((!(item->rcv)) && (id ==
+    // GDCWORK_SLAVE)` .. `gdcsub_write();`), so each WRITE starts on the cursor the last
+    // one left. Dir 0 steps one row (+40 words) per unit and the cursor ends one row past
+    // the last unit (WDAT_STEP STEP_DC00_D0: word 0x0800, cursor 0x0828; STEP_DC01_D0:
+    // cursor 0x0850), so the three draws paint ONE column of 48 rows from word 0x0800,
+    // each word reading 0x0001 (mask 0x0080, SET, WG 0 - the STEP rows' own value), and
+    // the CURD answers 0x8800 + 48 x 40 = 0x8F80.
+    $display("CHECK 8: chained WRITEs run in order on the advanced cursor; CURD waits");
+    begin : chain
+      reg [15:0] ead8;
+      reg        overlap;
+      for (k = 0; k < 49; k = k + 1) cpu_wr_word(2'd1, (15'h1000 + 15'd80 * k[14:0]), 16'h0000);
+      gdc_csrw(16'h8800, 8'h00);            // plane R word 0x0800, WG 0
+      gdc_mask(16'h0080);
+      gdc_vectw(3'd0, 16'd15);              // 16 units, one row each
+      gdc_write2(8'h23, 8'hFF, 8'hFF);      // draw 1
+      gdc_write2(8'h23, 8'hFF, 8'hFF);      // draw 2, no CSRW
+      gdc_write2(8'h23, 8'hFF, 8'hFF);      // draw 3, no CSRW
+      io_a2(8'hE0);                         // CURD behind them
+      // The stimulus must really overlap the walk, or this section proves nothing.
+      overlap = (dut_gdc2.d_state !== 3'd0) || (dut_gdc2.pend_valid !== 1'b0);
+      checks = checks + 1;
+      if (!overlap) fail("chain: the CURD did not land while a draw was still walking");
+      gdc_wait_idle;
+      @(negedge clk_sys);
+      io_addr = 8'hA2; io_rd = 1'b1;
+      @(negedge clk_sys);
+      io_rd = 1'b0;
+      @(negedge clk_sys);
+      ead8[7:0] = io_dout;
+      io_addr = 8'hA2; io_rd = 1'b1;
+      @(negedge clk_sys);
+      io_rd = 1'b0;
+      @(negedge clk_sys);
+      ead8[15:8] = io_dout;
+      check16(ead8, 16'h8F80, "chain: CURD during the walk reads the advanced cursor");
+      for (k = 0; k < 48; k = k + 1) begin
+        cpu_rd_word(2'd1, (15'h1000 + 15'd80 * k[14:0]), w);
+        check16(w, 16'h0001, "chain: row painted by the chained WRITEs");
+      end
+      cpu_rd_word(2'd1, (15'h1000 + 15'd80 * 15'd48), w);
+      check16(w, 16'h0000, "chain: the row past the last unit stays clear");
+    end
 
     // ==== VERDICT ====
     $display("NOTE gdc2_write: %0d checks, %0d errors", checks, errors);

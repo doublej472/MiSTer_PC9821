@@ -41,8 +41,8 @@ module tb_pc9821_gvram_combine;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -67,9 +67,9 @@ module tb_pc9821_gvram_combine;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -95,7 +95,7 @@ module tb_pc9821_gvram_combine;
     end
   endtask
 
-  // The GVRAM is block RAM now (r13/283), so there is no backend transaction to count: the
+  // The GVRAM is block RAM now, so there is no backend transaction to count: the
   // counters the cost columns print stay at zero and the columns read as clk_sys alone.
   integer cb_txns = 0;
   integer cb_fullwr = 0;
@@ -297,13 +297,13 @@ module tb_pc9821_gvram_combine;
 
     // ---- PHASE C: the single-plane DWORD fill. Four FRESH words per store, which the combiner
     // cannot merge: it must read each word for its other three planes and write it back once.
-    // This is the r13/61 baseline shape (3.8 MB/s, 52 clk_sys/store, 4 transactions).
+    // This is the measured baseline shape (3.8 MB/s, 52 clk_sys/store, 4 transactions).
     run_phase(2'd2, 40000, b_st1, b_tx1, fill_mbps, 4.0);
     $display("NOTE gvram_combine: C single-plane DWORD fill (four fresh words per store): %0d stores in %0d clk_sys = %0.1f MB/s of plane bytes",
              b_st1, 40000, fill_mbps);
     $display("NOTE gvram_combine:   uncoalesced: %0d backend transaction(s) for %0d store(s) = %0.1f per store",
              b_tx1, b_st1, (b_st1 == 0) ? 0.0 : (b_tx1 * 1.0) / b_st1);
-    $display("NOTE gvram_combine: r13/69 measured 3.8 MB/s / 52 clk_sys / 4 txns for the fill, and predicted a column coalescing four planes into one read + one write");
+    $display("NOTE gvram_combine: an earlier measurement read 3.8 MB/s / 52 clk_sys / 4 txns for the fill, and predicted a column coalescing four planes into one read + one write");
 
     // ---- PHASE D: the coalesced bytes must reach the SCANOUT, and a plane read must forward ----
     // Paint a line at 0x2000 through the four plane windows, ONE lane at a time, so every column
@@ -442,7 +442,7 @@ module tb_pc9821_gvram_combine;
 
     // ---- CHECKS: the path still completed its stores ----
     // The coalescer's transaction-count instruments are gone with the write-combining buffer
-    // (r13/283): in block RAM each store IS its own access, so the only tripwire left is that
+    //: in block RAM each store IS its own access, so the only tripwire left is that
     // every measurement phase actually completed stores and that the bytes are correct (above).
     if (a_st1 == 0 || w_st1 == 0 || b_st1 == 0)
       fail("a measurement phase completed no store: the write path is wedged");
@@ -450,7 +450,7 @@ module tb_pc9821_gvram_combine;
     $display("NOTE gvram_combine: coalesced column / uncoalesced fill plane-byte rate = %0.2fx (four plane stores to one word vs four fresh words per store)",
              multi_mbps / ((fill_mbps == 0.0) ? 1.0 : fill_mbps));
     $display("NOTE gvram_combine: full-word write-backs to the controller: %0d", cb_fullwr);
-    $display("NOTE gvram_combine: the four-plane rate is bounded by the plain client's own accept cadence (C_IDLE + C_RESP for a write since r13/272 deleted the write arm's C_RESP2/C_HOLD), not by SDRAM: the backend transaction count above is the coalescer's claim");
+    $display("NOTE gvram_combine: the four-plane rate is bounded by the plain client's own accept cadence (C_IDLE + C_RESP for a write: the write arm has no C_RESP2/C_HOLD), not by SDRAM: the backend transaction count above is the coalescer's claim");
 
     // ==== VERDICT ====
     if (errors == 0) begin

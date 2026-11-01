@@ -17,25 +17,25 @@
 //   * the board output snd_l
 //
 // WHAT IT PINS, as the checks at the end: at the shipped 0 dB the six full RHYTHM
-// drums sum PAST the 16-bit range (the r13/257 overlap is real and still in the
+// drums sum PAST the 16-bit range (the overlap is real and still in the
 // stimulus), but the drum PRE-SUM does not clip - pcm_out carries the raw sum - and
 // the FM+ADPCM sum is clamped exactly once, AT the jt08_acc junction (the same point
 // ymfm's m_last_fm.clamp16() clamps), with the SSG joining after it. A-1 (a194031e)
-// removed that junction clamp and left the raw sum to the final DAC; the owner's
+// removed that junction clamp and left the raw sum to the final DAC; a
 // real-listening report is why this bench now pins the clamp back (8f8194e2). The
 // SSG is AC-COUPLED (zero-mean) before the join (tb_pc9821_opna_ssg_level), so even
 // all three channels at maximum never reach any rail.
 //
-// WHY THIS BENCH EXISTS. r13/257 found the six-drum sum hard-limited to 16 bits
-// inside jt08_adpcm_acc (the flat-topped "drums clipping" the owner hears) while
+// WHY THIS BENCH EXISTS. An earlier analysis found the six-drum sum hard-limited to 16 bits
+// inside jt08_adpcm_acc (the flat-topped "drums clipping" heard on hardware) while
 // the FM+rhythm accumulator behind it is the real chip's authentic clamp point.
 // The fix moved the clamp to that junction and left the drum bus wide; A-1 then
-// removed the junction clamp entirely, and this lane restores it (ymfm clamps the
+// removed the junction clamp entirely, and this change restores it (ymfm clamps the
 // complete FM+ADPCM sum once, ymfm_opn.cpp:1410-1414, and adds the SSG after).
 // This bench keeps all of those facts pinned: the overlap still drives past the old
 // rail (so the case stays covered), the drum pre-sum does not reduce it, and the
 // junction clamps it to the 16-bit rail exactly as ymfm does - fail-first on both
-// the pre-r13/265 tree (where pcm_out was sat16) and the A-1 tree (where the
+// the earlier tree (where pcm_out was sat16) and the A-1 tree (where the
 // junction was raw).
 
 module tb_pc9821_sound_sum;
@@ -100,7 +100,7 @@ module tb_pc9821_sound_sum;
   // cannot be fooled by the DUT's width. Checked against the DUT's acc every slot
   // (wrap detection) and captured at each round's end for the clip check: pcm_out
   // must be the raw round sum, never a clamped one. On the pre-fix tree every
-  // over-rail round mismatches here - the flat-top the owner hears.
+  // over-rail round mismatches here - the flat-top heard on hardware.
   wire        dr_cen    = dut.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.cen;
   wire        dr_match  = dut.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.match;
   wire        dr_en_sum = dut.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.en_sum;
@@ -498,7 +498,7 @@ module tb_pc9821_sound_sum;
     if (p_presum == 0 && p_fmsnd == 0)
       fail("nothing sounded: the FM and rhythm triggers produced no output at all");
 
-    // 1. THE DIE'S SIX-DRUM BUS (YM2608-LLE fmopna_impl.c:5370; opna-lle-audit F1).
+    // 1. THE DIE'S SIX-DRUM BUS (YM2608-LLE fmopna_impl.c:5370).
     //    The raw six-drum sum DOES pass the 16-bit range DURING THIS PHASE (counted
     //    in raw_over16_in_D, not run-wide - the six-drum phase must be the one that
     //    exercises the wrap, or the coverage claim is misattributed), and the bus is
@@ -513,7 +513,7 @@ module tb_pc9821_sound_sum;
       fail("the drum-sum accumulator is not the die's 16-bit wrapping sum: acc diverged from the model");
 
     // 3. The census, named rather than asserted (the numbers are the evidence; see the
-    //    r13/265 report). The FM six at maximum DO exceed 16 bits, so the junction
+    //    printed census). The FM six at maximum DO exceed 16 bits, so the junction
     //    clamp (the same point ymfm clamps with clamp16()) is exercised and
     //    authentic, and the report says so. Only the SSG, alone, is guaranteed not to
     //    rail, and a future stimulus that made it rail would mean the wrapper's SSG

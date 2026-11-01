@@ -194,7 +194,7 @@ module tb_pc9821_artic_watch;
     end
   endtask
 
-  // The record's four U bytes (247..250 since r13/119 made the record one line), read out one
+  // The record's four U bytes (247..250 since the record became one line), read out one
   // index at a time. tools/check_telemetry_contract.py requires this index to be the one the
   // formatter puts the U field's first digit at, so a layout change cannot leave it here.
   task automatic capture_u(output [15:0] got);
@@ -252,7 +252,7 @@ module tb_pc9821_artic_watch;
     end
 
     // CHK-3 and CHK-4: the word the GUEST reads at 0x5E is the field the INSTRUMENT reports.
-    // PRELOAD the counter first (bench-audit 2026-10-12): ~620 clocks after reset it holds
+    // PRELOAD the counter first: ~620 clocks after reset it holds
     // ~4 ticks, so cnt[23:8] is 0x0000 and so is EVERY other 16-bit slice above bit 2 - a
     // dbg_artic_hi wired to the wrong half of the counter read 0x0000 = 0x0000 and passed
     // the check the VERDICT banner says it must fail. 0x00A5C300 makes cnt[23:8] = 0xA5C3,

@@ -2,12 +2,12 @@
 """fatimg.py - read (and, for a COPY of an image, write) FAT12/16 volumes and ISO 9660 images.
 
 Shared by integ_manifest.py (the INTEG manifest generator) and tools/mister_regress.py (which
-puts INTEG.COM and its manifests into a COPY of the owner's disk image before it goes to the
+puts INTEG.COM and its manifests into a COPY of the user's disk image before it goes to the
 MiSTer). Stdlib only, so it also runs on the MiSTer's python3.
 
 WRITES ARE FOR TEST COPIES. `Fat.put` allocates clusters, updates every FAT copy and a directory
 entry; it has been round-tripped against mtools on synthetic volumes (`--selftest`) and nothing
-else. Never point it at the owner's original image.
+else. Never point it at an original image.
 
     fatimg.py --selftest
 """
@@ -369,10 +369,12 @@ def _cli(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument('image')
     ap.add_argument('--partition', type=int)
+    ap.add_argument('--skip', type=lambda s: int(s, 0), default=0,
+                    help='container header bytes (.hdi/.nhd) before the MBR/volume')
     ap.add_argument('--put', nargs=2, metavar=('DOSNAME', 'LOCALFILE'), required=True)
     a = ap.parse_args(argv)
     with open(a.image, 'r+b') as f:
-        fs = Fat(f, locate_volume(f, a.partition, None, 0))
+        fs = Fat(f, locate_volume(f, a.partition, None, a.skip))
         data = open(a.put[1], 'rb').read()
         fs.put(a.put[0], data)
     print(f"put {a.put[0]} ({len(data)} bytes) into {a.image}")

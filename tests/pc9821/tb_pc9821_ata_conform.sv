@@ -181,7 +181,7 @@ module tb_pc9821_ata_conform;
   reg drain_active = 0;
   integer write_errors = 0;
   // Host block requests whose LBA is at or beyond the mounted image: the end-of-image
-  // tests (r13/328 finding 2) require this to stay 0, where the pre-fix start-only range
+  // tests require this to stay 0, where the pre-fix start-only range
   // check let a multi-sector command run past capacity.
   integer oor_reads = 0, oor_writes = 0;
 
@@ -296,7 +296,7 @@ module tb_pc9821_ata_conform;
     // tmp[27] = model[0..1] = 'Q','U'
     check("id_word_27_model_string", idw[27], 16'h5155);
     // tmp[47] = 0x8000 | IDEIO_MULTIPLE_MAX (128). The core WITHDRAWS this on
-    // purpose (r13/244): it buffers one sector at a time and the Xe10 ROM's READ
+    // purpose: it buffers one sector at a time and the Xe10 ROM's READ
     // MULTIPLE consumes a whole block without checking DRQ, so the multiple
     // advertisement would corrupt a streamed read. The commands stay implemented.
     waive("id_word_47_multiple_count", idw[47], 16'h8080);
@@ -307,7 +307,7 @@ module tb_pc9821_ata_conform;
     check("id_word_55_current_heads", idw[55], 16'd8);
     check("id_word_56_current_sectors", idw[56], 16'd17);
     check("id_word_57_capacity_low", idw[57], 16'd13600);
-    // tmp[59] = 0x0100 | mulmode. Withdrawn with word 47 (r13/244): the valid
+    // tmp[59] = 0x0100 | mulmode. Withdrawn with word 47: the valid
     // bit must not claim a multiple setting the advertisement denies.
     waive("id_word_59_multiple_mode", idw[59], 16'h0180);
     check("id_word_60_lba_capacity_low", idw[60], 16'd13600);
@@ -329,7 +329,7 @@ module tb_pc9821_ata_conform;
     check("read_drq_status", value, 8'h58);
     for (n = 0; n < 256; n = n + 1) begin
       read_word(word_value);
-      // r13/333 finding 8: the PIO read is claimed word-for-word, so EVERY word is compared
+      // The PIO read is claimed word-for-word, so EVERY word is compared
       // against the model, not only word 0. A serializer/index corruption after the first
       // word used to drain all 256 but assert only the first.
       if (word_value !== sector_word_for(32'd5, n[7:0])) begin
@@ -417,7 +417,7 @@ module tb_pc9821_ata_conform;
 
     // The machine's own DIAG section is the expected value here, not NP2kai: the probe
     // polls 0x064E for !BSY and then reads 0x0642 -- status 0x51, ERROR 0x04
-    // (docs/probes/IDE.TXT:343, tools/hwprobe/ideprobe/ideprobe.s:746-760 (/* DEVICE RESET */)). NP2kai's
+    // (docs/probes/IDE.TXT:343, tools/hwprobe/ideprobe/ideprobe.s:826 (`/* DEVICE RESET */`)). NP2kai's
     // 0x01|0x80 is another drive's AMNF presence signature and its drvreset does not
     // set STATUS.ERR at all, so the reference and the machine disagree on this one
     // command; the machine and the ATA definition (a device reset is an ABORT: STATUS
@@ -438,7 +438,7 @@ module tb_pc9821_ata_conform;
     waive("diagnostic_irq", {15'b0, irq}, 16'd0);
     read_byte(16'h0642, value); waive("diagnostic_error", value, 8'h81);
 
-    // ---- 12. end-of-image range validation (r13/328 finding 2) ----
+    // ---- 12. end-of-image range validation ----
     // A data command at capacity-1 with a count that does NOT fit must be REJECTED. The four
     // data commands once validated only the START lba, so the second sector (lba = capacity) ran
     // past the image: the status here was BSY/DRQ and oor_reads/oor_writes became non-zero. The
@@ -499,7 +499,7 @@ module tb_pc9821_ata_conform;
     // ---- 13. READ NATIVE MAX (0xF8) ----
     // NP2kai ideio.c:1162-1173 loads the capacity-derived address into the task file before
     // interrupting (sn = totals & 0xff, cy = (totals >> 8) & 0xffff, hd low nibble =
-    // (totals >> 24) & 0xf), leaving the high drive/head bits. r13/328 finding 4: 0xF8 once
+    // (totals >> 24) & 0xf), leaving the high drive/head bits. 0xF8 once
     // shared the STANDBY/IDLE arm and returned whatever address the caller had preloaded. A
     // DIFFERENT address is preloaded here so all four fields must be rewritten.
     // capacity = 13600 = 0x3520 -> sn 0x20, cy 0x0035, hd low nibble 0 (high nibble kept).

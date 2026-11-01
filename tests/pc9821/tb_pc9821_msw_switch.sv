@@ -117,7 +117,6 @@ module tb_pc9821_msw_switch;
   pc9821_gdc_text_dut u_gdc (
       .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(1'b1),
       .io_wr(io_wr), .io_rd(1'b0), .io_addr(io_addr), .io_din(io_din), .io_dout(io_dout),
-      .grcg_mode_r(8'h00),
       .tram_cpu_addr(tram_cpu_addr), .tram_cpu_din(tram_cpu_din),
       .tram_cpu_we(tram_cpu_we), .tram_cpu_dout(tram_cpu_dout),
       .cfg_fdd_mode(cfg_fdd_mode),

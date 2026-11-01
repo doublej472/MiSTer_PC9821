@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_MEMORY_SUBSYSTEM:
-// ROM loading and bus arbitration: the CPU is held until the ROM has loaded, and the load/arbitration handshake grants the bus correctly afterwards. The absent ROM area at 0xC0000-0xD7FFF is a route of its own: a read returns all ones in z486's accept-then-respond phases with no backend transaction, an instruction fetch returns four all-ones words, and a store is swallowed. THE 12 KiB HOLE BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF, is the same shape, because the machine reads 0xFF there and discards stores (docs/probes/VRAM.TXT:141-142): the direct address must not reach the backend, must answer all ones, and must swallow its stores, while 0xA4FFF stays the CG window's and 0xA8000 the B plane's, and the 0x0461 = 0x0A overlay keeps claiming the same 32 KiB. It also carries the JIS KU-BANK SWEEP: one JIS code from each bank of the FONT.ROM grid, driven through the real pack download, must land at the font store word the text scanout computes for that code and carry FONT.ROM's own bytes there, so a word offset that is a bit too narrow puts a whole ku bank at another bank's word and the log names the misplaced bank. THE 0x1E8E-GATED IDE WORK RAM AT 0xDA000-0xDBFFF IS THE MACHINE'S OWN GATE (docs/probes/SHADOWW.TXT:226-231: the 1E8E read-back runs FE FF FE through the 0x80/0x81/restore writes, the DA000 marker reads back FFFF under 0x80 and 5AA5 under 0x81, and the IDE ROM's work bytes reappear under 0x81): with the gate clear the window takes the absent route's own shape - all ones, stores swallowed, no backend transaction - and with it set the same address is ordinary RAM that takes the store at 0xDA000 and answers the read from it. THE TAIL ABOVE IT, 0xDC000-0xDFFFF, IS ABSENT IN BOTH GATE STATES (docs/probes/SHADOW.TXT:201-213 reads 0xFF over all 12 x 2 KiB blocks of the DA000..DFFFF region with the gate clear, ffblocks=000C; QEMU models the rest of the 0xD8000 window as rom_empty): all ones and swallowed stores whatever 0x1E8E holds, with the gate-ON state capture-pending (a marker write at 0xDC000 under 0x1E8E=0x81 settles it, probe2 /IDEGATE).
+// ROM loading and bus arbitration: the CPU is held until the ROM has loaded, and the load/arbitration handshake grants the bus correctly afterwards. The absent ROM area at 0xC0000-0xD7FFF is a route of its own: a read returns all ones in z486's accept-then-respond phases with no backend transaction, an instruction fetch returns four all-ones words, and a store is swallowed. THE 12 KiB HOLE BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF, is the same shape, because the machine reads 0xFF there and discards stores (docs/probes/VRAM.TXT:141-142): the direct address must not reach the backend, must answer all ones, and must swallow its stores, while 0xA4FFF stays the CG window's and 0xA8000 the B plane's, and the 0x0461 = 0x0A overlay keeps claiming the same 32 KiB. It also carries the JIS KU-BANK SWEEP: one JIS code from each bank of the FONT.ROM grid, driven through the real pack download, must land at the font store word the text scanout computes for that code and carry FONT.ROM's own bytes there, so a word offset that is a bit too narrow puts a whole ku bank at another bank's word and the log names the misplaced bank. THE 0x1E8E-GATED IDE WORK RAM AT 0xDA000-0xDBFFF IS THE MACHINE'S OWN GATE (docs/probes/SHADOWW.TXT:226-231: the 1E8E read-back runs FE FF FE through the 0x80/0x81/restore writes, the DA000 marker reads back FFFF under 0x80 and 5AA5 under 0x81, and the IDE ROM's work bytes reappear under 0x81): with the gate clear the window takes the absent route's own shape - all ones, stores swallowed, no backend transaction - and with it set the same address is ordinary RAM that takes the store at 0xDA000 and answers the read from it. THE TAIL ABOVE IT, 0xDC000-0xDFFFF, IS ABSENT IN BOTH GATE STATES (docs/probes/SHADOW.TXT:201-213 reads 0xFF over all 12 x 2 KiB blocks of the DA000..DFFFF region with the gate clear, ffblocks=000C; QEMU models the rest of the 0xD8000 window as rom_empty): all ones and swallowed stores whatever 0x1E8E holds, with the gate-ON state capture-pending (a marker write at 0xDC000 under 0x1E8E=0x81 settles it, probe2 /IDEGATE). THE DOWNLOAD GATE HAS NO LIVE ioctl TERM (docs/timing.md, the download gate): in the cycle the ioctl_download of a reload rises the CPU still runs and the loader does not own the backend, in the next cycle the CPU is held and the loader owns it, cpu_run rises in the second cycle after the download falls, a platform reset with the pack loaded keeps cpu_run high, and an out-of-range word keeps the CPU held after the download.
 
 
 module tb_pc9821_memory_subsystem;
@@ -65,16 +65,15 @@ module tb_pc9821_memory_subsystem;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   // The line-form names: the boundary answers every fill as word beats now (the
-  // beat-uniform fill, trade T22), so cpu_line_dout/cpu_line_resp_valid are dead
+  // beat-uniform fill, trade T22), so cpu_line_word/cpu_line_word_valid are dead
   // bench wires (no DUT port drives them; they read 0). The idle checks' OR terms
-  // with cpu_line_resp_valid are stricter-than-needed, not weaker.
-  wire [127:0] cpu_line_dout;
+  // with cpu_line_word_valid are stricter-than-needed, not weaker.
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
@@ -108,7 +107,7 @@ module tb_pc9821_memory_subsystem;
   wire [7:0] mem_burstcount;
   wire mem_line_read, mem_valid, mem_write;
   reg mem_ready = 1, mem_resp_valid = 0, mem_line_resp_valid = 0;
-  // The GVRAM scanout's SDRAM requester (r13/35). The wildcard instantiation needs every port
+  // The GVRAM scanout's SDRAM requester. The wildcard instantiation needs every port
   // named; nothing here drives the scanout, so it accepts and never answers.
   wire [31:0] mem3_addr, mem3_din;
   wire  [3:0] mem3_be;
@@ -118,12 +117,14 @@ module tb_pc9821_memory_subsystem;
   reg         mem3_ready = 1, mem3_resp_valid = 0;
 
   // ==== DUT ====
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the wildcard instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   wire       grcg_expand;   // the GRCG's CG-mode bit 7, fed back from the subsystem
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
   reg        scan_enable = 0;
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
@@ -137,18 +138,18 @@ module tb_pc9821_memory_subsystem;
 
   wire [1:0] ems_state;
 
-  // The GVRAM write client's two-word payload (r13/137); this bench's backend ignores it.
+  // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
   wire [31:0] mem_din_hi;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -159,6 +160,7 @@ module tb_pc9821_memory_subsystem;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -281,7 +283,7 @@ module tb_pc9821_memory_subsystem;
     end
   end
 
-  // THE GVRAM REACHES THE SHARED BACKEND AGAIN (r13/35): its 256 KiB array is SDRAM-resident,
+  // THE GVRAM REACHES THE SHARED BACKEND AGAIN: its 256 KiB array is SDRAM-resident,
   // so a plane store is observed at pc9821_gvram's D1 boundary rather than at the array's old
   // port A, and mem_addr/mem_be on the backend are the same request one stage on.
   integer    gvram_writes = 0;
@@ -290,7 +292,7 @@ module tb_pc9821_memory_subsystem;
   reg [3:0]  last_gvram_lanes;  // the plain path's four byte enables, presented in ONE visit
   reg [1:0]  last_gvram_plane;  // the plain path's plane byte lane
   // The GVRAM's D1 accept, observed at the D1 boundary so the count is one per plane access
-  // whatever the SDRAM backend's latency (r13/35). A plain plane-window access now presents the
+  // whatever the SDRAM backend's latency. A plain plane-window access now presents the
   // base word, the CPU's byte enables and the plane in ONE visit (the backend walks the lanes), so
   // addr's low two bits are 0 and `lanes` carries what the old per-lane walk put in `be`.
   always @(posedge clk) begin
@@ -306,7 +308,7 @@ module tb_pc9821_memory_subsystem;
   // Whatever else changes, the mapper must never be told it was ACCEPTED while
   // another route owns the request the backend is serving: it would then treat
   // that route's completion as its own answer. The GVRAM was the historical firing
-  // of the old check here; since r13/35 its array is SDRAM-resident and it reaches
+  // of the old check here; since its array became SDRAM-resident and it reaches
   // this backend again on its own ports, so it is an owner alongside the LOADER and
   // the mapper, and the check below holds the LOADER half of that contract.
   always @(posedge clk) begin
@@ -447,17 +449,17 @@ module tb_pc9821_memory_subsystem;
     //      ACCEPT RECORD MUST NOT ASSUME IT DOES ====
     //
     // sdram.v states its own read timing -- "Read latency is T_RCD + CAS +
-    // 2*burst_cnt - 1 cycles from ACT to last data" (sdram.v:21) -- asserting
-    // ready_pulse at the accept (sdram.v:377) and resp_valid0 from data_resp_pulse
-    // at the CAS return (sdram.v:175). A mapped READ is therefore answered SEVERAL
+    // 2*burst_cnt - 1 cycles from ACT to last data" (sdram.v:7) -- asserting
+    // ready_pulse at the accept (sdram.v:1333) and resp_valid0 from data_resp_pulse
+    // at the CAS return (sdram.v:396). A mapped READ is therefore answered SEVERAL
     // CYCLES after its accept, not one.
     //
     // An accept record that lasts one cycle misses its own response: the answer is
-    // gated off and the CPU waits forever. That is exactly the owner's hardware
+    // gated off and the CPU waits forever. That is exactly the observed hardware
     // failure -- the authentic POST sat at F000:FFF0 with IMR=FF and every activity
     // counter at zero -- and it is invisible to every other bench because THEIR
     // backend registers the response one cycle after valid&&ready
-    // (tb_pc9821_userdisk.sv:291-311), which is the one timing a one-cycle record
+    // (the integrated tiers' SDRAM models), which is the one timing a one-cycle record
     // happens to be wide enough for.
     task automatic check_slow_backend_response(input integer resp_delay);
       integer i;
@@ -628,6 +630,94 @@ module tb_pc9821_memory_subsystem;
     end
   endtask
 
+
+  // THE DOWNLOAD GATE'S EDGES (docs/timing.md, "the download gate"; tools/check_cpu_run_inv.py
+  // proves the loader side). cpu_run is pc9821_rom_loader's register and loader_owns is
+  // `load_valid || !rom_ready`: neither reads the live ioctl_download. Pinned here, cycle by
+  // cycle, on the whole subsystem:
+  //   * a reload while the guest runs: in the cycle ioctl_download rises nothing has moved
+  //     (cpu_run high, the loader not owning, a CPU request still served), and the next cycle
+  //     the CPU is held and the loader owns the backend - before its first word can be presented;
+  //   * the end edge, unchanged: cpu_run rises in the second cycle after the download falls;
+  //   * a platform (OSD) reset with the pack loaded leaves cpu_run high (the pack survives it);
+  //   * an out-of-range word keeps the CPU held after the download (load_error).
+  task automatic check_download_gate_edges;
+    integer n;
+    begin
+      // the reload while running
+      @(negedge clk);
+      if (!cpu_run || !rom_ready || dut.loader_owns) begin
+        $display("FAIL gate-edges: precondition (run=%b ready=%b owns=%b)",
+                 cpu_run, rom_ready, dut.loader_owns);
+        errors = errors + 1;
+      end
+      ioctl_download = 1;
+      #1;
+      if (!cpu_run || dut.loader_owns) begin
+        $display("FAIL gate-edges: the download's first cycle already moved the gate (run=%b owns=%b) - a live ioctl term is back",
+                 cpu_run, dut.loader_owns);
+        errors = errors + 1;
+      end
+      @(negedge clk);
+      #1;
+      if (cpu_run || !dut.loader_owns || rom_ready) begin
+        $display("FAIL gate-edges: the cycle after the download rose did not hold the CPU (run=%b owns=%b ready=%b)",
+                 cpu_run, dut.loader_owns, rom_ready);
+        errors = errors + 1;
+      end
+      send_word(27'h000_0010, 16'h1234);
+      repeat (2) @(negedge clk);
+      // the end edge: cpu_run rises in the second cycle after the fall
+      ioctl_download = 0;
+      n = 0;
+      while (!cpu_run && n < 8) begin
+        @(negedge clk);
+        n = n + 1;
+      end
+      if (n != 2 || !rom_ready || load_error) begin
+        $display("FAIL gate-edges: cpu_run rose %0d cycles after the download fell (expected 2; ready=%b error=%b)",
+                 n, rom_ready, load_error);
+        errors = errors + 1;
+      end
+      // a platform reset with the pack loaded: the gate holds through it
+      @(negedge clk);
+      reset = 1;
+      n = 0;
+      repeat (4) begin
+        @(negedge clk);
+        if (!cpu_run) n = n + 1;
+      end
+      reset = 0;
+      @(negedge clk);
+      if (n != 0 || !cpu_run) begin
+        $display("FAIL gate-edges: a platform reset with the pack loaded dropped cpu_run (%0d cycles low)", n);
+        errors = errors + 1;
+      end
+      // an out-of-range word: the CPU stays held after the download
+      ioctl_download = 1;
+      send_word(27'h010_0000, 16'hDEAD);
+      repeat (2) @(negedge clk);
+      ioctl_download = 0;
+      repeat (4) @(negedge clk);
+      if (cpu_run || !load_error || rom_ready) begin
+        $display("FAIL gate-edges: an out-of-range download released the CPU (run=%b error=%b ready=%b)",
+                 cpu_run, load_error, rom_ready);
+        errors = errors + 1;
+      end
+      // and a good reload releases it again
+      ioctl_download = 1;
+      send_word(27'h000_0010, 16'h1234);
+      repeat (2) @(negedge clk);
+      ioctl_download = 0;
+      repeat (4) @(negedge clk);
+      if (!cpu_run || load_error || !rom_ready) begin
+        $display("FAIL gate-edges: a good reload after the error did not release the CPU (run=%b error=%b ready=%b)",
+                 cpu_run, load_error, rom_ready);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
   // ==== CHECKS ====
 
   initial begin
@@ -711,7 +801,7 @@ module tb_pc9821_memory_subsystem;
     cpu_be = 4'hF;
     while (dut.u_window.state != 0) @(negedge clk);
 
-    // Graphics VRAM, unlike TRAM, has its own datapath. Since r13/35 its 256 KiB array is
+    // Graphics VRAM, unlike TRAM, has its own datapath. Its 256 KiB array is
     // SDRAM-resident and pc9821_gvram owns it, so a CPU byte in a plane window becomes ONE
     // visit at the D1 boundary: cc_addr = the column word's BASE (the access page in bit 15),
     // cc_lane_be = the CPU's byte enables (which of the four consecutive words), and the plane
@@ -750,7 +840,7 @@ module tb_pc9821_memory_subsystem;
     // 0x80000 is not the RAM page under 0x0A (`0461=0A b=0800 a=5AA5 p=FF q=FF`,
     // the marker at no 64 KiB-aligned address of the first MiB) and the 0x463
     // sweep proves 0xA0000's word is the text RAM's own 0x0020, so the window's
-    // low 32 KiB is the text VRAM there (r13/182 M1, closing that open question). Reachable from no firmware
+    // low 32 KiB is the text VRAM there (closing that open question). Reachable from no firmware
     // (0x0461 is written only with 0x08/0x0C/0x0E), but the routing is the
     // machine's now and a silent change back is caught here.
     win0_sel = 8'h0A;
@@ -763,7 +853,7 @@ module tb_pc9821_memory_subsystem;
     // THE READY IS READ AFTER A DELTA, NOT IN ZERO TIME. This case changes the address, the window
     // select AND cpu_valid in one time step and then reads the route's answer; without the settle it
     // samples the value from the PREVIOUS evaluation, which is the GVRAM's ready for the access
-    // BEFORE this one -- and since r13/310 a GVRAM store completes one clk_sys earlier, that stale
+    // BEFORE this one -- and since a GVRAM store completes one clk_sys earlier, that stale
     // value is 1 here and the loop below would take it for the TRAM route's answer. The route
     // select is combinational from the address, so the settled read is the route's own
     // answer for THIS request.
@@ -793,7 +883,7 @@ module tb_pc9821_memory_subsystem;
     // routes it to the registered pc9821_open_bus responder, so the guest sees
     // all ones, in the accept-then-respond phases z486 requires, with no SDRAM
     // transaction issued -- an option-ROM scan or a spurious call into the area
-    // can then never execute SDRAM residue (r12/30 section 1).
+    // can then never execute SDRAM residue.
     cpu_addr = 32'h000C_0000;                    // the area's base
     cpu_din = 32'hDEAD_BEEF;                     // must not be stored anywhere
     cpu_be = 4'hF;
@@ -823,7 +913,7 @@ module tb_pc9821_memory_subsystem;
       errors = errors + 1;
     end
     @(negedge clk);
-    if (cpu_resp_valid || cpu_line_resp_valid || mem_valid) begin
+    if (cpu_resp_valid || cpu_line_word_valid || mem_valid) begin
       $display("FAIL absent-area store was answered or stored");
       errors = errors + 1;
     end
@@ -951,7 +1041,7 @@ module tb_pc9821_memory_subsystem;
       errors = errors + 1;
     end
     @(negedge clk);
-    if (cpu_resp_valid || cpu_line_resp_valid || mem_valid) begin
+    if (cpu_resp_valid || cpu_line_word_valid || mem_valid) begin
       $display("FAIL gate-off 0xDA000 store was answered or stored");
       errors = errors + 1;
     end
@@ -1090,7 +1180,7 @@ module tb_pc9821_memory_subsystem;
       errors = errors + 1;
     end
     @(negedge clk);
-    if (cpu_resp_valid || cpu_line_resp_valid || mem_valid) begin
+    if (cpu_resp_valid || cpu_line_word_valid || mem_valid) begin
       $display("FAIL gate-off 0xDC000 store was answered or stored");
       errors = errors + 1;
     end
@@ -1107,7 +1197,7 @@ module tb_pc9821_memory_subsystem;
       errors = errors + 1;
     end
     @(negedge clk);
-    if (cpu_resp_valid || cpu_line_resp_valid || mem_valid) begin
+    if (cpu_resp_valid || cpu_line_word_valid || mem_valid) begin
       $display("FAIL gate-off 0xDFFFF store was answered or stored");
       errors = errors + 1;
     end
@@ -1134,7 +1224,7 @@ module tb_pc9821_memory_subsystem;
     // `A600wrote= 00 FF 55 AA` / `got= FF FF FF FF`, reproduced in VRAM2.TXT:153-154), while the
     // TRAM row above it (A000/A200) and the plane rows below it (A800/B000/B800) round-trip in
     // the SAME capture -- so the range is a hole, neither storage nor an alias of one. It was
-    // served by the mapper's default arm as live guest RAM at d_addr (the audit's M1); the fix
+    // served by the mapper's default arm as live guest RAM at d_addr; the fix
     // routes it to the registered open-bus responder, so the guest sees all ones with NO backend
     // transaction, in the accept-then-respond phases z486 requires.
     cpu_addr = 32'h000A_5000;                    // the hole's base
@@ -1176,9 +1266,9 @@ module tb_pc9821_memory_subsystem;
     cpu_valid = 0;
     cpu_write = 0;
     repeat (2) @(negedge clk);
-    if (cpu_resp_valid || cpu_line_resp_valid || mem_valid) begin
+    if (cpu_resp_valid || cpu_line_word_valid || mem_valid) begin
       $display("FAIL 0xA7FFF store was answered or stored (resp=%b line=%b mem_valid=%b)",
-               cpu_resp_valid, cpu_line_resp_valid, mem_valid);
+               cpu_resp_valid, cpu_line_word_valid, mem_valid);
       errors = errors + 1;
     end
     // Leave the shared response-route queue as this section found it. PRE-FIX the mapper's
@@ -1236,9 +1326,9 @@ module tb_pc9821_memory_subsystem;
     end
     win0_sel = 8'h08;
 
-    // The intensity plane is its own window, and since r12/33 D1/D2 it is no
+    // The intensity plane is its own window, and since the D1 datapath it is no
     // longer an address bias on the map's backend bus: the access is routed to
-    // pc9821_gvram, which owns the four planes in SDRAM (r13/35), so one CPU byte
+    // pc9821_gvram, which owns the four planes in SDRAM, so one CPU byte
     // becomes ONE visit carrying the addressed window's plane lane (here plane 3,
     // the intensity plane).
     g0 = gvram_writes;
@@ -1300,9 +1390,13 @@ module tb_pc9821_memory_subsystem;
     gvram_access_page = 0;
     repeat (3) @(posedge clk);
 
-    // A replacement pack download blocks CPU traffic immediately.
-    cpu_valid = 1;
+    // A replacement pack download blocks CPU traffic from the loader's edge on: the cycle after
+    // ioctl_download rises (the gate has no live ioctl term; check_download_gate_edges pins the
+    // cycle), and before the loader can present its first word.
+    @(negedge clk);
     ioctl_download = 1;
+    @(negedge clk);
+    cpu_valid = 1;
     #1;
     if (cpu_run || cpu_ready || mem_valid) begin
       $display("FAIL selected reload did not revoke CPU ownership");
@@ -1320,7 +1414,7 @@ module tb_pc9821_memory_subsystem;
       errors = errors + 1;
     end
 
-    // THE JIS GRID IS NO LONGER IN M10K (r13/280). A JIS word from the pack's glyph region
+    // THE JIS GRID IS NO LONGER IN M10K. A JIS word from the pack's glyph region
     // must NOT reach the font store: it stays in the pack's SDRAM copy and the GDC's fmem
     // reader fetches it into its row cache. The pack write itself must still land in SDRAM,
     // so this is the contract that the ANK tee (checked above) is the ONLY font M10K write.
@@ -1423,6 +1517,7 @@ module tb_pc9821_memory_subsystem;
     // read latency requires. The record of who the backend accepted must outlive
     // the accept, or the answer is dropped and the CPU waits forever.
     check_slow_backend_response(4);
+    check_download_gate_edges;
   // ==== VERDICT ====
 
     if (errors == 0) begin

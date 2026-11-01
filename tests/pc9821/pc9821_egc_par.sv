@@ -1,5 +1,5 @@
 // pc9821_egc_par -- BENCH-ONLY reference: the PLANE-PARALLEL EGC exactly as it shipped before
-// the egc-serial lane (pc9821 81c98be5, src/pc9821/core/pc9821_egc.sv), kept verbatim except for
+// the serial EGC (pc9821 81c98be5, src/pc9821/core/pc9821_egc.sv), kept verbatim except for
 // the module name and the shared state package (which the shipped module still defines). It is
 // the "old" side of tb_pc9821_egc_serial_equiv: the serial engine must agree with it on every
 // GVRAM write and every CPU read datum. It is never part of a build list.
@@ -282,11 +282,11 @@ module pc9821_egc_par (
   // ---------------------------------------------------------------
   // The operand's first byte lane: from the CPU's BYTE ENABLES, not the address
   // ---------------------------------------------------------------
-  // z486's address output is 30 bits ("Physical address [31:2]", src/z486/z486.sv:48
+  // z486's address output is 30 bits ("Physical address [31:2]", src/z486/z486.sv:78
   // `addr`) and pc9821_system forms the guest address as {z_addr, 2'b00}
-  // (src/pc9821/core/pc9821_system.sv:426 and :632, the `.cpu_addr` connections), so
+  // (src/pc9821/core/pc9821_system.sv:647 and :1061, the `.cpu_addr` connections), so
   // every access reaches this module DWORD-ALIGNED and the operand's byte lane is
-  // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1121 `calc_be`). Deriving the lane
+  // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1169 `calc_be`). Deriving the lane
   // from cpu_offset[1:0] made it 0 for every access, so a 16-bit unit on lanes 2:3
   // (be = 1100) became a BYTE unit on lane 0.
   //
@@ -710,7 +710,7 @@ module pc9821_egc_par (
   // position early: egcsftb_dnn_sub reads outptr[0] before its move (:174-178) and
   // egcsftb_dnl_sub moves first and then reads (outptr[1], outptr[0]) = (pre, pre-1)
   // (memegc.c:145-179, :331-369) - both take the PRE-move outptr as their primary byte,
-  // which is sub_data at the pre-move `o`, not at o + mv1. (Correcting the review egc.md F2 claim: its "within-unit descending
+  // which is sub_data at the pre-move `o`, not at o + mv1. (Correcting an earlier claim that "within-unit descending
   // byte placement IS correct" held for the WORD units' two calls only; the byte unit's single
   // call had the same missing direction term. Exposed by the extended matrix's descending
   // byte-produce cases, which compare by value against NP2kai.)
@@ -1178,7 +1178,7 @@ module pc9821_egc_par (
       // NP2kai's egc_reset ends in egcshift() at leng 0x000F (io/egc.c:69-80), so
       // `remain` is 16 and the FIRST post-reset produce carries the full bit length:
       // the first store of a guest that never writes 0x4AC/0x4AE after reset must be
-      // masked 0xFFFF, not the one-bit 0x0080 a remain of 1 produced (review egc.md F1).
+      // masked 0xFFFF, not the one-bit 0x0080 a remain of 1 produced.
       remain  <= 13'd16;
       stack   <= 6'd0;
       dstbit  <= 4'd0;
@@ -1583,7 +1583,7 @@ module pc9821_egc_par (
         // state by observing a level drop, which is the banned shape - the GRCG's G_HOLD is the
         // same state one module over and is unconditional, and the EGC's own read arm sits here
         // for a cycle after its response registers either way. What the read arm needs is the
-        // CPU's accept gap, not the level: src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0` clears it
+        // CPU's accept gap, not the level: src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0` clears it
         // at the ready edge, and a direct read's own `direct_rd_pending` keeps the next request off the
         // bus until the response lands (since the pipelined produce the response registers at
         // this state's closing edge, one cycle later than the pre-pipeline form registered it
@@ -1607,9 +1607,9 @@ module pc9821_egc_par (
 `ifdef VERILATOR
   // ---------------------------------------------------------------------------
   // R6/R8: THE UNCONDITIONAL S_HOLD BUBBLE'S CONTRACT (docs/single-cycle-event-
-  // discipline.md R6/R8; gfxeng audit F4). S_HOLD is one cycle by construction - it no
+  // discipline.md R6/R8). S_HOLD is one cycle by construction - it no
   // longer observes cpu_valid - and that is safe because the CPU's own accept gap keeps a
-  // completed request off the bus (src/z486/memory.sv:620-523 `ext_valid_r <= 1'b0` clears it at
+  // completed request off the bus (src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0` clears it at
   // the ready edge). Both halves are pinned here; they cost nothing in synthesis and run in
   // every bench that builds this module.
   // ---------------------------------------------------------------------------

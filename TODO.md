@@ -9,7 +9,6 @@ machine captures live in `docs/probes/`.
 
 | # | Section | File |
 |---|---|---|
-| 1 | RTL changes ready to implement from machine captures | `todo/1-rtl-from-captures.md` |
 | 2 | Probe re-runs | `todo/2-probe-corrections.md` |
 | 3 | Capture-pending hardware questions | `todo/3-capture-pending.md` |
 | 4 | Re-verification items | `todo/4-reverification.md` |
@@ -17,7 +16,7 @@ machine captures live in `docs/probes/`.
 | 6 | Audio: OPNA/SSG/ADPCM | `todo/6-audio.md` |
 | 6 | Video: display, GDC/CRTC raster | `todo/6-video.md` |
 | 6 | Storage: IDE/ATA, FDC, CD-ROM | `todo/6-storage.md` |
-| 6 | Tools and gates | `todo/6-tools-and-gates.md` |
+| 6 | Memory: the SDRAM controller and its bridges | `todo/6-memory.md` |
 
 ## Finding an item
 

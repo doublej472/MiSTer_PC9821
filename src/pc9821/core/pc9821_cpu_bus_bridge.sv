@@ -30,6 +30,16 @@ module pc9821_cpu_bus_bridge (
     input  wire        c_flush_done,
     output wire        p_flush_done,
 
+    // the DMA-side external snoop (the 486's EADS#): a one-cycle platform pulse with its
+    // physical address, held for the CPU's next enabled edge (pc9821_cpu_clk.sv:13-15, "snoop_valid with its address").
+    // p_snoop_busy is the hold's occupancy: the platform must not present a second DMA
+    // WRITE while it is high (pc9821_system's DMA-write back-pressure).
+    input  wire        p_snoop_valid,
+    input  wire [31:0] p_snoop_addr,
+    output wire        c_snoop_valid,
+    output wire [31:0] c_snoop_addr,
+    output wire        p_snoop_busy,
+
     // one-CPU-cycle output pulses, sampled once (under cpu_ce)
     input  wire        c_triple_fault,
     output wire        p_triple_fault,
@@ -63,10 +73,9 @@ assign c_ready = p_ready || acc_pend;
 // cpu_ce constant 1 the FIFO stays empty and c_resp_valid/c_din are p_resp_valid/p_din.
 //
 // A beat may reach the CPU on the same edge as a held accept: from the CPU's side that is a
-// zero-wait accept with its data in the accept cycle, which z486's bus contract allows. The
-// fork's 5227777 (re-vendored at 1b01c8f) fixed the paging unit for it - before that fix a
-// demand read completed in its PG_MEM_TLB accept cycle left fast_path_pending set and wedged
-// the CPU, and this bridge held such a beat back one edge (RESP_HOLD, removed with the fix).
+// zero-wait accept with its data in the accept cycle, which z486's bus contract allows
+// (including a paging demand read completed in its PG_MEM_TLB accept cycle), so no beat is
+// held back.
 reg [31:0] fifo_q [0:3];
 reg [1:0]  rd_ptr, wr_ptr;
 reg [2:0]  count;
@@ -103,6 +112,41 @@ assign c_flush_req  = p_flush_req | flush_pend;
 assign p_flush_busy = c_flush_busy | flush_pend;
 assign p_flush_done = c_flush_done & cpu_ce;
 
+// ---- the DMA-side external snoop (EADS#) ----
+// The uPD71071's accepted write raises a one-clk_sys pulse OUTSIDE the gated CPU domain.
+// z486 samples snoop_valid on posedge cpu_clk (l1_cache.sv:928 `snoop_valid_r <=
+// snoop_valid;`), so a pulse that lands in a cpu_ce=0 cycle has no ending edge and is
+// lost (an under-invalidation). Hold the pulse (and its address)
+// for the CPU the way the flush request is held, so every accepted write is captured
+// exactly once, on an enabled edge, with the address of the byte it invalidates. The
+// address is presented from the live pulse while it is high (a write accepted ON an
+// enabled edge carries that write's address) and from the latch while it waits.
+//
+// BACK-PRESSURE. ONE snoop can wait: a second accepted write would replace
+// the waiting address (the mux above takes the live pulse over the latch), silently
+// losing the first invalidate. The hold is therefore visible to the platform as
+// p_snoop_busy, and pc9821_system refuses to PRESENT or ACCEPT the next DMA write byte
+// while it is high (snoop writes only - a DMA read is never snooped). The uPD71071's
+// mem_req is a level held through S_MEM until mem_ready, so the byte waits, it is not
+// dropped; the cost is at most one CPU clock period per write byte, which is the same
+// pacing a real 486's EADS# imposes (one invalidate per CPU clock). A pacing argument
+// from the FDC's data rate alone would not hold for the 0x13 software-request register,
+// which can drive an unmasked channel at bus rate.
+// The simulation check below stays as a backstop: with the back-pressure it is
+// unreachable unless the gating itself breaks.
+reg        snoop_pend;
+reg [31:0] snoop_addr_q;
+always @(posedge clk) begin
+    if (cpu_ce)              snoop_pend <= 1'b0;
+    else if (p_snoop_valid) begin
+        snoop_pend   <= 1'b1;
+        snoop_addr_q <= p_snoop_addr;
+    end
+end
+assign c_snoop_valid = p_snoop_valid | snoop_pend;
+assign c_snoop_addr  = p_snoop_valid ? p_snoop_addr : snoop_addr_q;
+assign p_snoop_busy  = snoop_pend;
+
 // ---- the one-CPU-cycle output pulses ----
 assign p_triple_fault = c_triple_fault & cpu_ce;
 assign p_dbg_pulse    = c_dbg_pulse & {3{cpu_ce}};
@@ -113,6 +157,8 @@ always @(posedge clk) begin
         $fatal(1, "pc9821_cpu_bus_bridge: a fifth response beat while four wait for the CPU (more than one read's beats outstanding)");
     if (p_flush_req && flush_pend)
         $fatal(1, "pc9821_cpu_bus_bridge: a flush request while the previous one still waits for the CPU");
+    if (p_snoop_valid && snoop_pend)
+        $fatal(1, "pc9821_cpu_bus_bridge: a DMA snoop while the previous one still waits for the CPU (the platform accepted two writes inside one disabled run - the DMA-write back-pressure failed)");
 end
 // synthesis translate_on
 

@@ -52,6 +52,13 @@ PROPS = r"""
       assert (!(cs == C_RESP2) || cc_owns_plain);
       assert (!grcg_cpu_resp_valid || cc_owns_grcg);
       assert (!egc_cpu_resp_valid || (!(cs == C_RESP2) && !grcg_cpu_resp_valid));
+      // tmg-120: G_RMWC is only entered inside a walk, where the arm's lane is m_lane, so the
+      // merge byte formed from m_lane equals the one formed from the datum-dependent lane.
+      assert (gstate != G_RMWC || m_mode);
+      assert (gstate != G_RMWC || (pq[0].x_gr_d_m == pq[0].x_gr_d_old));
+      assert (gstate != G_RMWC || (pq[1].x_gr_d_m == pq[1].x_gr_d_old));
+      assert (gstate != G_RMWC || (pq[2].x_gr_d_m == pq[2].x_gr_d_old));
+      assert (gstate != G_RMWC || (pq[3].x_gr_d_m == pq[3].x_gr_d_old));
     end
   end
 """
@@ -70,6 +77,11 @@ PLANTS = [
     ("tests/pc9821/pc9821_gvram_dut.sv", ".cpu_valid(gvr_valid && own_grcg)", ".cpu_valid(gvr_valid)"),
     # the EGC's cpu_valid no longer gated by its owner
     ("tests/pc9821/pc9821_gvram_dut.sv", ".cpu_valid(gvr_valid && own_egc)", ".cpu_valid(gvr_valid)"),
+    # the RMWC merge byte takes the wrong lane
+    (ARB, "wire  [7:0] x_gr_d_m   = x_wdata[{m_lane[1:0], 3'b000} +: 8];",
+     "wire  [7:0] x_gr_d_m   = x_wdata[{m_lane[1:0] ^ 2'b01, 3'b000} +: 8];"),
+    # a GRCG merge started outside a walk (G_RMWC reachable with m_mode clear)
+    (ARB, "              m_mode  <= 1'b1;\n              m_write <= ef_wr;", "              m_mode  <= 1'b0;\n              m_write <= ef_wr;"),
     # the plain client accepting without owning the port
     (ARB, "C_IDLE: if (cpu_valid && cc_owns_plain) begin", "C_IDLE: if (cpu_valid) begin"),
 ]

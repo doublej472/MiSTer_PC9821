@@ -25,6 +25,10 @@ module ucode_rom
     input              q_ce,            // load the output register
     input              q_sel_b,         // it loads port B's word (registered terms only)
     output      [50:0] q_early,         // the selected word, predecoded, before the register
+    output      [1:0]  q_early_shift2_source,   // q_early's SHIFT2 source class (q_sel_b last)
+    output             q_early_shift_captures,  // q_early captures a shift operand (q_sel_b last)
+    output      [6:0]  q_dest_a,        // port A's word's destination field (q_early[30:24] when !q_sel_b)
+    output      [6:0]  q_dest_b,        // port B's word's destination field (q_early[30:24] when q_sel_b)
     output      [50:0] q,               // the executing microword
     output      [5:0]  q_shift_source,
     output      [3:0]  q_shift_source_class,
@@ -108,6 +112,14 @@ endfunction
 
 // Only the BSR loop consumes SHIFT2 carry in the immediately following
 // micro-jump. Other shift flags retire through the registered flag sideband.
+// The shifter's use_captured_source of a word: SHIFT2, or SHIFT whose
+// source class is 3 (SRCREG).
+function automatic logic use_captured_predecode(input [39:0] w);
+    use_captured_predecode = (w[17:11] == ALUJMP_SHIFT2) ||
+                             ((w[17:11] == ALUJMP_SHIFT) &&
+                              (shift_source_predecode(w[23:18]) == 4'd3));
+endfunction
+
 function automatic logic shift_uc_carry_predecode(input [36:0] w);
     shift_uc_carry_predecode = (w[17:11] == ALUJMP_SHIFT2) &&
                                (w[23:18] == SRC_TMPC) &&
@@ -395,10 +407,15 @@ always_ff @(posedge clk) begin
         // The shifter's use_captured_source, predecoded from the same word on the
         // same enable (it is is_shift2 || (aluop == SHIFT && source_class == 3),
         // all three fields of this register).
-        q_shift_use_captured_r <= (q_mem[17:11] == ALUJMP_SHIFT2) ||
-                                  ((q_mem[17:11] == ALUJMP_SHIFT) &&
-                                   (shift_source_predecode(q_mem[23:18]) == 4'd3));
-        q_shift_uc_carry_r <= shift_uc_carry_predecode(q_mem[36:0]);
+        // The three predecodes below are formed on each port with q_sel_b
+        // (pb_slot, the D2 issue decision) selecting the decoded result, so
+        // the select is the last LUT level in front of the flop instead of
+        // the first: f(sel ? b : a) = sel ? f(b) : f(a)
+        // (tests/equiv/q_predecode_split.v, the shipped functions).
+        q_shift_use_captured_r <= q_sel_b ? use_captured_predecode(q_mem_b)
+                                          : use_captured_predecode(q_mem_a);
+        q_shift_uc_carry_r <= q_sel_b ? shift_uc_carry_predecode(q_mem_b[36:0])
+                                      : shift_uc_carry_predecode(q_mem_a[36:0]);
         q_shift_alu_src_r <= q_mem[36:31];
         q_shift_aluop_r <= q_mem[17:11];
         q_shift_sigma_sel_r <= shift_sigma_predecode(q_mem[17:11]);
@@ -406,12 +423,29 @@ always_ff @(posedge clk) begin
         q_dly_source_r <= dly_source_predecode(q_mem[23:18]);
         q_mem_ctrl_r <= mem_ctrl_predecode(q_mem[36:0]);
         q_ind_ctrl_r <= ind_ctrl_predecode(q_mem[36:0]);
-        q_fpu_f8_r <= fpu_f8_predecode(q_mem[36:0]);
+        q_fpu_f8_r <= q_sel_b ? fpu_f8_predecode(q_mem_b[36:0])
+                              : fpu_f8_predecode(q_mem_a[36:0]);
     end
 end
 
 assign q = q_r;
 assign q_early = {ucode_predecode(q_mem[36:0]), q_mem[36:0]};
+// The next word's shifter-capture decode (z486.sv shift2_source_next_decode and
+// uc_next_captures_shift_source of q_early) formed on each port, with q_sel_b
+// selecting the decoded result: q_sel_b is pb_slot, the D2 issue decision, and
+// it otherwise sat in front of the decode on the way to the shifter's
+// shift2_operand_r. decode(sel ? b : a) = sel ? decode(b) : decode(a);
+// tests/equiv/shift2_next_split.v proves it.
+function automatic logic shift_captures_predecode(input [39:0] w);
+    shift_captures_predecode = (w[17:11] == ALUJMP_SHIFT2) ||
+                               ((w[17:11] == ALUJMP_SHIFT) && (w[23:18] == SRC_SRCREG));
+endfunction
+assign q_early_shift2_source = q_sel_b ? shift2_source_predecode(q_mem_b[23:18])
+                                       : shift2_source_predecode(q_mem_a[23:18]);
+assign q_early_shift_captures = q_sel_b ? shift_captures_predecode(q_mem_b)
+                                        : shift_captures_predecode(q_mem_a);
+assign q_dest_a = q_mem_a[30:24];
+assign q_dest_b = q_mem_b[30:24];
 assign q_kind_early = q_mem_a[39:37];
 assign q_kind_b = q_mem_b[39:37];
 

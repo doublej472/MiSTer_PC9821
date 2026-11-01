@@ -92,7 +92,7 @@ module pc9821_interrupts #(
   // BY THE ACK EVENT'S OWN VALIDITY: after a prior cascade ack a master-level SPURIOUS
   // ack (inta with nothing to serve) left int_acked_irq frozen at 7 and this mux answered
   // the slave's parked spurious vector 0x17 where the 8259 convention is the MASTER's own
-  // icw2_vec|7 = 0x0F (review interrupts.md F1). int_acked_valid is latched at the ack edge,
+  // icw2_vec|7 = 0x0F. int_acked_valid is latched at the ack edge,
   // so a spurious ack selects master_vec (which the PIC parks at icw2_vec|7 on that same
   // edge) and only a real cascade ack selects the slave - whose own spurious answer, 0x17,
   // is exactly the slave-side convention when the cascade fires with the slave idle.
@@ -103,7 +103,17 @@ module pc9821_interrupts #(
                    slave_cs  ? slave_dout  :
                    pit_cs    ? pit_dout    : 8'hFF;
 
-  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'h03)) master (
+  // WD_UNMASKED bit 1: the keyboard's acking 0x41 read withdraws a latched IRQ1
+  // even unmasked, so a polled read cannot leave a phantom INT 09h behind.
+  // WD_UNMASKED bit 0: the PIT's OUT0 falling (a channel-0 reprogram to mode 0, or a
+  // mode-0 count write) withdraws an unacknowledged IRQ0 whether masked or not -
+  // NP2kai clears master IRR0 on every channel-0 count and mode-set write
+  // (io/pit.c pit_o71 `pic.pi[0].irr &= (~1);`, pit_o77 `if (chnum == 0)`), and the
+  // Xe10's IRR follows OUT0 (docs/probes/IRQWD.TXT; the IMR sits after the IRR).
+  // Without it Might and Magic III's timer re-arm looped on a phantom IRQ0
+  // (tb_pc9821_pit_irq_reprogram).
+  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'h03),
+               .WD_UNMASKED(8'h03)) master (
       .clk(clk), .rst_n(reset_n), .cs(master_cs), .wr(io_wr), .rd(io_rd),
       .a0(io_addr[1]), .din(io_din), .dout(master_dout),
       .ir_in({slave_int, master_aux_irq, vsync_irq, keyboard_irq, pit_out0}),

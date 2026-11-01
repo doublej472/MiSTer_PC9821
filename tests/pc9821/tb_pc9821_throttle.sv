@@ -59,7 +59,7 @@ module tb_pc9821_throttle;
       .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
       .ps2_key(11'd0), .ram_size(ram_size), .bios_set(4'd0), .ram_size_max(ram_size_max),
       .bios_setup(1'b0), .cpu_speed_sel(cpu_speed_sel),
-      .dbg_uart_accept(1'b1), .trace_trig(),
+      .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
       .debug_post_code(debug_post_code), .debug_post_write(debug_post_write),
       .debug_bios_loaded(debug_bios_loaded), .cpu_cs(cpu_cs),
       .cpu_eip(cpu_eip), .cpu_cs_base(cpu_cs_base),

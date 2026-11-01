@@ -33,6 +33,23 @@ module eq_side #(parameter REF = 0) (
   wire        log_we;
   byte img [];
 
+  // The new drive's read-ahead ports. CDDA_REQ4 low keeps it fetching one sector per request,
+  // as the previous drive did, so the fetched stream compares; its played position follows a
+  // ring that plays each sector the moment its last sample is written (CDDA_PLAYED one cycle
+  // after every 588th CDDA_WR since the last flush), so a play completes when the previous
+  // drive's did, a few cycles later, and every command sees the same position.
+  wire       cdda_flush;
+  reg  [9:0] pm_n = 0;
+  reg        pm_played = 0;
+  always @(posedge clk) begin
+    pm_played <= 1'b0;
+    if (!REF && cdda_flush) pm_n <= 10'd0;
+    else if (cdda_wr) begin
+      if (pm_n == 10'd587) begin pm_n <= 10'd0; pm_played <= 1'b1; end
+      else pm_n <= pm_n + 10'd1;
+    end
+  end
+  generate if (REF) begin : g_noflush assign cdda_flush = 1'b0; end endgenerate
   /* verilator lint_off PINCONNECTEMPTY */
   generate
     if (REF) begin : g_ref
@@ -54,7 +71,8 @@ module eq_side #(parameter REF = 0) (
           .img_mounted(img_mounted), .img_size(img_size),
           .sd_lba(sd_lba), .sd_blk_cnt(sd_blk_cnt), .sd_rd(sd_rd), .sd_ack(sd_ack),
           .sd_buff_wr(sd_buff_wr), .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout),
-          .cdda_req(cdda_req), .cdda_wr(cdda_wr), .cdda_data(cdda_data),
+          .cdda_req(cdda_req), .cdda_req4(1'b0), .cdda_played(pm_played), .cdda_flush(cdda_flush),
+          .cdda_wr(cdda_wr), .cdda_data(cdda_data),
           .log_byte(log_byte), .log_we(log_we), .log_accept(1'b1)
       );
     end

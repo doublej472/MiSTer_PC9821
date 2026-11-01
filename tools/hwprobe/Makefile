@@ -1,4 +1,4 @@
-TOOLS := gfxbenc2 egcplane gfxbench idelat ideprobe ioprobe irqwd opnapro pegcwatch probe2 sndtest memmap a20map d8bank integ
+TOOLS := gfxbenc2 egcplane gfxbench idelat ideprobe ioprobe irqwd opnapro pegcwatch probe2 sndtest memmap a20map d8bank integ crt31k crt24k pegcrd grcgpace gdcfig txtmode fdmode
 
 # Build the DOS .COM probe binaries from their assembly sources.
 #
@@ -13,7 +13,7 @@ TOOLS := gfxbenc2 egcplane gfxbench idelat ideprobe ioprobe irqwd opnapro pegcwa
 # 0x10000 - 0x100 = 65280 bytes. The toolchain does NOT catch an overflow: a padded
 # probe2.s links and objcopy's to a 68074-byte "COM" with no error, and DOS simply
 # refuses to load it - which would be discovered on the machine, after the trip.
-# probe2 is the file several lanes append to and it has ~1.3 KiB of headroom, so the
+# probe2 is the file several investigations append to and it has ~1.3 KiB of headroom, so the
 # limit is enforced here, once, for every tool.
 COM_MAX := 65280
 
@@ -31,7 +31,35 @@ com_name = $(if $(COM_NAME_$(1)),$(COM_NAME_$(1)),$(1))
 .DEFAULT_GOAL := all
 .PHONY: all clean
 
-all: $(foreach t,$(TOOLS),$(t)/$(call com_name,$(t)).com)
+all: $(foreach t,$(TOOLS),$(t)/$(call com_name,$(t)).com) cpusuite tcrpm/tcrpm.com sdshmoo/sdshmoo.com
+
+# CPUSUITE is NASM, not GNU as: it runs z486's own test programs (src/z486/tests/programs, NASM
+# sources), and its pack is GENERATED from them by gen_cpusuite.py, so a change to the suite
+# reaches the pack on the next make. Both outputs are git-ignored (cpusuite/build/).
+.PHONY: cpusuite
+cpusuite: cpusuite/cpusuite.com cpusuite/build/CPUSUITE.BIN
+
+cpusuite/cpusuite.com: cpusuite/cpusuite.asm
+	nasm -f bin -o $@ $<
+	@if [ `wc -c < $@` -gt $(COM_MAX) ]; then echo "ERROR: $@ is over the DOS .COM limit"; rm -f $@; exit 1; fi
+	@echo "built $@"
+
+# TCRPM is NASM too: it switches to 32-bit protected mode and back (README).
+tcrpm/tcrpm.com: tcrpm/tcrpm.asm
+	nasm -f bin -o $@ $<
+	@if [ `wc -c < $@` -gt $(COM_MAX) ]; then echo "ERROR: $@ is over the DOS .COM limit"; rm -f $@; exit 1; fi
+	@echo "built $@"
+
+# SDSHMOO is NASM too: the SDRAM_CLK phase shmoo, 32-bit protected mode run from GVRAM (README).
+sdshmoo/sdshmoo.com: sdshmoo/sdshmoo.asm
+	nasm -f bin -o $@ $<
+	@if [ `wc -c < $@` -gt $(COM_MAX) ]; then echo "ERROR: $@ is over the DOS .COM limit"; rm -f $@; exit 1; fi
+	@echo "built $@"
+
+CPUSUITE_DEPS := $(wildcard ../../src/z486/tests/programs/*.asm ../../src/z486/tests/programs/*.json) \
+                 ../../src/z486/tests/test_protected_mode.py cpusuite/prelude.inc cpusuite/gen_cpusuite.py
+cpusuite/build/CPUSUITE.BIN: $(CPUSUITE_DEPS)
+	python3 cpusuite/gen_cpusuite.py --out cpusuite/build
 
 # One .COM per tool: as -> ld -> objcopy.
 define build_com
@@ -51,3 +79,5 @@ $(foreach t,$(TOOLS),$(eval $(call build_com,$(t))))
 
 clean:
 	rm -f $(foreach t,$(TOOLS),$(t)/$(t).com $(t)/$(call com_name,$(t)).com $(t)/$(t).o $(t)/$(t).elf)
+	rm -f cpusuite/cpusuite.com tcrpm/tcrpm.com sdshmoo/sdshmoo.com
+	rm -rf cpusuite/build

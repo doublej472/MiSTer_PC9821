@@ -7,10 +7,10 @@
  * EVERY other port 42. That table is now known to be wrong somewhere: the fresh
  * IDE probe (tools/hwprobe/ideprobe/ideprobe.s /TIME) measured the IDE data port at 8.5
  * clk_sys and the task file at ~14.8 against its own 0x5F row, while the class
- * table says 42. The earlier r13/213-215 class ladder went through the PIT
+ * table says 42. The earlier class ladder went through the PIT
  * byte-order bug and the dead-RTC OPNA-Timer-B workaround, so it is only half
  * trusted. This probe re-measures EVERY port class with the self-calibrating
- * method the fixed IDE probe uses, so the owner can correct the table.
+ * method the fixed IDE probe uses, so the table can be corrected.
  *
  * METHOD (identical to ideprobe.s /TIME, which is the fixed self-calibrating form):
  *   - For each port, TM_N=1024 back-to-back accesses in a cli window.
@@ -24,14 +24,14 @@
  *     printed, not assumed (the IDE probe's run reads 0xCEF3, not 0x6000).
  *   - The count comes from the PIT channel-0 counter through its latch command
  *     (0x0077 <- 0x00, 0x0071 x2), with the byte order MEASURED per run (pit_cal)
- *     and printed as RAW counts (16-bit mod 65536, NO halving: r13/215 section
- *     1.4 found the machine counts once per oscillator clock, 8 raw counts per
+ *     and printed as RAW counts (16-bit mod 65536, NO halving: a raster check on the
+ *     machine found the machine counts once per oscillator clock, 8 raw counts per
  *     ARTIC tick).  1 count = 1/2.4576 MHz = 406.9 ns and 1 ARTIC tick = 1/307200
  *     Hz = 3255.2 ns, so BOTH columns give absolute nanoseconds with no run-local
  *     scale at all; where they disagree (a torn or wrapped PIT window) the decoder
  *     flags the row and the ARTIC column serves.  The divisor (tm_div_probe) feeds
  *     only the one-reload wrap correction and is coherent-pair filtered - the
- *     absolute latch word tears (r13/215 section 1.1) and is never trusted raw.
+ *     absolute latch word tears and is never trusted raw.
  *   - The free-running ARTIC counter (0x005C low word / 0x005F high byte) is read
  *     at both ends of the same window as the independent cross-check.
  *
@@ -327,7 +327,7 @@ tmr_next:
     mov     eax, [tm_a1]
     sub     eax, [tm_a0]
     mov     [tm_ad], eax
-    /* Raw count distance, 16-bit mod 65536, NO halving: r13/215 section 1.4
+    /* Raw count distance, 16-bit mod 65536, NO halving: a raster check on the machine
      * found the machine's channel 0 counts once per oscillator clock (8 raw
      * counts per ARTIC tick, three windows, 0.5%), so the old mode-3 /2 was 2x
      * wrong. One negative distance means the counter reloaded inside the
@@ -352,7 +352,7 @@ tmr_done:
     ret
 
 /* tm_div_probe: the PIT divisor, for the one-reload wrap correction only -
- * the absolute latch word is known to tear (r13/215 section 1.1: scans have
+ * the absolute latch word is known to tear (scans have
  * returned 0xFFFA/0xD12E-class words that cannot be a count of the BIOS's
  * 0x6000 divisor), so each candidate is sampled TWICE back to back and only a
  * coherent pair (words within 64 counts) is accepted.  The window is 30 ms of

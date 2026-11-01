@@ -27,8 +27,8 @@ module tb_pc9821_grcg_ops;
   reg         cpu_line_read = 1'b0;
   reg         cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -54,9 +54,9 @@ module tb_pc9821_grcg_ops;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .grcg_expand(grcg_expand),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),

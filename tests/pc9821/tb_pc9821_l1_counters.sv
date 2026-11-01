@@ -65,7 +65,7 @@ module tb_pc9821_l1_counters;
     .cpu_resp_valid(d_cpu_resp_valid), .stores_drained(d_stores_drained),
     .vipt_probe_offset(12'd0), .vipt_probe_valid(1'b0), .vipt_probe_ready(),
     .vipt_probe_accepted(), .vipt_probe_direct_accepted(),
-    .vipt_resolve_phys_addr(32'd0), .vipt_resolve_valid(1'b0),
+    .vipt_resolve_phys_addr(32'd0), .vipt_resolve_tlb_phys(32'd0), .vipt_resolve_alt_phys(32'd0), .vipt_resolve_use_tlb(1'b0), .vipt_resolve_valid(1'b0),
     .vipt_resolve_data(), .vipt_resolve_hit(),
     .mem_addr(d_mem_addr), .mem_din(d_mem_din), .mem_dout(d_mem_dout),
     .mem_line_dout(128'd0), .mem_be(d_mem_be), .mem_burstcount(d_mem_burst),

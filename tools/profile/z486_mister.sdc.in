@@ -12,23 +12,49 @@ derive_clock_uncertainty
 # clk_sys's frequency phase-shifted so the device samples the controller's command/address and
 # launches read data with setup. The phase is derived from the "SDRAM board I/O" model below
 # (tools/profile_gen.py, derive_sdram_phase) unless the configuration overrides it.
-set pc9821_clk_sys [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0]*|divclk}]
-set pc9821_clk_sdram_pin [get_pins {emu|pll|pll_inst|altera_pll_i|general[1]*|divclk}]
-if {[llength $pc9821_clk_sys] != 1 ||
-    [llength $pc9821_clk_sdram_pin] != 1} {
+set pc9821_clk_sys [get_clocks {emu|pll|pll_inst|altera_pll_i|@CLK_SYS_COUNTER@*|divclk}]
+set pc9821_clk_sdram_pin [get_pins {emu|pll|pll_inst|altera_pll_i|@SDRAM_PIN_CLK_COUNTER@*|divclk}]
+# The guards count the COLLECTION (get_collection_size): `llength` of a collection handle is 1 even
+# when nothing matched, so a renamed PLL output (the dynamic-phase-shift PLL names its outputs
+# cyclonev_pll|counter[N].output_counter) would otherwise leave every constraint below inert
+# with nothing but an "Ignored filter" warning.
+if {[get_collection_size $pc9821_clk_sys] != 1 ||
+    [get_collection_size $pc9821_clk_sdram_pin] != 1} {
     error "PC9821: active core/SDRAM PLL clocks not found"
 }
 
 @PROFILE_SPECIFIC@
 
-# No second clock domain: the PC-98 dot rate is an enable on clk_sys
-# (pc9821_system's pixel_ce), not a separate clock. That is what the framework
-# requires (developer/emu.md: the video clock must be above 40 MHz and CE_PIXEL
-# must be based on CLK_VIDEO) and what the upstream template does, running its
-# whole video chain from clk_sys with ce_pix = the core's enable. The dot-clock
-# PLL, its asynchronous clock group and the clk_sys <-> video CDC are all gone
-# with it; this core's clocks are the main PLL's outputs (clk_sys and the
-# SDRAM pin clock), which sys/sys_top.sdc already groups.
+# ---------------- The video clock (CLK_VIDEO): the video PLL, rtl/vpll -----------------
+# The analog picture leaves on its own PLL clock, an exact multiple of the dot rate the raster runs
+# on (2 x 400/19 MHz for the native and doubled 24 kHz pictures, 2 x 25.168 MHz while 0x09A8 bit 0
+# selects the 31 kHz dot clock; tools/profile_gen.py, the video PLL section), so every pixel and
+# sync period is a constant number of clocks. The raster
+# stays on clk_sys; pc9821_video_out carries each dot across through a 16-entry FIFO whose write
+# pointer crosses Gray-coded through two flops, and the OSD/PLL-state levels through two flops each.
+# The video PLL is outside sys/sys_top.sdc's `*|pll|pll_inst` group, so its relation to the
+# framework's clocks is stated here: asynchronous to all of them.
+set pc9821_clk_vid [get_clocks {*vpll|vpll_inst|altera_pll_i|*[0].*|divclk}]
+if {[get_collection_size $pc9821_clk_vid] != 1} {
+    error "PC9821: the video PLL's clock not found"
+}
+set_clock_groups -asynchronous -group $pc9821_clk_vid \
+    -group [get_clocks { pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0].*|divclk \
+                         pll_audio|pll_audio_inst|altera_pll_i|*[0].*|divclk \
+                         spi_sck hdmi_sck *|h2f_user0_clk \
+                         FPGA_CLK1_50 FPGA_CLK2_50 FPGA_CLK3_50 }]
+# clk_sys <-> the video clock. Both come from the 50 MHz reference, so TimeQuest relates them by
+# their edges (a setup relationship of a fraction of a nanosecond somewhere in the 19-cycle
+# pattern), which no crossing here needs: every path between them ends in a synchroniser's first
+# stage (the FIFO pointer, the levels, sys_top's vs_d0/vsd on HDMI_TX_VS) or comes from a quasi-static
+# register. Bound each to one period of its destination clock (the video clock's generated, FASTEST
+# configuration: the 31 kHz clock) and drop the hold check, the standard treatment of a
+# synchronised crossing; a
+# max-delay rather than a false path keeps the Gray pointer's bits within one period of each other.
+set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid @VCLK_PERIOD_NS@
+set_max_delay -from $pc9821_clk_vid -to $pc9821_clk_sys @CLK_SYS_PERIOD_NS@
+set_false_path -hold -from $pc9821_clk_sys -to $pc9821_clk_vid
+set_false_path -hold -from $pc9821_clk_vid -to $pc9821_clk_sys
 
 # Detailed timing reports are produced by a separate STA session against the fitted
 # database (create_timing_netlist; read_sdc; update_timing_netlist, then report_timing).
@@ -46,18 +72,21 @@ if {[llength $pc9821_clk_sys] != 1 ||
 # these constraints use the full device limits and must be revisited with
 # measured/board-level skew before declaring hardware acceptance.
 create_generated_clock -name PC9821_SDRAM_CLK \
-    -source $pc9821_clk_sdram_pin -divide_by 1 [get_ports SDRAM_CLK]
+    -source $pc9821_clk_sdram_pin -divide_by 1@SDRAM_CLK_INVERT@ [get_ports SDRAM_CLK]
 
 set pc9821_sdram_out [get_ports {SDRAM_A[*] SDRAM_BA[*] SDRAM_CKE \
     SDRAM_DQMH SDRAM_DQML SDRAM_DQ[*] SDRAM_nCAS SDRAM_nCS SDRAM_nRAS \
     SDRAM_nWE}]
 set_output_delay -clock PC9821_SDRAM_CLK -max  1.5 $pc9821_sdram_out
 set_output_delay -clock PC9821_SDRAM_CLK -min -0.8 $pc9821_sdram_out
-set_input_delay -clock PC9821_SDRAM_CLK -max 6.0 [get_ports SDRAM_DQ[*]]
+@SDRAM_OUT_CELL_CUT@
+set_input_delay -clock PC9821_SDRAM_CLK -max @SDRAM_TAC_NS@ [get_ports SDRAM_DQ[*]]
 set_input_delay -clock PC9821_SDRAM_CLK -min 2.5 [get_ports SDRAM_DQ[*]]
 
-# dq_r is the sole controller register that reads the DQ pins, packed into the input cell
-# (FAST_INPUT_REGISTER), so this is not the ordinary single-cycle input path. The launch
+# dq_r is the sole controller register that reads the DQ pins, and it is the input cell's own
+# register: by default the rising-edge half of an instantiated input DDIO cell (sdram.v
+# DQ_IN_DDIO), or with build_profile.py --no-sdram-dq-ddio a fabric register the fitter packs
+# there (FAST_INPUT_REGISTER). Either way this is not the ordinary single-cycle input path. The launch
 # reference is the forwarded PC9821_SDRAM_CLK, whose path to the SDRAM_CLK pin runs through
 # the output buffer (~13.8 ns from the PLL), while the controller clock reaches the dq_r input
 # cell in ~8.5 ns: the two differ by 5.293 ns. Measured (on a 100 MHz split-clock build, when the
@@ -69,13 +98,15 @@ set_input_delay -clock PC9821_SDRAM_CLK -min 2.5 [get_ports SDRAM_DQ[*]]
 # setup-2 pairing, and it holds the correct halfword because the next one launches a full
 # controller-clock period later. A derivation from a nominal +4 ns phase that ignores the
 # output-path skew misplaces the consumed edge and is wrong.
-set pc9821_sdram_dq_capture [get_registers {*dq_r[*]}]
+# The capture collection is the selected cell's registers (tools/profile_gen.py DQ_CAPTURE_REGS).
+set pc9821_sdram_dq_capture [get_registers {@SDRAM_DQ_CAPTURE_REGS@}]
 if {[get_collection_size $pc9821_sdram_dq_capture] != 16} {
-    error "PC9821: expected 16 packed SDRAM DQ input registers"
+    error "PC9821: expected 16 SDRAM DQ input-cell capture registers (@SDRAM_DQ_CAPTURE_REGS@)"
 }
+@SDRAM_DQ_LO_CUT@
 set_multicycle_path -from [get_ports SDRAM_DQ[*]] \
     -to $pc9821_sdram_dq_capture -setup 2
-# NO hold multicycle on this pair (it carried `-hold 1` until the profile-gen lane). dq_r
+# NO hold multicycle on this pair (an earlier `-hold 1` was wrong). dq_r
 # captures on EVERY controller-clock edge and the SDRAM drives a new halfword on every SDRAM_CLK
 # edge, so this is a SHIFTED single-cycle capture, not data held for two cycles: the halfword
 # consumed at the setup-2 edge must not be overtaken by the NEXT halfword, which is the same
@@ -115,7 +146,7 @@ set_false_path -from $pc9821_reset_regs
 # reset_req = buttons[1] | status[0] shows the asymmetry this removes: its
 # `buttons` half (= cfg[1:0]) is already false-pathed both ways by
 # sys/sys_top.sdc's `cfg[*]` pair, and the status half is the same class of
-# signal. sdram_sz likewise (fixed per core load, r13/300 F1) feeds only the
+# signal. sdram_sz likewise (fixed per core load) feeds only the
 # controller's row/bank geometry decode. Cut both directions, mirroring `cfg`.
 # This is not a CDC handshake: hps_io writes both words on clk_sys and the HPS
 # side crosses through the already-grouped h2f/spi interface.
@@ -143,7 +174,7 @@ set_false_path -to   $pc9821_sdramsz_regs
 # and the numbers move with the placement draw (this tree's draws: CDDA
 # -7.051 / -6.391, vsync -6.277 / -5.907). The constrained flow (the fitter's
 # STA, which reads sys/sys_top.sdc and this file) already cuts these crossings
-# at the clock groups: the lightoc fit's own summary shows pll_audio +15.403 /
+# at the clock groups: an 80 MHz fit's own summary shows pll_audio +15.403 /
 # pll_hdmi +0.179 setup (after-draw; +15.402/+0.170 in the before draw) and
 # nothing at -7 ns. To reproduce the constrained
 # view in a query session, run `read_sdc` after `create_timing_netlist`.
@@ -168,7 +199,7 @@ set_false_path -to   $pc9821_sdramsz_regs
 #    (cdc_vector_handshake_continuous in the same file), which is why only the
 #    tick needs an exception.
 set pc9821_clk_audio [get_clocks {pll_audio|pll_audio_inst|altera_pll_i|*[0]*|divclk}]
-if {[llength $pc9821_clk_audio] != 1} {
+if {[get_collection_size $pc9821_clk_audio] != 1} {
     error "PC9821: pll_audio output clock not found"
 }
 #    The CD-DA path is BUILT ONLY WITH THE CD-ROM (z486_mister.sv CDDA_EN), so the guard asks
@@ -183,22 +214,21 @@ if {[get_collection_size [get_registers -nowarn {*cdda_inst|*}]] > 0} {
 }
 
 # 2) HDMI TX vsync level. `hdmi_out_vs` (sys/sys_top.v:1300,1329) registers on
-#    hdmi_tx_clk, the clkselect mux of clk_vid (= clk_sys in this core) and
-#    hdmi_clk_out (pll_hdmi) (sys/sys_top.v:1263-1271); both legs are real at
-#    runtime, so the source is asynchronous whenever the hdmi_clk_out leg is
-#    selected and same-clock otherwise. The clk_sys side syncs it twice:
+#    hdmi_tx_clk, the clkselect mux of clk_vid (the video PLL's clock, see the video clock
+#    section above; it was clk_sys until 2026-10-15) and hdmi_clk_out (pll_hdmi)
+#    (sys/sys_top.v:1263-1271); both legs are real at runtime, so the source is asynchronous to
+#    clk_sys either way. The clk_sys side syncs it twice:
 #    vs_d0 -> vs_d1 -> vs_d2 with a stability filter on the raw level
 #    (sys/sys_top.v:544-548) and vsd -> vsd2 (sys/sys_top.v:1088-1093).
 #    vs_d0 and vsd are first stages. vs_d1 is named too: the filter's compare
 #    reaches its enable raw (:545), but the value it can load is only the
 #    stage-1 sample, so the filter at worst advances/defers the level by one
-#    clk_sys. Clock-scoped because the clk_vid leg's same-clock copies of
-#    these paths are REAL single-cycle paths (measured +5.839/+8.892/+9.650 on
-#    the lightoc draw) and must stay timed. The clk_100 telemetry chains at
+#    clk_sys. Clock-scoped: the clk_vid leg is bounded by the video clock section's max-delay
+#    instead (one clk_sys period, what it was held to while clk_vid was clk_sys). The clk_100 telemetry chains at
 #    sys/hps_io.sv:985 and :1020 are deliberately NOT named here: frozen
 #    framework internals, covered by the same clock groups.
 set pc9821_clk_hdmi [get_clocks {pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0]*|divclk}]
-if {[llength $pc9821_clk_hdmi] != 1} {
+if {[get_collection_size $pc9821_clk_hdmi] != 1} {
     error "PC9821: pll_hdmi output clock not found"
 }
 set pc9821_vs_sync_vsd0 [get_registers -nowarn {vs_d0*}]

@@ -1,9 +1,0 @@
-# Captured run, tb_pc9821_opna_cdc (Verilator 5.052).
-# -DSKEW0 = every bit settles together; default = per-bit routing skew <= 1.55 ns.
-# CLK_AUDIO = 24.576 MHz; the capture is once per 10 cycles (pc9821_audio_volume slot 1).
-# Stimulus: the SSG noise generator at max level, 20 ms.
-
--- -DSKEW0 --
-OPNA_CDC: captures=50000 midflight=0 (0.0000% -> 0/s)  snd_l=12276
--- default (skewed) --
-OPNA_CDC: captures=50000 midflight=6 (0.0120% -> 300/s)  snd_l=12276

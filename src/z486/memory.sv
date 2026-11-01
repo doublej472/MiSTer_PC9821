@@ -53,7 +53,11 @@ module memory
 
     // Runtime cacheable-RAM top; with RAM_BOUND_ENABLE the effective bound is
     // min(ram_cache_top, NO_ALLOC_BOUND).
-    parameter        RAM_BOUND_ENABLE = 0
+    parameter        RAM_BOUND_ENABLE = 0,
+
+    // Classify the demand request on the paging unit's mem_req arms
+    // (cache_unit CLASS_SPLIT); 0 classifies dcache_req_phys_addr_raw directly.
+    parameter        CLASS_SPLIT = 0
 ) (
     input              clk,
     input              reset_n,
@@ -71,6 +75,16 @@ module memory
     // Paging-unit demand request
     input              dcache_req_valid,
     input      [31:0]  dcache_req_phys_addr_raw,
+    // The request on both mem_req arms (read only with CLASS_SPLIT).
+    input      [31:0]  dcache_req_phys_addr_m1,
+    input      [31:0]  dcache_req_phys_addr_m0,
+    input              dcache_req_is_io_m1,
+    input              dcache_req_is_io_m0,
+    input              dcache_req_split_sel,
+    input              dcache_req_pre_sel,
+    input      [31:0]  dcache_req_pre_phys,
+    input      [4:0]   dcache_req_route_m1,
+    input      [4:0]   dcache_req_route_m0,
     input      [11:0]  dcache_req_preread_offset,
     input              dcache_req_preread_priority,
     input              dcache_req_write,
@@ -114,6 +128,9 @@ module memory
     output             dcache_vipt_probe_direct_accepted,
     input              dcache_vipt_resolve_valid,
     input      [31:0]  dcache_vipt_resolve_phys_addr_raw,
+    input      [31:0]  dcache_vipt_resolve_tlb_phys_raw,   // the address's arms and select
+    input      [31:0]  dcache_vipt_resolve_alt_phys_raw,   // (data_access), for the tag compare
+    input              dcache_vipt_resolve_use_tlb,
     output             dcache_vipt_resolve_hit,
     output     [31:0]  dcache_vipt_resolve_data,
 
@@ -206,6 +223,7 @@ wire ext_valid_r;
 wire icache_read_pending;
 wire icache_invalidate_valid;
 wire [31:0] icache_invalidate_addr;
+wire [1:0] dcache_req_cls_m1, dcache_req_cls_m0;   // the routing class on mem_req's arms
 cache_unit #(
     .PROTECT_UMA_ROM(PROTECT_UMA_ROM),
     .DCACHE_SET_BITS(DCACHE_SET_BITS),
@@ -238,7 +256,8 @@ cache_unit #(
     .NO_ALLOC_ENABLE(NO_ALLOC_ENABLE),
     .NO_ALLOC_CLASS(NO_ALLOC_CLASS),
     .NO_ALLOC_BOUND(NO_ALLOC_BOUND),
-    .RAM_BOUND_ENABLE(RAM_BOUND_ENABLE)
+    .RAM_BOUND_ENABLE(RAM_BOUND_ENABLE),
+    .CLASS_SPLIT(CLASS_SPLIT)
 ) cache_unit_inst (
     // Clock, reset and board configuration
     .clk(clk),
@@ -252,6 +271,17 @@ cache_unit #(
     // Paging unit: demand data request (physical address, before A20 masking)
     .dcache_req_valid(dcache_req_valid),
     .dcache_req_phys_addr_raw(dcache_req_phys_addr_raw),
+    .dcache_req_phys_addr_m1(dcache_req_phys_addr_m1),
+    .dcache_req_phys_addr_m0(dcache_req_phys_addr_m0),
+    .dcache_req_is_io_m1(dcache_req_is_io_m1),
+    .dcache_req_is_io_m0(dcache_req_is_io_m0),
+    .dcache_req_split_sel(dcache_req_split_sel),
+    .dcache_req_pre_sel(dcache_req_pre_sel),
+    .dcache_req_pre_phys(dcache_req_pre_phys),
+    .dcache_req_route_m1(dcache_req_route_m1),
+    .dcache_req_route_m0(dcache_req_route_m0),
+    .dcache_req_cls_m1(dcache_req_cls_m1),
+    .dcache_req_cls_m0(dcache_req_cls_m0),
     .dcache_req_preread_offset(dcache_req_preread_offset),
     .dcache_req_preread_priority(dcache_req_preread_priority),
     .dcache_req_write(dcache_req_write),
@@ -277,6 +307,9 @@ cache_unit #(
     .dcache_vipt_probe_direct_accepted(dcache_vipt_probe_direct_accepted),
     .dcache_vipt_resolve_valid(dcache_vipt_resolve_valid),
     .dcache_vipt_resolve_phys_addr_raw(dcache_vipt_resolve_phys_addr_raw),
+    .dcache_vipt_resolve_tlb_phys_raw(dcache_vipt_resolve_tlb_phys_raw),
+    .dcache_vipt_resolve_alt_phys_raw(dcache_vipt_resolve_alt_phys_raw),
+    .dcache_vipt_resolve_use_tlb(dcache_vipt_resolve_use_tlb),
     .dcache_vipt_resolve_hit(dcache_vipt_resolve_hit),
     .dcache_vipt_resolve_data(dcache_vipt_resolve_data),
     // Paging unit: instruction line request (prefetch)
@@ -335,7 +368,7 @@ cache_unit #(
     .icache_invalidate_valid(icache_invalidate_valid)
 );
 
-bus_unit #(.ENABLE_X87(ENABLE_X87)) bus_unit_inst (
+bus_unit #(.ENABLE_X87(ENABLE_X87), .SPLIT(CLASS_SPLIT)) bus_unit_inst (
     // Clock and reset
     .clk(clk),
     .reset_n(reset_n),
@@ -349,6 +382,11 @@ bus_unit #(.ENABLE_X87(ENABLE_X87)) bus_unit_inst (
     .dcache_req_is_inta(dcache_req_is_inta),
     .dcache_req_is_vga_mem(dcache_req_is_vga_mem),
     .dcache_req_is_x87(dcache_req_is_x87),
+    .dcache_req_route_m1(dcache_req_route_m1),
+    .dcache_req_route_m0(dcache_req_route_m0),
+    .dcache_req_cls_m1(dcache_req_cls_m1),
+    .dcache_req_cls_m0(dcache_req_cls_m0),
+    .dcache_req_split_sel(dcache_req_split_sel),
     .dcache_req_accepted(dcache_req_accepted),
     .dcache_req_complete(dcache_req_complete),
     .dcache_read_complete(dcache_read_complete),

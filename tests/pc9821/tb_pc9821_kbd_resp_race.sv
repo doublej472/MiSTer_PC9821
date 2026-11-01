@@ -1,11 +1,11 @@
-// tb_pc9821_kbd_resp_race — a command response must not be lost to its own delivery.
+// tb_pc9821_kbd_resp_race - a command response must not be lost to its own delivery.
 //
 // ==== WHAT THIS PROVES ====
-// A command response loaded in the exact clk the old response's last byte delivers must not be lost (review r2-pulses H9, defer-not-lose): the in-flight byte still reaches the guest, the new FA A0 83 of the 0x96 ID command is installed intact (resp_count 3, 0x83 at the shift top) instead of being clobbered by the deliver's bookkeeping, and the guest sees the whole ack sequence byte by byte.
+// A command response loaded in the exact clk the old response's last byte delivers must not be lost (defer-not-lose): the in-flight byte still reaches the guest, the new FA A0 83 of the 0x96 ID command is installed intact (resp_count 3, 0x83 at the shift top) instead of being clobbered by the deliver's bookkeeping, and the guest sees the whole ack sequence byte by byte.
 //
 // A guest command write that loads a new response in the exact clk the old
-// response's last byte delivers must keep the NEW response (review r2-pulses
-// H9). Before the fix the deliver arm (later in the same always block) shifted
+// response's last byte delivers must keep the NEW response.
+// Before the fix the deliver arm (later in the same always block) shifted
 // `resp_shift` and decremented `resp_count` from the OLD response, so the fresh
 // FA A0 83 of the 0x96 keyboard-ID command was clobbered to a zero-length
 // response and the 0x9C/0x9D/0x96 protocol's FA ack never appeared.
@@ -111,7 +111,7 @@ module tb_pc9821_kbd_resp_race;
     write_port(1'b1, 8'h5E);
     write_port(1'b1, 8'h05);
 
-    // ==== THE COLLISION (review r2-pulses H9's collision test) ====
+    // ==== THE COLLISION ====
     // A junk command (0xEE -> the default one-byte FC response, no pending
     // parameter) puts resp_count at 1; the load's NBA makes deliver_resp fire in
     // the NEXT clk. The strobe is HELD across two consecutive posedges with only

@@ -1,4 +1,4 @@
-// TEST REFERENCE: pc9821_gdc2 as of 3b134fe4 (before the area-video pass), renamed. Never edited; the lockstep bench tb_pc9821_gdc2_equiv proves the shipped module against it.
+// TEST REFERENCE: pc9821_gdc2 as of 3b134fe4 (before the area-video pass), renamed. Never edited, except that the 0xA0 status bit-2 behaviour change (FIFO empty clears while read-back data is queued, docs/probes/RDBACK.TXT:172) is mirrored from the shipped module so the pair stays equivalent, so are the two figure-engine changes the WRITE slice can see - CSRW's third byte loads the mask with its dAD one-hot (the Xe10's GDCCURS MASK_THEN_CURS rows) and the 0xA0 status bit 3 reads DRAWING while the engine holds a job -, and so is the walker's odd-frame wrap step (w_nz) and the packed walk's stride (the PITCH command 0x47 kept, stepped as NP2kai vram/makegrex.c:286-291 from PITCH and the gdc_5m clock input instead of the SCROLL im bit while pegc_256), and the planar walk's step from the same PITCH byte and the SCROLL im bit (NP2kai vram/makegrph.c:147-151) instead of a constant 40; the lockstep bench tb_pc9821_gdc2_equiv proves the shipped module against it.
 // PC-9821 GDC2 (the graphics GDC) display-address generator.
 //
 // The slave GDC's SCROLL parameter block, its START/STOP display latch, and the byte
@@ -40,6 +40,7 @@ module pc9821_gdc2_ref (
     // The PEGC 256-colour select (pc9821_crtc's mode2_256col): the packed display walks
     // its partitions as NP2kai's makegrphex does (see the walker below).
     input wire        pegc_256,
+    input wire        gdc_5m,        // mirrored: the packed stride's clock select
     input wire        stat_blank,    // ~de_ff[1]: status bit 6
     input wire        stat_vsync,    // vs_sync_ff[1]: status bit 5
 
@@ -167,7 +168,9 @@ module pc9821_gdc2_ref (
   // `item->ptr = GDC_CODE; item->rcv = 2/1/0` in the `(data & 0x60) == 0x20` arm
   // (io/gdc.c gdc_work).
   localparam [2:0] RCV_NONE = 3'd0, RCV_CSRW = 3'd1, RCV_CSRFORM = 3'd2,
-                   RCV_VECTW = 3'd3, RCV_CODE = 3'd4, RCV_MASK = 3'd5;
+                   RCV_VECTW = 3'd3, RCV_CODE = 3'd4, RCV_MASK = 3'd5,
+                   RCV_PITCH = 3'd6;   // mirrored
+  reg [7:0] gdc2_pitch;               // mirrored
   reg [3:0] gdc2_recv_left;  // parameter bytes the armed block still owes (0..11)
   reg [2:0] gdc2_recv_tgt;   // which block
   reg [3:0] gdc2_recv_ptr;
@@ -341,7 +344,6 @@ module pc9821_gdc2_ref (
   // 2 x PITCH. The doubling is therefore this machine's DEFAULT, not a hard-wired
   // constant: a guest that programs im = 1 (a 5 MHz machine) gets PITCH.
   localparam [7:0] GDC2_PITCH    = 8'd40;
-  localparam [8:0] GDC2_PITCH_X2 = {GDC2_PITCH, 1'b0};
   // The FOUR partitions' fields, decoded per partition k from para[GDC_SCROLL + 4k ..]
   // (NP2kai vram/makegrph.c grphput_*: `vad = LOADINTELWORD(gdc.s.para + GDC_SCROLL + gpos +
   // 0); vad = LOW15(vad << 1); remain = LOADINTELWORD(... + gpos + 2)`, gpos = 0, 4, 8, 12).
@@ -403,8 +405,9 @@ module pc9821_gdc2_ref (
   reg  d_csrw_touch, d_mask_touch;
   wire wb_csrw_w = io_wr && (io_addr == 8'hA0) && !gdc2_sync_pend &&
                    (gdc2_recv_tgt == RCV_CSRW) && (gdc2_recv_left != 4'd0);
-  wire wb_mask_w = io_wr && (io_addr == 8'hA0) && !gdc2_sync_pend &&
-                   (gdc2_recv_tgt == RCV_MASK) && (gdc2_recv_left != 4'd0);
+  wire wb_mask_w = io_wr && (io_addr == 8'hA0) && !gdc2_sync_pend && (gdc2_recv_left != 4'd0) &&
+                   ((gdc2_recv_tgt == RCV_MASK) ||
+                    ((gdc2_recv_tgt == RCV_CSRW) && (gdc2_recv_ptr[1:0] == 2'd2)));   // mirrored
 
   integer i;
   always @(posedge clk_sys) begin
@@ -415,6 +418,7 @@ module pc9821_gdc2_ref (
       gdc2_grph_start <= 1'b0;   // graphics display off until GDC2 says START
       gdc2_recv_left <= 4'd0;
       gdc2_recv_tgt <= RCV_NONE;
+      gdc2_pitch <= 8'd40;
       gdc2_recv_ptr <= 4'd0;
       gdc2_snd_cnt <= 3'd0;
       gdc2_snd_ptr <= 3'd0;
@@ -496,9 +500,10 @@ module pc9821_gdc2_ref (
         8'hE0: begin
           gdc2_snd[0] <= gdc2_csrw[0];
           gdc2_snd[1] <= gdc2_csrw[1];
-          gdc2_snd[2] <= gdc2_csrw[2] & 8'h03;
-          gdc2_snd[3] <= 8'h00;
-          gdc2_snd[4] <= 8'h00;
+          // The Xe10's CURD (GDCCURS.CSV raw_curd, GDCWG.CSV WG row): see pc9821_gdc2.sv.
+          gdc2_snd[2] <= {4'hF, gdc2_csrw[2][3], 1'b0, gdc2_csrw[2][1:0]};
+          gdc2_snd[3] <= gdc2_mask[0];
+          gdc2_snd[4] <= gdc2_mask[1];
           gdc2_snd_cnt <= 3'd5;
         end
         8'hC0: begin
@@ -559,6 +564,10 @@ module pc9821_gdc2_ref (
           gdc2_recv_tgt  <= RCV_VECTW;
           gdc2_recv_left <= 4'd11;
           gdc2_recv_ptr  <= 4'd0;
+        end else if (io_din == 8'h47) begin   // mirrored: PITCH, one byte
+          gdc2_recv_tgt  <= RCV_PITCH;
+          gdc2_recv_left <= 4'd1;
+          gdc2_recv_ptr  <= 4'd0;
         end else if (io_din == 8'h4A) begin
           // MASK: two parameter bytes, the write mask the WRITE command paints
           // through (io/gdc_cmd.tbl row 0x4a, NP2kai gdcsub_write's GDC_MASK).
@@ -594,12 +603,19 @@ module pc9821_gdc2_ref (
         end else gdc2_sync_cnt <= gdc2_sync_cnt + 3'd1;
       end else if (gdc2_recv_left != 4'd0) begin
         case (gdc2_recv_tgt)
-          RCV_CSRW:    gdc2_csrw[gdc2_recv_ptr[1:0]] <= io_din;
+          RCV_CSRW: begin   // mirrored: the third byte's dAD loads the one-hot mask
+            gdc2_csrw[gdc2_recv_ptr[1:0]] <= io_din;
+            if (gdc2_recv_ptr[1:0] == 2'd2) begin
+              gdc2_mask[0] <= (io_din[7] == 1'b0) ? (8'h01 << io_din[6:4]) : 8'h00;
+              gdc2_mask[1] <= (io_din[7] == 1'b1) ? (8'h01 << io_din[6:4]) : 8'h00;
+            end
+          end
           RCV_CSRFORM: if (gdc2_recv_ptr == 4'd0)
                          gdc2_lr <= io_din[4:0];   // CSRFORM[4:0] = lr-1 (NP2kai vram/makegrph.c:362)
           RCV_VECTW:   gdc2_vect[gdc2_recv_ptr[3:0]] <= io_din;
           RCV_CODE:    gdc2_code[gdc2_recv_ptr[0]] <= io_din;
           RCV_MASK:    gdc2_mask[gdc2_recv_ptr[0]] <= io_din;
+          RCV_PITCH:   gdc2_pitch <= io_din;   // mirrored
           default: ;
         endcase
         gdc2_recv_ptr  <= gdc2_recv_ptr + 4'd1;
@@ -782,6 +798,8 @@ module pc9821_gdc2_ref (
   reg [15:0] v_gstart1, v_gstart2, v_gstart3, v_gstart4;
   reg [9:0]  v_glines1, v_glines2, v_glines3, v_glines4;   // raster lines; 0 = never expires
   reg [3:0]  v_gim;         // each partition's im bit: its step is PITCH at 1, 2 x PITCH at 0
+  reg [7:0]  v_pstride;     // mirrored
+  reg [7:0]  v_gpitch;      // mirrored (the planar walk's PITCH)
   reg [4:0]  v_lr2;         // slave CSRFORM[4:0] = lr-1, so lr = 1..32 raster lines per
                             // GDC line (makegrph.c:362 `mg.lr = (gdc.s.para[GDC_CSRFORM] &
                             // 0x1f) + 1`); lr = 2 is the 640x200 doubling - the ADDRESS step
@@ -793,10 +811,15 @@ module pc9821_gdc2_ref (
       v_glines1 <= 10'd0; v_glines2 <= 10'd0; v_glines3 <= 10'd0; v_glines4 <= 10'd0;
       v_gim <= 4'd0;        // the power-on SCROLL block is the machine's im = 0
       v_lr2 <= 5'd0;        // the captured CSRFORM reset: lr = 1, one stride per raster line
+      v_pstride <= 8'd80;   // mirrored
+      v_gpitch  <= 8'd40;   // mirrored
     end else begin
       // The CSRFORM line repeat is a single field with no multi-register coherence to
       // preserve, so it needs only a frame-boundary latch, not the cfg_dirty handshake.
       if (w_start || (pixel_ce && frame_end)) v_lr2 <= gdc2_lr;
+      if (w_start || (pixel_ce && frame_end))   // mirrored
+        v_pstride <= (gdc_5m ? gdc2_pitch : {gdc2_pitch[6:0], 1'b0}) & 8'hFE;
+      if (w_start || (pixel_ce && frame_end)) v_gpitch <= gdc2_pitch;   // mirrored
       if (snap_now) begin
         v_gstart1 <= g_start_w[0]; v_gstart2 <= g_start_w[1];
         v_gstart3 <= g_start_w[2]; v_gstart4 <= g_start_w[3];
@@ -812,6 +835,7 @@ module pc9821_gdc2_ref (
   reg  [4:0]  w_mulc;     // NP2kai's mul - 1: raster lines left before the next step
   reg  [15:0] w_vad;      // NP2kai's vad, 16 bits (the packed walk's page is bit 15)
   reg         w_ph;       // the raster line's parity when the walker last stepped
+  reg         w_nz;       // the raster line was not line 0 when the walker last looked   // mirrored
   // The next partition's fields, and this one's step.
   // THE PACKED (256-colour) WALK differs in two ways, both NP2kai vram/makegrex.c's:
   // makegrphex loops `grphput(&mg, 0)` / `grphput(&mg, 4)` only - partition 2 returns to
@@ -827,13 +851,14 @@ module pc9821_gdc2_ref (
   wire [9:0]  w_nlines = w_pk2 ? v_glines1 :
                          (w_part == 2'd0) ? v_glines2 : (w_part == 2'd1) ? v_glines3 :
                          (w_part == 2'd2) ? v_glines4 : v_glines1;
-  wire [15:0] w_pitch  = v_gim[w_part] ? {8'd0, GDC2_PITCH} : {7'd0, GDC2_PITCH_X2};
+  wire [7:0]  w_gstep  = (v_gim[w_part] ? v_gpitch : {v_gpitch[6:0], 1'b0}) & 8'hFE;   // mirrored
+  wire [15:0] w_pitch  = pegc_256 ? {8'd0, v_pstride} : {8'd0, w_gstep};   // mirrored
   // One step of the walk to the next line (NP2kai's per-line tail).
   wire        w_s_next = (w_remain == 10'd1);
   wire [15:0] w_s_vad  = w_s_next ? w_nstart :
                          (w_mulc == 5'd0) ? w_vad + w_pitch : w_vad;
   // The raster advanced a line and the walker has not stepped for it yet.
-  wire        w_lag    = (vline[0] != w_ph);
+  wire        w_lag    = (vline[0] != w_ph) || ((vline == 10'd0) && w_nz);   // mirrored
   // ...and the decode line is past the window's first line: above grph_vbp the walk waits
   // at its line 0 (makegrph starts at mg.liney = grph_vbp).
   wire        w_adv    = w_lag && (v_oline > {4'd0, v_gvbp});
@@ -842,10 +867,11 @@ module pc9821_gdc2_ref (
   always @(posedge clk_sys) begin
     if (!rst_n_sys) begin
       v_wrap_d <= 1'b0;
-      w_part <= 2'd0; w_remain <= 10'd0; w_mulc <= 5'd0; w_vad <= 16'd0; w_ph <= 1'b0;
+      w_part <= 2'd0; w_remain <= 10'd0; w_mulc <= 5'd0; w_vad <= 16'd0; w_ph <= 1'b0; w_nz <= 1'b0;
     end else begin
       v_wrap_d <= v_wrap;
       w_ph     <= vline[0];
+      w_nz     <= (vline != 10'd0);
       if (w_start) begin
         w_part   <= 2'd0;
         w_vad    <= w_i_vad;
@@ -881,15 +907,17 @@ module pc9821_gdc2_ref (
   // the queue nonempty (NP2kai gdc_ia0 `if (gdc.s.snd) ret |= 0x01;`,
   // io/gdc.c:764-765). The 2M-sample histogram's dead bit 0 at 0xA0
   // (docs/probes/GDC.TXT) does not refute that: the probe
-  // never arms a slave read-back (tools/hwprobe/probe2/probe2.s:1488-1540 samples
+  // never arms a slave read-back (tools/hwprobe/probe2/probe2.s:1684-1730 (`sec_gdc:`) samples
   // the bare status port), so the queue is empty all capture and "hardwired 0" is
   // indistinguishable from "empty". 0xA2 is NOT a second status byte: it pops the slave's parameter
   // read-back queue and answers 0xFF with nothing pending (NP2kai gdc_ia2,
   // io/gdc.c:813-820) - the machine agrees (probes/PROBE.TXT `GDC status 60 A0 A2:
   // 05 04 ff`, i.e. 0xA2 = 0xFF while 0xA0 carried the status), which is what
-  // review readbacks.md P3 is about.
+  // is the defect this fixes.
   // ---------------------------------------------------------------
-  wire [7:0] gdc2_status = {1'b0, stat_blank, stat_vsync, 2'b00, 1'b1, 1'b0,
+  wire [7:0] gdc2_status = {1'b0, stat_blank, stat_vsync, 1'b0,
+                            (d_state != D_IDLE) || pend_valid,   // mirrored: DRAWING
+                            (gdc2_snd_cnt == 3'd0), 1'b0,
                             (gdc2_snd_cnt != 3'd0)};   // bit 0: read-back data available
   assign io_dout = (io_addr == 8'hA0) ? gdc2_status :
                    (io_addr == 8'hA2) ? gdc2_snd_q  : 8'hFF;

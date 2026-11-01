@@ -150,7 +150,7 @@ module tb_pc9821_l1_alias_fill;
       // The real paging unit drives this from the demand itself (paging_unit.sv:513:
       // `early_idx_drive || pretrans_present || req_mem_present || ...`), so a demand always owns
       // the preread over a VIPT probe. Tying it to 1'b0 makes the core's own invariant fire
-      // (l1_cache.sv:589, "L1 pipelined store accepted without preread priority") on ANY cacheable
+      // (l1_cache.sv:797, "L1 pipelined store accepted without preread priority") on ANY cacheable
       // store, so this bench aborted there instead of running its checks. Same repair as
       // tb_pc9821_cpu_vram_coherency and tb_pc9821_dma_flush_coherency.
       .dcache_req_preread_priority(cpu_valid),
@@ -171,7 +171,7 @@ module tb_pc9821_l1_alias_fill;
       .dcache_vipt_probe_valid(1'b0), .dcache_vipt_probe_offset(12'h0),
       .dcache_vipt_probe_ready(), .dcache_vipt_probe_accepted(),
       .dcache_vipt_probe_direct_accepted(),
-      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0),
+      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
       .dcache_vipt_resolve_hit(), .dcache_vipt_resolve_data(),
       .x87_req_selected(), .x87_req_accepted(1'b0), .x87_req_complete(1'b0),
       .x87_read_complete(1'b0), .x87_rdata(32'h0),
@@ -261,7 +261,7 @@ module tb_pc9821_l1_alias_fill;
     repeat (2) @(posedge clk);
 
     // ==== A1 D-side, open-bus twin of a RAM line ====
-    // The review's confirm test: store at the RAM encoding, READ through the
+    // The confirm test: store at the RAM encoding, READ through the
     // open-bus twin (which used to fill the shared line with F's), read RAM again.
     req(32'h0000_1000, 1'b1, 32'hAAAA_5555, rd);
     req(32'h0000_1000, 1'b0, 32'h0, rd);
@@ -287,7 +287,7 @@ module tb_pc9821_l1_alias_fill;
     req(32'h1000_2000, 1'b0, 32'h0, rd);
     chk(rd, 32'hFFFF_FFFF, "D: open-bus twin at 0x10002000 after the RAM store (A1)");
 
-    // The review's "or the other way: open bus returns RAM data": a store through
+    // And "the other way: open bus returns RAM data": a store through
     // the open encoding used to land in the shared line and read back at the RAM
     // twin. Seed the RAM twin first so the want value is unambiguous.
     req(32'h0000_3000, 1'b1, 32'h7777_0000, rd);

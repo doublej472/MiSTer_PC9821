@@ -15,7 +15,7 @@ documented 307200 Hz, CLK50 = ARTIC * 50000000 / 307200 (clk_sys at the core's
 
 TIME BASE. ARTIC ticks are converted BOTH ways with the device clocks and no
 run-local scale (the /TIME ladder's lesson): absolute ns = ticks * 3255.208 (307200 Hz,
-machine-confirmed by r13/215 section 1.4's raster check), and clk_sys at 50 MHz
+machine-confirmed by a raster check on the machine), and clk_sys at 50 MHz
 for diffing against the core's own benchmarks. The printed CLK50/PER fields are
 recomputed from ARTIC here and flagged if they disagree (integer rounding).
 
@@ -41,7 +41,7 @@ per-phase raw totals in its header block):
     gfx_scene G   505 clk_sys/row      the playfield shake (EGC 0x28F0, sft=2;
                                        400 rows in 202366)
 
-A hand-copied bench number rots: before the gvram-latency-fix lane's
+A hand-copied bench number rots: before the
 per-operation GVRAM acceptance period this table read 1952 / 343 / 3319 / 513.
 Re-run the bench named in CORE_GFX_SCENE_SRC and compare before trusting a copy.
 
@@ -58,7 +58,7 @@ import sys
 # and ns per tick (307200 Hz, machine-confirmed).
 CLK_PER_TICK = 50_000_000 / 307_200
 NS_PER_TICK = 1e9 / 307_200
-# Review P2f exemption: this decoder is ARTIC-only (gfxbenc2 never touches the
+# Exemption from the strap-divisor rule: this decoder is ARTIC-only (gfxbenc2 never touches the
 # PIT), so there is no PIT_HZ strap to cross-check and no sub-tick PIT column.
 
 # The core's own numbers, from tools/bench.py gfx_scene. Stored as the raw

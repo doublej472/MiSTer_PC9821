@@ -1,9 +1,9 @@
-// tb_pc9821_block_hostcost — the HOST-facing cost of a disk sector, in both directions.
+// tb_pc9821_block_hostcost - the HOST-facing cost of a disk sector, in both directions.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_BLOCK_HOSTCOST: The host-facing cost of the disk path through the REAL stack the top level wires (pc9821_ata -> pc9821_block_share -> the shared pc9821_block_io engine) counted in the terms the ARM actually pays: HANDSHAKES per sector, 256-word transfers per sector and read-ahead window flushes, for seven realistic guest patterns (a 64-sector READ SECTORS, the DOS per-sector-command read loop, a 64-sector WRITE SECTORS, the per-sector-command write loop, an 8-page EMM386 swap pattern in both command shapes, and the per-sector read loop with a floppy read interleaved every four sectors), with a parameterised host model that charges the r13/68 request-to-ack round trip, the ARM's per-word stream cost and -- for a write -- the FileSeek/FileWriteAdv the ARM performs AFTER its word loop (O_SYNC on the OSD's writable image, user_io.cpp:2151). It prints clk/sector, stall/sector, handshakes/sector and words/sector for every pattern, proves each sector's data is byte-exact in both directions, and pins that a sequential read stays at ~0.2 handshakes/sector, that the per-sector-command read loop keeps its read-ahead run across the EMM386 swap pattern's page writes (the bench FAILS at 24 read handshakes for 64 read sectors before that change and PASSES at 10), that a floppy read interleaved between every four disk sectors costs the disk NEITHER its read-ahead window NOR its handshake amortisation (the bench FAILS at 24 disk handshakes and 15 window losses before the window carried its owner's tag, and PASSES at 6 with none), that a floppy-only sequential read is one handshake per block (the bench FAILS at 3 handshakes, 1 of them multi-block), and that the write direction is one host handshake per sector by construction - the drive's buffer holds one sector - with the ARM's own FileSeek/FileWriteAdv of the 512 bytes sitting between one handshake and the next, which the bench sweeps (wr_tail 0 / 1500 / 20000 clk) because that is the only term fewer, larger handshakes could remove. It also runs a BURST-WIDTH SWEEP: pc9821_block_io instances at BURST_SECTORS 1/2/4/8 execute the same 64-sector stream and a mid-tail pattern break under the same host model at word rates 1 and 18 clk/word (18 = 360 ns/word, the rate the 2.9 ms burst-tail claim rests on) and at a no-ARM-cache stress latency, pinning the handshake law 2 + ceil(62/width), the word law 256 x (2 + width x ceil(62/width)) and the pattern-break stall (width-1) x 256 words of tail at the word rate - the laws the width-16/32 [ESTIMATED] figures extrapolate from, because the engine width check refuses to build those.
+// TB_PC9821_BLOCK_HOSTCOST: The host-facing cost of the disk path through the REAL stack the top level wires (pc9821_ata -> pc9821_block_share -> the shared pc9821_block_io engine) counted in the terms the ARM actually pays: HANDSHAKES per sector, 256-word transfers per sector and read-ahead window flushes, for seven realistic guest patterns (a 64-sector READ SECTORS, the DOS per-sector-command read loop, a 64-sector WRITE SECTORS, the per-sector-command write loop, an 8-page EMM386 swap pattern in both command shapes, and the per-sector read loop with a floppy read interleaved every four sectors), with a parameterised host model that charges the measured request-to-ack round trip, the ARM's per-word stream cost and -- for a write -- the FileSeek/FileWriteAdv the ARM performs AFTER its word loop (O_SYNC on the OSD's writable image, user_io.cpp:2151). It prints clk/sector, stall/sector, handshakes/sector and words/sector for every pattern, proves each sector's data is byte-exact in both directions, and pins that a sequential read stays at ~0.2 handshakes/sector, that the per-sector-command read loop keeps its read-ahead run across the EMM386 swap pattern's page writes (the bench FAILS at 24 read handshakes for 64 read sectors before that change and PASSES at 10), that a floppy read interleaved between every four disk sectors costs the disk NEITHER its read-ahead window NOR its handshake amortisation (the bench FAILS at 24 disk handshakes and 15 window losses before the window carried its image's tag, and PASSES at 6 with none), that a floppy-only sequential read is one handshake per block (the bench FAILS at 3 handshakes, 1 of them multi-block), and that the write direction is one host handshake per sector by construction - the drive's buffer holds one sector - with the ARM's own FileSeek/FileWriteAdv of the 512 bytes sitting between one handshake and the next, which the bench sweeps (wr_tail 0 / 1500 / 20000 clk) because that is the only term fewer, larger handshakes could remove. It also runs a BURST-WIDTH SWEEP: pc9821_block_io instances at BURST_SECTORS 1/2/4/8 execute the same 64-sector stream and a mid-tail pattern break under the same host model at word rates 1 and 18 clk/word (18 = 360 ns/word, the rate the 2.9 ms burst-tail claim rests on) and at a no-ARM-cache stress latency, pinning the handshake law 2 + ceil(62/width), the word law 256 x (2 + width x ceil(62/width)) and the pattern-break stall (width-1) x 256 words of tail at the word rate - the laws the width-16/32 [ESTIMATED] figures extrapolate from, because the engine width check refuses to build those.
 
 // The central difficulty this bench exists for: NO SIMULATION CAN SEE THE HOST. The HPS
 // round trip is a model here, so a bench can never say "the disk is slow" - what it CAN
@@ -111,6 +111,7 @@ module tb_pc9821_block_hostcost;
       .a_img_mounted(img_mounted), .a_img_readonly(img_readonly), .a_img_size(img_size),
       .a_mounted(hdd_mounted), .a_readonly(hdd_readonly), .a_capacity(hdd_capacity),
       .a_req_read(ata_block_read), .a_req_write(ata_block_write), .a_req_lba(ata_block_lba),
+      .a_req_window(1'b1),
       .a_req_done(ata_block_done), .a_req_error(ata_block_error), .a_busy(hdd_busy),
       .a_buf_we(ata_buf_we), .a_buf_addr(ata_buf_addr), .a_buf_data(ata_buf_data),
       .a_buf_rd_addr(ata_rd_addr), .a_buf_rd_data(ata_rd_data),
@@ -715,7 +716,7 @@ module tb_pc9821_block_hostcost;
     $display("PATTERN 8");
     // ==== 8. the floppy's own sequential read, 8 blocks, no disk traffic ====
     // The FDC walking a track. Its side of the shared engine is pinned here - ONE handshake
-    // per block (docs/trade-candidates.md T7/T8: the owner accepted wall clock on the floppy
+    // per block (docs/trade-candidates.md T7/T8: wall clock on the floppy is traded
     // for area, bounded by the machine's own capture) - because the shared engine's burst
     // width is the DISK's, and a floppy burst is exactly what used to cost the disk its
     // window. FAIL-FIRST: while the width was shared, the run detector fired on the floppy's
@@ -1089,7 +1090,7 @@ module burstwidth_case #(parameter BURST_SECTORS = 8) (
     run_stream(32'h10000);
     word_clk = 18; hps_lat = 4600; hps_hit_lat = 200;
     run_stream(32'h20000);
-    // C: the stress bound - every handshake charged the full r13/68 residual (the ARM
+    // C: the stress bound - every handshake charged the full measured ~4600-clk residual (the ARM
     // window model off), which is the assumption the width-32 win arithmetic used.
     word_clk = 18; hps_lat = 4600; hps_hit_lat = 4600;
     run_stream(32'h30000);

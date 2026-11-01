@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PEGC_SCANOUT: the packed scanout fetches one 640-byte display line per raster line as SDRAM bursts on the fourth requester - 160 dwords from {display page, GDC line base[14:0], 3'b000} at peg_base (MAME pc9821.cpp:104-113's `(...) << 3` line addressing over the GDC's area partition, qemu pc98-vga.c:4426-4437's 640-byte pitch) - and serves the mixer's column walk byte-for-byte in dot order (one dword for its four dots, the byte picked by dot[1:0]), with the display page forced to 0 while the FF2 dat-0x68 VRAM-boundary f/f is set (MAME pc9821.cpp:98) and reachable at +0x40000 without it, ping-pong buffers so the displayed line survives while the next is fetched, and NO 200-line interleave (the references copy packed rows directly: qemu 4422-4438, MAME 100-123). The walk is repeated at TEN line-base alignments that put the line start at every position around a 512-dword row end - including the start where the 10-dword burst exactly fits the row - so the controller's mid-line row SPLIT and the packed page/base arithmetic are walked, not just one aligned case: a second segment read from the wrong row, an off-by-one column or a wrong-page read is a byte the walk cannot match. The packed page is TWO terms (pc9821_pegc_scan's line_base_new): the SCROLL walk's own page bit - the GDC2 start word's bit 14, gfx_walk_page - XOR the 0xA4 term MAME adds (pc9821.cpp:98,112), with the FF2 dat-0x68 f/f zeroing the 0xA4 TERM only (NP2kai's packed arm drops the 0xA4 term and its non-packed arm drops the walk bit - the recorded divergence); the page-flip legs pin that composition in all four term combinations. FAIL-FIRST: with the walk bit dropped (the pre-fix page term) the walk-1 fetch reads page 0 and every flip leg mismatches its tag. FAIL-FIRST: before pc9821_pegc_scan existed the mixer seam had no packed_idx at all. The run goes through the REAL sdram_sync_bridge (the controller on clk_sys) and the REAL src/memory/sdram.v on PORT 3, so the row-6 fourth-requester wiring is in the path.
+// TB_PC9821_PEGC_SCANOUT: the packed scanout fetches one 640-byte display line per raster line as SDRAM bursts on the fourth requester - 160 dwords from {display page, GDC line base[14:0], 3'b000} at peg_base (MAME pc9821.cpp:104-113's `(...) << 3` line addressing over the GDC's area partition, qemu pc98-vga.c:4426-4437's 640-byte pitch) - and serves the mixer's column walk byte-for-byte in dot order (one dword for its four dots, the byte picked by dot[1:0]), with the display page forced to 0 while the FF2 dat-0x68 VRAM-boundary f/f is set (MAME pc9821.cpp:98) and reachable at +0x40000 without it, ping-pong buffers so the displayed line survives while the next is fetched, and NO 200-line interleave (the references copy packed rows directly: qemu 4422-4438, MAME 100-123). The walk is repeated at TEN line-base alignments that put the line start at every position around a 512-dword row end - including the start where the 10-dword burst exactly fits the row - so the controller's mid-line row SPLIT and the packed page/base arithmetic are walked, not just one aligned case: a second segment read from the wrong row, an off-by-one column or a wrong-page read is a byte the walk cannot match. The packed page is TWO terms (pc9821_pegc_scan's line_base_new): the SCROLL walk's own page bit - the GDC2 start word's bit 14, gfx_walk_page - XOR the 0xA4 term MAME adds (pc9821.cpp:98,112), with the FF2 dat-0x68 f/f zeroing the 0xA4 TERM only (NP2kai's packed arm drops the 0xA4 term and its non-packed arm drops the walk bit - the recorded divergence); the page-flip legs pin that composition in all four term combinations. FAIL-FIRST: with the walk bit dropped (the pre-fix page term) the walk-1 fetch reads page 0 and every flip leg mismatches its tag. FAIL-FIRST: before pc9821_pegc_scan existed the mixer seam had no packed_idx at all. The run goes through the REAL sdram_sync_bridge (the controller on clk_sys) and the REAL src/memory/sdram.v on PORT 3, so the row-6 fourth-requester wiring is in the path. A line tick that lands while a port-3 request is presented and not yet taken defers the restart until that request is taken and its burst drains (the sdram_sync_bridge contract: valid and payload held to ready), and the next line is then fetched whole - FAIL-FIRST: the restart moved the address under the held request and the seam showed the wrong line.
 
 // ==== DUT ====
 // pc9821_pegc_scan alone on the memory side, behind the real SDRAM bridge and
@@ -66,7 +66,7 @@ module tb_pc9821_pegc_scanout;
   wire [12:0] SDRAM_A;
   wire  [1:0] SDRAM_BA, SDRAM_DQM;
   wire        nWE, nRAS, nCAS, nCS, CKE;
-  sdram_sync_bridge #(.FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .FAST_GRADE(1'b0)) backend (
+  sdram_sync_bridge #(.FREQ(`TB_SDRAM_FREQ), .FAST_GRADE(1'b0)) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
       .valid0(p0_valid), .ready0(p0_ready), .wr0(p0_write), .addr0(p0_addr[26:0]),
@@ -164,7 +164,7 @@ module tb_pc9821_pegc_scanout;
   endtask
 
   // Read the line the MIXER would show, byte for byte, at the mixer seam. The
-  // mixer drives line_rd_sel = line_sel (pc9821_video_mixer.sv:94) and walks the
+  // mixer drives line_rd_sel = line_sel (pc9821_video_mixer.sv:94, `assign line_rd_sel  = line_sel;`) and walks the
   // column address + dot-within-column; that is exactly this walk. Because the
   // ping-pong displays the PREVIOUSLY fetched buffer (the gvram_scan display
   // pipeline), the line visible here is the one fetched BEFORE the last
@@ -328,6 +328,47 @@ module tb_pc9821_pegc_scanout;
                sel0, sel1, sel2, sel3);
       errors = errors + 1;
     end
+
+    // ---- a line tick that lands while a request is PRESENTED and not yet taken ----
+    // The SDRAM bridge's contract (sdram_sync_bridge: "the controller samples it on the
+    // cycle it takes the request"): a requester holds valid AND its payload until ready.
+    // A tick in that window must not restart the fetch under the presented request; the
+    // restart is deferred until the request is taken and its burst drains, and the new
+    // line is then fetched whole. A raster reprogram or an overrun line puts a tick there
+    // (the 640x480 frame at 90 MHz did, during the mode set).
+    // FAIL-FIRST: the pre-fix restart moved mem_addr under the held valid, and the seam
+    // showed the wrong line (byte 0 0x4a where Q's is 0xe5).
+    preload_line(1'b0, 1'b0, 15'h0300);   // P: tag 0 at page 0, base 0x300
+    preload_line(1'b1, 1'b1, 15'h0300);   // Q: tag 1 at page 1, same base
+    scan_enable = 1'b0;
+    @(negedge clk_sys);
+    scan_page = 1'b0; scan_line_base = 15'h0300; page_force_zero = 1'b0; scan_walk_page = 1'b0;
+    scan_enable = 1'b1;
+    @(negedge clk_sys);
+    scan_line_tick = 1'b1;
+    @(negedge clk_sys);
+    scan_line_tick = 1'b0;
+    // Past P's first burst, find a presented request the controller has not taken.
+    begin : held_tick
+      integer g;
+      g = 0;
+      while (!(p3_valid && !p3_ready && dut.fetch_w != 9'd0) && g < 4000) begin
+        @(negedge clk_sys); g = g + 1;
+      end
+      if (!(p3_valid && !p3_ready))
+        $fatal(1, "TB_PC9821_PEGC_SCANOUT: never saw a held port-3 request to tick under");
+      scan_page = 1'b1;                     // the next line is Q
+      scan_line_tick = 1'b1;
+      @(negedge clk_sys);
+      scan_line_tick = 1'b0;
+      g = 0;
+      while (!line_ready && g < 8000) begin @(negedge clk_sys); g = g + 1; end
+      if (!line_ready) $fatal(1, "TB_PC9821_PEGC_SCANOUT: the deferred restart never filled its line");
+    end
+    // P never completed, so the restart did not swap; Q filled the buffer behind the seam.
+    // One more fetch swaps it to the seam.
+    fetch_line(1'b0, 15'h0300, 1'b0, 1'b0);
+    walk_line(1'b1);                        // the seam shows Q, whole
 
     // ==== VERDICT ====
     if (errors == 0) begin

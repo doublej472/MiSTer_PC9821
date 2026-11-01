@@ -147,8 +147,8 @@ module pc9821_video_mixer (
                           !(gfx_odd_line && !pegc_256);
   // 4-bit to 8-bit by nibble replication ({n,n}), not a linear scale: NP2kai
   // `pal_makeskiptable`, and the same rule the text path used on its way out. The
-  // replication happens BEFORE the compositor now (24-bit arms), which is
-  // bit-identical to the old output-stage replication for the 16-colour path and
+  // replication happens BEFORE the compositor (24-bit arms), which is
+  // bit-identical to an output-stage replication for the 16-colour path and
   // lets the 256-colour arm carry FULL bytes (NP2kai's pal_make9821 renders them
   // verbatim; the DAC width is capture-pending).
   wire [23:0] grph_rgb = pegc_256 ? grph_colour256 :

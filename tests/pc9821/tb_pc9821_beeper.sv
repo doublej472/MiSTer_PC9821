@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught. And the 0x871E software-DIP BEEPER VOLUME (bits [3:2], review-audio-volume F3) actually scales the speaker amplitude: writing each code through the real I/O path yields the 0/1024/2048/3072 ladder through z486_mister's mirrored amplitude block - linear in the code with 0 = EXACT mute (NP2kai io/dipsw.c:44-57 sets BEEP_VOL from (value>>2)&3, sound/beepg.c:113-114 scales `samp *= vol`, sound/beepg.c:161-163 goes silent at 0), the unit pinned so code 2 - NP2kai's default 'Mid' (pccore.c:847) - is the historical 2,048, and the exported beep_vol port carries exactly the written bits.
+// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught. And the 0x871E software-DIP BEEPER VOLUME (bits [3:2]) actually scales the speaker amplitude: writing each code through the real I/O path yields the 0/1024/2048/3072 ladder through z486_mister's mirrored amplitude block - linear in the code with 0 = EXACT mute (NP2kai io/dipsw.c:44-57 sets BEEP_VOL from (value>>2)&3, sound/beepg.c:113-114 scales `samp *= vol`, sound/beepg.c:161-163 goes silent at 0), the unit pinned so code 2 - NP2kai's default 'Mid' (pccore.c:847) - is the historical 2,048, and the exported beep_vol port carries exactly the written bits.
 //
 // TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught; and the exported beep_vol volume port carries the SELECTED bank's 0x871E bits, which is the other half of that register - 0x871E is bank A's sdip[3] with 0x8F1F bit 6 clear and bank B's sdip[15] with it set, so a bank-select write alone moves the volume and the two banks hold independent images, where a single mirror loaded only on the 0x871E write would answer bank A's code for both.
 //
@@ -77,6 +77,7 @@ module tb_pc9821_beeper;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -103,16 +104,19 @@ module tb_pc9821_beeper;
   wire [15:0] egc_access, egc_fgbg, egc_ope, egc_fg, egc_mask, egc_bg,
               egc_sft, egc_leng;
   wire        egc_shift_we;
-  // The beeper's mute, the port this lane added to pc9821_iobus.
+  // The beeper's mute, the port added to pc9821_iobus for it.
   wire        beep_mute;
-  // The beeper volume: 0x871E bits [3:2] (review-audio-volume F3), auto-connected
+  // The beeper volume: 0x871E bits [3:2], auto-connected
   // by the .* instantiation below.
   wire [1:0]  beep_vol;
 
   // ---------------------------------------------------------------
   // DUT B: the PIT, whose channel 2 is the tone
   // ---------------------------------------------------------------
-  reg        pit_cs   = 0;
+  // Named pit_sel, not pit_cs: pc9821_iobus is instantiated with `.*` and P5 made it output the
+  // device-bus chip selects, so `pit_cs` there is the fabric's decode (this bench drives the PIT
+  // directly, in isolation from it).
+  reg        pit_sel  = 0;
   reg  [1:0] pit_addr = 0;   // 0=ch0 1=ch1 2=ch2 3=control
   reg        pit_wr   = 0, pit_rd = 0;
   reg  [7:0] pit_din  = 0;
@@ -124,7 +128,7 @@ module tb_pc9821_beeper;
   wire [1:0] ems_state;
   wire top_shadow_en;
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
-  // port (r13/57) and the `.*` DUT instantiation matches by name, so it must
+  // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
@@ -135,6 +139,7 @@ module tb_pc9821_beeper;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -155,8 +160,14 @@ module tb_pc9821_beeper;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -172,11 +183,16 @@ module tb_pc9821_beeper;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) iobus (
       .ide_unit0_present(1'b0),.*);
 
   pc9821_pit #(.SYS_CLOCK_HZ(50_000_000)) pit (
-      .clk(clk), .rst_n(~reset), .cs(pit_cs), .addr(pit_addr),
+      .clk(clk), .rst_n(~reset), .cs(pit_sel), .addr(pit_addr),
       .wr(pit_wr), .rd(pit_rd), .din(pit_din), .dout(pit_dout),
       .out0(pit_out0), .out1(pit_out1), .out2(pit_out2)
   );
@@ -269,9 +285,9 @@ module tb_pc9821_beeper;
   task automatic pit_write(input [1:0] regsel, input [7:0] data);
     begin
       @(negedge clk);
-      pit_cs = 1; pit_addr = regsel; pit_din = data; pit_wr = 1;
+      pit_sel = 1; pit_addr = regsel; pit_din = data; pit_wr = 1;
       @(negedge clk);
-      pit_wr = 0; pit_cs = 0;
+      pit_wr = 0; pit_sel = 0;
       repeat (2) @(negedge clk);
     end
   endtask

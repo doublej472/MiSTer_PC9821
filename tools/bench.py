@@ -92,7 +92,7 @@ def marker_present(output: str, marker: str) -> bool:
     This used to fall back to `f"{marker}: PASS" in output`, which accepts the marker
     anywhere -- inside a diagnostic line, an echoed claim, or a `FAIL: no TB_X: PASS`
     message -- so a run could satisfy the runner without printing its verdict. Every
-    bench's PASS display emits the marker alone on its line (r13/333 finding 6 checked
+    bench's PASS display emits the marker alone on its line (checked across
     the whole tree), so the exact line is the honest test."""
     return re.search(rf"^{re.escape(marker)}: PASS[ \t\r]*$", output, re.M) is not None
 
@@ -102,7 +102,7 @@ def marker_present(output: str, marker: str) -> bool:
 # count (its `errors++` is missing or on another path) -- a vacuous check the marker and the
 # exit code cannot see. Case-sensitive, at the start of the line (after indentation), so
 # narration such as "CHECK 2: the ITF fail path" or "0 byte(s) fail" is not caught; no
-# passing bench in the tree prints such a line (bench-audit, 2026-10-12).
+# passing bench in the tree prints such a line.
 FAILURE_LINE = re.compile(r"^[ \t]*(?:FAIL|MISMATCH)", re.M)
 
 

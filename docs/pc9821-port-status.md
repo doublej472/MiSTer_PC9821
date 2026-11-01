@@ -12,7 +12,7 @@ describes the core as it stands.
 | CPU | z486, vendored in-tree as a plain copy of a curated fork ([`z486-local-patch.md`](z486-local-patch.md)) |
 | FPU | x87 disabled (`ENABLE_X87 = 0`) |
 | Platform | `src/pc9821/core/pc9821_system.sv`: z486, native PC-9821 memory and devices, explicit tie-offs for everything else |
-| Clock | one core clock: clk_sys = the SDRAM controller's clock, 80 MHz in the shipping build |
+| Clock | one core clock: clk_sys = the SDRAM controller's clock, 90 MHz in the shipping build (`base`) |
 
 `src/pc9821/` is organised by feature: `core/`, `video/`, `audio/`, `interrupts/`, `timers/`,
 `storage/`, `input/`, `rtc/`, `common/`.
@@ -22,7 +22,7 @@ describes the core as it stands.
 The core boots the authentic PC-9821Xe10 / Xe firmware (the user's own dumps, packed by
 `tools/build_pack.py`) through the ITF and the BIOS POST to DOS, and runs Touhou 1-5, DOOM
 (packed 256-colour mode), and a range of other PC-98 games on a real MiSTer at the shipping
-80 MHz build. Sprites, the GRCG/EGC drawing engines and the analogue palette display correctly
+90 MHz build. Sprites, the GRCG/EGC drawing engines and the analogue palette display correctly
 on the real card.
 
 ### Simulation tiers
@@ -129,9 +129,15 @@ The PC-98 device aperture is `A0000-FFFFF` plus the `FA0000-FFFFFF` mirror and t
 aliases; those accesses are ordered and uncached, and `0x80000-0x9FFFF` (main RAM) stays
 cacheable. z486 has no uncached read path for RAM (every read miss allocates), so
 correctness rests on: write-through with no write-allocate; a whole-L1 flush (`cache_flush`,
-~136 cycles) on every ROM bank/gate change and every DMA completion; and nothing but the CPU
-writing a cacheable range. `PROTECT_UMA_ROM` must stay 0 (it would write-protect graphics
-plane 3).
+~136 cycles) on every ROM bank/gate change; the DMA's accepted writes driving z486's external
+snoop (the 486's EADS#, one invalidate per byte, T24), held for the gated CPU clock by
+`pc9821_cpu_bus_bridge` so an OSD CPU Speed below Full cannot drop it, with the DMAC's next
+write byte back-pressured while a held snoop waits (the hold is one deep, so a second accepted
+write would otherwise replace the waiting address), so a disk buffer stays
+coherent; and nothing but the CPU writing a cacheable range. `PROTECT_UMA_ROM` must stay 0 (it
+would write-protect graphics plane 3). `tools/check_cpu_domain.py` holds the wiring together:
+every z486 pulse input is bridge-driven or a documented tied-off constant, and the snoop hold
+gates both the DMA presentation and the accept the DMAC sees.
 
 ## Video
 
@@ -148,8 +154,13 @@ page flip takes effect at the write (the real-machine probe shows the tear).
 The **graphics GDC** implements SCROLL (four partitions), the display START/STOP latch (the
 compositor's graphics enable), CSRFORM's line repeat (a 640x200 program is line-doubled into
 the 400-line raster), and the **WRITE family** (WDAT/VECTW/CSRW/WRITE, the uPD7220's vector
-path, `tb_pc9821_gdc2_write`). FIGD line/rectangle/arc drawing, the CURD read-back's five-byte
-shape and the FIFO/drawing-busy timing are accepted but **not executed** (README known issues).
+path, `tb_pc9821_gdc2_write`), and the **figure engine**: FIGS/FIGD dot, line, arc and
+rectangle, GCHRD character and area fill (ZOOM, slant), the TEXTW pattern, the four ROPs and the
+GRCG/EGC routes, behind the uPD7220's 16-entry command FIFO with the DRAWING status bit, one step
+per 14 dot clocks (`tb_pc9821_gdc2_figure_xe10` replays 1,450 Xe10 capture rows,
+`tb_pc9821_gdc2_figure`; `tools/hwprobe/gdcfig` draws a comparison picture). The CURD read-back answers
+the Xe10's five bytes ({EAD[7:0], EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]},
+`tb_pc9821_readback_gdc`), and the arc has no capture yet (item 126).
 
 ### Character generator
 
@@ -172,8 +183,8 @@ unit in turn (always four steps, whatever `0x4A0` enables), accumulates the writ
 and presents them as the same column requests the parallel engine issued, so every GVRAM word is
 written whole in one clk_sys and the compare/pattern results appear only when all four planes are
 in. It is bit-identical to the parallel engine (`tb_pc9821_egc_serial_equiv`) and stays under the
-Xe10's own EGC cost at 80 and 50 MHz (`tb_pc9821_egc_xe10_pace` against `docs/probes/EGCP.TXT`:
-writes cost the CPU nothing, a same-page read+write row 262.5 ns at 80 MHz against the
+Xe10's own EGC cost (`tb_pc9821_egc_xe10_pace` against `docs/probes/EGCP.TXT`, run at 80 and
+50 MHz clk_sys: writes cost the CPU nothing, and a same-page read+write row stays under the
 machine's 677 ns); trade-candidates T41 carries the area and cycle numbers.
 
 **PEGC 256-colour**: the display half is implemented (the `0xE0000` register file, the window
@@ -183,12 +194,65 @@ gather sessions with a byte mask on the module's DQM-on-address pins
 ([`sdram-dqm-wiring.md`](sdram-dqm-wiring.md)). The PEGC **plane-mode engine** is not
 implemented (README known issues).
 
+**The 640x480 256-colour mode** (INT 18h AH=30h BH=0x31 on the 31 kHz raster, the mode the
+Windows 95 PC-9821 driver `PEGCV8.DRV` sets) displays: the packed walk's stride is the slave's
+own PITCH - PITCH words of 8 bytes with both FF2 clock bits set (5 MHz), twice that at 2.5 MHz,
+`& 0xFE` (NP2kai `vram/makegrex.c`), so the driver's PITCH 0x80 is its 1024-byte pitch - the
+displayed height is the taller of the two GDCs' windows (the BIOS programs the master with 475
+lines and the slave with 480; NP2kai `dispsync_renewalvertical`), and the walker steps across
+the wrap of an odd (525- or 449-line) frame. The planar walk steps the same PITCH byte, doubled
+when the SCROLL partition's im bit is clear and masked to an even byte (NP2kai
+`vram/makegrph.c`): the 2.5 MHz state (PITCH 40, im 0) and the 5 MHz state (PITCH 80, im 1) both
+step one 640-dot line, and the planar fetch itself is unchanged (80 columns per line from the
+M10K array). `tb_pc9821_pegc_480` scans a whole frame through the real modules at
+90 MHz and requires every packed line fetch to finish inside the 31 kHz line (2860 clk_sys) under a
+saturating CPU stream; `tb_pc9821_sdram_bw` asserts the same deadline.
+
 ### Pixel clock
 
-The PC-98 dot rate is an enable on `clk_sys`, not a second clock: an accumulator gives
-21.0526 MHz (`video_ce`), and `CLK_VIDEO = clk_sys` with `CE_PIXEL` so `video_cleaner` ->
-`gamma_fast` -> `video_freak` run as the MiSTer template expects. `video_off` is tied 0 (a 1
+The raster runs on `clk_sys`, gated by an EXACT dot enable (`pc9821_dot_ce`, a NUM/DEN accumulator
+at any clk_sys), so everything the guest sees keeps one time base. Two dot clocks, as on the
+machine: 400/19 MHz (21.0526 MHz, 50 MHz x 8/19) for the 24 kHz raster, and while port `0x09A8`
+bit 0 is set the Xe10's SEPARATE 31 kHz oscillator, measured at 25 168 031 Hz
+(`docs/probes/CRT31K.TXT`, the ARTIC calibrated by the same run's 24 kHz rows: a VGA-class part,
+not NP2kai's 25.26 MHz); the core makes 25 168 007 Hz (-0.94 ppm). `0x09A8` also selects the
+31 kHz monitor range for the clamp (NP2kai `gdcclk[2]`, minx 92 / maxx 108). The constants live
+in one place, `src/pc9821/video/pc9821_vclk_pkg.sv`.
+
+The picture leaves on its own clock: `CLK_VIDEO` is a second, fractional-N PLL (`rtl/vpll`,
+generated from `tools/profile/vpll_template.v`), 50 MHz x (M + K/2^32) / 19 with N bypassed;
+`pc9821_vpll_ctl` reprograms it (N, M, K, start, through the framework's cut-down `pll_cfg_hdmi`)
+between M 16 = 42.105 MHz (2 x the 24 kHz dot) and M 19 + 523/4096 = 50.336 MHz (2 x the 31 kHz
+dot). No integer PLL comes within 54 ppm of the 31 kHz clock, hence fractional mode, as the
+framework's HDMI PLL. The PLL is generated at its fastest setting (31 kHz) so the fitter times the
+video domain there. `pc9821_video_out` carries each dot across through a 16-entry Gray-pointer FIFO
+that is frame-locked by construction (both sides' dot rates are the same exact ratio of 50 MHz); a
+PLL switch flushes and re-primes it. A pixel is then a constant 2 video clocks (native: 24.83 kHz,
+or 31.46 kHz in the 31 kHz mode) or 1 (the line doubler, 49.66 kHz). A 31 kHz raster always leaves
+native: it is already VGA-rate, so the doubler stands aside whatever the OSD asks, and the 31 kHz
+picture is never scan-doubled to 62.9 kHz. Because `CLK_VIDEO` is an exact multiple of the dot
+rate, no analog pixel or sync edge jitters by a clk_sys period.
+`video_cleaner` -> `gamma_fast` -> `video_freak` run on `CLK_VIDEO`. `video_off` is tied 0 (a 1
 blanks every HDMI pixel under `MISTER_FB`).
+
+Every clock domain and every crossing between them is mapped, with the constraint that guards each
+one, in [`clock-domains.md`](clock-domains.md): the video FIFO's Gray pointer and level
+synchronisers and their max-delay/hold bounds, the audio held-vector handshake and the 44.1 kHz
+toggle and HDMI-vsync synchronisers, the video PLL's reconfiguration handshake and relock window,
+the SDRAM output clock, the gated CPU clock, and the frozen framework groups.
+
+### Analog video converter
+
+The analog video converter is a compile-time knob selected at run time by the OSD's `Analog video`
+field: `vga_dbl_en` (`--vga-dbl`, on in every preset) builds `pc9821_line_doubler` (each GDC line
+sent twice at 49.7 kHz for VGA monitors; MiSTer.ini `forced_scandoubler=1` turns it on from
+Native). The analog modes are VGA Native (24 or 31 kHz) and Doubled (49 kHz); there is no 15 kHz TV
+or composite/S-Video output. The doubler runs on the video PLL's clock (`CLK_VIDEO`,
+`rtl/vpll`, generated like the main PLL from `tools/profile/vpll_template.v`): an exact multiple of
+the dot rate, so every analog pixel and sync period is a constant number of clocks
+(`tb_pc9821_video_clk`). The video PLL is GENERATED as the RECONFIGURABLE fractional variant
+(`pc9821_vpll_ctl`) in every build, because 0x09A8 bit 0 moves it between the 24 kHz and 31 kHz
+clocks at run time (`tb_pc9821_crt31k_video`).
 
 ## Sound
 
@@ -198,8 +262,10 @@ from its own 7.9872 MHz enable, IRQ12 (INT5), and the board's PCM block (`src/pc
 not DMA). The FM+ADPCM sum clamps once where the die does; the six-drum bus is the die's
 16-bit wrap; the SSG joins zero-mean through the board's coupling at a level pinned by paired
 SNDTEST recordings (`docs/probes/SNDTEST-balance-2026-09-25.txt`). The rhythm image is a runtime
-input (see the pack). An **MPU-PC98II** MIDI interface over the MiSTer UART is built by the
-`midilink` profile. The core's ADPCM-A rhythm sounds without a driver, while the real machine's
+input (see the pack). An **MPU-PC98II** MIDI interface over the MiSTer UART is built in every
+preset except `trace`, and is present to the guest (ports 0xE0D0/0xE0D2, IRQ6) only while the
+OSD's UART mode is MIDI: otherwise its ports read open bus and it is held in reset, so it
+reappears in its power-on state (`tb_pc9821_mpu_system`). The core's ADPCM-A rhythm sounds without a driver, while the real machine's
 is silent until a driver such as PMD is resident - an open divergence (TODO item 47).
 
 ## Interrupts, timers, input, RTC
@@ -242,11 +308,45 @@ settings are approximations of the named clock, not cycle-exact models of those 
   DEVICE PARAMETERS, CHS and LBA28, multi-sector PIO reads and writes, READ/WRITE MULTIPLE,
   FLUSH CACHE as a no-op, IRQ9, a read-only image rejected before any host transfer. The
   fixed-disk BIOS interface is INT 1Bh, and it belongs to the guest's BIOS.
-- **IDE layout (fixed, owner 2026-10-11)**: the hard disk (hps_io slot 0) is ALWAYS bank 0's
+- **HDI hard-disk images** (`pc9821_hdd_image.sv`, between the ATA and the shared block engine):
+  the image is recognised by CONTENT at mount, because hps_io gives the core a size and a pulse,
+  never a file name. A 32-byte little-endian Anex86/FDI header (https://www.pc98.org/project/doc/hdi.html;
+  NP2kai `fdd/sxsihdd.h`'s `HDIHDR`) is accepted when reserved is 0, HeaderSize is
+  [32, 1 MiB] and a multiple of 512, bytes/sector is 512, and each geometry field is inside
+  NP2kai's bounds (0 < sectors, heads < 256, 0 < cylinders < 65536) - what NP2kai's
+  `fdd/sxsihdd.c` checks, plus the reserved and whole-sector tests content detection needs in
+  place of its extension test. DataSize and the file's exact size are not checked (NP2kai reads
+  neither). Then the drive's capacity is NP2kai's `cylinders * heads * sectors`, clamped to the
+  sectors the file holds after the header, and every guest LBA is translated by
+  `HeaderSize/512` for reads AND writes; the
+  header's own sectors are never named, so a write cannot touch them. The first sector is read
+  through the same block port at mount, with the engine's read-ahead window tag low so a raw
+  image's first guest access is the same miss it always was, and the drive reports not-present
+  until that probe lands (a mount during a probe discards it and re-reads). Any validation
+  failure - and any raw PC-98 image, whose first DWORD is the IPL/partition table rather than 0 -
+  falls back to the old behaviour byte for byte: offset 0, capacity `file size / 512`. The parsed
+  offset survives an OSD reset like the other medium latches; only an eject or a replacement mount
+  clears it. An HDI with an unpadded 32-byte header (or any header that is not a whole sector)
+  cannot be sector-addressed and falls back to raw (README known issues).
+  `tb_pc9821_hdi_img` is the fail-first bench.
+- **Fixed VHD hard-disk images** (`pc9821_hdd_image.sv`, the same seam): a Microsoft Virtual PC
+  fixed VHD has its guest data at file offset 0 and a 512-byte BIG-endian footer at the END of
+  the file (NP2kai `fdd/hdd_vhd.h`: "a minimal support for VirtualPC VHD images (fixed disk
+  image only, for now...)"). When the front sector is not an HDI, a second mount probe reads the
+  image's LAST sector and accepts it only when the footer's cookie is "conectix", its data
+  offset is all-ones (a fixed disk has no dynamic header), its disk type is 2 (fixed), its
+  `current size` is a non-zero multiple of 512 with `current size + 512 <= file size`, and its
+  checksum is the one's complement of the sum of the 512 footer bytes with the checksum field
+  zeroed. Then the offset is 0 (a write lands at the guest LBA) and the guest capacity is
+  `current size / 512`, so the footer's sector is never a guest LBA. Dynamic and differencing
+  VHDs (disk type 3/4, the "cxsparse" header at offset 512) are not supported and fall back to
+  raw. The two formats are mutually exclusive: an HDI is recognised by its front header and
+  short-circuits the tail probe; a fixed VHD by its tail. `tb_pc9821_hdi_img` covers both.
+- **IDE layout (fixed)**: the hard disk (hps_io slot 0) is ALWAYS bank 0's
   master (IDE unit 0) and the CD-ROM, when built, ALWAYS bank 1's master (unit 2); without the CD
   bank 1 is an empty connector. Nothing moves with `CDROM_EN` or with a disc mount or eject. This
   is the stock CD-equipped Xe10's layout and NP2kai's default (HDD at unit 0, CD at unit 2). The
-  owner's Xe10 answers at bank 1 and floats bank 0 (`docs/probes/IDE.TXT`, `ATA.TXT`) only because
+  measured Xe10 answers at bank 1 and floats bank 0 (`docs/probes/IDE.TXT`, `ATA.TXT`) only because
   its CF card sits in the CD connector; the core uses that machine's measured live-bank answers
   and empty-bank float (`0x0E` task file, `0x0F` at `0x74C`/`0x74E`) at its own banks. Port
   `0xF0` bits 5/6 are the two connectors' drive-present lines (active low; the ITF's IDE drive
@@ -256,13 +356,14 @@ settings are approximations of the named clock, not cycle-exact models of those 
   with neither (`tb_pc9821_ide_layout`, both builds through the real `pc9821_system`).
 - **CD-ROM** (`pc9821_atapi.sv`, on in every preset): an ATAPI drive as bank 1's master with
   the hard disk on bank 0, ISO and PCD images (`tools/cue2pcd.py` converts BIN/CUE), and CD-DA
-  playback. Expected values follow NP2kai's `cbus/ideio.c`/`atapicmd.c`. Verified with NEC's
+  playback, its level the OSD's "CD audio volume" field (default 0 dB, the unity level shipped
+  before the field; NP2kai's default CD-DA level, -6 dB, is a step; `tb_pc9821_osd_cd_volume`). Expected values follow NP2kai's `cbus/ideio.c`/`atapicmd.c`. Verified with NEC's
   `NECCD.SYS` + MSCDEX. While CD-DA plays, every file read on the CD fails with the driver's
   "CDR101: Not ready" (DOS error 5 to a program whose INT 24h answers Fail). That is the guest
   stack's answer, not the drive's: the MS-DOS CD-ROM Extensions 2.1 device-driver spec has the
   driver fail every request that needs head movement while the drive plays, returning the busy
   and error bits and an error code, and a `--dbg-cd` trail of `mister_regress.py`'s `probe-cda`
-  (2026-10-12) shows NECCD.SYS answering each open from READ SUB-CHANNEL (audio status 0x11) and
+  shows NECCD.SYS answering each open from READ SUB-CHANNEL (audio status 0x11) and
   TEST UNIT READY alone, with no READ(10) sent while the drive plays. A real drive reports the same
   0x11 during play, so the Xe10 is expected to give the same answer. A program that wants data
   stops the audio first. The drive
@@ -272,11 +373,14 @@ settings are approximations of the named clock, not cycle-exact models of those 
   can observe.
 - **Floppy** (`pc9821_fdc.sv`, `pc9821_fdd_media.sv`): two drives, D88 and raw images, READ
   DATA/READ ID/WRITE DATA over DMA channel 2, raw FORMAT, live mount/eject with NP2kai's
-  media-change interrupts. **D88 FORMAT and 2HS/rpm gating remain** (README known issues).
+  media-change interrupts, and NP2kai's media-mode gate (a D88's 2D/2DD/2HD class against the
+  controller's 2HD/2DD mode and the unit's 0x04BE rpm bit). **D88 FORMAT remains** (README known
+  issues), as do the per-sector `rpm_flg` test of a 2HD D88 whose fd_type minor is non-zero
+  (NP2kai `fdd_d88.c` rpmcheck; here such a disk reads at either rpm) and 2HS media.
 - **DMA**: the 8237-compatible DMA controller (`pc9821_dmac`) serves the FDC; the PCM
   board does not use DMA.
 
-**Storage area pass (2026-10-11, lane `area-storage`).** The storage paths were slimmed for LABs
+**Storage area pass (trade-candidates T37).** The storage paths were slimmed for LABs
 with every guest-read value held identical, each change proven against the previous RTL by a
 bench that passes on both and fails a mutant. Module-alone A&S (`tools/res_exp_map.py`):
 `pc9821_ata` 924 -> 854 ALMs (the end-of-image test is one borrow of `capacity - lba`; LBAs are
@@ -306,44 +410,18 @@ drive probe sees it.
 
 ## Timing and resources
 
-The device is a Cyclone V 5CSEBA6 (DE10-Nano). **LABs, not ALMs, are the binding resource**:
-the shipping build with the CD-ROM and the throttle uses all but a few of the 4,191 LABs.
-`tools/check_fit.py` re-derives the fit and the inferred-RAM lines from a build's reports and
-fails a fit that did not close or that lost block-RAM inference.
+The device is a Cyclone V 5CSEBA6 (DE10-Nano), and **LABs, not ALMs, are the binding resource**: the
+shipping build with the CD-ROM uses all but a few dozen of the 4,191 LABs. Every preset runs past
+timing closure; the clock, slack and `pll_hdmi` facts, the build profiles and the SDRAM_CLK
+structure are in [`build.md`](build.md) ("Build profiles") and [`fitting.md`](fitting.md) ("Timing and area facts"), and where the critical
+paths are is in [`timing.md`](timing.md). `tools/check_fit.py` re-derives the fit and the
+inferred-RAM lines from a build's reports and fails a fit that did not close or that lost block-RAM
+inference.
 
-**Every preset runs past timing closure.** The worst `clk_sys` cones carry ~17.2-17.8 ns of
-data (~54 MHz if closed). The shipping 80 MHz build fits at roughly -7 to -8 ns of
-`clk_sys` setup slack depending on the placement seed, and boots and runs reliably on the
-tested boards; on the same tree, 85-87.5 MHz builds passed, 90 MHz is seed-dependent and 95 MHz
-and above fail. A single fit's slack is one placement draw (seeds spread ~1 ns), so compare
-builds with `tools/seed_sweep.py`. The framework's `pll_hdmi` divclk can show negative slack
-on some seeds; that is upstream `sys/ascal.vhd` logic.
-
-The SDRAM interface is source-synchronously constrained against the AS4C32M16SB limits, and
-its pin-clock phase is derived per clock by `tools/profile_gen.py`. The module is stable to
-about 120 MHz in the MiSTer memory test, which is why there is no SDRAM clock crossing: the
-controller always runs on clk_sys.
-
-Rules that keep the design fitting are in `AGENTS.md` (block-RAM inference traps, one write
-port and one read address per clock, no power-up value on a memory's read register).
-
-## MiSTer deployment
-
-```sh
-./tools/mister_load.sh                 # default dump set: RBF + pack + MGL + image
-./tools/mister_load.sh --machine xe    # the other dump set
-./tools/mister_load.sh --both          # both sets, one menu entry each
-./tools/mister_load.sh --packs-only    # packs and MGLs without the RBF
-./tools/mister_load.sh --no-copy       # reload the installed core
-```
-
-It copies the RBF to `_Computer/PC9821Z486.rbf` and verifies its SHA-256, copies each pack
-(after `tools/check_pack.py` verifies it against the dumps; a pack already on the card is kept
-unless `--pack` is given), writes one MGL per firmware set (`PC9821Z486.mgl`,
-`PC9821Z486-xe.mgl`; `setname PC9821`, so paths resolve under `games/PC9821/`) and sends
-`load_core` through `/dev/MiSTer_cmd`. `tools/deploy_mister.sh` stages the same files into
-`mister_deploy/` for a manual copy to the SD card instead. Testing on a MiSTer in detail is in
-`AGENTS.md`.
+The SDRAM interface is source-synchronously constrained against the AS4C32M16SB limits, and its
+pin-clock phase is derived per clock by `tools/profile_gen.py`. The module is stable to about
+120 MHz in the MiSTer memory test, which is why there is no SDRAM clock crossing: the controller
+always runs on clk_sys.
 
 ## Hardware debug surface
 
@@ -351,18 +429,12 @@ unless `--pack` is given), writes one MGL per firmware set (`PC9821Z486.mgl`,
 registered, CPU released), `LED_DISK[0] = cpu_run && z_valid` (CPU issuing memory requests).
 A disk LED that flickers and stops means the CPU started and stopped requesting memory.
 
-**Debug UART** (`/dev/ttyS1` on the MiSTer, 115200 8N1). The `trace` profile adds a watchdog
-record and perf/graphics counters; `tools/decode_telemetry.py` decodes them (the record table
-is held by `tools/check_telemetry_contract.py`). The byte before the record's LF says which
-trigger fired: **`W`** a request outstanding and nothing completed for 200 ms (wedged), **`S`**
-no request for 200 ms (halted or polling from cache), **`P`** the 2 s heartbeat (which says
-nothing about progress). The `--dbg-*` build options add compile-time instruments (a CPU
-sampler, a memory snoop, a triggered instruction trace, a display-programming log, the CD
-command log) read by `tools/decode_dbglog.py`.
-
 **`io_debug_status`** (port `0x0EE0`, the watchdog's `ST`): bit0 `rom_ready`, bit1
 `ioctl_download`, bit2 `cpu_run`, bit3 loader owns the backend, bit4 `load_error`, bits 7:5
 the RAM-size code actually in force.
+
+Deploying to a MiSTer and the debug UART (the `trace` telemetry and the `--dbg-*` instruments,
+[`debug-instruments.md`](debug-instruments.md)) are in [`mister-testing.md`](mister-testing.md).
 
 ## Target machine
 
@@ -379,32 +451,19 @@ A mid-range 486 PC-9821 (Xe10 / Xe), not a PCI-era model:
 
 ## Not implemented
 
-- the GDC2's FIGD line/rectangle/arc drawing and its FIFO/drawing-busy timing;
 - the PEGC plane-mode engine;
 - the WSS/MSS 16-bit audio board;
 - the serial port;
 - x87 / FPU;
-- FDC D88 FORMAT and 2HS/rpm gating;
+- FDC D88 FORMAT, the per-sector D88 `rpm_flg` test and 2HS media;
 - the `0xDA000` IDE work-RAM paging (served as plain RAM) and the `FA0000-FFFFFF` mirror
   (served as RAM);
 - reserved/open-bus decode is approximate outside the ranges the firmware exercises.
 
 ## Open hardware questions
 
-Each needs a capture on a real machine (the probes are in `tools/hwprobe/`); the full list is
-TODO section 3.
-
-1. **`0x0432` bit 7** encoding (the one capture answers with bit 7 clear).
-2. **`0xE0000`** answers nothing on the machine in digital mode; the core maps plane 3 there.
-3. **`0x043F` read-back** is `0xC4` on the machine; the core returns a constant.
-4. **`0x074E`** for other units/heads.
-5. **CG window even offsets**: NP2kai reads the low page, QEMU round-trips, this core drops
-   the write and reads zero.
-6. Whether the IDE BIOS needs the **`0xDA000` paging** or only writable RAM.
-7. **The calendar's bit order** (needs a machine with a live backup battery, or a
-   write-then-read probe).
-8. **`0x60` reads `0x44`** on the machine (bit 6 set); the text GDC status does not model it.
-9. **`0x6C`** (and `0x66`) are undecoded; what the machine answers there is unmeasured.
+The questions that need a capture on a real machine (the probes are in `tools/hwprobe/`) are
+section 3 of [`TODO.md`](../TODO.md).
 
 ## Keeping this document honest
 
@@ -415,7 +474,9 @@ bench, a hardware capture or a cited source shows.
 
 ## Licensing
 
-Upstream z486 SystemVerilog is Apache-2.0; `src/z486/LICENSE-SCOPE.md` excludes `ucode.hex`
-from that grant. `src/opna/` keeps each vendored part's licence header with
-`src/opna/LICENSE-SCOPE.md` scoping it. **No firmware is vendored in this tree, and none may
-be**: the ROMs, the font and the rhythm image are the user's runtime inputs.
+The licence for the project's own code has not been decided yet (TODO item 140), so the tree has
+no root `LICENSE`; `NOTICE` lists the third-party parts and their licences. Upstream z486 is
+Apache-2.0 with `src/z486/LICENSE-SCOPE.md` excluding `ucode.hex` from that grant, and
+`src/opna/` keeps each vendored part's licence header with `src/opna/LICENSE-SCOPE.md` scoping it.
+**No firmware is vendored in this tree, and none may be**: the ROMs, the font and the rhythm image
+are the user's runtime inputs.

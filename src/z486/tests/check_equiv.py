@@ -14,10 +14,12 @@ input bit.  Each proof is run twice:
 The models restate the RTL expressions they prove; each file names its RTL
 site.  A model whose first line is `// check-equiv: tempinduct` is sequential
 and is proved by temporal induction from its declared power-up values.  A line
-`// check-equiv: functions <file> <name>...` (file relative to the model)
-pastes those functions' text from a GENERATED RTL file at the model's
+`// check-equiv: functions <file> <name>...` (file relative to the model; one
+line per file, any number of lines) pastes those functions' text from a GENERATED RTL file at the model's
 `// @@FUNCTIONS@@` line, so the proof runs on the shipped text rather than a
-restatement.  yosys is required: a missing yosys is a FAIL, never a skip.
+restatement.  @@Z486_ROOT@@ in a model stands for the z486 root directory (an
+`include of a shipped header, a $readmemh of a shipped ROM image); a line
+`// check-equiv: memory` maps such a ROM to cells before the proof.  yosys is required: a missing yosys is a FAIL, never a skip.
 """
 import pathlib
 import re
@@ -42,18 +44,28 @@ def extract_functions(src: pathlib.Path, names: list[str]) -> str:
 
 
 def model_source(path: pathlib.Path) -> pathlib.Path:
-    """The model as yosys reads it: with any `functions` directive expanded."""
+    """The model as yosys reads it: with any `functions` directive expanded,
+    and @@Z486_ROOT@@ (for an `include or a $readmemh of a shipped file)
+    replaced by the absolute z486 root."""
     text = path.read_text()
-    m = re.search(r"^// check-equiv: functions (\S+) (.+)$", text, re.M)
-    if not m:
-        return path
-    funcs = extract_functions((path.parent / m.group(1)).resolve(), m.group(2).split())
+    ms = list(re.finditer(r"^// check-equiv: functions (\S+) (.+)$", text, re.M))
+    if not ms:
+        if "@@Z486_ROOT@@" not in text:
+            return path
+        out_dir = HERE / "obj_dir" / "equiv"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / path.name
+        out.write_text(text.replace("@@Z486_ROOT@@", str(HERE.parent)))
+        return out
+    # One or more directive lines, each naming a file and its functions.
+    funcs = "\n".join(extract_functions((path.parent / m.group(1)).resolve(), m.group(2).split())
+                      for m in ms)
     if "// @@FUNCTIONS@@" not in text:
         raise SystemExit(f"check-equiv: {path.name} has no // @@FUNCTIONS@@ line")
     out_dir = HERE / "obj_dir" / "equiv"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / path.name
-    out.write_text(text.replace("// @@FUNCTIONS@@", funcs))
+    out.write_text(text.replace("// @@FUNCTIONS@@", funcs).replace("@@Z486_ROOT@@", str(HERE.parent)))
     return out
 
 
@@ -65,8 +77,11 @@ def run(path: pathlib.Path, mutant: int) -> bool:
     path = model_source(path)
     sat = ("sat -tempinduct -prove mismatch 0 -verify" if seq
            else "sat -prove mismatch 0 -verify -show-inputs")
+    # "// check-equiv: memory" maps an inferred memory (a $readmemh ROM image)
+    # to cells the SAT solver can model.
+    mem = "memory; " if re.search(r"^// check-equiv: memory$", path.read_text(), re.M) else ""
     script = (f"read_verilog -sv {path}; chparam -set MUTANT {mutant} {top}; "
-              f"prep -top {top}; flatten; {sat}")
+              f"prep -top {top}; flatten; {mem}{sat}")
     r = subprocess.run(["yosys", "-q", "-p", script],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     return r.returncode == 0

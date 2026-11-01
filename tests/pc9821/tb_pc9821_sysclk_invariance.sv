@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Every guest-visible TIMEBASE and device-pacing TIME this core owns measures the same WALL-CLOCK rate at two clk_sys frequencies (the base profile's 50 MHz and mediumoc's 100 MHz): each device is instantiated twice in ONE simulation, on its own clock, and read at the same simulated nanosecond, so an equal count is an equal real time rather than an equal cycle count - a model counting clk_sys instead of a real time reads 2x at 100 MHz. THE VIDEO ENABLE IS THE PRODUCTION ONE, not a copy: the real pc9821_system runs at both clocks (its CPU is tests/pc9821/z486_stub.sv) and its exported video_ce - the production PIXEL_CE_INC = round(PIXEL_HZ * 2^24 / SYS_FREQ) accumulator - drives the standalone CRTC probes and is itself counted, so a divider that counted clk_sys fails here. Covered, each with the time it is derived from named in the bench: PIT channel 0 at BOTH programs a guest uses - the BIOS's 100 Hz (divisor 0x6000 at 2.4576 MHz) and the sound drivers' 9990.24 Hz (divisor 0x00F6, the Rusty intro's INT 08h music/PCM tick) - plus channel 1 (the beeper tone, the ITF's own 2000 Hz program: control 0x76, divisor 0x04CD) and channel 2 (the RS-232C baud clock), all three on the 8253's own 2.4576 MHz input clock; the uPD4993A's four guest-writable tick rates (1/64, 1/32, 1/16 s and off) and its 1 Hz divider; the keyboard's typematic delay and interval (NP2kai's 500 ms / 50 ms) and the 3 s OSD HELP-hold window; the calendar's CDAT serial read, whose bit clock is the GUEST's (both clocks are driven with one wall-clock command schedule and the recovered 48-bit payload is compared); the bus mouse's IRQ13 at its default 120 Hz and at its guest-programmed 60 Hz and 30 Hz forms; the game port's 1.1 us tick and the axis one-shot it times (the right end stop's 1022 ticks); the ARTIC 307200 Hz counter the ITF's delay() spins on (qemu pc98-sys.c:64 TIMESTAMP_HZ); the two I/O-wait floors that are real times and therefore must be paid at both clocks (0x005F = the machine's item-41 1621 ns, one value, an 8253 port >= one 2.4576 MHz tick); the GVRAM arbiter's captured per-access holds (478 ns read, 142 ns write, 104 ns GRCG store - the capture's times, converted per profile and asserted back as times); the FDC's 20 us recalibrate delay; the OPNA's 7.9872 MHz chip enable, the SSG's cen/16 sample enable and its guest-programmed Timer A/B IRQ period (144 and 2304 chip enables per count); PCM86's sample strobe at a guest-selected rate of NP2kai's pcm86rate8 table; and the FAITHFUL I/O class table (IO_LATENCY_PROFILE 2, build_profile.py's 'iofaithful'), whose per-class times all come from docs/probes/IO.TXT and must be the same REAL TIME at 50 and 100 MHz and within one clk_sys of the capture: the default class (823 ns read / 862 ns write), the EGC named ports 0x006A/0x00A6 (386 read / 356 write), the text GDC 0x0060/0x0062 (444), the graphics GDC 0x00A0/0x00A2 (676), the GRCG pair 0x007C/0x007E (359 write; 0x007C reads at the default class), the 8253 write 0x0077 (861), the 0x005F read (826) and write (1621, docs/probes/IO.TXT's anchor) and the EGC register file 0x04A1 odd / 0x04A0 even (823 / 9290). The iobus's per-access class floor (IO_MIN_HOLD = 4 clk_sys, r13/276's deliberate stall reduction against r13/245's measured 840 ns machine class) is PRINTED at both clocks and asserted by nothing, because locking in either number would decide a stall-budget question that is the owner's. FAIL-FIRST history: the keyboard's OSD HELP-hold window is read at both clocks and must be 3 s of wall time, which the 28-bit HELP_HOLD_CYCLES = SYS_CLOCK_HZ*3 could not hold at 100 MHz (300e6 mod 2^28 = 31_564_544, a 0.32 s hold) - that case fails before the width fix and passes after it - and the 0x60 status byte's data-ready bit 0 was a bare `stat_dr <= ~stat_dr` on every clk_sys, so its edge count read 2x at 100 MHz before the fix. The data-ready bit's RATE IS NOT A MACHINE FACT and is not claimed: the machine's 2^21-sample 0x60 histogram (docs/probes/GDC.TXT) measures only its ~50 % duty and no reference gives its period, so the bench asserts the DERIVATION (one toggle per two 21.0526 MHz dots) and the two clocks' agreement. The MPU-PC98II's MIDI-out serialiser is measured here too: its start bit is the same 32 us at both clocks, which is MIDI's own 31250 baud.
+// Every guest-visible TIMEBASE and device-pacing TIME this core owns measures the same WALL-CLOCK rate at two clk_sys frequencies (the base profile's 50 MHz and mediumoc's 100 MHz): each device is instantiated twice in ONE simulation, on its own clock, and read at the same simulated nanosecond, so an equal count is an equal real time rather than an equal cycle count - a model counting clk_sys instead of a real time reads 2x at 100 MHz. THE VIDEO ENABLE IS THE PRODUCTION ONE, not a copy: the real pc9821_system runs at both clocks (its CPU is tests/pc9821/z486_stub.sv) and its exported video_ce - the production PIXEL_CE_INC = round(PIXEL_HZ * 2^24 / SYS_FREQ) accumulator - drives the standalone CRTC probes and is itself counted, so a divider that counted clk_sys fails here. Covered, each with the time it is derived from named in the bench: PIT channel 0 at BOTH programs a guest uses - the BIOS's 100 Hz (divisor 0x6000 at 2.4576 MHz) and the sound drivers' 9990.24 Hz (divisor 0x00F6, the Rusty intro's INT 08h music/PCM tick) - plus channel 1 (the beeper tone, the ITF's own 2000 Hz program: control 0x76, divisor 0x04CD) and channel 2 (the RS-232C baud clock), all three on the 8253's own 2.4576 MHz input clock; the uPD4993A's four guest-writable tick rates (1/64, 1/32, 1/16 s and off) and its 1 Hz divider; the keyboard's typematic delay and interval (NP2kai's 500 ms / 50 ms) and the 3 s OSD HELP-hold window; the calendar's CDAT serial read, whose bit clock is the GUEST's (both clocks are driven with one wall-clock command schedule and the recovered 48-bit payload is compared); the bus mouse's IRQ13 at its default 120 Hz and at its guest-programmed 60 Hz and 30 Hz forms; the game port's 1.1 us tick and the axis one-shot it times (the right end stop's 1022 ticks); the ARTIC 307200 Hz counter the ITF's delay() spins on (qemu pc98-sys.c:64 TIMESTAMP_HZ); the two I/O-wait floors that are real times and therefore must be paid at both clocks (0x005F = the machine's item-41 1621 ns, one value, an 8253 port >= one 2.4576 MHz tick); the GVRAM arbiter's captured per-access holds (478 ns read, 142 ns write, 104 ns GRCG store - the capture's times, converted per profile and asserted back as times); the FDC's 20 us recalibrate delay; the OPNA's 7.9872 MHz chip enable, the SSG's cen/16 sample enable and its guest-programmed Timer A/B IRQ period (144 and 2304 chip enables per count); PCM86's sample strobe at a guest-selected rate of NP2kai's pcm86rate8 table; and the FAITHFUL I/O class table (IO_LATENCY_PROFILE 2, build_profile.py's 'iofaithful'), whose per-class times all come from docs/probes/IO.TXT and must be the same REAL TIME at 50 and 100 MHz and within one clk_sys of the capture: the default class (823 ns read / 862 ns write), the EGC named ports 0x006A/0x00A6 (386 read / 356 write), the text GDC 0x0060/0x0062 (444), the graphics GDC 0x00A0/0x00A2 (676), the GRCG pair 0x007C/0x007E (359 write; 0x007C reads at the default class), the 8253 write 0x0077 (861), the 0x005F read (826) and write (1621, docs/probes/IO.TXT's anchor) and the EGC register file 0x04A1 odd / 0x04A0 even (823 / 9290). The iobus's per-access class floor (IO_MIN_HOLD = 4 clk_sys, a deliberate stall reduction against the measured 840 ns machine class) is PRINTED at both clocks and asserted by nothing, because locking in either number would decide a stall-budget question this bench does not own. FAIL-FIRST history: the keyboard's OSD HELP-hold window is read at both clocks and must be 3 s of wall time, which the 28-bit HELP_HOLD_CYCLES = SYS_CLOCK_HZ*3 could not hold at 100 MHz (300e6 mod 2^28 = 31_564_544, a 0.32 s hold) - that case fails before the width fix and passes after it - and the 0x60 status byte's data-ready bit 0 was a bare `stat_dr <= ~stat_dr` on every clk_sys, so its edge count read 2x at 100 MHz before the fix. The data-ready bit's RATE IS NOT A MACHINE FACT and is not claimed: the machine's 2^21-sample 0x60 histogram (docs/probes/GDC.TXT) measures only its ~50 % duty and no reference gives its period, so the bench asserts the DERIVATION (one toggle per two 21.0526 MHz dots) and the two clocks' agreement. The MPU-PC98II's MIDI-out serialiser is measured here too: its start bit is the same 32 us at both clocks, which is MIDI's own 31250 baud. The 31 kHz mode (0x09A8 bit 0 set) is covered at both clocks too: the production dot enable with its 31 kHz select high drives a CRTC programmed with the BIOS 31 kHz master SYNC block, and its frame and line periods must be the Xe10's measured 70.0669 Hz / 31.460 kHz (docs/probes/CRT31K.TXT, calibrated) within 3 ppm at 50 and 100 MHz alike.
 //
 // Every guest-visible TIMEBASE this core owns measures the SAME WALL-CLOCK RATE at two
 // different clk_sys frequencies (50 MHz, the base profile, and 100 MHz, mediumoc). Each
@@ -43,7 +43,7 @@
 //   mouse timing 1, 2 (60/30 Hz)  the same rate scaled by the guest's 0xBFDB field
 //                                 (mouseif.c:309-312,344-348: (realclock/120)<<timing)
 //   gameport axis tick 1.1 us     the IBM game-port formula t = 24.2 us + 0.011 us * R
-//                                 in 1.1 us ticks (pc9821_gameport.sv:95-115)
+//                                 in 1.1 us ticks (pc9821_gameport.sv:105-130)
 //   gameport axis one-shot        the same formula's OUTPUT: the right end stop's
 //                                 R = 1000 asks 1022 ticks, so the pulse the guest
 //                                 times is 1022 * 1.1 us of wall clock
@@ -51,11 +51,11 @@
 //                                 counter the ITF's delay() spins on (iobus 0x5C..0x5F)
 //   0x005F I/O wait 1621 ns          the firmware's own I/O-wait port, ONE value (iobus IO_NS_5F_W)
 //   8253 port >= one PIT tick     the ITF timer self-test floor (iobus IO_PIT_HOLD)
-//   GVRAM holds 478/142/104 ns    the Xe10's own capture (pc9821_gvram_arb.sv:354 (GVRAM_RD_HOLD) and :295-336:
+//   GVRAM holds 478/142/104 ns    the Xe10's own capture (pc9821_gvram_arb.sv:396 (GVRAM_RD_HOLD) and :295-336:
 //                                 GFX2.TXT GRCG_RMW-CTRLGC = 103.9 ns store,
 //                                 GFXB.TXT GVRAM0 WRITE = 142.0 ns, and the
 //                                 PW4RW/PLANE_COPY pair's read half = 478.4 ns)
-//   FDC recalibrate 20 us         pc9821_fdc.sv:64 (RECAL_CYCLES) = SYS_CLOCK_HZ/50_000
+//   FDC recalibrate 20 us         pc9821_fdc.sv:77 (RECAL_CYCLES) = SYS_CLOCK_HZ/50_000
 //   OPNA chip enable 7.9872 MHz   the YM2608's own clock (pc9821_opna.sv:97 (CEN_STEP)
 //                                 CEN_STEP; NP2kai's OPNA_CLOCK doubled)
 //   OPNA SSG sample 499.2 kHz     cen/16, the SSG's own update rate
@@ -67,8 +67,8 @@
 //                                 same period in its own quantisation)
 //   PCM86 sample rate             NP2kai sound/pcm86c.c:35 pcm86rate8[] - 44100 Hz
 //                                 down to 4134.375 Hz, each 8x the entry
-//                                 (pc9821_pcm86.sv:156 (STEP0); 2^29 * rate step)
-//   kbd HELP hold 3 s             the OSD "hold HELP" contract (pc9821_kbd.sv:16-21)
+//                                 (pc9821_pcm86.sv:154 (`STEP0`); 2^29 * rate step)
+//   kbd HELP hold 3 s             the OSD "hold HELP" contract (pc9821_kbd.sv:14-20, `HELP_HOLD_CYCLES`)
 //   kbd typematic 500 ms / 50 ms  NP2kai sound/keystat.c's repeat defaults
 //                                 (pc9821_kbd.sv:25 (SYS_CLOCK_HZ / 2))
 //   raster line 848 dots          the SYNC block's own geometry: 848 dots at the
@@ -83,12 +83,11 @@
 //                                 is the PIXEL_HZ-derived dot rate (one toggle per two
 //                                 dots, profile-invariant) and NOT a clk_sys count.
 //
-// The VIDEO side is covered the same way (audit rtl-audit-video F6), and since the audit's
-// B1 the ENABLE ITSELF is the production one: the real pc9821_system runs at both clocks
+// The VIDEO side is covered the same way, and the ENABLE ITSELF is the production one: the real pc9821_system runs at both clocks
 // (its CPU is tests/pc9821/z486_stub.sv, the same port shell tb_pc9821_system_reset_seed
-// uses) and its exported video_ce - pc9821_system.sv:1558 (the dot rate as a fraction) - PIXEL_CE_INC,
+// uses) and its exported video_ce - pc9821_system.sv:1119 (the dot rate as a fraction) - PIXEL_CE_INC,
 // round(PIXEL_HZ * 2^24 / SYS_FREQ) - is what drives the standalone crtc_probe pair AND
-// what the bench counts. The audit found this bench computing its OWN copy of that
+// what the bench counts. This bench once computed its OWN copy of that
 // divider ("it tests the CRTC given a dot enable, not the dot enable"), so a change to the
 // RTL formula passed here; now a raw clk_sys count in the production expression makes the
 // 100 MHz raster, its stat_dr edges and its line/frame periods read 2x and the bench FAILS.
@@ -121,12 +120,12 @@
 //
 // WHAT IS DELIBERATELY NOT ASSERTED. The iobus's per-access class floor (IO_MIN_HOLD = 4
 // clk_sys) is a fixed CLOCK count where the machine's measured classes are real times
-// (r13/245's probe: default 840 ns, EGC 400 ns, text GDC 460 ns, graphics GDC 680 ns at
-// its 0x5F anchor), and r13/276 dropped the classes to that floor ON PURPOSE to cut the
+// (the machine probe: default 840 ns, EGC 400 ns, text GDC 460 ns, graphics GDC 680 ns at
+// its 0x5F anchor), and the FSM-floor change dropped the classes to that floor ON PURPOSE to cut the
 // CPU's I/O-bus wait. So one default-class access is 80 ns at 50 MHz and 40 ns at
 // 100 MHz. The min profile's floor is PRINTED and asserted by nothing: locking in either
-// number would decide a stall-budget question that belongs to the owner. The two floors
-// r13/276 kept - 0x5F and the 8253 - ARE asserted, because they are the firmware's and
+// number would decide a stall-budget question that is still open. The two floors
+// that change kept - 0x5F and the 8253 - ARE asserted, because they are the firmware's and
 // must hold. The FAITHFUL profile (IO_LATENCY_PROFILE 2) is the opposite case and IS
 // asserted: its classes are the machine's measured TIMES (docs/probes/IO.TXT), so both
 // clocks must pay the SAME real time, within one clk_sys of the capture - which is exactly
@@ -267,8 +266,8 @@ module tb_pc9821_sysclk_invariance;
   wire [15:0] fcyc_egcf_e_50, fcyc_egcf_e_100, fcyc_egcf_o_50, fcyc_egcf_o_100;
   wire        fdone_50, fdone_100;
   // The same seven faithful rows on the MIN profile, PRINTED and never asserted (see the
-  // header: the min profile's floor is the owner's stall-budget question). They are here so
-  // the owner can read what the same accesses cost at the floor.
+  // header: the min profile's floor is an open stall-budget question). They are here so
+  // a reader can see what the same accesses cost at the floor.
   wire [15:0] mcyc_egc_r_50, mcyc_egc_r_100, mcyc_egc_w_50, mcyc_egc_w_100;
   wire [15:0] mcyc_gdc1_50, mcyc_gdc1_100, mcyc_gdc2_50, mcyc_gdc2_100;
   wire [15:0] mcyc_pit_w_50, mcyc_pit_w_100, mcyc_5f_r_50, mcyc_5f_r_100;
@@ -424,7 +423,7 @@ module tb_pc9821_sysclk_invariance;
   // The PRODUCTION video path: pc9821_system at both clocks (CPU = the z486 stub). Its
   // video_ce is the enable the shipped design gives the framework as CE_PIXEL, and it is
   // what DRIVES the two crtc_probe instances below - so the CRTC checks are checks of the
-  // production divider, not of a copy of it (audit rtl-audit-video B1).
+  // production divider, not of a copy of it.
   sys_probe #(.HZ(CLK50_HZ))  sys50  (.clk(clk50),  .reset(reset),
                                       .video_ce(ce_50), .ce_edges(ce_edges_50),
                                       .hs_pulses(sys_hs_50), .vs_pulses(sys_vs_50),
@@ -454,6 +453,20 @@ module tb_pc9821_sysclk_invariance;
                       .dr_edges(dr_100), .lines(lin_100), .frames(frm_100),
                       .de_line(de_line_100), .line_ns(line_ns_100),
                       .frame_ns(frame_ns_100), .hs_width_ns(hs_w_100));
+
+  // THE 31 kHz MODE (0x09A8 bit 0 set): the production dot enable (pc9821_dot_ce) with c31 high at
+  // both clocks, driving a crtc31_probe that programs the BIOS 31 kHz master SYNC block (NP2kai
+  // bios/bios18.c gdcmastersync[2], the block docs/probes/CRT31K.TXT measured) into a pc9821_crtc
+  // with crt31k high. The 0x09A8 latch -> c31 wiring itself is tb_pc9821_crt31k's subject.
+  wire        ce31_50, ce31_100;
+  wire [31:0] f31_ns_50, f31_ns_100, l31_ns_50, l31_ns_100;
+  wire [15:0] l31_n_50, l31_n_100;
+  pc9821_dot_ce #(.SYS_FREQ(CLK50_HZ))  dot31_50  (.clk(clk50),  .reset(reset), .c31(1'b1), .ce(ce31_50));
+  pc9821_dot_ce #(.SYS_FREQ(CLK100_HZ)) dot31_100 (.clk(clk100), .reset(reset), .c31(1'b1), .ce(ce31_100));
+  crtc31_probe crtc31_50  (.clk(clk50),  .reset(reset), .sample(sample), .pixel_ce(ce31_50),
+                           .frame_ns(f31_ns_50), .line_ns(l31_ns_50), .lines(l31_n_50));
+  crtc31_probe crtc31_100 (.clk(clk100), .reset(reset), .sample(sample), .pixel_ce(ce31_100),
+                           .frame_ns(f31_ns_100), .line_ns(l31_ns_100), .lines(l31_n_100));
 
   // ==== checks ====
   integer ns_5f_50, ns_5f_100, ns_71_50, ns_71_100, ns_def_50, ns_def_100;
@@ -496,9 +509,12 @@ module tb_pc9821_sysclk_invariance;
   localparam integer PIXEL_HZ        = 21_052_600;
   localparam integer LINE_NS         = 40_280;     // 848 dots / 21.0526 MHz
   localparam integer FRAME_NS        = 17_723_227; // 848 * 440 dots / 21.0526 MHz
-  localparam integer HS_WIDTH_NS     = 2_660;      // the block's hs field: 7 chars = 56 dots
+  localparam integer HS_WIDTH_NS     = 3_040;      // the block's hs field 7: (7 + 1) chars = 64 dots (MAME upd7220.cpp:1243 `m_hs = (m_pr[3] & 0x1f) + 1`)
   localparam integer DE_LINE         = 640;        // the block's cr field: 80 chars = 640 dots
   localparam integer LINES_EXPECTED  = 2470;       // 99.5 ms / 40.280 us
+  // The 31 kHz mode's capture (docs/probes/CRT31K.TXT `RUN frames=70 ticks=306930`, calibrated):
+  localparam integer F31_NS          = 14_272_074; // 1 / 70.06690 Hz
+  localparam integer L31_NS          = 317_864;    // 1 / 31 460.04 Hz, in 0.1 ns
   localparam integer FRAMES_EXPECTED = 5;          // 99.5 ms / 17.723 ms
   localparam integer DR_EXPECTED     = 1_047_366;  // 99.5 ms * 21.0526 MHz / 2 (see above)
   // The production enable's own rate over the same window (one enable per dot).
@@ -727,11 +743,25 @@ module tb_pc9821_sysclk_invariance;
     if (frame_ns_50 > frame_ns_100 + 1_000)
       fail($sformatf("the CRTC's frame period is not clock-invariant: %0d ns at 50 MHz, %0d ns at 100 MHz", frame_ns_50, frame_ns_100));
     if ((hs_w_50 > HS_WIDTH_NS + 100) || (hs_w_50 < HS_WIDTH_NS - 100))
-      fail($sformatf("the CRTC's hsync pulse is %0d ns wide, not the block's %0d (hs = 7 => 56 dots)", hs_w_50, HS_WIDTH_NS));
+      fail($sformatf("the CRTC's hsync pulse is %0d ns wide, not the block's %0d (hs = 7 => 64 dots)", hs_w_50, HS_WIDTH_NS));
     note($sformatf("crtc raster: %0d lines / %0d frames over 99.5 ms, active %0d dots/line, line %0d / %0d ns, frame %0d / %0d ns, hsync %0d / %0d ns",
          lin_50, frm_50, de_line_50, line_ns_50, line_ns_100, frame_ns_50, frame_ns_100, hs_w_50, hs_w_100));
-    // DISPLAY ONLY - the deliberately waived divergence (r13/276), not an assertion.
-    note($sformatf("I/O class floor (r13/276, NOT asserted): one default-class access is %0d ns at 50 MHz and %0d ns at 100 MHz; the machine's measured default class is 840 ns (r13/245)",
+
+    // ---- the 31 kHz raster at both clocks (0x09A8 bit 0 set) ----
+    // The capture's rates (docs/probes/CRT31K.TXT, the ARTIC calibrated by its 24 kHz rows as
+    // tools/hwprobe/crt31k/crt31k_decode.py does): a 70.0669 Hz frame = 14 272 074 ns and a
+    // 31 460.04 Hz line = 31 786.4 ns. Each probe averages three whole frames, so the clk_sys sampling
+    // (20 / 10 ns) is under 0.5 ppm of the frame; the band is the capture's own ~3 ppm.
+    if ((f31_ns_50 > F31_NS + 43) || (f31_ns_50 < F31_NS - 43) || (f31_ns_100 > F31_NS + 43) || (f31_ns_100 < F31_NS - 43))
+      fail($sformatf("the 31 kHz frame is %0d / %0d ns at 50 / 100 MHz, not the capture's %0d ns (70.0669 Hz, within 3 ppm)", f31_ns_50, f31_ns_100, F31_NS));
+    if ((l31_ns_50 > L31_NS + 1) || (l31_ns_50 < L31_NS - 1) || (l31_ns_100 > L31_NS + 1) || (l31_ns_100 < L31_NS - 1))
+      fail($sformatf("the 31 kHz line is %0d / %0d (x 0.1 ns) at 50 / 100 MHz, not the capture's %0d (31.460 kHz)", l31_ns_50, l31_ns_100, L31_NS));
+    if ((f31_ns_50 > f31_ns_100 + 20) || (f31_ns_100 > f31_ns_50 + 20) || (l31_n_50 != l31_n_100))
+      fail($sformatf("the 31 kHz raster is clock-dependent: frame %0d / %0d ns, %0d / %0d lines", f31_ns_50, f31_ns_100, l31_n_50, l31_n_100));
+    note($sformatf("31 kHz raster: frame %0d / %0d ns (capture %0d), line %0d / %0d x 0.1 ns (capture %0d), %0d / %0d lines in three frames",
+         f31_ns_50, f31_ns_100, F31_NS, l31_ns_50, l31_ns_100, L31_NS, l31_n_50, l31_n_100));
+    // DISPLAY ONLY - the deliberately waived divergence, not an assertion.
+    note($sformatf("I/O class floor (NOT asserted): one default-class access is %0d ns at 50 MHz and %0d ns at 100 MHz; the machine's measured default class is 840 ns",
          ns_def_50, ns_def_100));
 
     // ---- PIT channel 1 (the beeper's tone) and channel 2 (the RS-232C clock) ----
@@ -847,7 +877,7 @@ module tb_pc9821_sysclk_invariance;
          gp_width_50, gp_width_100, GP_AXIS_NS));
 
     // ---- the GVRAM arbiter's holds: the capture's TIMES, never a cycle count ----
-    // pc9821_gvram_arb.sv:354 (GVRAM_RD_HOLD) converts the Xe10 capture's 478 ns read / 142 ns write /
+    // pc9821_gvram_arb.sv:396 (GVRAM_RD_HOLD) converts the Xe10 capture's 478 ns read / 142 ns write /
     // 104 ns GRCG store from SYS_CLOCK_HZ, so the CONSTANT is a clk count and the TIME it
     // encodes must be the same at both clocks (each rounds to whole cycles, hence one
     // clk_sys of tolerance on the capture's own value). These set the CPU's effective
@@ -949,7 +979,7 @@ module tb_pc9821_sysclk_invariance;
     pcm_step("z6  5501.25 Hz ",  5_501_250, pcm_50.dut.STEP6, pcm_100.dut.STEP6);
     pcm_step("z7  4134.375 Hz",  4_134_375, pcm_50.dut.STEP7, pcm_100.dut.STEP7);
 
-    // ---- the PRODUCTION pixel enable (audit rtl-audit-video B1) ----
+    // ---- the PRODUCTION pixel enable ----
     // pc9821_system's own video_ce, counted at both clocks and converted with the window: a
     // divider that counted clk_sys reads 2x at 100 MHz here, and a divider with a different
     // PIXEL_HZ reads a different rate at BOTH. This is the check the bench did not have - it
@@ -959,7 +989,7 @@ module tb_pc9821_sysclk_invariance;
       fail($sformatf("the PRODUCTION video_ce (pc9821_system's pixel_ce) is not clock-invariant: %0d edges at 50 MHz, %0d at 100 MHz over 99.5 ms", ce_edges_50, ce_edges_100));
     if ((ce_edges_50 > 32'(CE_EXPECTED + 200)) || (ce_edges_50 < 32'(CE_EXPECTED - 200)))
       fail($sformatf("the PRODUCTION video_ce produced %0d dot enables over 99.5 ms, not the 21.0526 MHz dot rate (%0d)", ce_edges_50, CE_EXPECTED));
-    // The shipped CRTC is held in reset until cpu_run (pc9821_system.sv:1336 (rst_n_sys =)
+    // The shipped CRTC is held in reset until cpu_run (pc9821_system.sv:1765 (rst_n_sys =)
     // !(reset || !cpu_run), and cpu_run = rom_ready), and this bench loads no pack, so the
     // production RASTER runs no lines here - the raster numbers above are the standalone
     // crtc_probe's, driven by the same production enable. The two clocks' agreement is
@@ -970,7 +1000,7 @@ module tb_pc9821_sysclk_invariance;
     note($sformatf("PRODUCTION video: video_ce %0d / %0d dot enables over 99.5 ms (21.0526 MHz; the enable is ungated by cpu_run, which is what makes it the production divider's rate), pc9821_system's own raster %0d / %0d lines (held in reset without a loaded pack - the raster checks above are the standalone CRTC driven by this same enable)",
          ce_edges_50, ce_edges_100, sys_hs_50, sys_hs_100));
 
-    // ---- the FAITHFUL class table's remaining captured rows (audit B9) ----
+    // ---- the FAITHFUL class table's remaining captured rows ----
     // Each of these is a docs/probes/IO.TXT row: the machine's own measured access time for
     // that class, converted per profile. Asserted the same way as the rows above - the same
     // real time at both clocks, and within one clk_sys of the capture. The min profile's
@@ -1389,6 +1419,7 @@ module iobus_probe #(parameter [31:0] HZ = 32'd50_000_000,
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   wire        beep_mute;
   wire [1:0]  beep_vol;
   reg         triple_fault_reset = 1'b0;
@@ -1443,6 +1474,7 @@ module iobus_probe #(parameter [31:0] HZ = 32'd50_000_000,
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire  [1:0] ems_state;
@@ -1462,8 +1494,14 @@ module iobus_probe #(parameter [31:0] HZ = 32'd50_000_000,
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -1481,6 +1519,11 @@ module iobus_probe #(parameter [31:0] HZ = 32'd50_000_000,
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1), .SYS_CLOCK_HZ(HZ), .IO_LATENCY_PROFILE(PROF)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -1625,7 +1668,7 @@ module sys_probe #(parameter integer HZ = 50_000_000) (
       .img_mounted(1'b0), .img_readonly(1'b0), .img_size(64'd0), .img_ack(1'b0),
       .img_buff_addr(13'd0), .img_buff_din(16'd0), .img_buff_wr(1'b0),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
-      .dbg_uart_accept(1'b1),
+      .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0),
       .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0),
       .video_ce(video_ce), .video_blank_n(), .video_hsync(video_hsync), .video_vsync(video_vsync),
@@ -1644,7 +1687,7 @@ module sys_probe #(parameter integer HZ = 50_000_000) (
     gv_rd_hold = 16'd0; gv_wr_hold = 16'd0; gv_gr_hold = 16'd0;
     wait (!reset);
     repeat (4) @(negedge clk);
-    // The arbiter's captured per-access TIMES, converted per profile (pc9821_gvram_arb.sv:354 (GVRAM_RD_HOLD)):
+    // The arbiter's captured per-access TIMES, converted per profile (pc9821_gvram_arb.sv:396 (GVRAM_RD_HOLD)):
     // 478 ns read, 142 ns write, 104 ns GRCG store. They are a clk count in the module and a
     // TIME here, which is exactly the property this bench checks.
     gv_rd_hold = 16'(dut.memory.u_gvram_arb.GVRAM_RD_HOLD);
@@ -1823,9 +1866,9 @@ endmodule
 // plus the first line's and frame's period and the first hsync pulse's width in ns.
 //
 // pixel_ce IS AN INPUT, and the bench wires it to pc9821_system's own video_ce: the
-// production PIXEL_HZ-derived 24-bit fixed-point enable (pc9821_system.sv:1558 (the dot rate as a fraction),
+// production PIXEL_HZ-derived 24-bit fixed-point enable (pc9821_system.sv:1119 (the dot rate as a fraction),
 // round(PIXEL_HZ * 2^24 / SYS_FREQ)), which averages 21.0526 MHz at every build profile.
-// Audit rtl-audit-video B1: this probe used to compute its OWN copy of that divider from
+// This probe used to compute its OWN copy of that divider from
 // its own PIXEL_HZ parameter, so it tested the CRTC GIVEN a dot enable and a change to the
 // RTL's formula was invisible; with the production enable wired in, a raw clk_sys count
 // makes everything below read 2x at 100 MHz. A bit gated by this enable reads the same
@@ -1849,9 +1892,9 @@ module crtc_probe (
   wire       hs_out, vs_out, de_out;
 
   pc9821_crtc dut (
-      .clk_sys(clk), .rst_n_sys(!reset), .pixel_ce(pixel_ce),
+      .clk_sys(clk), .rst_n_sys(!reset), .rst_n_vid(!reset), .pixel_ce(pixel_ce),
+      .gfx_win_on(1'b0),
       .io_wr(1'b0), .io_rd(1'b0), .io_addr(io_addr), .io_din(8'h00), .io_dout(io_dout),
-      .grcg_mode_r(8'h00),
       .tram_cpu_addr(14'd0), .tram_cpu_din(8'h00), .tram_cpu_we(1'b0),
       .wk_tr_read(1'b0), .wk_tr_addr(14'd0),
       .ank_word(16'h0000), .jc_rd_q(32'd0), .cg_ram_vid_q(8'h00),
@@ -1971,3 +2014,76 @@ module mpu_rate_probe #(parameter integer HZ = 50_000_000) (
     bit_ns = c * NS_PER_CYCLE;
   end
 endmodule
+
+// ------------------------------------------------------------------
+// pc9821_crtc in the 31 kHz mode: crt31k high, and the BIOS 31 kHz master SYNC block programmed
+// through the master GDC's ports as the BIOS and HSB.EXE do (SYNC 0x0F to 0x62, its eight bytes
+// 10 4E 47 0C 07 0D 90 89 to 0x60; NP2kai bios/bios18.c gdcmastersync[2]). The block lands at the
+// first frame boundary; the probe skips two frames and then averages three, reporting the frame and
+// line periods in wall-clock time (the line in 0.1 ns) and the lines counted in those four frames.
+// pixel_ce is the production enable (pc9821_dot_ce with c31 high).
+// ------------------------------------------------------------------
+module crtc31_probe (
+    input wire clk,
+    input wire reset,
+    input wire sample,
+    input wire pixel_ce,
+    output reg [31:0] frame_ns,
+    output reg [31:0] line_ns,      // x 0.1 ns
+    output reg [15:0] lines
+);
+  reg  [7:0] io_addr = 8'h60, io_din = 8'h00;
+  reg        io_wr = 1'b0;
+  wire [7:0] io_dout;
+  wire       hs_out, vs_out, de_out;
+  pc9821_crtc dut (
+      .clk_sys(clk), .rst_n_sys(!reset), .rst_n_vid(!reset), .pixel_ce(pixel_ce),
+      .crt31k(1'b1), .gfx_win_on(1'b0),
+      .io_wr(io_wr), .io_rd(1'b0), .io_addr(io_addr), .io_din(io_din), .io_dout(io_dout),
+      .tram_cpu_addr(14'd0), .tram_cpu_din(8'h00), .tram_cpu_we(1'b0),
+      .wk_tr_read(1'b0), .wk_tr_addr(14'd0),
+      .ank_word(16'h0000), .jc_rd_q(32'd0), .cg_ram_vid_q(8'h00),
+      .vsync_irq_arm(1'b0),
+      .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out)
+  );
+  task automatic put(input [7:0] a, input [7:0] d);
+    begin
+      @(negedge clk); io_addr = a; io_din = d; io_wr = 1'b1;
+      @(negedge clk); io_wr = 1'b0;
+      repeat (4) @(negedge clk);
+    end
+  endtask
+  reg     vs_d = 1'b1, hs_d = 1'b1;
+  integer n_vs = 0, n_hs = 0;
+  real    t_v0 = 0.0, t_v1 = 0.0, t_h0 = 0.0, t_h1 = 0.0;
+  always @(posedge clk) begin
+    vs_d <= vs_out;
+    hs_d <= hs_out;
+    if (!reset && !sample && vs_d && !vs_out) begin
+      n_vs = n_vs + 1;
+      if (n_vs == 3) t_v0 = $realtime;
+      if (n_vs == 6) t_v1 = $realtime;
+    end
+    if (!reset && !sample && hs_d && !hs_out && n_vs >= 3 && n_vs < 6) begin
+      if (n_hs == 0) t_h0 = $realtime;
+      t_h1 = $realtime;
+      n_hs = n_hs + 1;
+    end
+  end
+  initial begin
+    frame_ns = 32'd0; line_ns = 32'd0; lines = 16'd0;
+    wait (!reset);
+    repeat (8) @(negedge clk);
+    put(8'h62, 8'h0F);
+    put(8'h60, 8'h10); put(8'h60, 8'h4E); put(8'h60, 8'h47); put(8'h60, 8'h0C);
+    put(8'h60, 8'h07); put(8'h60, 8'h0D); put(8'h60, 8'h90); put(8'h60, 8'h89);
+    io_addr = 8'h60;
+    wait (sample);
+    if (n_vs >= 6) begin
+      frame_ns = 32'((t_v1 - t_v0) / 3.0);
+      line_ns  = 32'((t_h1 - t_h0) * 10.0 / real'(n_hs - 1));
+      lines    = 16'(n_hs);
+    end
+  end
+endmodule
+

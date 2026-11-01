@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_DECOUPLE: the ACCEPT-AND-DECOUPLE of a plane-window STORE (r13/322). A store is ACCEPTED (its cpu_ready pulsed) in the cycle its access is captured and the array work completes BEHIND the CPU, so the clk_sys the CPU held the request unaccepted (pc9821_perf_msg's MW condition) is 0-1 for every store shape TH05 issues - the plain dword/byte store, the GRCG's mixed-datum RMW at 16 and 32 bits, the all-planes TDW burst, and the EGC's 16- and 32-bit fill - against 4-12 on the pre-change tree. It is FAIL-FIRST: the file connects NO new port, so it runs on the pre-change pc9821_gvram (git stash push -- src/) and the store holds there fail every bound. The CORRECTNESS BAR is read-after-write coherency: a store immediately followed, with NO drain wait, by a read of the SAME column must return the store's byte, for the plain and the GRCG RMW arms, and a 16-store stream must read back byte-exact at every column; a read is NOT decoupled (its data is not ready until the array captures it), so its hold is a guard. Every store shape's array-access count is a floor guard and every pattern is checked byte-exact so a shorter hold cannot be met by dropping a lane.
+// TB_PC9821_GVRAM_DECOUPLE: the ACCEPT-AND-DECOUPLE of a plane-window STORE. A store is ACCEPTED (its cpu_ready pulsed) in the cycle its access is captured and the array work completes BEHIND the CPU, so the clk_sys the CPU held the request unaccepted (pc9821_perf_msg's MW condition) is 0-1 for every store shape TH05 issues - the plain dword/byte store, the GRCG's mixed-datum RMW at 16 and 32 bits, the all-planes TDW burst, and the EGC's 16- and 32-bit fill - against 4-12 on the pre-change tree. It is FAIL-FIRST: the file connects NO new port, so it runs on the pre-change pc9821_gvram (git stash push -- src/) and the store holds there fail every bound. The CORRECTNESS BAR is read-after-write coherency: a store immediately followed, with NO drain wait, by a read of the SAME column must return the store's byte, for the plain and the GRCG RMW arms, and a 16-store stream must read back byte-exact at every column; a read is NOT decoupled (its data is not ready until the array captures it), so its hold is a guard. Every store shape's array-access count is a floor guard and every pattern is checked byte-exact so a shorter hold cannot be met by dropping a lane.
 //
 // The header above is the manifest claim VERBATIM (tools/check_tests.py holds the two
 // together). The shape of the proof: the number this change moves is the CPU's HOLD (the
@@ -29,8 +29,8 @@ module tb_pc9821_gvram_decouple;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -54,9 +54,9 @@ module tb_pc9821_gvram_decouple;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),

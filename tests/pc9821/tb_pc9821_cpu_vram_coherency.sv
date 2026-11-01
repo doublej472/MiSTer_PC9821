@@ -2,11 +2,11 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_CPU_VRAM_COHERENCY:
-// The z486 L1 data cache holds no line for the PC-98 device aperture, so a CPU store to a VRAM-window address reads back byte-exact and a second read still reaches the backend; every aperture address from 0xC0000 to 0xFFFFF, the 0xE0000 intensity window included, is served directly while the RAM addresses below 0xC0000 and the A0000-BFFFF internal VGA aperture are classified the way the machine classifies them; an external writer (the EGC/GRCG, played by a direct write to the backend storage) changing VRAM behind the CPU's back is visible on the CPU's next read, and the platform's whole-L1 cache_flush clears the cached line so the flushed value is what the CPU sees on an address where the L1 really does hold one, with the self-modifying store/scanout-read/re-read round trip byte-exact at every step. The RAM above 32 MiB stays CACHEABLE and NOT device-classified (memory-window-audit-REPORT.md: the platform's device-MMIO window is OFF, its old 32-64 MiB base having been the pack base for a 64 MB module while a 128 MB module lets the OSD's guest size reach 96 MiB, so 32 MiB of real guest RAM sat inside it L1-bypassed, and the runtime no-allocate bound above the guest RAM top already gives the memory-size probe the behaviour the window existed for), pinned by cacheability at 32, 48, just-below-64 and just-past-64 MiB with the dcache_req_is_device_mmio classifier asserted at both ends of the retired range.
+// The z486 L1 data cache holds no line for the PC-98 device aperture, so a CPU store to a VRAM-window address reads back byte-exact and a second read still reaches the backend; every aperture address from 0xC0000 to 0xFFFFF, the 0xE0000 intensity window included, is served directly while the RAM addresses below 0xC0000 and the A0000-BFFFF internal VGA aperture are classified the way the machine classifies them; an external writer (the EGC/GRCG, played by a direct write to the backend storage) changing VRAM behind the CPU's back is visible on the CPU's next read, and the platform's whole-L1 cache_flush clears the cached line so the flushed value is what the CPU sees on an address where the L1 really does hold one, with the self-modifying store/scanout-read/re-read round trip byte-exact at every step. The RAM above 32 MiB stays CACHEABLE and NOT device-classified (the platform's device-MMIO window is OFF, its old 32-64 MiB base having been the pack base for a 64 MB module while a 128 MB module lets the OSD's guest size reach 96 MiB, so 32 MiB of real guest RAM sat inside it L1-bypassed, and the runtime no-allocate bound above the guest RAM top already gives the memory-size probe the behaviour the window existed for), pinned by cacheability at 32, 48, just-below-64 and just-past-64 MiB with the dcache_req_is_device_mmio classifier asserted at both ends of the retired range.
 //
 // WHY THIS EXISTS. The CPU caches by physical address; the machine's VRAM is reached through
-// device windows a hardware writer also writes. docs/z486-local-patch.md section 1 declares
-// 0xC0000-0xFFFFF uncached on top of the internal 0xA0000-0xBFFFF aperture, and r13/48 names the
+// device windows a hardware writer also writes. The fork's memory-map template
+// (z486_cache_map_pkg, docs/z486-local-patch.md) declares 0xC0000-0xFFFFF uncached on top of the internal 0xA0000-0xBFFFF aperture, and an earlier analysis names the
 // 0xE0000 intensity plane as the reason plane 3 has to stay out of the cache: it is the top bit
 // of every 16-colour palette index. Nothing in the tree drove the L1 against that decode; the
 // benches that exist check the GVRAM's OWN cache (tb_pc9821_gvram_coherence), not the CPU's.
@@ -57,7 +57,7 @@ module tb_pc9821_cpu_vram_coherency;
       .DCACHE_SET_BITS(6),          // the shipped size (z486_mister.sv DCACHE_SET_BITS)
       .ICACHE_SET_BITS(6),
       .ENABLE_X87(1'b0),
-      // DEVICE-MMIO WINDOW: OFF, matching pc9821_system.sv (memory-window-audit-REPORT.md).
+      // DEVICE-MMIO WINDOW: OFF, matching pc9821_system.sv.
       // Its 32-64 MiB base was the PACK BASE FOR A 64 MB SDRAM MODULE, not a property of the
       // machine, and on a 128 MB module the OSD's guest size reaches 96 MiB -- so 32 MiB of
       // real guest RAM sat inside the window and was served L1-bypassed. The runtime
@@ -87,7 +87,7 @@ module tb_pc9821_cpu_vram_coherency;
       // The real paging unit drives this from the demand itself (paging_unit.sv:
       // `early_idx_drive || pretrans_present || req_mem_present || ...`), so a demand always
       // owns the preread over a VIPT probe. Tying it to 1'b0 makes the core's own invariant
-      // fire (l1_cache.sv:589, "L1 pipelined store accepted without preread priority") on ANY
+      // fire (l1_cache.sv:797, "L1 pipelined store accepted without preread priority") on ANY
       // cacheable store -- which is why this bench aborted at its FIRST one and never reached
       // its checks on HEAD. Model the rule the stub can express: a presented demand reserves
       // the port. (Same repair as tb_pc9821_dma_flush_coherency's mcpu_valid.)
@@ -109,7 +109,7 @@ module tb_pc9821_cpu_vram_coherency;
       .dcache_vipt_probe_valid(1'b0), .dcache_vipt_probe_offset(12'h0),
       .dcache_vipt_probe_ready(), .dcache_vipt_probe_accepted(),
       .dcache_vipt_probe_direct_accepted(),
-      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0),
+      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
       .dcache_vipt_resolve_hit(), .dcache_vipt_resolve_data(),
       .x87_req_selected(), .x87_req_accepted(1'b0), .x87_req_complete(1'b0),
       .x87_read_complete(1'b0), .x87_rdata(32'h0),
@@ -410,8 +410,8 @@ module tb_pc9821_cpu_vram_coherency;
     decode_is(32'h001C_0000, 1'b0, "(b) decode 0x1C0000");
     decode_is(32'h0100_0000, 1'b0, "(b) decode 0x1000000");
     // ------------------------------------------------------------------
-    // (b2) THE RAM ABOVE 32 MiB IS CACHEABLE AND NOT DEVICE-CLASSIFIED
-    //      (memory-window-audit-REPORT.md). The platform's device-MMIO window is OFF: its old
+    // (b2) THE RAM ABOVE 32 MiB IS CACHEABLE AND NOT DEVICE-CLASSIFIED.
+    //      The platform's device-MMIO window is OFF: its old
     //      32-64 MiB base was the pack base for a 64 MB module, not a property of the machine,
     //      and on a 128 MB module the OSD's guest size reaches 96 MiB, so 32 MiB of REAL guest
     //      RAM sat inside it and was served L1-bypassed. The no-allocation bound at the guest
@@ -432,7 +432,7 @@ module tb_pc9821_cpu_vram_coherency;
     devmmio_is(32'h0200_0000, 1'b0, "(b2) device_mmio at 32 MiB");
     devmmio_is(32'h03FF_FFFF, 1'b0, "(b2) device_mmio below 64 MiB");
     devmmio_is(32'h0400_0000, 1'b0, "(b2) device_mmio past 64 MiB");
-    // The PEGC extended VRAM at 0xF00000 (r13/48) is device memory by alias
+    // The PEGC extended VRAM at 0xF00000 is device memory by alias
     // (pc9821_memory_subsystem.sv peg_window) and z486 now classifies the
     // window uncached like the aperture itself: tb_pc9821_cpu_alias_coherency
     // ASSERTS it (with the mirror, peg_high and fw_high aliases); this probe

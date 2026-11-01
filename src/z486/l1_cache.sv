@@ -60,6 +60,12 @@ module l1_cache #(
     output        vipt_probe_accepted,
     output        vipt_probe_direct_accepted,
     input  [31:0] vipt_resolve_phys_addr,
+    // vipt_resolve_phys_addr = vipt_resolve_use_tlb ? vipt_resolve_tlb_phys
+    //                                               : vipt_resolve_alt_phys
+    // (data_access fuses it): the tag compare takes each arm and the select last.
+    input  [31:0] vipt_resolve_tlb_phys,
+    input  [31:0] vipt_resolve_alt_phys,
+    input         vipt_resolve_use_tlb,
     input         vipt_resolve_valid,
     output [31:0] vipt_resolve_data,
     output        vipt_resolve_hit,
@@ -353,19 +359,6 @@ begin
 end
 endfunction
 
-function automatic [31:0] forward_storeq_slot(
-    input [31:0] value,
-    input        slot_live,
-    input [29:0] slot_addr,
-    input [31:0] slot_data,
-    input  [3:0] slot_be,
-    input [29:0] addr_dw
-);
-begin
-    forward_storeq_slot = (slot_live && slot_addr == addr_dw) ?
-                          merge32(value, slot_data, slot_be) : value;
-end
-endfunction
 
 function automatic [STOREQ_IDX_BITS-1:0] storeq_next_idx(input [STOREQ_IDX_BITS-1:0] idx);
 begin
@@ -374,6 +367,59 @@ end
 endfunction
 
 // Slot holding the k-th oldest entry.
+// Physical slot p's age (0 = oldest = tail) is (p - tail) mod depth; the slot is
+// live in the overlay when its age is below the count.
+function automatic logic sq_slot_live(input [STOREQ_IDX_BITS-1:0] tail,
+                                      input [STOREQ_CNT_BITS-1:0] count, input integer p);
+    integer age;
+begin
+    age = p - tail;
+    if (age < 0) age = age + STOREQ_DEPTH;
+    sq_slot_live = age < count;
+end
+endfunction
+
+// The store-queue overlay from per-slot hits: per byte lane, the youngest
+// hitting slot whose byte enable covers it (slot q is younger than p when its
+// age is larger), and the lanes any hit covers.  Returns {be, data}; data lanes
+// outside be are zero.
+function automatic [35:0] sq_overlay_pick(input [STOREQ_DEPTH-1:0] hit,
+                                          input [STOREQ_IDX_BITS-1:0] tail,
+                                          input [32*STOREQ_DEPTH-1:0] data,
+                                          input [4*STOREQ_DEPTH-1:0] be);
+    logic [31:0] d;
+    logic [3:0]  bo;
+    logic        cov_p, younger_cov;
+    integer      ap, aq;
+begin
+    d = 32'd0;
+    bo = 4'd0;
+    for (int b = 0; b < 4; b++) begin
+        for (int p = 0; p < STOREQ_DEPTH; p++) begin
+            ap = p - tail; if (ap < 0) ap = ap + STOREQ_DEPTH;
+            cov_p = hit[p] && be[p*4 + b];
+            younger_cov = 1'b0;
+            for (int q = 0; q < STOREQ_DEPTH; q++) begin
+                aq = q - tail; if (aq < 0) aq = aq + STOREQ_DEPTH;
+                if ((aq > ap) && hit[q] && be[q*4 + b])
+                    younger_cov = 1'b1;
+            end
+            if (cov_p && !younger_cov)
+                d[b*8 +: 8] = d[b*8 +: 8] | data[p*32 + b*8 +: 8];
+            bo[b] = bo[b] | cov_p;
+        end
+    end
+    sq_overlay_pick = {bo, d};
+end
+endfunction
+
+// A way's tag against the resolve address, compared on each of its two arms
+// with the arm select last: (tag == (sel ? t : a)) = sel ? tag == t : tag == a.
+function automatic logic vipt_tag_eq_split(input logic sel, input [TAG_BITS-1:0] tag,
+                                           input [TAG_BITS-1:0] t, input [TAG_BITS-1:0] a);
+    vipt_tag_eq_split = sel ? (tag == t) : (tag == a);
+endfunction
+
 function automatic [STOREQ_IDX_BITS-1:0] storeq_age_idx(
     input [STOREQ_IDX_BITS-1:0] tail, input integer k);
     integer i;
@@ -411,6 +457,30 @@ begin
         2'd2: way_data_mux = data2;
         default: way_data_mux = data3;
     endcase
+end
+endfunction
+
+// The registered store patch is applied to its own way's RAM read before the
+// way mux, so the hit way selects among already patched words instead of the
+// patch decision waiting on the encoded hit way (pmatch: the patch is valid
+// and names this dword). Equal to (pmatch && pway == way) ? pdata
+// : way_data_mux(way, ...) for every input (tests/equiv/way_patch_pick.v).
+function automatic [31:0] way_patch_pick(
+    input [1:0] way,
+    input [31:0] data0,
+    input [31:0] data1,
+    input [31:0] data2,
+    input [31:0] data3,
+    input pmatch,
+    input [1:0] pway,
+    input [31:0] pdata
+);
+begin
+    way_patch_pick = way_data_mux(way,
+        (pmatch && pway == 2'd0) ? pdata : data0,
+        (pmatch && pway == 2'd1) ? pdata : data1,
+        (pmatch && pway == 2'd2) ? pdata : data2,
+        (pmatch && pway == 2'd3) ? pdata : data3);
 end
 endfunction
 
@@ -456,26 +526,48 @@ reg         patch_fwd_valid_r;
 reg  [1:0]  patch_fwd_way_r;
 reg  [31:0] patch_fwd_data_r;
 reg  [SET_BITS+WORD_OFFSET_BITS-1:0] patch_fwd_addr_r;
-wire patch_fwd_hit = patch_fwd_valid_r && (patch_fwd_way_r == lookup_way) &&
-                     (patch_fwd_addr_r == {req_set_r, req_word_r});
-wire [31:0] lookup_way_data = patch_fwd_hit ? patch_fwd_data_r : lookup_way_ram_data;
+wire patch_fwd_match = patch_fwd_valid_r && (patch_fwd_addr_r == {req_set_r, req_word_r});
+wire patch_fwd_hit = patch_fwd_match && (patch_fwd_way_r == lookup_way);
+wire [31:0] lookup_way_data = way_patch_pick(lookup_way, rd_data0_r, rd_data1_r,
+    rd_data2_r, rd_data3_r, patch_fwd_match, patch_fwd_way_r, patch_fwd_data_r);
 wire [TAG_BITS-1:0] vipt_resolve_tag =
     vipt_resolve_phys_addr[TAG_MSB:TAG_LSB];
+// The tag compare against each arm of the resolve address, the VIPT TLB hit
+// (vipt_resolve_use_tlb) selecting the result: the TLB M10K's physical page is
+// compared in parallel with the TLB's own tag compare instead of after it (the
+// fitted vipt_tlb q -> vipt_hit (fo ~32) -> resolve address -> tag compare ->
+// vipt_hit_vec -> vipt_load_ex_hit -> d2_ready path).  Equal to the compare
+// against vipt_resolve_tag (tests/equiv/vipt_tag_split.v; fused below).
+wire [TAG_BITS-1:0] vipt_resolve_tag_tlb = vipt_resolve_tlb_phys[TAG_MSB:TAG_LSB];
+wire [TAG_BITS-1:0] vipt_resolve_tag_alt = vipt_resolve_alt_phys[TAG_MSB:TAG_LSB];
 wire [3:0] vipt_hit_vec = {
-    rd_valid3_r && !rd_invalidated_r[3] && (rd_tag3_r == vipt_resolve_tag),
-    rd_valid2_r && !rd_invalidated_r[2] && (rd_tag2_r == vipt_resolve_tag),
-    rd_valid1_r && !rd_invalidated_r[1] && (rd_tag1_r == vipt_resolve_tag),
-    rd_valid0_r && !rd_invalidated_r[0] && (rd_tag0_r == vipt_resolve_tag)
+    rd_valid3_r && !rd_invalidated_r[3] &&
+        vipt_tag_eq_split(vipt_resolve_use_tlb, rd_tag3_r, vipt_resolve_tag_tlb, vipt_resolve_tag_alt),
+    rd_valid2_r && !rd_invalidated_r[2] &&
+        vipt_tag_eq_split(vipt_resolve_use_tlb, rd_tag2_r, vipt_resolve_tag_tlb, vipt_resolve_tag_alt),
+    rd_valid1_r && !rd_invalidated_r[1] &&
+        vipt_tag_eq_split(vipt_resolve_use_tlb, rd_tag1_r, vipt_resolve_tag_tlb, vipt_resolve_tag_alt),
+    rd_valid0_r && !rd_invalidated_r[0] &&
+        vipt_tag_eq_split(vipt_resolve_use_tlb, rd_tag0_r, vipt_resolve_tag_tlb, vipt_resolve_tag_alt)
 };
+// synthesis translate_off
+always @(posedge clk)
+    if (!reset && vipt_resolve_valid &&
+        (vipt_resolve_phys_addr !== (vipt_resolve_use_tlb ? vipt_resolve_tlb_phys
+                                                          : vipt_resolve_alt_phys)))
+        $fatal(1, "l1_cache: the VIPT resolve arms disagree with vipt_resolve_phys_addr");
+// synthesis translate_on
 wire [1:0] vipt_hit_way = way_encode(vipt_hit_vec);
 wire [31:0] vipt_way_ram_data = way_data_mux(
     vipt_hit_way, rd_data0_r, rd_data1_r, rd_data2_r, rd_data3_r);
 // A probe may preread in the cycle a store patches the same dword (the probe
 // shares the read port with a store's S_LOOKUP). Take the registered patch
 // value over the RAM read that raced it; set/word bits are page-offset bits.
-wire vipt_patch_fwd_hit = patch_fwd_valid_r && (patch_fwd_way_r == vipt_hit_way) &&
+wire vipt_patch_fwd_match = patch_fwd_valid_r &&
     (patch_fwd_addr_r == vipt_resolve_phys_addr[SET_MSB:BYTE_OFFSET_BITS]);
-wire [31:0] vipt_way_data = vipt_patch_fwd_hit ? patch_fwd_data_r : vipt_way_ram_data;
+wire vipt_patch_fwd_hit = vipt_patch_fwd_match && (patch_fwd_way_r == vipt_hit_way);
+wire [31:0] vipt_way_data = way_patch_pick(vipt_hit_way, rd_data0_r, rd_data1_r,
+    rd_data2_r, rd_data3_r, vipt_patch_fwd_match, patch_fwd_way_r, patch_fwd_data_r);
 // A younger VIPT lookup may share the preread used to capture an older store
 // to the same word. The store reaches S_LOOKUP while that younger request
 // finalizes, so forward its registered bytes over the RAM's old data.
@@ -519,8 +611,6 @@ wire lookup_wr_open = lookup_store_busy && lookup_wr_room_r &&
 assign cpu_wr_ready = (cpu_ready && !store_patch_busy) || lookup_wr_open;
 wire lookup_wr_accept = cpu_valid && cpu_write && lookup_wr_open;
 wire accept_cpu = (cpu_valid && cpu_ready && can_accept_cpu) || lookup_wr_accept;
-wire [29:0] req_addr_dw = req_addr_r[31:2];
-wire [29:0] fill_addr_dw = {req_addr_r[31:4], fill_count};
 logic [31:0] lookup_forward_data;
 logic [31:0] fill_word_data;
 logic [31:0] bypass_forward_data;
@@ -561,9 +651,62 @@ wire [STOREQ_CNT_BITS-1:0] storeq_count_wr_next =
      storeq_merge_lookup ? (storeq_dequeuing ? storeq_count - 1'b1 : storeq_count)
                          : (storeq_dequeuing ? storeq_count : storeq_count + 1'b1);
 
+// The queued stores' overlay on the word being read: the youngest matching store's
+// bytes per lane, and which lanes any store covers. A lookup reads in S_LOOKUP
+// and a fill word merges in S_FILL, so one overlay (word taken from the request
+// or from the fill beat by state) serves both instead of a compare and a merge
+// chain per reader.
+wire [1:0] sq_fwd_word = (state == S_FILL) ? fill_count : req_addr_r[3:2];
+logic [31:0] sq_ov_data;
+logic [3:0]  sq_ov_be;
+// The overlay in physical-slot order: each slot's address is compared with the
+// word directly (no tail-rotated mux in front of the 30-bit compare), its age
+// guard (k < storeq_count, k = the slot's age) and the youngest-wins
+// precedence are functions of the registered tail and count only, and each
+// byte lane takes the one winning slot's byte (an AND-OR, not a chain of
+// merges).  The fitted path was storeq_tail -> tail + k -> slot mux -> address
+// compare -> four chained merges -> normal_rdata -> OPR_R.  Equal to the
+// age-ordered chain (kept below as the reference, fused) for every input:
+// tests/equiv/sq_overlay_phys.v pastes sq_overlay_pick and sq_slot_live.
+logic [STOREQ_DEPTH-1:0] sq_slot_hit;
+logic [32*STOREQ_DEPTH-1:0] sq_data_flat;
+logic [4*STOREQ_DEPTH-1:0]  sq_be_flat;
 always_comb begin
-    lookup_forward_data = lookup_way_data;
-    fill_word_data = mem_dout;
+    for (int p = 0; p < STOREQ_DEPTH; p++) begin
+        sq_data_flat[p*32 +: 32] = storeq_data[p];
+        sq_be_flat[p*4 +: 4]     = storeq_be[p];
+    end
+    for (int p = 0; p < STOREQ_DEPTH; p++)
+        sq_slot_hit[p] = sq_slot_live(storeq_tail, storeq_count, p) && storeq_valid[p] &&
+                         (storeq_addr[p] == {req_addr_r[31:4], sq_fwd_word});
+    {sq_ov_be, sq_ov_data} = sq_overlay_pick(sq_slot_hit, storeq_tail, sq_data_flat, sq_be_flat);
+end
+// synthesis translate_off
+logic [31:0] sq_ov_data_ref;
+logic [3:0]  sq_ov_be_ref;
+always_comb begin
+    sq_ov_data_ref = 32'd0;
+    sq_ov_be_ref   = 4'd0;
+    // Oldest to youngest, so the youngest matching store's bytes win.
+    for (int k = 0; k < STOREQ_DEPTH; k++) begin
+        if (k < storeq_count &&
+            storeq_valid[storeq_age_idx(storeq_tail, k)] &&
+            storeq_addr[storeq_age_idx(storeq_tail, k)] == {req_addr_r[31:4], sq_fwd_word}) begin
+            sq_ov_data_ref = merge32(sq_ov_data_ref, storeq_data[storeq_age_idx(storeq_tail, k)],
+                                     storeq_be[storeq_age_idx(storeq_tail, k)]);
+            sq_ov_be_ref   = sq_ov_be_ref | storeq_be[storeq_age_idx(storeq_tail, k)];
+        end
+    end
+end
+always @(posedge clk)
+    if (!reset && ((sq_ov_be !== sq_ov_be_ref) || (sq_ov_data !== sq_ov_data_ref)))
+        $fatal(1, "l1_cache: physical-slot store-queue overlay %h/%h != age chain %h/%h",
+               sq_ov_be, sq_ov_data, sq_ov_be_ref, sq_ov_data_ref);
+// synthesis translate_on
+
+always_comb begin
+    lookup_forward_data = merge32(lookup_way_data, sq_ov_data, sq_ov_be);
+    fill_word_data = merge32(mem_dout, sq_ov_data, sq_ov_be);
     // The uncached read needs no store-queue forwarding: S_LOOKUP launches it only with the
     // queue empty and not draining (`storeq_empty && !storeq_draining`), and the queue is
     // filled only in S_LOOKUP and S_NW_WRITE, so it is still empty for the whole of
@@ -574,8 +717,6 @@ always_comb begin
     // Oldest to youngest, so the youngest matching store's bytes win.
     for (int k = 0; k < STOREQ_DEPTH; k++) begin
         if (k < storeq_count) begin
-            lookup_forward_data = forward_storeq_slot(lookup_forward_data, storeq_valid[storeq_age_idx(storeq_tail, k)], storeq_addr[storeq_age_idx(storeq_tail, k)], storeq_data[storeq_age_idx(storeq_tail, k)], storeq_be[storeq_age_idx(storeq_tail, k)], req_addr_dw);
-            fill_word_data = forward_storeq_slot(fill_word_data, storeq_valid[storeq_age_idx(storeq_tail, k)], storeq_addr[storeq_age_idx(storeq_tail, k)], storeq_data[storeq_age_idx(storeq_tail, k)], storeq_be[storeq_age_idx(storeq_tail, k)], fill_addr_dw);
             wide_line_data = forward_storeq_line_slot(wide_line_data, storeq_valid[storeq_age_idx(storeq_tail, k)], storeq_addr[storeq_age_idx(storeq_tail, k)], storeq_data[storeq_age_idx(storeq_tail, k)], storeq_be[storeq_age_idx(storeq_tail, k)], req_addr_r[31:4]);
         end
     end
@@ -654,6 +795,11 @@ end
 always @(posedge clk)
     if (!reset && lookup_wr_accept && !cpu_preread_priority)
         $fatal(1, "L1 pipelined store accepted without preread priority");
+// The per-way patch pick equals the patch decision taken after the way mux.
+always @(posedge clk)
+    if (!reset && ((lookup_way_data != (patch_fwd_hit ? patch_fwd_data_r : lookup_way_ram_data)) ||
+                   (vipt_way_data != (vipt_patch_fwd_hit ? patch_fwd_data_r : vipt_way_ram_data))))
+        $fatal(1, "L1 WAY-PATCH FUSE MISMATCH: lookup=%08x vipt=%08x", lookup_way_data, vipt_way_data);
 // synthesis translate_on
 wire [BRAM_ADDR_BITS-1:0] data_write_addr = data_store_write ?
                                             req_bram_addr :
@@ -685,6 +831,15 @@ wire tag_fill_way0 = tag_fill_write && (fill_way == 2'd0);
 wire tag_fill_way1 = tag_fill_write && (fill_way == 2'd1);
 wire tag_fill_way2 = tag_fill_write && (fill_way == 2'd2);
 wire tag_fill_way3 = tag_fill_write && (fill_way == 2'd3);
+// The set-wide clear against the preread set, compared per candidate and
+// picked by vipt_probe_fire last, so the CPU set (the issuing EA's page-offset
+// bits) reaches rd_invalidated_r through one compare instead of through the
+// preread_set select that also drives every RAM address.
+// tests/equiv/preread_clear_pick.v proves it equal to
+// tag_clear_all && (tag_clear_set == preread_set).
+wire preread_clear_hit = tag_clear_all &&
+                         (vipt_probe_fire ? (tag_clear_set == vipt_probe_set)
+                                          : (tag_clear_set == cpu_preread_set));
 
 always_ff @(posedge clk) begin
     if (idle_preread || lookup_wr_preread || vipt_probe_fire) begin
@@ -699,7 +854,7 @@ always_ff @(posedge clk) begin
         rd_plru_r <= plru_set[preread_set];
         // The clear is set-wide, so a read launched on the same edge returns
         // valid entries for every way of that set.  Mask them next cycle.
-        rd_invalidated_r <= ((tag_clear_all && (tag_clear_set == preread_set)) ||
+        rd_invalidated_r <= (preread_clear_hit ||
                              (idle_preread && !vipt_probe_fire && cpu_force_bus))
                             ? 4'b1111 : 4'b0000;
     end

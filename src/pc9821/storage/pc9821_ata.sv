@@ -23,7 +23,7 @@ module pc9821_ata (
 
     output reg         block_read,
     output reg         block_write,
-    output reg  [31:0] block_lba,
+    output wire [31:0] block_lba,   // meaningful on the block_read/block_write pulse (see lba_plus1)
     input  wire        block_done,
     input  wire        block_error,
     input  wire        block_buf_we,
@@ -121,17 +121,17 @@ module pc9821_ata (
   // write) are gated on this wire too. NP2kai drops the whole access when getidedrv()
   // is NULL - the bank select is the outer of its two tests (cbus/ideio.c:50-60, e.g.
   // ideio_i64e:1421-1442, ideio_i642:1324-1338, ideio_w16:1503-1515) - and the
-  // machine's window is measured in the write direction (docs/probes/ATA.TXT). A stray access at
-  // the wrong bank used to swallow a pending
+  // machine's window is measured in the write direction (docs/probes/ATA.TXT). Ungated, a stray access at
+  // the wrong bank would swallow a pending
   // interrupt, clear the drive's ERR snapshot, or splice two bytes into the sector the
   // adapter was about to write to the image.
-  // THE LAYOUT IS FIXED (owner, 2026-10-11): the one hard disk is ALWAYS bank 0's master (IDE
+  // THE LAYOUT IS FIXED: the one hard disk is ALWAYS bank 0's master (IDE
   // unit 0) and bank 1 belongs to the CD-ROM (pc9821_atapi, bank 1's master, owns that bank's
   // reads when it is built); without the CD bank 1 is an empty connector and floats here. That is
   // the stock CD-equipped Xe10's layout and NP2kai's default (HDD at unit 0, CD at unit 2). The
-  // owner's Xe10 answers at bank 1 and floats bank 0 (docs/probes/IDE.TXT, ATA.TXT) only because
+  // probed Xe10 answers at bank 1 and floats bank 0 (docs/probes/IDE.TXT, ATA.TXT) only because
   // its CF card sits in the CD connector; the float VALUES below are that machine's empty-bank
-  // measurement, applied to the empty bank. (The second hard disk was removed on 2026-10-08.)
+  // measurement, applied to the empty bank. There is no second hard disk.
   wire bank_has_interface = !channel_reg[0];
   // DEVICE 1 (0x064C bit 4) IS ABSENT: the disk is its bank's master (the Xe10
   // firmware never probes a slave, BANK3@0x0789-0x07B7). An absent device 1 follows ATA-3 r6
@@ -140,7 +140,7 @@ module pc9821_ata (
   // which device 0 runs for the pair. Software that runs on the real Xe10 depends on it: the
   // Linux/98 image boots there with its IDE driver (pc98_ide.c), whose
   // pc98ide_identify selects 0xF0 and gives the unit up when STATUS reads 0x00 or 0xFF, or 0x00
-  // after IDENTIFY; the old "master answers for DEV=1" model gave it a phantom hdb that aliased
+  // after IDENTIFY; a "master answers for DEV=1" model gives it a phantom hdb that aliases
   // the master. Re-selecting device 0 restores everything: the master's own state is untouched.
   wire        slave_sel     = drive_head[4];
   function automatic slave_ignores(input [7:0] cmd);
@@ -163,6 +163,15 @@ module pc9821_ata (
   // port's upper four bits are zero. A transfer that would carry past sector 2^28-1 (an image
   // over 128 GiB) cannot be addressed by the interface in the first place.
   reg [27:0] current_lba;
+  // THE REQUEST LBA IS current_lba OR ONE PAST IT. Every block_read/block_write pulse is set on
+  // the same edge as this flag, and on that edge the request's LBA is the NEW current_lba (a
+  // command start, a write commit) or the new current_lba + 1 (the read-ahead: issued after a
+  // fetch with current_lba unchanged as current + 1, or on the guest's last word with
+  // current_lba stepping to current + 1 as current + 2). So the port is formed from current_lba
+  // instead of being a second 28-bit register. Between pulses it follows current_lba; its only
+  // reader, pc9821_block_share, samples it on the pulse alone (`a_pend_lba <= a_req_lba`).
+  reg        lba_plus1;
+  assign block_lba = {4'd0, current_lba + {27'd0, lba_plus1}};
 
   // Read-ahead: two 256-word sector buffers so sector N+1's HPS
   // fetch overlaps sector N's PIO drain. active_buf is the buffer the guest
@@ -334,8 +343,8 @@ module pc9821_ata (
   reg [27:0] chs_lba_q;
   always @(posedge clk) begin
     chs_sec_ok  <= (sector_number >= 8'd1) && (sector_number <= idp_sectors);
-    // Four bits, because an adopted geometry can have 16 heads; the old
-    // three-bit slice silently wrapped that to zero.
+    // Four bits, because an adopted geometry can have 16 heads; a three-bit
+    // slice would silently wrap that to zero.
     chs_head_ok <= (drive_head[3:0] <= idp_head_max);
     chs_lba_q   <= 28'(({16'd0, cylinder_high, cylinder_low} * idp_stride) +
                        ({28'd0, drive_head[3:0]} * {24'd0, idp_sectors}) +
@@ -357,7 +366,7 @@ module pc9821_ata (
   reg [32:0] lba_room_q;
   always @(posedge clk) lba_room_q <= {1'b0, capacity} - {5'd0, requested_lba};
   // lba_room_q[32] (the borrow) is "requested_lba > capacity"; room 0 is "== capacity" and fails
-  // the count compare (count >= 1), which also covers capacity == 0. So this one test is the old
+  // the count compare (count >= 1), which also covers capacity == 0. So this one test is
   // `requested_lba >= capacity || capacity == 0 || !range_ok`.
   wire range_ok = !lba_room_q[32] && ({23'd0, data_count} <= lba_room_q[31:0]);
 
@@ -387,9 +396,9 @@ module pc9821_ata (
   // completion is consumed by EXACTLY ONE handler per cycle. `prefetch_retire`
   // is the retire decode shared by both candidate consumers;
   // `last_word_take` names the one where the guest's last-word read takes the
-  // arriving sector in place (the old shape relied on the last-word handler
-  // being the later NBA to override the prefetch-latch arm - two consumers of
-  // one block_done, resolved by source position, R2).
+  // arriving sector in place (not the last-word handler being the later NBA to
+  // override the prefetch-latch arm - two consumers of one block_done, resolved
+  // by source position, R2).
   wire prefetch_retire = (xfer_state == X_PIO_READ) && prefetch_busy && block_done;
   wire last_word_take = io_rd && (io_addr == 16'h0641) && status_reg[3] &&
                         (xfer_state == X_PIO_READ) && (pio_byte == 9'd510) &&
@@ -509,9 +518,9 @@ module pc9821_ata (
   // The integrity word (IDENTIFY word 255: 0xA5 signature + the two's-complement checksum of the
   // other 255 words) is the byte sum of the words THIS transfer delivered, accumulated as the guest
   // reads them (the 0x0641 strobe that steps pio_byte), so the page is walked by the one
-  // identify_word instance the data port already reads. It used to be recomputed in the background
-  // from a SECOND instance of the table (one word per clk after each divider run); that copy cost
-  // ~70 ALMs (module-alone) and read the same words the guest is about to read. The two agree for
+  // identify_word instance the data port already reads. Recomputing it in the background
+  // from a SECOND instance of the table (one word per clk after each divider run) costs ~70 ALMs
+  // (module-alone) and reads the same words the guest is about to read. The two agree for
   // every transfer in which the page does not change between its words; the only difference is a
   // geometry change in the middle of one IDENTIFY, which the background form would have folded in
   // and this one reports as the words were delivered. (Word 255 itself is 0 in the sum.)
@@ -561,10 +570,10 @@ module pc9821_ata (
       // connected device": (bank[1] & 1) ? 0x02 : 0x00, forced clear when the
       // selected unit has no drive at all (cbus/ideio.c:660-675). This model's
       // "selected bank" is channel_reg[0] and its "connected device" is the
-      // mounted image, so bit 1 = device_present exactly. The old QEMU
-      // irq_levels form (bit 0 = pending ch0 IRQ) had both the bit position and
-      // the meaning wrong, so a driver identifying the interface read an IRQ
-      // sample as a connection answer (review readbacks.md P5). Measured 0x00 at
+      // mounted image, so bit 1 = device_present exactly. QEMU's
+      // irq_levels form (bit 0 = pending ch0 IRQ) has both the bit position and
+      // the meaning wrong, so a driver identifying the interface would read an IRQ
+      // sample as a connection answer. Measured 0x00 at
       // the idle DOS prompt with bank 0x00 (probes/PROBE.TXT `0433=00`), which
       // every model answers alike.
       16'h0433: io_dout = device_present ? 8'h02 : 8'h00;
@@ -677,7 +686,7 @@ module pc9821_ata (
                                   input [7:0] block);
     begin
       current_lba <= lba;
-      block_lba <= {4'd0, lba};
+      lba_plus1 <= 1'b0;   // block_lba = lba
       block_read <= 1'b1;
       block_dir_write <= 1'b0;
       sectors_left <= count;
@@ -763,7 +772,7 @@ module pc9821_ata (
       block_pos    <= 8'd0;
       block_read     <= 1'b0;
       block_write    <= 1'b0;
-      block_lba      <= 32'd0;
+      lba_plus1      <= 1'b0;
       // Reset because leaving it out makes the buffer's read mux depend on an X in
       // simulation. Every transfer sets it correctly before it can matter -- a read
       // through begin_block_read and a write at the sector-complete edge -- so no
@@ -829,9 +838,9 @@ module pc9821_ata (
       // The geometry divider runs FREE: pass 0 (the adopted stride, words 54/57/58) then pass 1
       // (1008, word 1), 32 clocks each, forever. It reads `capacity` and `idp_stride` live, so a
       // change in either is folded in by the next lap (at most 64 clocks, a few hundred ns); a lap
-      // that straddles a change publishes one mixed result that the next lap replaces. This is
-      // what the old change-detect (a 32-bit and a 16-bit copy of the inputs, their comparators
-      // and a separate dividend copy) bought, for ~100 ALMs.
+      // that straddles a change publishes one mixed result that the next lap replaces. A
+      // change-detect (a 32-bit and a 16-bit copy of the inputs, their comparators and a
+      // separate dividend copy) would buy no more, for ~100 ALMs.
       div_sq        <= {div_sq[30:0], div_ge};
       div_remainder <= div_remainder_next;
       if (div_count == 5'd31) begin
@@ -900,7 +909,7 @@ module pc9821_ata (
           // No follow-up request when a same-cycle command dispatch supersedes
           // this transfer (H8): the takeover's own request owns the adapter.
           if (sectors_left > 9'd1 && !command_takeover) begin
-            block_lba     <= {4'd0, current_lba + 28'd1};
+            lba_plus1     <= 1'b1;   // block_lba = current_lba + 1
             block_read    <= 1'b1;
             prefetch_busy <= 1'b1;
           end
@@ -920,7 +929,7 @@ module pc9821_ata (
           // Sector complete: hand the buffer to the block adapter. DRQ drops
           // while the write is in flight, so the guest waits on BSY.
           pio_byte    <= 9'd0;
-          block_lba   <= {4'd0, current_lba};
+          lba_plus1   <= 1'b0;   // block_lba = current_lba
           block_write <= 1'b1;
           block_dir_write <= 1'b1;
           status_reg  <= ATA_ST_BSY;
@@ -982,8 +991,8 @@ module pc9821_ata (
             // Forcing irq low at the last word dropped a request the guest had not acked.
             if (xfer_state == X_PIO_READ) advance_taskfile(current_lba + 28'd1);
           end else if (prefetch_valid || last_word_take) begin
-            // The next sector is already in fill_buf, so present it without the
-            // serialized HPS round trip the old FSM paid here: one IRQ, as for
+            // The next sector is already in fill_buf, so present it without a
+            // serialized HPS round trip here: one IRQ, as for
             // every other sector, and DRQ with this sector's data behind it.
             // `last_word_take` names this handler as the owner of a completion
             // arriving in this same clk (H7): the folded check reads its error
@@ -1005,14 +1014,14 @@ module pc9821_ata (
               block_pos      <= block_step(block_pos, block_size);
               advance_taskfile(current_lba + 28'd1);
               if (sectors_left > 9'd2) begin
-                block_lba     <= {4'd0, current_lba + 28'd2};
+                lba_plus1     <= 1'b1;   // block_lba = (current_lba + 1) + 1
                 block_read    <= 1'b1;
                 prefetch_busy <= 1'b1;
               end
             end
           end else begin
-            // The read-ahead is still in flight: wait for it, as the old serial
-            // path waited after issuing the request. The pending level is left
+            // The read-ahead is still in flight: wait for it, as a serial
+            // path waits after issuing the request. The pending level is left
             // alone for the same reason as the final-word handler above: the
             // level stays until the guest's 0x064E read, and dropping it here
             // makes a deferred ISR's 0x0433 source check read 0x00 - no ack, and
@@ -1121,7 +1130,7 @@ module pc9821_ata (
                   // (BANK3 file 0x1085-0x10A9), and flags bit 0 is set from the INT
                   // 1Bh caller's fn bit 5 (BANK3 file 0x03B0-0x03B8 `test
                   // [bp+0x1],0x20`), so a without-retry read arrives as 0x21.
-                  // Aborting it (the old default arm) routed the ROM into its error
+                  // Aborting it (a default arm) routes the ROM into its error
                   // recovery - SRST, RECALIBRATE and the 0x01F3 settle of
                   // 121*(0x28-[es:0x2060]) ARTIC units, up to 4.03 s of emulated time
                   // per trigger (tb_pc9821_ata_th5load fail-firsts this). Retry is a
@@ -1224,11 +1233,11 @@ module pc9821_ata (
                   // machine does: the probe's own DIAG section polls 0x064E for !BSY and
                   // then reads 0x0642 -- "after 0x08 status = 51 ; after 0x08
                   // ERROR(0642) = 04" (docs/probes/IDE.TXT:343,
-                  // tools/hwprobe/ideprobe/ideprobe.s:746-760 (/* DEVICE RESET */)). The ATA definition agrees
+                  // tools/hwprobe/ideprobe/ideprobe.s:826 (`/* DEVICE RESET */`)). The ATA definition agrees
                   // (ABRT = 0x04, with STATUS.ERR set on an abort), so the machine and the
-                  // spec outrank the 0x01 (AMNF) this arm used to publish: that is another
-                  // drive's post-diagnostic presence signature, and a guest classifying the
-                  // reset by STATUS.ERR (the ATA contract) read a failed reset as success.
+                  // spec outrank 0x01 (AMNF): that is another drive's post-diagnostic
+                  // presence signature, and a guest classifying the reset by STATUS.ERR (the
+                  // ATA contract) would read a failed reset as success.
                   // ERROR 0x01 remains the *SRST* (0x74C bit 2) and EXECUTE DEVICE
                   // DIAGNOSTIC signature, which is what the PC-98 disk BIOS's presence test
                   // after SRST reads (see the 0x74C handler).

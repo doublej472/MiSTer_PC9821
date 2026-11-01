@@ -11,34 +11,34 @@
 //
 // The CLK_AUDIO domain has no reset in this design (the mixer it feeds has none either), so
 // every register carries a power-up seed and the machine is self-recovering - the same
-// convention as pc9821_audio_volume (review r2-resets F2).
+// convention as pc9821_audio_volume.
 //
-// ==== LOCAL CHANGE (resaudit-audioio P0, 2026-09-27) ================================
-// The module is RE-IMPLEMENTED as one more instance of the shared pc9821_audio_fir_engine
-// (stages B/C are u_fir_b/u_fir_c in pc9821_audio_out.sv; this is u_fir_a). The
-// integrator/comb form that used to live here is just the FACTORED form of the full-rate
-// FIR (1 + z^-1 + z^-2 + z^-3)^5, evaluated at the decimated phase - its 16 taps are
+// ==== THE FORM: one instance of pc9821_audio_fir_engine ===========================
+// The decimator is one more instance of the shared pc9821_audio_fir_engine (stages B/C are
+// u_fir_b/u_fir_c in pc9821_audio_out.sv; this is u_fir_a). A CIC integrator/comb chain is
+// the FACTORED form of the full-rate FIR (1 + z^-1 + z^-2 + z^-3)^5, evaluated at the
+// decimated phase - its 16 taps are
 //
 //   h = [1, 5, 15, 35, 65, 101, 135, 155, 155, 135, 101, 65, 35, 15, 5, 1]  (sum 1024 = 4^5)
 //
-// and the shipped output d5[25:10] was exactly floor((sum h_k x[4m-k]) / 1024) in 16-bit
-// two's complement. The old mod-2^27 wraparound was exact because the true sum fits 26
-// bits signed (|sum| <= 2^15 * 2^10 = 2^25, matching the +1 integrator-headroom note the
-// old form carried at IW = 27); the engine computes acc = sum x*(h_k<<7) in 42 bits (no
-// wrap possible, |acc| <= 2^32) and takes acc[32:17] = the same floor - its overflow clamp
-// never fires for these coefficients. The value stream, the decimation phase (vcnt == 3,
-// the old form's `decim`), the out_valid cadence and the gain are UNCHANGED: no gain, no
-// clamp position and no filter response moved. Proof, both legs (run
-// when the change landed): an arithmetic model (both modules' exact arithmetic re-implemented
-// from their own semantics, 16 stimulus classes, 0 mismatches) and an RTL co-sim against the
-// pre-change module (1160 output pairs, 0 mismatches).
+// and the integrator/comb output d5[25:10] is exactly floor((sum h_k x[4m-k]) / 1024) in
+// 16-bit two's complement (its mod-2^27 wraparound is exact because the true sum fits 26 bits
+// signed, |sum| <= 2^15 * 2^10 = 2^25, the +1 integrator headroom at IW = 27). The engine
+// computes acc = sum x*(h_k<<7) in 42 bits (no wrap possible, |acc| <= 2^32) and takes
+// acc[32:17] = the same floor - its overflow clamp never fires for these coefficients. The
+// value stream, the decimation phase (vcnt == 3, the integrator/comb form's `decim`), the
+// out_valid cadence and the gain are those of the integrator/comb form: no gain, no clamp
+// position and no filter response differs. Proof, both legs: an arithmetic model (both forms'
+// exact arithmetic re-implemented from their own semantics, 16 stimulus classes, 0
+// mismatches) and an RTL co-sim against the integrator/comb module (1160 output pairs, 0
+// mismatches).
 //
-// What the change BUYS (module-alone A&S, both variants real-topped): 284 ALMs / 530 ALUTs /
-// 560 registers -> 124 ALMs / 148 ALUTs / 225 registers, +2 M10K +2 DSP (this instance's own two history
-// RAMs and two multipliers; the baseline fit carried 71 free M10K and 57 free DSP).
+// Area (module-alone A&S, both variants real-topped): 124 ALMs / 148 ALUTs / 225 registers,
+// +2 M10K +2 DSP (this instance's own two history RAMs and two multipliers), against 284 ALMs /
+// 530 ALUTs / 560 registers for the integrator/comb form.
 //
-// What it COSTS (a latency trade, raised for the owner): compute latency grows by ~18 CLK_AUDIO
-// cycles (~0.74 us) - a run is TAPS+3 = 19
+// Latency (a latency trade): compute latency is ~18 CLK_AUDIO cycles (~0.74 us) longer than
+// the integrator/comb form's - a run is TAPS+3 = 19
 // clk after the trigger valid (+2 clk start handoff) where the adder cascade answered in
 // ~3 clk. Both finish inside the 40-clk group (2.4576 MHz valid spacing), runs never
 // overlap (40-clk spacing vs 21-clk worst run), and the output sample STREAM and the
@@ -47,22 +47,22 @@
 // measures the latency as PIN-EXACT: 0 mismatches over 334 848 clk x 5 stimulus classes,
 // so the presentation margins absorb the shift at every 512-clk boundary.
 //
-// The old form sampled x_l AT the valid edge (its st==0 step) and x_r ONE CLK LATER (its
-// st==1 step - the two-step integrator schedule). This form reproduces that sampling
-// EXACTLY: the history write lands one clk after the valid and carries in_l latched at the
-// valid edge and in_r as seen at the write edge. With production inputs (mix_pre is written
-// ON the valid and held for 10 clk) the two edges see the same value and the replica is
-// inert, but a stimulus that changes in_r between them (tb_pc9821_audio_out_timeline's
-// per-clk staircases) sees the OLD form's own asymmetry - and this form matches it, so the
-// rewrite is bit-exact for EVERY input stream, not only the production contract one. The
-// first chain co-sim run proved the difference is real (98 presentations of 1-2 LSB on the
-// right channel alone) before the replica was added.
+// The integrator/comb form samples x_l AT the valid edge (its st==0 step) and x_r ONE CLK
+// LATER (its st==1 step - the two-step integrator schedule). This form reproduces that
+// sampling EXACTLY: the history write lands one clk after the valid and carries in_l latched
+// at the valid edge and in_r as seen at the write edge. With production inputs (mix_pre is
+// written ON the valid and held for 10 clk) the two edges see the same value and the replica
+// is inert, but a stimulus that changes in_r between them (tb_pc9821_audio_out_timeline's
+// per-clk staircases) sees the integrator/comb form's own asymmetry - and this form matches
+// it, so the form is bit-exact for EVERY input stream, not only the production contract one.
+// Without the replica the chain co-sim differs (98 presentations of 1-2 LSB on the right
+// channel alone).
 //
 // Two hardware rules this form must keep (invisible to every bench):
 // - NO power-up seed and NO reset on q_l/q_r in the engine and on coef_q below - either
-//   makes Quartus refuse the RAM and build the table out of LUTs (the kbd_lut trap,
-//   res-mlab-REPORT section 7.2) and the whole area win evaporates with zero functional
-//   change.
+//   makes Quartus refuse the RAM and build the table out of LUTs (Info 276007, the trap
+//   pc9821_audio_volume's gain ROM notes) and the whole area win evaporates with zero
+//   functional change.
 // - CMIRROR = 15, deliberately: the engine's mirror (midx = 2*CMIRROR - idx) supports
 //   ODD-length prototypes only (2*CMIRROR+1 taps), and this prototype is EVEN (16 taps,
 //   symmetry centre 7.5). An integer mirror centre is wrong - CMIRROR=8 mirrors tap 9 to
@@ -70,7 +70,7 @@
 //   only sample-exact comparison catches (measured: the co-sim fails from output 0).
 //   So the full 16-entry table is stored and
 //   the mirror never fires.
-// ==== end LOCAL CHANGE ==============================================================
+// ==== end THE FORM ===================================================================
 `default_nettype none
 
 module pc9821_audio_cic4 (
@@ -85,9 +85,9 @@ module pc9821_audio_cic4 (
 
     // ---- history write: one input sample per valid, free-running pointer ----
     // The write lands ONE CLK AFTER the valid: wr_pend/waddr_q/in_l_q hold the request and
-    // in_r is taken live at the write edge. That is the old form's sampling asymmetry
-    // replicated to the cycle (x_l at the valid edge, x_r one clk later - see the LOCAL
-    // CHANGE block), and with the production held-input contract it is inert.
+    // in_r is taken live at the write edge. That is the integrator/comb form's sampling
+    // asymmetry replicated to the cycle (x_l at the valid edge, x_r one clk later - see THE
+    // FORM block), and with the production held-input contract it is inert.
     /* verilator lint_off PROCASSINIT */   // no reset in this domain: seeds are power-up
     reg [4:0] wptr = 0;
     reg [1:0] vcnt = 0;
@@ -104,10 +104,10 @@ module pc9821_audio_cic4 (
         if (valid) begin
             wr_pend <= 1'b1;
             waddr_q <= wptr;
-            in_l_q  <= in_l;      // x_l sampled AT the valid edge (old st==0)
+            in_l_q  <= in_l;      // x_l sampled AT the valid edge (the integrator/comb st==0)
             wptr    <= wptr + 5'd1;
             vcnt    <= vcnt + 2'd1;
-            if (vcnt == 2'd3) begin   // the same decimation phase as the old form's `decim`
+            if (vcnt == 2'd3) begin   // the integrator/comb form's `decim` phase
                 start <= 1'b1;
                 saddr <= wptr;
             end

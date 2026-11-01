@@ -16,7 +16,7 @@
 //           would stream N*512 bytes out of a one-sector buffer and corrupt the image.
 //
 // READ-AHEAD WINDOW. The HPS round trip (sd_rd -> sd_ack -> the word stream -> done) has a
-// large fixed per-handshake cost (r13/68 measures up to ~4600 clk_sys per 512-byte
+// large fixed per-handshake cost (measured at up to ~4600 clk_sys per 512-byte
 // handshake), and one handshake per sector caps a streaming read below the PIO drain rate.
 // hps_io's block protocol carries up to 32 blocks (16 KiB) per handshake over sd_blk_cnt,
 // so this adapter keeps a BURST_SECTORS-sector window cache: on a read miss that CONTINUES
@@ -41,9 +41,9 @@
 // read forward, so their LBAs overlap). So a request carries whether it is for the image the
 // window's blocks came from, and a request that is not is served as the single block it asks
 // for: it neither hits the window, nor fills it, nor replaces its base/total/mask, nor moves
-// its run. That is what lets a window SURVIVE a hand-over to another image. The shared
-// adapter's metadata load (img_mounted) used to BE the window flush, so an access to the
-// disk's other device threw the disk's read-ahead away and the disk paid two single-block
+// its run. That is what lets a window SURVIVE a hand-over to another image. Were the shared
+// adapter's metadata load (img_mounted) the window flush, an access to the disk's other
+// device would throw the disk's read-ahead away and the disk would pay two single-block
 // fetches to earn every run again (docs/trade-candidates.md T19; measured in
 // tb_pc9821_block_hostcost's interleaved pattern). The tag is a POLICY input and not a rule
 // this module derives, because only the caller knows which image its request is for; the
@@ -53,9 +53,8 @@
 // pc9821_block_share drives `req_window` for the disk's requests and not for the floppy's, and
 // asserts `win_flush` when the disk's slot is mounted or ejected - the only event that
 // replaces the image the window's blocks came from. A mount of a floppy slot does not touch
-// it. The floppy is served one block per handshake, which is what its own instance did before
-// the two engines were shared (docs/trade-candidates.md T7/T8: the owner accepted wall clock
-// on the floppy for area, and the FDC delivers the medium at its own rate - a multi-block
+// it. The floppy is served one block per handshake (docs/trade-candidates.md T7/T8: wall clock
+// on the floppy is accepted for area, and the FDC delivers the medium at its own rate - a multi-block
 // handshake it cannot use is what costs the disk its window).
 //
 // A window kept across a hand-over is not a stale sector answered: a slot is only COMPLETE once
@@ -66,10 +65,17 @@
 
 module pc9821_block_io #(
     // Sectors per multi-block read handshake, 1..8 (the window cache is this many sectors
-    // of 256 words). 8 amortises r13/68's ~4600-clk handshake to ~575 clk/sector while
+    // of 256 words). 8 amortises the measured ~4600-clk handshake to ~575 clk/sector while
     // keeping the burst tail (the background part after the served sector) under ~1.8 us
     // at one word per clk_sys.
-    parameter BURST_SECTORS = 8
+    parameter BURST_SECTORS = 8,
+    // 1: the instantiator never presents a request while this engine is busy (pc9821_block_share
+    // holds its arbiter in ARB_HELD until `busy` falls, and a request leaves only ARB_REQ), so a
+    // request never finds a background fetch in flight and the S_WAIT deferral - its latched
+    // request, second window test and second fetch-start source - is never entered and is not
+    // built. A request that breaks the contract is a simulation error. 0 (the default, the
+    // engine's standalone benches): the deferral is built.
+    parameter SERIAL_REQ = 0
 ) (
     input wire clk,
     input wire rst_n,
@@ -85,7 +91,7 @@ module pc9821_block_io #(
     // reproduces the mount-flushes-the-window behaviour this module always had.
     input  wire        win_flush,
     output reg         mounted,
-    output reg         readonly,
+    output wire        readonly,
     output reg  [31:0] capacity,
 
     input  wire        req_read,
@@ -225,7 +231,11 @@ module pc9821_block_io #(
   // the one block it asked for, which is what leaves the window's owner's read-ahead intact.
   wire [7:0]  run_len_next  = (req_window && (req_lba == run_next)) ? (run_len + 8'd1) : 8'd1;
   wire [4:0]  burst_want    = (req_window && (run_len_next >= 8'd3)) ? BURST_SECTORS[4:0] : 5'd1;
-  wire [31:0] room          = capacity - req_lba;
+  // One subtraction serves both the room and the past-the-image test below: req_lba >= capacity
+  // exactly when capacity - req_lba borrows or is zero.
+  wire [32:0] room33        = {1'b0, capacity} - {1'b0, req_lba};
+  wire [31:0] room          = room33[31:0];
+  wire        req_past_end  = room33[32] || (room33[31:0] == 32'd0);
   wire [4:0]  burst_blocks  = (room < {27'd0, burst_want}) ? room[4:0] : burst_want;
 
   // The window hit tests (combinational at the accept edge so a miss issues its fetch in
@@ -247,7 +257,7 @@ module pc9821_block_io #(
   // A write to an unmounted or read-only image, or any request past the image, is rejected
   // before any host transaction starts, so the drive reports a clean abort instead of a
   // half-finished block.
-  wire req_reject = !mounted || (req_lba >= capacity) || (req_write && readonly);
+  wire req_reject = !mounted || req_past_end || (req_write && readonly);
 
   // The transfer's word span: one handshake carries fetch_total sectors of 256 words. The
   // single-block case reduces to this module's original checks word for word.
@@ -315,6 +325,12 @@ module pc9821_block_io #(
   assign sd_blk_cnt = sd_blk_cnt_r;
 
   assign busy = req_owed || fetch_active;
+`ifdef VERILATOR
+  always @(posedge clk)
+    if (SERIAL_REQ && rst_n && (req_read || req_write) && busy)
+      $error("pc9821_block_io: SERIAL_REQ engine got a request while busy (serve %0d, fetch %0d)",
+             serve_st, fetch_st);
+`endif
 
   // Mount state deliberately survives rst_n. The single-cycle img_mounted
   // pulse arrives before the guest ROM pack has finished loading, and the
@@ -322,16 +338,21 @@ module pc9821_block_io #(
   // it, so clearing the state on reset would strand the guest with no disk.
   // The initial value matches the FPGA power-up state; only an eject
   // (img_mounted with a sub-sector size) clears it afterwards.
+  // readonly's power-up 1 sits on an internal register: Quartus ignores a power-up value on an
+  // output port (docs/policies.md, the power-up rule).
+  /* verilator lint_off PROCASSINIT */  // the power-up value, kept by Quartus on an internal register
+  reg readonly_r = 1'b1;
+  /* verilator lint_on PROCASSINIT */
+  assign readonly = readonly_r;
   initial begin
     mounted  = 1'b0;
-    readonly = 1'b1;
     capacity = 32'd0;
   end
 
   always @(posedge clk) begin
     if (img_mounted) begin
       mounted  <= (img_size >= 64'd512);
-      readonly <= img_readonly;
+      readonly_r <= img_readonly;
       capacity <= (|img_size[63:41]) ? 32'hFFFFFFFF : img_size[40:9];
     end
   end
@@ -472,9 +493,9 @@ module pc9821_block_io #(
       if (win_flush) begin
         // The image the window's blocks came from has been REPLACED: every slot it holds must
         // stop answering, because the same LBA now names different bytes. The metadata LOAD
-        // (img_mounted) deliberately does not do this any more: a hand-over loads the engine
-        // with the incoming owner's image, and flushing the window there threw the other
-        // image's read-ahead away on every access (T19 - tb_pc9821_block_hostcost's interleaved
+        // (img_mounted) deliberately does not do this: a hand-over loads the engine with the
+        // incoming owner's image, and flushing the window there would throw the other image's
+        // read-ahead away on every access (T19 - tb_pc9821_block_hostcost's interleaved
         // pattern measured 24 disk handshakes per 32 sectors against 6 with no floppy).
         win_mask  <= {BURST_SECTORS{1'b0}};
         win_total <= 5'd0;
@@ -494,9 +515,9 @@ module pc9821_block_io #(
         // A request PRESENTED in this same cycle is ANSWERED, never dropped. This is the one
         // cycle in which the acceptance block below cannot run, so a requester that handed its
         // request over here would otherwise wait for a completion no edge can ever produce: the
-        // disk holds BSY in X_WAIT_BLOCK (pc9821_ata.sv:573 (xfer_state <= X_WAIT_BLOCK;)) and
+        // disk holds BSY in X_WAIT_BLOCK (pc9821_ata.sv:700 (xfer_state <= X_WAIT_BLOCK;)) and
         // never sees its block_done, and the floppy holds `rbusy` so it never asks again
-        // (pc9821_fdd_media.sv:565 "if (bwant && !rbusy && !blk_req_rd) begin") - a silent hang,
+        // (pc9821_fdd_media.sv:1018 "if (bwant && !rbusy && !blk_req_rd) begin") - a silent hang,
         // not the visible abort every other eject alignment produces. The medium the request was
         // for is gone, so the answer is that same error. (A pulse while a serve is owed is still
         // neither latched nor queued: the branch above already owns that completion.)
@@ -560,7 +581,7 @@ module pc9821_block_io #(
         // A request accepted while a burst's background tail streams (its serve already
         // completed) waits here: served from the window the moment its slot completes, or
         // given its own handshake once the engine is free.
-        if (serve_st == S_WAIT) begin
+        if (!SERIAL_REQ && (serve_st == S_WAIT)) begin
           if (win_hit_q) begin
             serve_st <= S_REPLAY;
             rp_slot  <= win_off_q[2:0];
@@ -605,7 +626,7 @@ module pc9821_block_io #(
               rp_slot  <= win_off[2:0];
               rp_addr  <= 9'd0;
               rp_run   <= 1'b1;
-            end else if (!fetch_active) begin
+            end else if (SERIAL_REQ || !fetch_active) begin
               if (req_write) start_write_fetch(req_lba);
               else start_read_fetch(req_lba, {1'd0, burst_blocks}, req_window);
             end else begin

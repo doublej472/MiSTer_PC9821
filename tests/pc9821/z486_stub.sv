@@ -1,8 +1,8 @@
-// z486_stub — the CPU's PORT SHELL for pc9821_system reset-seed benches.
+// z486_stub - the CPU's PORT SHELL for pc9821_system reset-seed benches.
 //
 // tests/pc9821/tb_pc9821_system_reset_seed checks the POWER-UP/RESET state of
-// pc9821_system's own telemetry and line-response flops (review r2-resets
-// F6/F7). Those checks need a CPU that produces a KNOWN interrupt-acknowledge
+// pc9821_system's own telemetry and line-response flops (its
+// checks F6/F7). Those checks need a CPU that produces a KNOWN interrupt-acknowledge
 // pattern and nothing else, and the real z486 tree cannot be elaborated in the
 // 4-state simulator those checks are for (it uses `static` block lifetimes
 // Icarus does not implement). So this stub replaces `z486` with the same port

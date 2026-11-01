@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OSD:
-// The OSD's three stored selections, decoded: all eight RAM Size list positions select the guest size their label names, the list rotated so position 0 - what a card with no config file passes - is 16 MB instead of the 1 MB that cannot boot the firmware, with every size in the owner's set still reachable exactly once; the VSync pair, position 0 asking for the guest's own rate and position 1 for 60 Hz; and Enter BIOS setup, position 0 Off = the config-less default.
+// The OSD's two stored selections, decoded: all eight RAM Size list positions select the guest size their label names, the list rotated so position 0 - what a card with no config file passes - is 16 MB instead of the 1 MB that cannot boot the firmware, with every size in the set still reachable exactly once; and Enter BIOS setup, position 0 Off = the config-less default. FDD mode position 0 is Auto and position 1 Fixed (0x00BE bit 2). Keyboard position 0 is the US host layout and position 1 JIS.
 //
 // WHY THIS BENCH EXISTS AT ALL. The mapping used to be a function inside z486_mister.sv, which
 // no bench in this tree can reach, because they are unit benches and none of them elaborates the
@@ -15,19 +15,27 @@ module tb_pc9821_osd;
 
   // ==== DUT ====
   reg  [2:0] osd_ram_size = 3'd0;
-  reg        osd_vsync    = 1'b0;
   reg        osd_bios_setup = 1'b0;
+  reg        osd_fdd_mode = 1'b0;
+  reg        osd_kbd_layout = 1'b0;
+  wire       kbd_layout_jis;
   wire [2:0] ram_size_code;
-  wire       vsync_native;
   wire       bios_setup;
+  wire       fdd_dip_fixed;
 
   pc9821_osd dut (
     .osd_ram_size (osd_ram_size),
-    .osd_vsync    (osd_vsync),
     .osd_bios_setup(osd_bios_setup),
+    .osd_gdc_clock(1'b0),
+    .osd_fdd_mode (osd_fdd_mode),
     .ram_size_code(ram_size_code),
-    .vsync_native (vsync_native),
-    .bios_setup   (bios_setup)
+    .bios_setup   (bios_setup),
+    .gdc_clock_5m (),
+    .fdd_dip_fixed(fdd_dip_fixed),
+    .osd_kbd_layout(osd_kbd_layout),
+    .kbd_layout_jis(kbd_layout_jis),
+    .osd_cd_volume(3'd0),        // the CD audio volume field: tb_pc9821_osd_cd_volume
+    .cd_volume_code()
   );
 
   integer errors = 0;
@@ -92,7 +100,7 @@ module tb_pc9821_osd;
       seen[i] = ram_size_code;
     end
 
-    // 2. The rotation is a PERMUTATION: every size in the owner's set stays reachable,
+    // 2. The rotation is a PERMUTATION: every size in the offered set stays reachable,
     //    exactly once. A rotation that dropped a size, or mapped two entries to one,
     //    would pass check 1 for the entries it happened to get right.
     for (i = 0; i < 8; i = i + 1) begin
@@ -121,25 +129,7 @@ module tb_pc9821_osd;
       errors = errors + 1;
     end
 
-    // 4. VSync. Position 0 is the guest's own rate, so the module must report
-    //    "native" for 0 and "not native" (60 Hz) for 1. The polarity is the whole
-    //    content of this check: the option's LABEL order and the bit's meaning have
-    //    to agree, and before the rotation they agreed the other way round.
-    osd_vsync = 1'b0;
-    #1;
-    if (vsync_native !== 1'b1) begin
-      $display("FAIL VSync entry 0 is the guest's own rate, but vsync_native=%0b (0 = forced 60 Hz)",
-               vsync_native);
-      errors = errors + 1;
-    end
-    osd_vsync = 1'b1;
-    #1;
-    if (vsync_native !== 1'b0) begin
-      $display("FAIL VSync entry 1 is 60 Hz, but vsync_native=%0b", vsync_native);
-      errors = errors + 1;
-    end
-
-    // 5. Enter BIOS setup (hold HELP). Position 0 is Off, which is what a card with
+    // 4. Enter BIOS setup (hold HELP). Position 0 is Off, which is what a card with
     //    no stored config passes; position 1 asks the keyboard to hold HELP.
     osd_bios_setup = 1'b0;
     #1;
@@ -151,6 +141,36 @@ module tb_pc9821_osd;
     #1;
     if (bios_setup !== 1'b1) begin
       $display("FAIL BIOS setup entry 1 is On, but bios_setup=%0b", bios_setup);
+      errors = errors + 1;
+    end
+
+    // 5. FDD mode. Position 0 is Auto (0x00BE bit 2 clear), the chosen default; position 1 is
+    //    Fixed, the measured unit's setting (both are MAME pc9801.cpp DSW3:1 positions).
+    osd_fdd_mode = 1'b0;
+    #1;
+    if (fdd_dip_fixed !== 1'b0) begin
+      $display("FAIL FDD mode entry 0 is Auto, but fdd_dip_fixed=%0b", fdd_dip_fixed);
+      errors = errors + 1;
+    end
+    osd_fdd_mode = 1'b1;
+    #1;
+    if (fdd_dip_fixed !== 1'b1) begin
+      $display("FAIL FDD mode entry 1 is Fixed, but fdd_dip_fixed=%0b", fdd_dip_fixed);
+      errors = errors + 1;
+    end
+
+    // 6. Keyboard. Position 0 is US (the layout the core translated the backslash key in
+    //    before the option existed), position 1 JIS; pc9821_kbd reads layout_jis.
+    osd_kbd_layout = 1'b0;
+    #1;
+    if (kbd_layout_jis !== 1'b0) begin
+      $display("FAIL Keyboard entry 0 is US, but kbd_layout_jis=%0b", kbd_layout_jis);
+      errors = errors + 1;
+    end
+    osd_kbd_layout = 1'b1;
+    #1;
+    if (kbd_layout_jis !== 1'b1) begin
+      $display("FAIL Keyboard entry 1 is JIS, but kbd_layout_jis=%0b", kbd_layout_jis);
       errors = errors + 1;
     end
 

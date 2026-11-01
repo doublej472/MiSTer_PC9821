@@ -2,7 +2,7 @@
 // pre-fix output stage in the same run.
 //
 // ==== WHAT THIS PROVES ====
-// A 45 kHz tone carried on the mixer's 2.4576 MHz grid - above the 48 kHz presentation's 24 kHz Nyquist, so it MUST be removed and not folded - comes out of the pre-fix output stage (a bare register loaded on audio_volume_valid, the stage this lane replaced) folded onto 3 kHz at the tone's own level, and comes out of pc9821_audio_out at <= -60 dB relative: the bare-latch arm measures the fold at about 0 dB (the fold is real and the stimulus is non-vacuous) while the filtered arm's 5/32 polyphase prototype holds a 28 kHz stopband at -100 dB by design, so the aliasing that a bare strobe cannot avoid is removed instead of folded - and an in-band 3 kHz tone at the same drive on the right channel passes at 0 dB +-0.5 dB, so the stopband cannot be met by a stage that attenuates everything.
+// A 45 kHz tone carried on the mixer's 2.4576 MHz grid - above the 48 kHz presentation's 24 kHz Nyquist, so it MUST be removed and not folded - comes out of the pre-fix output stage (a bare register loaded on audio_volume_valid, the stage it replaced) folded onto 3 kHz at the tone's own level, and comes out of pc9821_audio_out at <= -60 dB relative: the bare-latch arm measures the fold at about 0 dB (the fold is real and the stimulus is non-vacuous) while the filtered arm's 5/32 polyphase prototype holds a 28 kHz stopband at -100 dB by design, so the aliasing that a bare strobe cannot avoid is removed instead of folded - and an in-band 3 kHz tone at the same drive on the right channel passes at 0 dB +-0.5 dB, so the stopband cannot be met by a stage that attenuates everything.
 //
 // ==== DUT ====
 // pc9821_audio_out (src/pc9821/audio/pc9821_audio_out.sv) in parallel with the PRE-FIX
@@ -16,8 +16,8 @@
 // CHK-4 the filtered arm PASSES the band: a 3 kHz tone at the same drive on the RIGHT
 //       channel comes out at 0 dB +-0.5 dB (the module's design flatness is 0.071 dB over
 //       0-20 kHz, pc9821_audio_out.sv's header). Without it CHK-2 is satisfied by a filter
-//       that attenuates everything - a muted or gutted stage passed (bench-audit mutation
-//       2026-10-12: half the C prototype zeroed still met -60 dB).
+//       that attenuates everything - a muted or gutted stage passed (a planted
+//       mutation: half the C prototype zeroed still met -60 dB).
 //
 // ==== VERDICT ====
 // PASS when the bare arm shows the fold and the filtered arm does not; FAIL naming which

@@ -1,10 +1,10 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The OPNA register-write queue's storage is one 64x11 M10K, not 704 flip-flops with 64 per-word write enables: 64 host writes fill the queue, the drain fires them back in order with their exact address/data/stretch payload, and the drain's cycle-by-cycle behaviour (its fire strobe, state, read and write pointers and count) is identical to the pre-M10K register-array implementation run as an oracle on the same stimulus, so the block RAM's registered output replaces the old drain register one-for-one and the DRAIN_GAP/SHORT_GAP pacing is unchanged. Both models carry the review-S1 fire-retry discipline (a fire meeting a host access holds and retries; the pop moves only when the fire completes), so what this bench proves is the STORAGE equivalence, edge for edge.
+// The OPNA register-write queue's storage is one 64x11 M10K, not 704 flip-flops with 64 per-word write enables: 64 host writes fill the queue, the drain fires them back in order with their exact address/data/stretch payload, and the drain's cycle-by-cycle behaviour (its fire strobe, state, read and write pointers and count) is identical to the pre-M10K register-array implementation run as an oracle on the same stimulus, so the block RAM's registered output replaces the old drain register one-for-one and the DRAIN_GAP/SHORT_GAP pacing is unchanged. Both models carry the S1 fire-retry discipline (a fire meeting a host access holds and retries; the pop moves only when the fire completes), so what this bench proves is the STORAGE equivalence, edge for edge.
 //
 // ---- the oracle is the OLD queue, written out again ----
-// r13/113 moved the wrq from three per-slot register arrays (wrq_addr 2 bits,
+// A rewrite moved the wrq from three per-slot register arrays (wrq_addr 2 bits,
 // wrq_data 8, wrq_str 1 = 704 flip-flops, one 11-bit write enable per slot) into one
 // 64x11 M10K simple dual port: one write port, one registered read port. The read was
 // already one clk deep, so the RAM's output register keeps the drain's latency
@@ -66,7 +66,7 @@ module tb_pc9821_wrq;
   );
 
   // ==== the OLD module as the oracle ====
-  // The pre-r13/113 queue: three per-slot register arrays and the drain FSM. It is
+  // The old queue: three per-slot register arrays and the drain FSM. It is
   // driven by the same host-port signals (and the DUT's own 7.9872 MHz chip enable and
   // stretch bit), and its registered read output is exposed so the bench can compare.
   wire [10:0] ref_dr_word;
@@ -225,7 +225,7 @@ module tb_pc9821_wrq;
 
 endmodule
 
-// The pre-r13/113 register-write queue, verbatim but for its inputs being brought
+// The old register-write queue, verbatim but for its inputs being brought
 // out: three per-slot register arrays, the FIFO pointers, and the drain FSM with the
 // same DRAIN_GAP/SHORT_GAP pacing. Its registers are the ground truth the M10K's
 // registered read output has to reproduce edge for edge.

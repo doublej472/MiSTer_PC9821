@@ -77,12 +77,11 @@ module tb_pc9821_sdram_act;
   wire [1:0]  SDRAM_DQM;
   wire        nWE, nRAS, nCAS, nCS, CKE;
 
-  // HAS_DQM = 1'b0 is the DE10 configuration (MiSTer modules have no DQM pins), so the
-  // partial-byte write below takes the read-modify-write path -- which issues a SECOND
+  // ADQM = 0 (the default): the partial-byte write below takes the read-modify-write path,
+  // which issues a SECOND
   // BankActivate (RMW_ACT) that must carry the same latched row.
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .FAST_GRADE(1'b1)
   ) dut (
       .clk(clk), .resetn(resetn), .nce(1'b0), .refresh_allowed(1'b1),
@@ -105,7 +104,7 @@ module tb_pc9821_sdram_act;
       .SDRAM_CKE(CKE)
   );
 
-  sdram_chip_model #(.CAS(CAS)) chip (
+  sdram_chip_model #(.CAS(CAS), .FREQ_HZ(FREQ), .GRADE(6)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );

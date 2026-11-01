@@ -35,17 +35,19 @@ module pc9821_memory_map (
     // (see ems_page_base), and state 2 is routed to the open-bus responder by the subsystem.
     input wire [1:0]  ems_state,
     // Where the 0x22 state's 64 KiB page lives in the backend (see pc9821_memory_subsystem).
+    /* verilator lint_off UNUSEDSIGNAL */   // low 20 bits are the constant 0x48000 (pack_base + PACK_BYTES + 0x48000): the page arm is a splice
     input wire [31:0] ems_page_base,
+    /* verilator lint_on UNUSEDSIGNAL */
       // 0x0461: the base of the movable 128 KiB window at 0x80000-0x9FFFF, as a PAGE NUMBER.
     input wire [7:0] win0_sel,
     // pc9821_iobus's registered `win0_sel != 8'h08` (equal to the compare every cycle).
     input wire       win0_sel_moved,
 
       // Runtime memory sizing: the 1 MiB firmware reserve sits directly above the guest RAM.
-    /* verilator lint_off UNUSEDSIGNAL */   // pack_base is a whole number of MiB: its low 20 bits are zero and not read
+    /* verilator lint_off UNUSEDSIGNAL */   // pack_base/guest_ram_bytes are whole MiB: their low 20 bits are zero and not read
     input wire [31:0] pack_base,
+    input wire [31:0] guest_ram_bytes,      // size_code_bytes: a whole MiB; the RAM bound reads only [31:20]
     /* verilator lint_on UNUSEDSIGNAL */
-    input wire [31:0] guest_ram_bytes,
 
       // The PEGC extended-VRAM window: 0xF00000-0xF7FFFF when 0x043B's 15-16 MiB hole is on, and
       // the SDRAM base it lives at. Decoded in pc9821_memory_subsystem because that is
@@ -98,12 +100,13 @@ module pc9821_memory_map (
     // raw address per arm and select late, so the translation selects are the LAST mux in those
     // cones rather than their first (docs/timing.md P0); cpu_addr still carries the data path.
     // A requester with no translation ties cpu_addr_raw to cpu_addr and both selects low.
+    /* verilator lint_off UNUSEDSIGNAL */   // cpu_addr_raw[12:0] is never read: the decoders take [31:13], the win0 slice [19:13]/[16], and the data path prefers cpu_addr
     input  wire [31:0] cpu_addr_raw,
+    /* verilator lint_on UNUSEDSIGNAL */
     input  wire        xl_low20,
     input  wire        xl_peg,
     input  wire [31:0] cpu_din,
     output wire [31:0] cpu_dout,
-    output wire [127:0] cpu_line_dout,
     input  wire [3:0]  cpu_be,
     input  wire [7:0]  cpu_burstcount,
     input  wire        cpu_line_read,
@@ -111,14 +114,21 @@ module pc9821_memory_map (
     input  wire        cpu_write,
     output wire        cpu_ready,
     output wire        cpu_resp_valid,
-    output wire        cpu_line_resp_valid,
 
                 // Asserted for the absent ROM area so the subsystem routes it away; this block does not serve it.
     output wire        absent_area,
     // d_addr >= guest_ram_bytes: the subsystem's open-bus select reuses this compare instead of
-    // building a second 32-bit one on the same post-window-0 address
-    // (tools/equiv/route_addr_vs_d_addr.sv proves its route_addr is this d_addr).
+    // building a second 32-bit one on the same post-window-0 address - its `route_addr` IS the
+    // d_addr exported just below, so the two cannot disagree.
     output wire        addr_ge_ram,
+    // THE WINDOW-0 BIAS, EXPORTED. `d_addr` is the post-window-0 address every decode below uses,
+    // and `win0_moved` is the flag that produced it; pc9821_memory_subsystem's route selects
+    // (the PEGC/TRAM/CG windows, the open-bus bound) consume THESE instead of recomputing the
+    // membership test, the 9-bit bias add and the 32-bit select a second time. One definition,
+    // one copy: tools/check_cpu_addr_front_equiv.py proves the exported pair equal to the
+    // window-0 bias expressions for every 32-bit address and both window-0 flags.
+    output wire [31:0] d_addr,
+    output wire        win0_moved,
     // Asserted for the EMS window's measured unmapped state (0x2x other than 0x20/0x22) so
     // the subsystem routes it to the registered open-bus responder, exactly as absent_area
     // is. Decoded here, on the same post-window-0 address every other region uses, so the
@@ -152,19 +162,20 @@ module pc9821_memory_map (
   // identity the plane windows below already use, and it is on the design's worst 50 MHz cone:
   // the two magnitude compares left a LessThan chain between the CPU address and win0_moved.
   // Tested on the RAW address: no translation arm can move an address into or out of the
-  // window (pc9821_memory_subsystem's win0_moved comment; tools/equiv/route_addr_vs_d_addr.sv).
+  // window (pc9821_memory_subsystem reads this flag; tools/check_cpu_addr_front_equiv.py).
   wire        win0_in_window = !(|cpu_addr_raw[31:20]) && (cpu_addr_raw[19:17] == 3'b100);
   // win0_sel_moved is pc9821_iobus's REGISTERED `win0_sel != 8'h08`, equal to the compare in
   // every cycle (tools/check_win0_moved_inv.py), so the window test is the address slice and one
   // flop, not the slice and an 8-bit compare (the C7 head, docs/timing.md).
-  wire        win0_moved = win0_in_window && win0_sel_moved;
+  // The exported pair (see the port comment): the module's own consumers read the same wire.
+  assign win0_moved = win0_in_window && win0_sel_moved;
   // The bias add is a bit splice, not a carry chain: inside the window cpu_addr - 0x80000 is
   // exactly cpu_addr[16:0], and win0_sel << 16 lands the page in [23:16], so the 32-bit
   // `cpu_addr + {8'd0,win0_sel,16'd0} - 0x80000` is a 9-bit add over a wired-through low half.
   // win0_sel[0] is always 0 (pc9821_iobus masks 0xFE); the cpu_addr[16] carry term keeps the
   // odd-value arithmetic identical anyway. The carry chain it replaces was 2.3 ns of
   wire [8:0] win0_hi = {1'b0, win0_sel} + {8'd0, cpu_addr_raw[16]};   // [16] is never translated
-  wire [31:0] d_addr = win0_moved ? {7'd0, win0_hi, cpu_addr[15:0]} : cpu_addr;
+  assign d_addr = win0_moved ? {7'd0, win0_hi, cpu_addr[15:0]} : cpu_addr;
   // THE REGION DECODE IS MUXED LATE. Every window flag below is a pure function of
   // d_addr[31:13], and d_addr is one of exactly two addresses: the raw cpu_addr, or (window 0
   // moved) {7'd0, win0_hi, cpu_addr[15:0]}. So each flag is decoded on BOTH in parallel and
@@ -227,10 +238,10 @@ module pc9821_memory_map (
   // across 0xD8000-0xDBFFF with one 16 KiB half of BANK0.BIN (the pack's extended ROM bank 0
   // at +0x31000): select 1 shows 0x0000-0x3FFF, select 3 shows 0x4000-0x7FFF; selects 0 and 2
   // are the IDE option ROM. Measured: docs/probes/D8BANK-XE10.TXT (each select's 32 KiB
-  // dumped on the Xe10 and matched byte for byte against the owner's BANK0/BANK3; the
+  // dumped on the Xe10 and matched byte for byte against the BANK0/BANK3 dumps; the
   // 0xDC000 half reads 0xFF for every select). The Xe10 BIOS's INT 1Fh AH=CEh path selects 1
   // and far-returns into D800:0018, which EMM386 reaches during its initialisation; showing
-  // the IDE ROM there instead hung MS-DOS 6.2 EMM386's boot. ASSUMPTION: the alternate banks
+  // the IDE ROM there instead hangs MS-DOS 6.2 EMM386's boot. ASSUMPTION: the alternate banks
   // share the IDE ROM's 0x053D gate (ide_rom_enable); the capture was taken with it open.
   wire d8_alt = ide_rom_enable && d8_bank[0];
   wire d8_alt_window = d8_alt && dv[15];
@@ -242,10 +253,10 @@ module pc9821_memory_map (
   wire fw_window = fw_low || fw_high;
         // Out-of-range completion lives here as well as in the subsystem's pc9821_open_bus responder:
         // tb_pc9821_memory_map expects 0xFFFF_FFFF here, and the two cannot both accept.
-        // The bound is tested on the BIASSED address (aliases.md A6): d_addr is the address
+        // The bound is tested on the BIASSED address: d_addr is the address
         // the backend would serve, so a window-0 target past guest RAM (or past where its
         // direct encoding is RAM) is open bus here exactly as its direct encoding is. Testing
-        // cpu_addr let the overlay's 0x80000-0x9FFFF reach ordinary SDRAM at a target where
+        // cpu_addr would let the overlay's 0x80000-0x9FFFF reach ordinary SDRAM at a target where
         // the direct encoding serves open bus (or PEGC EVRAM). The fw_high guard moves with
         // it because fw_high is decoded on d_addr too; for every access the two agree except
         // through the window-0 bias, which can never land on fw_high.
@@ -253,10 +264,30 @@ module pc9821_memory_map (
   // and the window-0/translation selects pick the finished compare (the fitted R1 chain ran
   // eff_addr -> d_addr -> this compare -> open_select -> z_ready). `d_addr >= 0xFFFF8000` is
   // &d_addr[31:15], i.e. fw_high.
-  wire ge_raw = (cpu_addr_raw >= guest_ram_bytes);
-  wire ge_l20 = ({12'd0, cpu_addr_raw[19:0]} >= guest_ram_bytes);
-  wire ge_peg = ({8'd0, cpu_addr_raw[23:0]} >= guest_ram_bytes);
-  wire ge_mv  = ({7'd0, win0_hi, cpu_addr_raw[15:0]} >= guest_ram_bytes);
+  //
+  // THE BOUND IS A 12-BIT SLICE COMPARE, NOT A 32-BIT MAGNITUDE COMPARE.
+  // INVARIANT: guest_ram_bytes is one of the eight OSD sizes, 1/2/4/8/16/32/64/96 MiB
+  // (pc9821_system's size_code_bytes, a 3-bit ram_size_sel case), so its bits [19:0] are
+  // ZERO in every reachable state. For a MiB-aligned bound B, `A >= B` is exactly
+  // `A[31:20] >= B[31:20]` for EVERY 32-bit A: below B's 1 MiB block A cannot reach B
+  // whatever its low bits, and inside B's own block A's low bits can only make it greater
+  // than or equal to B (A[19:0] >= 0 always). The low 20 bits of each arm's address are
+  // therefore not part of the comparison, and no 32-bit magnitude carry chain runs into
+  // open_select (the R1/P0 cone, docs/timing.md).
+  // The one arm whose address is below the smallest legal size collapses outright:
+  //   {12'd0, cpu_addr_raw[19:0]} is in [0, 1 MiB) and the smallest guest size is 1 MiB,
+  //   so the 15 MiB / BIOS-high alias arm can never be at or above the bound (ge_l20 = 0).
+  // tools/check_memmap_addr_equiv.py proves every output of this map value-identical to
+  // the full-width form over every address under these two invariants (guest_ram_bytes
+  // from the size table, pack_base/pack-relative bases MiB-aligned), and its plants on
+  // each arm must be refuted.
+  wire [11:0] ram_mib_hi = guest_ram_bytes[31:20];
+  wire ge_raw = (cpu_addr_raw[31:20] >= ram_mib_hi);
+  wire ge_l20 = 1'b0;                                    // see the invariant above
+  wire ge_peg = ({8'd0, cpu_addr_raw[23:20]} >= ram_mib_hi);
+  // The window-0 arm's address is {7'd0, win0_hi, cpu_addr_raw[15:0]}, so its
+  // [31:20] is {7'd0, win0_hi[8:4]} (bit 24 is win0_hi[8], bits 23:20 its [7:4]).
+  wire ge_mv  = ({7'd0, win0_hi[8:4]} >= ram_mib_hi);
   assign addr_ge_ram = win0_moved ? ge_mv : xl_low20 ? ge_l20 : xl_peg ? ge_peg : ge_raw;
   wire out_of_range = addr_ge_ram && !fw_high && !peg_window;
   wire local_open_bus = out_of_range && cpu_valid;   // the EMS window's unmapped state is answered by the registered
@@ -266,7 +297,7 @@ module pc9821_memory_map (
   wire [14:0] fw_offset = d_addr[14:0];
 
             // ================= ABSENT ROM AREA: 0xC0000-0xD7FFF ======================
-            // Owner: 0xFF throughout, and stores discarded. Decoded on d_addr and left
+            // Measured: 0xFF throughout, and stores discarded. Decoded on d_addr and left
             // UNCLAIMED, not identity RAM: the BIOS's option-ROM scan walks this range and absent != 0xAA55.
             // ONE 16 KiB OF IT IS NOT ABSENT ON THE MACHINE: the fitted PC-9801-86 banks its 16 KiB
             // SOUND.ROM at 0xCC000-0xCFFFF, and the machine answers real code there - the +C000..+F800
@@ -277,12 +308,11 @@ module pc9821_memory_map (
             // ================= THE PC-9801-86 SOUND.ROM WINDOW: 0xCC000-0xCFFFF =================
             // The fitted -86 card banks its 16 KiB option ROM here and the machine answers real
             // code: docs/probes/SHADOW.TXT:150-199 samples all eight 2 KiB blocks of the window and
-            // every sampled byte matches the owner's bios/xe10/SOUND.ROM dump (sha256 f05b508d...;
+            // every sampled byte matches the Xe10's SOUND.ROM dump (sha256 f05b508d...;
             // the +C000 row's 06 1E 56 57 55 53 16 1F is SOUND.ROM[0x0000]), so the dump IS the
             // window's content. Read-only like every ROM window: a store is dropped. Served from
             // the pack's SOUND.ROM region (tools/pack_layout.py SOUND_OFFSET); a pack built
-            // without the image is 0xFF there, i.e. the "no card fitted" answer. This is item
-            // 96, implemented once the owner's dump made the window modelable (2026-09-28).
+            // without the image is 0xFF there, i.e. the "no card fitted" answer.
   wire sound_rom_window = dv[10];
             // ================= THE 0x1E8E-GATED IDE WORK RAM: 0xDA000-0xDBFFF ======================
             // The IDE option ROM keeps its private 8 KiB work RAM at D800:2000+ (BANK3@0x0B40
@@ -295,9 +325,8 @@ module pc9821_memory_map (
             // SURVIVES the disconnect and only its visibility is gated). Gate-off is exactly the
             // absent area's shape (all ones, stores discarded), so it takes the same route: this
             // is what an EMM386 C0000-DFFFF region scan sees on the machine, and why the scan can
-            // never claim the IDE ROM's work area as UMB (the failing-boot mechanism this fixes;
-            // its causal link to the freeze is PLAUSIBLE, not proven -- the owner's hardware
-            // boot-test is the proof). The 8 KiB extent follows QEMU's non-PCI machine class
+            // never claim the IDE ROM's work area as UMB (a failing-boot mechanism; its causal
+            // link to that freeze is PLAUSIBLE, not proven - a hardware boot test is the proof). The 8 KiB extent follows QEMU's non-PCI machine class
             // (hw/i386/pc98-mem.c:1427-1433 "its work RAM is paged in at 0xda000"); NP2kai's
             // comment says the same although its page mask 0x1c00 would also cover DC000
             // (cbus/ideio.c:1478-1495). DC000-DFFFF is NOT gated RAM at all: it is the
@@ -351,8 +380,8 @@ module pc9821_memory_map (
   // block); [A8000,BFFFF] is nibble B plus the half-block nibble A with bit 15 set
   // (A8000-AFFFF); [E0000,E7FFF] is nibble E with bit 15 clear. Each identity holds for
   // every 20-bit value, and taking them as one-LUT slice functions lets the d_addr/win0 mux
-  // feed the decode directly instead of through the wide comparators (the lightoc fit's
-  // worst path carried LessThan8/ems_in_window here). tb_pc9821_gvram_porta_equiv pins the
+  // feed the decode directly instead of through the wide comparators (wide comparators
+  // here, LessThan8/ems_in_window, were a fit's worst path). tb_pc9821_gvram_porta_equiv pins the
   // stream through the aliases and the EMS-shaded silence.
   // In 256-colour mode the packed arms above shadow the EMS overlay entirely
   // (NP2kai's memvga handlers take every slot when VOPBIT_VGA is set - cpumem.c),
@@ -432,12 +461,17 @@ module pc9821_memory_map (
   // window adds is a constant plus at most 16 dynamic bits that cannot carry past bit 19. So
   // each arm is {base[31:20], 20-bit sum} and no adder reaches above bit 19; the only carries left
   // are the short constant-plus-field adds below. The 32-bit `peg_base + (d_addr - 0xF00000)` and
-  // `peg_base + peg_bank_off` of the old form collapse to splices: inside the PEGC window
+  // `peg_base + peg_bank_off` of the full-width form collapse to splices: inside the PEGC window
   // d_addr[31:19] is 0x1E0, so d_addr - 0xF00000 is d_addr[18:0], and peg_base[18:0] is zero
-  // with bit 19 set. Bit-equal to the old form under those base invariants
+  // with bit 19 set. Bit-equal to the full-width form under those base invariants
   // (tools/check_memmap_addr_equiv.py proves it over every input bit).
-  // pack_base's low 20 bits (zero) and peg_base's low 19 bits (zero) are therefore not read; the EMS
-  // page and shadow bases keep their own low 20 bits, which the offsets add to without a carry out.
+  // pack_base's low 20 bits (zero) and peg_base's low 19 bits (zero) are therefore not read.
+  // The EMS page base's low 20 bits are the constant 0x48000 (it is pack_base + PACK_BYTES +
+  // 0x48000 with both terms MiB-aligned, pc9821_memory_subsystem), so that add collapses to a
+  // splice too (lo_ems_page below); the shadow base keeps its own low 20 bits, which the
+  // window offset adds to without a carry out. tools/check_memmap_addr_equiv.py pins both
+  // premises in text (PREMISES) as well as proving the outputs, so a change to either
+  // subsystem formula fails the proof instead of silently breaking the map.
   /* verilator lint_off UNUSEDSIGNAL */   // the bases' zero low bits are not read
   wire [31:20] pack_hi = pack_base[31:20];
   wire [31:20] peg_hi  = peg_base[31:20];
@@ -450,7 +484,12 @@ module pc9821_memory_map (
   wire [19:0] lo_ide_rom    = {4'h7, 3'd0, d_addr[12:0]};                  // pack + 0x70000
   wire [19:0] lo_d8_alt     = 20'h31000 + {5'd0, d8_bank[1], d_addr[13:0]};
   wire [19:0] lo_sound_rom  = 20'hC6800 + {6'd0, d_addr[13:0]};
-  wire [19:0] lo_ems_page   = ems_page_base[19:0] + {4'd0, gvram_low[15:0]};
+  // 0x48000 + the 16-bit page offset is a bit splice, not an add: 0x48000's bits [14:0] are
+  // zero, so they pass through as gvram_low[14:0]; bit 15 is 1 + gvram_low[15], i.e.
+  // ~gvram_low[15], which carries into bit 16 exactly when gvram_low[15] is set; bits 17 and
+  // 19 are zero and 0x40000 is bit 18. Bit-equal to `ems_page_base[19:0] + offset`
+  // for every offset under the 0x48000 premise above.
+  wire [19:0] lo_ems_page   = {3'b010, gvram_low[15], ~gvram_low[15], gvram_low[14:0]};
   wire [19:0] bank_off      = bank_offset(top_bank);
   wire [19:0] lo_fw         = (fw_shadow_access ? fw_shadow_base[19:0] : bank_off) +
                               {5'd0, fw_offset};
@@ -499,10 +538,14 @@ module pc9821_memory_map (
   wire local_accept = local_open_bus || fw_write_blocked;
   assign cpu_ready = (local_accept ? 1'b1 : mem_ready);
   assign cpu_dout = local_open_bus ? 32'hFFFF_FFFF : mem_dout;
-  assign cpu_line_dout = local_open_bus ? {4{32'hFFFF_FFFF}} : 128'd0;
+  // THE MAP ROUTE HAS NO LINE FORM. A cache-line fill this route serves from the backend
+  // is four word beats on mem_resp_valid/cpu_dout; the only LINE reading this map can answer
+  // locally is its out-of-range open-bus path (local_open_bus is the sole local_accept term a
+  // read can set - the other, fw_write_blocked, is write-only), and that arm is answered as
+  // four all-ones beats in pc9821_memory_subsystem, which owns the reset and the counter. The
+  // map stays purely combinational.
   assign cpu_resp_valid = mem_resp_valid ||
                           (cpu_valid && local_accept && !cpu_write && !cpu_line_read);
-  assign cpu_line_resp_valid = cpu_valid && local_accept && !cpu_write && cpu_line_read;
 
 endmodule
 

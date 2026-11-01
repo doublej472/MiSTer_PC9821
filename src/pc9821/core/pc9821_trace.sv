@@ -41,7 +41,7 @@ module pc9821_trace #(
     // The SECOND requester into the same SDRAM controller. It is the pack's font port, and it is
     // the one way mem0 can go unanswered while nothing in the GVRAM looks wrong: a font transfer
     // stuck in flight holds the controller. pc9821_system exports it as ext_mem1_valid, which IS
-    // fmem_valid (pc9821_system.sv:623).
+    // fmem_valid (pc9821_system.sv:1104, `.fmem_valid(ext_mem1_valid)`).
     input  wire        ctx_fmem_valid,
     // One-cycle freeze request (pc9821_system trace_trig): once armed, commit the current PC
     // with its dwell so far and dump exactly as a stall does, so the ring holds the transitions
@@ -115,12 +115,11 @@ module pc9821_trace #(
   wire [REC_BITS-1:0] rec_after = (records == RECORDS) ? records : (records + 1'b1);
   wire [63:0]   stall_rec = {cur_cs, cur_eip, 16'hFFFF};
 
-  // !dumping MUST GATE BOTH TERMS. It guarded only `moved`, and `stall` stays high for the whole
-  // dump - stall_cnt is frozen above the threshold and `dumped` is not set until the end - so the
-  // ring was rewritten every cycle at the post-stall wr_ptr, which is the OLDEST slot. The dump
-  // therefore destroyed the oldest record before reading it, and the first line printed the stall
-  // record twice. The bench caught it as an order failure, not as corruption, because only one
-  // slot was clobbered.
+  // !dumping MUST GATE BOTH TERMS. `stall` stays high for the whole dump - stall_cnt is frozen
+  // above the threshold and `dumped` is not set until the end - so with only `moved` gated the
+  // ring would be rewritten every cycle at the post-stall wr_ptr, which is the OLDEST slot: the
+  // dump would destroy the oldest record before reading it, and the first line would print the
+  // stall record twice (a bench sees that as an order failure, since only one slot is clobbered).
   wire          fire    = stall || (armed_trig && trig);
   wire          ring_wr = (moved || fire) && !dumping;
   wire [63:0]   ring_d  = stall ? stall_rec : rec_data;

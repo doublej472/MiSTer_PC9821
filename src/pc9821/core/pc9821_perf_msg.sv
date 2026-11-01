@@ -1,20 +1,29 @@
 // The per-interval performance record: the interval itself, the CPU's memory wait, the SDRAM
-// controller's accepted transactions, the L1 caches' lookups and fills, the GVRAM's array walk,
+// controller's accepted transactions, the GVRAM's array walk,
 // the EGC/GRCG operation counts, the VISIBLE-line graphics cycles and sprite pass, and the
 // page-coincidence probe, so a capture answers WHERE the time goes even when nothing is wedged.
 
 // THE LAYOUT IS A CONTRACT with tools/decode_telemetry.py and tools/check_telemetry_contract.py:
-// "PRF", then NINETEEN 12-byte fields (a SPACE, a 2-char label, '=', 8 hex digits), then ONE LF,
-// 232 bytes. CY is first so the line reads "over CY cycles: ..." and the denominator is never hunted
+// "PRF", then TWENTY-ONE 12-byte fields (a SPACE, a 2-char label, '=', 8 hex digits), then ONE LF,
+// 256 bytes. CY is first so the line reads "over CY cycles: ..." and the denominator is never hunted
 // for. The leading space delimits a field, so no field may be emitted without it, and there is no
 // CR anywhere: every record here ends with a bare LF.
 
 // CY IS THE DENOMINATOR: the trigger's window counters freeze while a record is emitted, so the
 // interval is window + emission and not the nominal WDG_PERIOD (2 % low on a heartbeat, 17 % on a
-// stall). IL/IM/DL/DM are the caches' own S_LOOKUP pulses (z486's dbg_il/dbg_im/dbg_dl/dbg_dm):
-// the vendored CPU exports the two decisions it already makes, and the counting stays here.
-// GW/GC are pc9821_gvram's walk pulses by the same rule. See for
-// what each ratio means and how far it can be trusted.
+// stall). GW/GC are pc9821_gvram's walk pulses: the module exports the event and the counting
+// stays here. The CPU exports no L1 lookup or miss pulse, so the record has no cache fields.
+//
+// MW IS A PLATFORM-CYCLE COUNT, NOT A CPU-CYCLE COUNT. `cpu_req` (z_valid) is a LEVEL
+// held for the whole CPU cycle, which is `k` clk_sys cycles under the OSD CPU Speed throttle, so
+// MW also counts the DISABLED cycles in which the CPU is not running: it is the CPU's memory wait
+// multiplied by the throttle ratio (up to ~160x at 0.5 MHz on an 80 MHz build). That contradicts
+// rule 4 of src/z486/docs/throttle.md ("count CPU events, not platform cycles"), but this is a
+// debug instrument, not a guest-visible rate, and re-basing it needs its own bench (MW for a
+// known stall equal at Full and at 1 MHz), so it is STATED rather than changed: **MW - and the
+// GFX record's DW, the I/O subset of it - is only meaningful at CPU Speed = Full.** The
+// transaction counters (RD/WR/S1/S2/S3/W3) and the GVRAM/EGC/GRCG event counters are clk_sys
+// event counts and do not have this defect; CY is the interval and stays the denominator.
 
 `default_nettype none
 
@@ -36,10 +45,6 @@ module pc9821_perf_msg (
     input  wire       sd2_ready, // ... and it was accepted this cycle
     input  wire       sd3_valid, // the PEGC packed scanout port presents a request
     input  wire       sd3_ready, // ... and it was accepted this cycle
-    input  wire       dbg_il,    // L1 I-cache lookup pulse (z486 dbg_il)
-    input  wire       dbg_im,    // L1 I-cache fill-causing miss pulse (z486 dbg_im)
-    input  wire       dbg_dl,    // L1 D-cache READ lookup pulse (z486 dbg_dl)
-    input  wire       dbg_dm,    // L1 D-cache READ fill-causing miss pulse (z486 dbg_dm)
     input  wire       dbg_walk_start, // GVRAM one-visit array walk began (pc9821_gvram)
     input  wire       dbg_walk_cycle, // ... and one clk_sys of it was spent
     input  wire       dbg_egc_txn,    // an EGC command was accepted (pc9821_egc)
@@ -53,8 +58,7 @@ module pc9821_perf_msg (
     input  wire       dbg_access_page, // the CPU/GRCG/EGC access page (pc9821_gvram)
     input  wire       dbg_scan_page_q, // the page the scanout's line fetch is latched on
     // The CPU's LAST page fault, read LIVE into the record (gauges, like SP/AP, not counters).
-    // The core latches the faulting linear address and the error code; until now they reached
-    // the top level and nothing read them. A page fault is normal on this machine (DOS/4GW
+    // The core latches the faulting linear address and the error code. A page fault is normal on this machine (DOS/4GW
     // demand-pages), so PA/PF name the LAST fault - which is the fatal one when the guest
     // stops immediately after it, and the reason a capture is taken then.
     input  wire [2:0] dbg_pf_code, // latched page-fault error code
@@ -64,10 +68,9 @@ module pc9821_perf_msg (
     output reg  [7:0] ch
 );
 
-    // 9 bits now: the record is 304 bytes (3 + 25*12 + 1) after the page-fault fields, and 8
-    // bits caps a record at 256. `fld` stays 5 bits: 25 fields need the fifth bit (19 fit in
-    // the 4 bits the selector started with).
-    localparam [8:0] PRF_MSG_LEN = 9'd304;
+    // 9 bits: the record is 256 bytes (3 + 21*12 + 1), so its length does not fit in 8.
+    // `fld` is 5 bits: 21 fields need the fifth bit.
+    localparam [8:0] PRF_MSG_LEN = 9'd256;
 
     // A request that is outstanding and NOT accepted is the CPU waiting on memory: the same
     // condition pc9821_wdg_trigger.sv treats as "not completed" (z_valid is a LEVEL held until
@@ -76,7 +79,7 @@ module pc9821_perf_msg (
     // one request, so it counts once, which is what makes RD/WR a transaction rate.
     // CY advances unconditionally: it is the one counter the trigger's freeze does not stop, which
     // is what makes it the interval rather than the window.
-    reg [31:0] cy, mw, rd, wr, il, im, dl, dm, gw, gc, et, eu, gs, gv, ev, pd, pc;
+    reg [31:0] cy, mw, rd, wr, gw, gc, et, eu, gs, gv, ev, pd, pc;
     // The other three SDRAM ports' accept counts (S1/S2/S3) and the scanout port's
     // present-but-unaccepted cycles (W3), on the same accept rule as RD/WR.
     reg [31:0] s1, s2, s3, w3;
@@ -90,7 +93,6 @@ module pc9821_perf_msg (
     always @(posedge clk) begin
         if (reset) begin
             cy <= 32'd0; mw <= 32'd0; rd <= 32'd0; wr <= 32'd0;
-            il <= 32'd0; im <= 32'd0; dl <= 32'd0; dm <= 32'd0;
             gw <= 32'd0; gc <= 32'd0;
             et <= 32'd0; eu <= 32'd0; gs <= 32'd0;
             gv <= 32'd0; ev <= 32'd0; pd <= 32'd0; pass_cnt <= 32'd0; pc <= 32'd0;
@@ -106,10 +108,6 @@ module pc9821_perf_msg (
             if (sd2_valid && sd2_ready) s2 <= s2 + 32'd1;
             if (sd3_valid && sd3_ready) s3 <= s3 + 32'd1;
             if (sd3_valid && !sd3_ready) w3 <= w3 + 32'd1;
-            if (dbg_il) il <= il + 32'd1;
-            if (dbg_im) im <= im + 32'd1;
-            if (dbg_dl) dl <= dl + 32'd1;
-            if (dbg_dm) dm <= dm + 32'd1;
             if (dbg_walk_start) gw <= gw + 32'd1;
             if (dbg_walk_cycle) gc <= gc + 32'd1;
             if (dbg_egc_txn)    et <= et + 32'd1;
@@ -129,11 +127,10 @@ module pc9821_perf_msg (
             // keeps the two pages opposite every cycle, so this is ZERO; a nonzero PC is stores
             // landing on the DISPLAYED page - the leak - and the two status bits SP/AP say which
             // pages.
-            // THE IN-FLIGHT ARM IS ALL THREE WRITE OWNERS, and it has to be: it was the GRCG's
-            // alone until 2026-10-03, so the counter could only ever see a leak through GRCG
-            // stores - and Farland Story, the game it was read for, draws with PLAIN window
-            // stores (its intervals move GW/GC/PW while GS/GR/GT stay flat), so the decisive
-            // measurement read 0 through the very leak it exists to find. A read (the plain
+            // THE IN-FLIGHT ARM IS ALL THREE WRITE OWNERS, and it has to be: with the GRCG's
+            // alone the counter could only see a leak through GRCG stores - and Farland Story
+            // draws with PLAIN window stores (its intervals move GW/GC/PW while GS/GR/GT stay
+            // flat), so it would read 0 through the very leak it exists to find. A read (the plain
             // client's read arm, a TCR read) is still not counted: neither writes anything.
             if ((dbg_gr_owned || dbg_eg_owned || dbg_pw_owned) &&
                 (dbg_access_page == dbg_scan_page_q)) pc <= pc + 32'd1;
@@ -141,7 +138,7 @@ module pc9821_perf_msg (
     end
 
     // THE RECORD'S DIGITS ARE ONE INSTANT. Each field's eight hex digits are eight byte
-    // transfers, and the 621-byte report overflows the 512-entry FIFO behind it, so the emission
+    // transfers, and the 707-byte report overflows the 512-entry FIFO behind it, so the emission
     // is paced at the UART drain rate in the tail while these counters keep counting: read live,
     // the eight digits of one field would sample eight different times and a carry crossing
     // between two of them splices two counter values into one torn composite. `snap` (the
@@ -150,20 +147,18 @@ module pc9821_perf_msg (
     // are mutually consistent and the ratios between them stay honest. The live counters keep
     // counting through the emission (CY advances regardless, as its contract states), so the
     // next interval still measures window + emission.
-    reg [31:0] cy_q, mw_q, rd_q, wr_q, il_q, im_q, dl_q, dm_q, gw_q, gc_q,
+    reg [31:0] cy_q, mw_q, rd_q, wr_q, gw_q, gc_q,
                et_q, eu_q, gs_q, gv_q, ev_q, pd_q, pc_q;
     reg [31:0] s1_q, s2_q, s3_q, w3_q;
     always @(posedge clk) begin
         if (reset) begin
             cy_q <= 32'd0; mw_q <= 32'd0; rd_q <= 32'd0; wr_q <= 32'd0;
-            il_q <= 32'd0; im_q <= 32'd0; dl_q <= 32'd0; dm_q <= 32'd0;
             gw_q <= 32'd0; gc_q <= 32'd0;
             et_q <= 32'd0; eu_q <= 32'd0; gs_q <= 32'd0;
             gv_q <= 32'd0; ev_q <= 32'd0; pd_q <= 32'd0; pc_q <= 32'd0;
             s1_q <= 32'd0; s2_q <= 32'd0; s3_q <= 32'd0; w3_q <= 32'd0;
         end else if (snap) begin
             cy_q <= cy; mw_q <= mw; rd_q <= rd; wr_q <= wr;
-            il_q <= il; im_q <= im; dl_q <= dl; dm_q <= dm;
             gw_q <= gw; gc_q <= gc;
             et_q <= et; eu_q <= eu; gs_q <= gs;
             gv_q <= gv; ev_q <= ev; pd_q <= pd; pc_q <= pc;
@@ -180,8 +175,8 @@ module pc9821_perf_msg (
     // The 2-char label of each field, as two bytes. This is the ONE place a field's name lives on
     // the RTL side; the decoder's PRF_FIELDS table must name them in the same order, and
     // check_telemetry_contract.py holds the two together. `p == 1` is the label's first character
-    // and `p == 2` its second, the positions of a label inside a field's 12 bytes. Nineteen
-    // fields, so `f` is 5 bits: at 4 bits the new fields would alias onto CY..PD and nothing
+    // and `p == 2` its second, the positions of a label inside a field's 12 bytes. Twenty-one
+    // fields, so `f` is 5 bits: at 4 bits the later fields would alias onto CY..PC and nothing
     // would fail to compile.
     function [7:0] prf_label(input [4:0] f, input [1:0] p);
         reg [15:0] l;
@@ -190,41 +185,36 @@ module pc9821_perf_msg (
                 (f == 5'd1) ? "MW" :
                 (f == 5'd2) ? "RD" :
                 (f == 5'd3) ? "WR" :
-                (f == 5'd4) ? "IL" :
-                (f == 5'd5) ? "IM" :
-                (f == 5'd6) ? "DL" :
-                (f == 5'd7) ? "DM" :
-                (f == 5'd8) ? "GW" :
-                (f == 5'd9) ? "GC" :
-                (f == 5'd10) ? "ET" :
-                (f == 5'd11) ? "EU" :
-                (f == 5'd12) ? "GS" :
-                (f == 5'd13) ? "GV" :
-                (f == 5'd14) ? "EV" :
-                (f == 5'd15) ? "PD" :
-                (f == 5'd16) ? "PC" :
-                (f == 5'd17) ? "SP" :
-                (f == 5'd18) ? "AP" :
-                (f == 5'd19) ? "S1" :
-                (f == 5'd20) ? "S2" :
-                (f == 5'd21) ? "S3" :
-                (f == 5'd22) ? "W3" :
-                (f == 5'd23) ? "PF" : "PA";
+                (f == 5'd4) ? "GW" :
+                (f == 5'd5) ? "GC" :
+                (f == 5'd6) ? "ET" :
+                (f == 5'd7) ? "EU" :
+                (f == 5'd8) ? "GS" :
+                (f == 5'd9) ? "GV" :
+                (f == 5'd10) ? "EV" :
+                (f == 5'd11) ? "PD" :
+                (f == 5'd12) ? "PC" :
+                (f == 5'd13) ? "SP" :
+                (f == 5'd14) ? "AP" :
+                (f == 5'd15) ? "S1" :
+                (f == 5'd16) ? "S2" :
+                (f == 5'd17) ? "S3" :
+                (f == 5'd18) ? "W3" :
+                (f == 5'd19) ? "PF" : "PA";
             prf_label = (p == 2'd1) ? l[15:8] : l[7:0];
         end
     endfunction
 
-    // Which field and which byte inside it `idx` names. "PRF" is bytes 0..2, then nineteen 12-byte
-    // runs (3..14, 15..26, ... 219..230), then the LF at 231. `pos` is 8 bits wide because that is
-    // what the subtraction of an 8-bit `idx` produces: narrowing it to 4 would be a truncation the
-    // lint must then be told to ignore. `fld` is 5 bits: nineteen fields do not fit in
-    // the 4 bits left.
+    // Which field and which byte inside it `idx` names. "PRF" is bytes 0..2, then twenty-one
+    // 12-byte runs (3..14, 15..26, ... 243..254), then the LF at 255. `pos` is 8 bits wide, the
+    // truncated difference of the 9-bit `idx`. `fld` is 5 bits: twenty-one fields do not fit
+    // in 4.
     reg [4:0] fld;
     reg [7:0] pos;
     always @* begin
         fld = 5'd0;
         pos = 8'd0;
-        if ((idx >= 9'd3) && (idx < 9'd303)) begin
+        if ((idx >= 9'd3) && (idx < 9'd255)) begin
             if      (idx < 9'd15)  begin fld = 5'd0;  pos = 8'(idx -  9'd3); end
             else if (idx < 9'd27)  begin fld = 5'd1;  pos = 8'(idx - 9'd15); end
             else if (idx < 9'd39)  begin fld = 5'd2;  pos = 8'(idx - 9'd27); end
@@ -245,11 +235,7 @@ module pc9821_perf_msg (
             else if (idx < 9'd219) begin fld = 5'd17; pos = 8'(idx - 9'd207); end
             else if (idx < 9'd231) begin fld = 5'd18; pos = 8'(idx - 9'd219); end
             else if (idx < 9'd243) begin fld = 5'd19; pos = 8'(idx - 9'd231); end
-            else if (idx < 9'd255) begin fld = 5'd20; pos = 8'(idx - 9'd243); end
-            else if (idx < 9'd267) begin fld = 5'd21; pos = 8'(idx - 9'd255); end
-            else if (idx < 9'd279) begin fld = 5'd22; pos = 8'(idx - 9'd267); end
-            else if (idx < 9'd291) begin fld = 5'd23; pos = 8'(idx - 9'd279); end
-            else                   begin fld = 5'd24; pos = 8'(idx - 9'd291); end
+            else                   begin fld = 5'd20; pos = 8'(idx - 9'd243); end
         end
     end
 
@@ -262,32 +248,28 @@ module pc9821_perf_msg (
             5'd1:    val = mw_q;
             5'd2:    val = rd_q;
             5'd3:    val = wr_q;
-            5'd4:    val = il_q;
-            5'd5:    val = im_q;
-            5'd6:    val = dl_q;
-            5'd7:    val = dm_q;
-            5'd8:    val = gw_q;
-            5'd9:    val = gc_q;
-            5'd10:   val = et_q;
-            5'd11:   val = eu_q;
-            5'd12:   val = gs_q;
-            5'd13:   val = gv_q;
-            5'd14:   val = ev_q;
-            5'd15:   val = pd_q;
-            5'd16:   val = pc_q;
+            5'd4:    val = gw_q;
+            5'd5:    val = gc_q;
+            5'd6:    val = et_q;
+            5'd7:    val = eu_q;
+            5'd8:    val = gs_q;
+            5'd9:    val = gv_q;
+            5'd10:   val = ev_q;
+            5'd11:   val = pd_q;
+            5'd12:   val = pc_q;
             // SP/AP are the two page LEVELS, not counters: a 1-bit status read live into the
             // record's 32-bit field, so a capture sees the pages as they are at the read.
-            5'd17:   val = {31'd0, dbg_scan_page_q};
-            5'd18:   val = {31'd0, dbg_access_page};
-            5'd19:   val = s1_q;
-            5'd20:   val = s2_q;
-            5'd21:   val = s3_q;
-            5'd22:   val = w3_q;
+            5'd13:   val = {31'd0, dbg_scan_page_q};
+            5'd14:   val = {31'd0, dbg_access_page};
+            5'd15:   val = s1_q;
+            5'd16:   val = s2_q;
+            5'd17:   val = s3_q;
+            5'd18:   val = w3_q;
             // PF/PA are the CPU's LAST page fault, read LIVE (gauges, like SP/AP): the code is
             // 3 bits and the address 32, so the faulting linear address is the field that names
             // WHERE the guest died.
-            5'd23:   val = {29'd0, dbg_pf_code};
-            5'd24:   val = dbg_pf_addr;
+            5'd19:   val = {29'd0, dbg_pf_code};
+            5'd20:   val = dbg_pf_addr;
             default: val = 32'd0;
         endcase
     end

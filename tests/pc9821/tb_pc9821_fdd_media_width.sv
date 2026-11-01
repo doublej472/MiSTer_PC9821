@@ -17,6 +17,10 @@ module tb_pc9821_fdd_media_width;
   // ==== the image: bytes as a function of the file offset ====
   reg [7:0]  hdr [0:687];     // the D88 header being tested
   reg        raw_mode = 0;    // a raw body: every byte past the (zero) head is the pattern
+  // The unit's 0x04BE rpm bit: a raw 18- or 21-sector row is a 1.44 MB medium, served only at
+  // rpm 1 (NP2kai fdd_xdf.c rows HD4/DMF carry rpm 1; fdd_seeksector_common `fdc.rpm[fdc.us] !=
+  // fdd->inf.xdf.rpm` -> failure).
+  reg        b_rpm = 0;
   integer    sec_off = 0;     // the one D88 sector header's file offset
   reg [7:0]  sechdr [0:15];
   wire [31:0] alias_off = (sec_off[31:0] & 32'h001FFFFF) < 32'd688 ? 32'h7FFFFFFF : (sec_off[31:0] & 32'h001FFFFF);
@@ -110,7 +114,7 @@ module tb_pc9821_fdd_media_width;
       .blk_fill_data(blk_fill_data),
       .present(present), .writeprotect(writeprotect),
       .req(req), .req_hdr(req_hdr), .unit(2'd0),
-      .req_c(req_c), .req_h(req_h), .req_r(req_r), .req_n(req_n), .req_idx(req_idx),
+      .req_c(req_c), .req_h(req_h), .req_tc(req_c), .req_hd(req_h[0]), .req_mf(1'b1), .req_2hd(1'b1), .req_rpm(b_rpm), .req_r(req_r), .req_n(req_n), .req_idx(req_idx),
       .ready(ready), .rdy(rdy), .hdrv(hdrv), .err(err), .dout(dout), .adv(adv),
       .hdr_r(hdr_r), .hdr_n(hdr_n), .hdr_sects(hdr_sects)
   );
@@ -204,6 +208,7 @@ module tb_pc9821_fdd_media_width;
     integer j;
     begin
       raw_mode = 0;
+      b_rpm = 0;
       for (j = 0; j < 688; j = j + 1) hdr[j] = 8'h00;
       hdr[8'h1B] = 8'h20;
       hdr[8'h1C] = fdsz[7:0]; hdr[8'h1D] = fdsz[15:8]; hdr[8'h1E] = fdsz[23:16]; hdr[8'h1F] = fdsz[31:24];
@@ -212,7 +217,7 @@ module tb_pc9821_fdd_media_width;
       // the sector C=1 H=0 R=1 N=2 (512 bytes) of track 2, wherever p2 puts it
       sec_off = p2;
       sechdr[0] = 8'd1; sechdr[1] = 8'd0; sechdr[2] = 8'd1; sechdr[3] = 8'd2;
-      sechdr[4] = 8'd1; sechdr[5] = 8'd0; sechdr[6] = 8'h40;
+      sechdr[4] = 8'd1; sechdr[5] = 8'd0; sechdr[6] = 8'h00;   // mfm_flg 0x00 = MFM, the mode req_mf names (0x40 = FM, NP2kai searchsector_d88)
       for (j = 7; j < 14; j = j + 1) sechdr[j] = 8'h00;
       sechdr[14] = 8'h00; sechdr[15] = 8'h02;
     end
@@ -258,6 +263,7 @@ module tb_pc9821_fdd_media_width;
     integer tr, off, len;
     begin
       raw_mode = 1;
+      b_rpm = (sects == 18) || (sects == 21);
       mount({32'd0, size});
       expect_present(what, 1'b1);
       tr = tracks - 1;

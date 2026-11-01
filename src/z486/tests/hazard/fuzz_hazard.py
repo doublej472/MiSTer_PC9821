@@ -57,6 +57,15 @@ NCP = 16
 DP_LIN = 0x52000           # data page remapped between DP_A / DP_B
 DP_A, DP_B = 0x62000, 0x63000
 HOT = 0x70000              # 256-byte hot window
+# FUZZ_PC98=1 (with the PC-98 map testbench, Z486_TESTBENCH=obj_dir_pc98/...):
+# the hot-window operations also run on a device window (GVRAM, uncached
+# DIRECT: its stores must take the demand path) and on window 0's RAM range,
+# both folded into the result, so a device store that posts (merged, reordered
+# against a VGA read that does not wait for the store queue) or a window-0
+# store that does not changes the checksum or trips cache_unit's assertion.
+PC98 = os.environ.get("FUZZ_PC98") == "1"
+DEV = 0xA8000              # 256-byte GVRAM window (PC-98 DIRECT)
+W0 = 0x90000               # 256-byte window in window 0's range (RAM)
 COLD = 0x64000             # cold lines, 0x40 apart
 PT = 0x1000
 PTE_FL = 0x23              # P, RW, A (supervisor)
@@ -280,7 +289,10 @@ class Gen:
         elif k < 65:
             self.e("wbinvd")
         elif k < 80:                                  # hot window
-            a = HOT + r.randrange(0, 0xfc)
+            base = HOT
+            if PC98 and r.random() < 0.4:
+                base = r.choice([DEV, W0])
+            a = base + r.randrange(0, 0xfc)
             if r.random() < 0.7:
                 a &= ~3
             kk = r.randrange(6)
@@ -346,24 +358,26 @@ class Gen:
         self.e("stosd")
         self.e("add eax, 0x9e3779b9")
         self.e(f"loop {lb}")
-        self.e(f"mov edi, {HOT:#x}")
-        self.e("mov ecx, 64")
-        lb = self.label()
-        self.L.append(f"{lb}:")
-        self.e("stosd")
-        self.e("rol eax, 7")
-        self.e(f"loop {lb}")
+        for win in ([HOT, DEV, W0] if PC98 else [HOT]):
+            self.e(f"mov edi, {win:#x}")
+            self.e("mov ecx, 64")
+            lb = self.label()
+            self.L.append(f"{lb}:")
+            self.e("stosd")
+            self.e("rol eax, 7")
+            self.e(f"loop {lb}")
         self.e("wbinvd")
         for _ in range(self.nops):
             self.op()
-        # fold the hot window and both data frames' first lines
-        self.e(f"mov esi, {HOT:#x}")
-        self.e("mov ecx, 64")
-        lb = self.label()
-        self.L.append(f"{lb}:")
-        self.e("lodsd")
-        self.fold()
-        self.e(f"loop {lb}")
+        # fold the hot window(s) and both data frames' first lines
+        for win in ([HOT, DEV, W0] if PC98 else [HOT]):
+            self.e(f"mov esi, {win:#x}")
+            self.e("mov ecx, 64")
+            lb = self.label()
+            self.L.append(f"{lb}:")
+            self.e("lodsd")
+            self.fold()
+            self.e(f"loop {lb}")
         self.e(f"mov eax, [{DP_A:#x}]")
         self.fold()
         self.e(f"mov eax, [{DP_B:#x}]")
@@ -382,7 +396,8 @@ def config(name, lat):
             "eip": 0,
             "seg_cache": {"CS": {"base": CODE_BASE, "limit": 0xffffffff, "flags": 0xa9e0},
                           "DS": seg, "SS": seg, "ES": seg, "FS": seg, "GS": seg},
-            "page_tables": [[0, 0, 128, "RW"]], "mem_latency": lat, "cycles": 3_000_000}
+            "page_tables": [[0, 0, 128, "RW"]] + ([[W0, W0, 1, "RW"], [DEV, DEV, 1, "RW"]] if PC98 else []),
+            "mem_latency": lat, "cycles": 3_000_000}
 
 
 def run_one(stem, cfg, plus):

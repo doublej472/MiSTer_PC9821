@@ -2,12 +2,12 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_WATCHDOG:
-// The stall-watchdog telemetry record is a function of the diagnostic fields and nothing else: all 351 bytes are compared against a golden capture of this formatter, and the 137 bytes that carry fields are shown to move with them. The record is also shown to be ONE line - exactly one LF, as its last byte, and no CR anywhere, because a CR arrives as a second newline through a tty and that is the blank line between records r13/119 removed. The record is also a SNAPSHOT: its bytes are the fields' values at the report's accept (snap), held while the record is read, so setting the fields again without a new snapshot reprints the old bytes and a paced emission can never splice two counter values into one field (the telemetry tear the data-race review found); a NEW snapshot takes the new values.
+// The stall-watchdog telemetry record is a function of the diagnostic fields and nothing else: all 351 bytes are compared against a golden capture of this formatter, and the 137 bytes that carry fields are shown to move with them. The record is also shown to be ONE line - exactly one LF, as its last byte, and no CR anywhere, because a CR arrives as a second newline through a tty and that is the blank line between records that was removed. The record is also a SNAPSHOT: its bytes are the fields' values at the report's accept (snap), held while the record is read, so setting the fields again without a new snapshot reprints the old bytes and a paced emission can never splice two counter values into one field (a telemetry tear); a NEW snapshot takes the new values.
 //
-// TWO PROPERTIES ARE THE POINT OF THE REWRITE AND ARE ASSERTED DIRECTLY (r13/119). The record is
+// TWO PROPERTIES ARE THE POINT OF THE REWRITE AND ARE ASSERTED DIRECTLY. The record is
 // ONE line: exactly one 0x0A, as its LAST byte, and NO 0x0D anywhere. The old record was four lines
 // ended CR LF, and a serial tty's ICRNL maps CR to LF on the way into a capture, so every one of
-// those pairs landed in the owner's log as TWO newlines - the blank line between records. A byte
+// those pairs landed in a capture log as TWO newlines - the blank line between records. A byte
 // that moved back to a CR would restore the bug while every field still matched, so the newline
 // shape is checked rather than assumed.
 //
@@ -328,7 +328,7 @@ module tb_pc9821_watchdog;
     // 7. THE SNAPSHOT (the telemetry tear fix): the record's digits are the fields' values at
     //    the report's accept (snap), HELD while the record is read - live digits would follow
     //    the fields, and a carry crossing between two digits of one field splices two values
-    //    into a torn composite (the data-race review's telemetry tear, the same shape the
+    //    into a torn composite (a telemetry tear, the same shape the
     //    PRF/GFX formatters had). Set the fields back to vector A and re-read with NO new
     //    snapshot: the record must reprint vector B's bytes exactly. On a formatter that reads
     //    live this fails deterministically (every field byte follows A); a NEW snapshot then

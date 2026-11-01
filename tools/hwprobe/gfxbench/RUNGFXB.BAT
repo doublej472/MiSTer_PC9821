@@ -5,7 +5,7 @@ REM Copy GFXBENCH.COM and this file to the machine, then:
 REM     RUNGFXB
 REM and send back GFXB.TXT.
 REM
-REM Run it on the owner's Xe10 (100 MHz): its GVRAM0(A8000) WRITE row refreshes
+REM Run it on the reference Xe10 (100 MHz): its GVRAM0(A8000) WRITE row refreshes
 REM the plain-fill anchor (the legacy 13.8 MB/s = 0.145 us/word has no archived
 REM capture and no named machine). The output MUST be redirected: the TRAM
 REM window is the visible console and is scribbled by the fill. The GVRAM is

@@ -3,7 +3,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_ATAPI: The CD-ROM answers as bank 1's ATAPI MASTER with the REAL pc9821_ata's one disk on bank 0, every expected value taken from NP2kai (cbus/ideio.c, cbus/atapicmd.c), from the Xe10's own IDE ROM or from the image the host model serves, never from the RTL: the IDE ROM's probe of bank 1's master (BANK3@0x0A0A) passes step by step - the pre-reset presence test (STATUS 0x00, the 0xEB/0x14 signature marking the unit ATAPI, ERROR 0x01), IDENTIFY DEVICE ending ERR+ABRT, the ready poll with its SRST-and-retry, and a PACKET INQUIRY whose byte 0 is 5 - so the ROM records a CD-ROM; device 0 on bank 1 reads the signature 0x01/0x01/0x14/0xEB with STATUS 0x00 after DEVICE RESET (ERROR 0x01, an interrupt) and 0x51/ERROR 0x01 after an SRST pulse, device 1 on bank 1 is an absent slave (STATUS and ALTERNATE STATUS 0x00, a command for it not executed), and bank 0's master is the hard disk; IDENTIFY DEVICE aborts with the signature and IDENTIFY PACKET DEVICE returns word 0 = 0x8580 and the model "NEC CD-ROM DRIVE:98"; a PACKET command shows the CoD phase (0x644 = 0x01, DRQ, no interrupt), INQUIRY returns NP2kai's 36 bytes ("NEC     CD-ROM DRIVE:98 1.0 ", type 5, removable) in a data phase whose 0x644/0x648/0x64A say IO and the byte count, then completes with 0x50 and 0x644 = 0x03; TEST UNIT READY with no medium and the first one after a mount answer CHECK with NOT READY / 0x3A in REQUEST SENSE (0x28 once NEC mode is on via MODE SENSE page 0x0F), the next one GOOD; READ CAPACITY returns the sector count and 2048; READ(10) streams each 2048-byte sector of an ISO and of a PCD (from the raw sector's MODE1 user data) through the slot's block handshake with one interrupt and byte count 2048 per sector, and a read past the end answers ILLEGAL REQUEST / 0x21; READ TOC format 0 returns the descriptors (LBA, MSF and NEC BCD forms) of a one-track ISO and of a three-track PCD header, lead-out 0xAA; MODE SENSE page 0x2A returns NP2kai's page with medium type 0x03 for a data+audio disc; PLAY AUDIO MSF streams the audio sectors' {R,L} samples into the CD-DA port and READ SUB-CHANNEL reports playing/paused/completed with the current position, which wanders by NP2kai's rand() & 7 frames while paused or completed; and PATACD.SYS's unit probe (bank 0/1, master/slave, IDENTIFY PACKET with the 0xEC fallback, word 0 bits 15:14 = 10, INQUIRY type 5, polled with nIEN, NOP after the packet command) finds the CD at bank 1's master, reads an all-zero identify page for the absent slave beside the disk, and finds nothing at the other three units; and the OSD's Eject CD-ROM (pc9821_mount_eject's size-0 event on slot 4, status[11] as the --cdrom top wires it) leaves no medium - TEST UNIT READY answers NOT READY / 0x3A every time and MODE SENSE reports medium type 0x70 - and a re-mount answers NOT READY / 0x28 once (NEC mode), then GOOD, and reads again; and a READ(10) whose block request waits while hps_io streams ANOTHER slot's words takes none of them; and a PLAY AUDIO MSF issued while the previous play's audio sector is still being fetched streams its own first sector whole and completes at its own end (NP2kai's synchronous playaudio: the superseded fetch's completion does not advance the new play); and with nIEN set a drive RELEASES INTRQ (ATA-3 Device Control: high impedance) so an unacknowledged CD request cannot hide the disk's next IRQ9 edge on the ORed line (MAME pc9801.cpp ideirq INPUT_MERGER_ANY_HIGH), while the request itself follows NP2kai's ideio.c - a completion under nIEN neither raises nor clears it and a status read under nIEN does not acknowledge it.
+// TB_PC9821_ATAPI: The CD-ROM answers as bank 1's ATAPI MASTER with the REAL pc9821_ata's one disk on bank 0, every expected value taken from NP2kai (cbus/ideio.c, cbus/atapicmd.c), from the Xe10's own IDE ROM or from the image the host model serves, never from the RTL: the IDE ROM's probe of bank 1's master (BANK3@0x0A0A) passes step by step - the pre-reset presence test (STATUS 0x00, the 0xEB/0x14 signature marking the unit ATAPI, ERROR 0x01), IDENTIFY DEVICE ending ERR+ABRT, the ready poll with its SRST-and-retry, and a PACKET INQUIRY whose byte 0 is 5 - so the ROM records a CD-ROM; device 0 on bank 1 reads the signature 0x01/0x01/0x14/0xEB with STATUS 0x00 after DEVICE RESET (ERROR 0x01, an interrupt) and 0x51/ERROR 0x01 after an SRST pulse, device 1 on bank 1 is an absent slave (STATUS and ALTERNATE STATUS 0x00, a command for it not executed), and bank 0's master is the hard disk; IDENTIFY DEVICE aborts with the signature and IDENTIFY PACKET DEVICE returns word 0 = 0x8580 and the model "NEC CD-ROM DRIVE:98"; a PACKET command shows the CoD phase (0x644 = 0x01, DRQ, no interrupt), INQUIRY returns NP2kai's 36 bytes ("NEC     CD-ROM DRIVE:98 1.0 ", type 5, removable) in a data phase whose 0x644/0x648/0x64A say IO and the byte count, then completes with 0x50 and 0x644 = 0x03; TEST UNIT READY with no medium and the first one after a mount answer CHECK with NOT READY / 0x3A in REQUEST SENSE (0x28 once NEC mode is on via MODE SENSE page 0x0F), the next one GOOD; READ CAPACITY returns the sector count and 2048; READ(10) streams each 2048-byte sector of an ISO and of a PCD (from the raw sector's MODE1 user data) through the slot's block handshake with one interrupt and byte count 2048 per sector, and a read past the end answers ILLEGAL REQUEST / 0x21; READ TOC format 0 returns the descriptors (LBA, MSF and NEC BCD forms) of a one-track ISO and of a three-track PCD header, lead-out 0xAA; MODE SENSE page 0x2A returns NP2kai's page with medium type 0x03 for a data+audio disc; PLAY AUDIO MSF streams the audio sectors' {R,L} samples into the CD-DA port and READ SUB-CHANNEL reports playing/paused/completed with the current position, which wanders by NP2kai's rand() & 7 frames while paused or completed; and PATACD.SYS's unit probe (bank 0/1, master/slave, IDENTIFY PACKET with the 0xEC fallback, word 0 bits 15:14 = 10, INQUIRY type 5, polled with nIEN, NOP after the packet command) finds the CD at bank 1's master, reads an all-zero identify page for the absent slave beside the disk, and finds nothing at the other three units; and the OSD's Eject CD-ROM (pc9821_mount_eject's size-0 event on slot 4, status[11] as the --cdrom top wires it) leaves no medium - TEST UNIT READY answers NOT READY / 0x3A every time and MODE SENSE reports medium type 0x70 - and a re-mount answers NOT READY / 0x28 once (NEC mode), then GOOD, and reads again; and a READ(10) whose block request waits while hps_io streams ANOTHER slot's words takes none of them; and a PLAY AUDIO MSF issued while the previous play's audio sector is still being fetched streams its own first sector whole and completes at its own end (NP2kai's synchronous playaudio: the superseded fetch's completion does not advance the new play); and with nIEN set a drive RELEASES INTRQ (ATA-3 Device Control: high impedance) so an unacknowledged CD request cannot hide the disk's next IRQ9 edge on the ORed line (MAME pc9801.cpp ideirq INPUT_MERGER_ANY_HIGH), while the request itself follows NP2kai's ideio.c - a completion under nIEN neither raises nor clears it and a status read under nIEN does not acknowledge it. With the drive on bank 1 the 0x0433 read is 0x02, the selected bank's connected-device bit (NP2kai ideio_i433). The MSF converter is pinned at its 4500-frame boundary: a mount of N sectors makes the converter's frame count N + 150 (atapicmd.c's 150-frame lead-in), so media of 4349/4350/4351 and 4424/4425/4426 sectors put the minute compare one frame below, exactly on and one frame above its edge and the seconds step's 74/75/76-frame tail there, and READ TOC MSF/BCD must answer 00:59:74, 01:00:00, 01:00:01, 01:00:74, 01:01:00 and 01:01:01. The CD-DA player reads ahead: behind a host that takes 20 ms per slot-4 request (longer than the 13.3 ms one sector lasts) an 800 ms play reaches the real src/soc/cdda.v ring's output whole, every sample in order and equal to the disc with no silent sample inside it; READ SUB-CHANNEL reports NP2kai's dacurpos, the next sector its mixer loads - one past the sector being heard, exactly lba0 + ceil(k / 588) after k samples have reached the speakers (ideio.c playdevaudio increments dacurpos as it loads a sector, before mixing it) - and reports completed only once every sample has left the ring; PAUSE and STOP silence the output at once, a paused drive reports that same position plus NP2kai's rand() & 7, and RESUME continues from the start of the sector that was being heard with no gap. A sector finishing in the very cycle of a PAUSE is merged into the held position (one past it) and one finishing in a STOP's cycle is discarded with the play (position 0). Another disc mounted over a playing one stops the play at once as NP2kai's mixer does when the medium goes away (ideio.c playdevaudio: daflag 0x14): no sample of the old disc reaches the speakers after the mount, no sector of the new disc is fetched, READ SUB-CHANNEL answers 0x14 at NP2kai's position, and the TEST UNIT READY that reports the new disc stops the player (0x13, position 0). A core reset in the middle of a play stops it as NP2kai's ideio_reset does on every machine reset (cbus/cbuscore.c resetfn[]; devinit daflag 0x15): the speakers go silent at once, no audio sector is fetched, the disc stays mounted and READ SUB-CHANNEL answers 0x15 with no position.
 //
 // The CD is pc9821_atapi; the IDE read mux is the one pc9821_system builds (`cd_io_own` picks
 // the CD's byte). The host model serves hps_io slot 4 from an in-memory image: an ISO of
@@ -68,12 +68,72 @@ module tb_pc9821_atapi;
   wire real_cdda_req;
   wire [15:0] real_cdda_l, real_cdda_r;
   wire cdda_req_mux = use_real_cdda ? real_cdda_req : cdda_req;
+  // The always-ready model's ring plays each sector the moment its last sample is written (its
+  // CDDA_PLAYED one cycle after the 588th CDDA_WR since the last flush); room for four whenever
+  // it has room at all.
+  wire cdda_flush;
+  reg  [9:0] pm_n = 0;
+  reg        pm_played = 0;
+  always @(posedge clk) begin
+    pm_played <= 1'b0;
+    if (cdda_flush) pm_n <= 10'd0;
+    else if (cdda_wr) begin
+      if (pm_n == 10'd587) begin pm_n <= 10'd0; pm_played <= 1'b1; end
+      else pm_n <= pm_n + 10'd1;
+    end
+  end
+  wire real_cdda_req4, real_cdda_played;
+  reg  c23_quiet = 0;   // C23: the model fetches one sector at a time and reports nothing played
+  wire cdda_req4_mux   = use_real_cdda ? real_cdda_req4 : (cdda_req && !c23_quiet);
+  // C23: a played pulse forced into the exact cycle the drive executes a PAUSE (0x4B) or a
+  // START STOP UNIT (0x1B) packet
+  reg  [7:0] c23_op = 8'h00;
+  wire c23_hit = (c23_op != 8'h00) && cd.exec_go && cd.cmd == 8'hA0 && cd.cdb[0] == c23_op;
+  wire cdda_played_mux = use_real_cdda ? real_cdda_played : ((pm_played && !c23_quiet) || c23_hit);
   /* verilator lint_off PINMISSING */
   cdda #(24576000) real_cdda (
-      .CLK(clk), .CDDA_REQ(real_cdda_req), .CDDA_WR(cdda_wr && use_real_cdda), .CDDA_DATA(cdda_data),
-      .VOLUME_L(4'hF), .VOLUME_R(4'hF), .CLK_AUDIO(clk_audio), .AUDIO_L(real_cdda_l), .AUDIO_R(real_cdda_r));
+      .CLK(clk), .CDDA_REQ(real_cdda_req), .CDDA_REQ4(real_cdda_req4), .CDDA_PLAYED(real_cdda_played),
+      .CDDA_FLUSH(cdda_flush && use_real_cdda),
+      .CDDA_WR(cdda_wr && use_real_cdda), .CDDA_DATA(cdda_data),
+      .VOLUME_L(4'hF), .VOLUME_R(4'hF), .CLK_AUDIO(clk_audio), .AUDIO_CE(real_cdda_ce),
+      .AUDIO_L(real_cdda_l), .AUDIO_R(real_cdda_r));
   /* verilator lint_on PINMISSING */
+  // C13 sample check: every non-silent 44.1 kHz output sample of the real ring, in order, must be
+  // the next little-endian L,R pair of the played sectors (abyte), starting at the PLAY's first byte.
+  wire real_cdda_ce;
+  // A zero output sample while the play is under way (after its first sample, before its last)
+  // where the disc's next sample is not zero is a GAP: the ring ran dry (C20).
+  integer c13_k = 0, c13_bad = 0, c13_lba0 = 0, c13_gap = 0, c13_want = 0;
+  bit     c13_hold = 0;   // C22: silence is expected (paused), not a gap
+  always @(posedge clk_audio) if (use_real_cdda && real_cdda_ce) begin
+    automatic integer l = c13_lba0 + (c13_k * 4) / 2352;
+    automatic integer i = (c13_k * 4) % 2352;
+    automatic logic [15:0] wl = {abyte(l, i + 1), abyte(l, i)};
+    automatic logic [15:0] wr = {abyte(l, i + 3), abyte(l, i + 2)};
+    if (real_cdda_l != 0 || real_cdda_r != 0) begin
+      if (real_cdda_l !== wl || real_cdda_r !== wr) c13_bad = c13_bad + 1;
+      c13_k = c13_k + 1;
+    end else if (!c13_hold && c13_k > 0 && c13_k < c13_want && (wl != 0 || wr != 0))
+      c13_gap = c13_gap + 1;
+  end
   wire        log_we;
+  // C21/C22/C24: the samples that had reached the speakers when the drive EXECUTED the last READ
+  // SUB-CHANNEL (the poll's own port traffic takes microseconds; a sample lasts 22.7 us)
+  integer subq_k = 0;
+`ifndef NO_CD
+  always @(posedge clk) if (cd.exec_go && cd.cmd == 8'hA0 && cd.cdb[0] == 8'h42) subq_k <= c13_k;
+`endif
+  // NP2kai's reported position after k samples of a play from LBA lba0: dacurpos is the next
+  // sector its mixer LOADS, and playdevaudio loads a sector (dacurpos++) before mixing its first
+  // sample (ideio.c), so after k samples dacurpos = lba0 + ceil(k / 588). The output sample is
+  // counted a fraction of a sample after the ring hands it over, so within 3 samples of a
+  // sector boundary both neighbours are accepted; everywhere else the value is exact.
+  function automatic integer np2_pos_lo(input integer lba0, input integer k);
+    np2_pos_lo = lba0 + ((k < 3 ? 0 : k - 3) + 587) / 588;
+  endfunction
+  function automatic integer np2_pos_hi(input integer lba0, input integer k);
+    np2_pos_hi = lba0 + (k + 3 + 587) / 588;
+  endfunction
 
   // THE OSD's EJECT, as z486_mister.sv wires it in a --cdrom build: every hps_io slot goes through
   // pc9821_mount_eject #(.N(HPS_VDNUM = 5)), and slot 4's eject_req is status[11] ("T[11],Eject
@@ -103,7 +163,8 @@ module tb_pc9821_atapi;
       .img_mounted(me_mounted[4]), .img_size(me_size),
       .sd_lba(sd_lba), .sd_blk_cnt(sd_blk_cnt), .sd_rd(sd_rd), .sd_ack(sd_ack),
       .sd_buff_wr(sd_buff_wr), .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout),
-      .cdda_req(cdda_req_mux), .cdda_wr(cdda_wr), .cdda_data(cdda_data),
+      .cdda_req(cdda_req_mux), .cdda_req4(cdda_req4_mux), .cdda_played(cdda_played_mux),
+      .cdda_flush(cdda_flush), .cdda_wr(cdda_wr), .cdda_data(cdda_data),
       .log_byte(log_byte), .log_we(log_we), .log_accept(1'b1)
   );
 `else
@@ -130,14 +191,17 @@ module tb_pc9821_atapi;
   function automatic [7:0] dbyte(input integer l, input integer i);
     dbyte = 8'((i ^ (i >> 8) * 29) + l * 13 + 1);
   endfunction
+  // disc_id tells two audio discs apart (C24 mounts a second disc over a playing one)
+  integer disc_id = 0;
   function automatic [7:0] abyte(input integer l, input integer i);
-    abyte = 8'(l * 91 + i * 7 + 3 + (i >> 8));
+    abyte = 8'(l * 91 + i * 7 + 3 + (i >> 8) + disc_id * 53);
   endfunction
   function automatic [7:0] bcd8(input integer v);
     bcd8 = 8'(((v / 10) << 4) | (v % 10));
   endfunction
   byte img [];
   integer pcd_mode = 0;
+  integer pcd_secs = PCD_SECS;   // C20 mounts a longer PCD (more audio sectors) by raising this
   task automatic make_iso;
     begin
       img = new[ISO_SECS * 2048];
@@ -164,15 +228,15 @@ module tb_pc9821_atapi;
   task automatic make_pcd;
     integer base;
     begin
-      img = new[(PCD_SECS + 1) * 2352];
+      img = new[(pcd_secs + 1) * 2352];
       foreach (img[k]) img[k] = 0;
       img[0] = "P"; img[1] = "C"; img[2] = "9"; img[3] = "8";
       img[4] = "C"; img[5] = "D"; img[6] = "0"; img[7] = "1";
       img[8] = 3; img[9] = 1;
-      img[12] = 8'(PCD_SECS);
+      img[12] = 8'(pcd_secs); img[13] = 8'(pcd_secs >> 8);
       pcd_entry(0, 8'h14, 0); pcd_entry(1, 8'h10, 10); pcd_entry(2, 8'h10, 20);
-      pcd_entry(3, 8'h10, PCD_SECS);
-      for (int l = 0; l < PCD_SECS; l++) begin
+      pcd_entry(3, 8'h10, pcd_secs);
+      for (int l = 0; l < pcd_secs; l++) begin
         base = (l + 1) * 2352;
         if (l < 10) begin
           img[base] = 0; for (int i = 1; i < 11; i++) img[base + i] = 8'hFF; img[base + 11] = 0;
@@ -187,6 +251,7 @@ module tb_pc9821_atapi;
 
   // ==== hps_io's side of slot 4 ====
   integer host_reqs = 0;
+  integer host_sec_reqs = 0;   // C24/C25: requests for anything but the header (LBA 0)
   integer host_delay = 6;   // clk cycles from the request to the ack (C13 models the ARM's latency)
   bit host_foreign = 0;     // C16: stream another slot's words (acks low) before serving the request
   always @(negedge clk) begin : host
@@ -194,6 +259,7 @@ module tb_pc9821_atapi;
     if (sd_rd && !sd_ack) begin
       lba = sd_lba; words = (sd_blk_cnt + 1) * 256;
       host_reqs = host_reqs + 1;
+      if (lba != 0) host_sec_reqs = host_sec_reqs + 1;
       repeat (host_delay) @(negedge clk);
       if (host_foreign) begin
         // hps_io still serving ANOTHER slot (the hard disk's): its words on the shared bus,
@@ -223,6 +289,18 @@ module tb_pc9821_atapi;
       img_size = img.size();
       @(negedge clk); img_mounted = 1; repeat (3) @(negedge clk); img_mounted = 0;
       repeat (20000) @(negedge clk);   // the header fetch and (ISO) the lead-out MSF
+    end
+  endtask
+  // C19: an ISO of exactly n sectors. The mount's header is the drive's own iso_word for an ISO,
+  // so the image's content is irrelevant; only its SIZE reaches the converter (iso_cap -> the
+  // lead-out's frames). Verilator zero-fills the dynamic array.
+  task automatic mount_iso_sectors(input integer n);
+    begin
+      img = new[n * 2048];
+      pcd_mode = 0;
+      img_size = img.size();
+      @(negedge clk); img_mounted = 1; repeat (3) @(negedge clk); img_mounted = 0;
+      repeat (20000) @(negedge clk);
     end
   endtask
 
@@ -511,6 +589,9 @@ module tb_pc9821_atapi;
     expect8(16'h064E, 8'h50, "C1 bank 0's master is the hard disk");
     expect8(16'h0648, 8'h00, "C1 the disk's cylinder low");
     wr(16'h0432, 8'h01); wr(16'h064C, 8'hA0);
+    // 0x0433 bit 1 = the selected bank has a connected device (NP2kai cbus/ideio.c ideio_i433:
+    // `(bank[1] & 1) ? 0x02 : 0`): with the drive on bank 1 the read is 0x02.
+    expect8(16'h0433, 8'h02, "C1 0x0433 reports the bank-1 drive as connected (0x02)");
 
     // ==== C2: DEVICE RESET and SRST ====
     sel_cd;
@@ -827,7 +908,7 @@ module tb_pc9821_atapi;
       mount(1);
       rst_n = 1;
       repeat (8) @(negedge clk);
-      use_real_cdda = 1;
+      use_real_cdda = 1; c13_lba0 = 10; c13_want = 6 * 588;
       host_delay = 100000;          // 1 ms at this bench's 100 MHz clk
       wr(16'h0432, 8'h01); wr(16'h064C, 8'hA0); wr(16'h074C, 8'h02);
       packet(8'h00, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C13 first TUR after the mount");
@@ -851,6 +932,10 @@ module tb_pc9821_atapi;
       // sees it slightly early here, never late.
       else if (done_at < 80 - 47) fail($sformatf("C13 the play completed after %0d ms, faster than its 80 ms of audio", done_at));
       else $display("C13: 6 sectors played in %0d ms", done_at);
+      repeat (6000000) @(negedge clk);   // 60 ms: let the ring drain to the speakers
+      $display("C13: %0d samples out of the ring, %0d wrong", c13_k, c13_bad);
+      if (c13_k < 6 * 588 - 600) fail($sformatf("C13 only %0d CD-DA samples reached cdda's AUDIO_L/R, want about %0d", c13_k, 6 * 588));
+      if (c13_bad != 0) fail($sformatf("C13 %0d CD-DA samples at cdda's output differ from the disc", c13_bad));
       host_delay = 6;
       use_real_cdda = 0;
     end
@@ -1034,6 +1119,339 @@ module tb_pc9821_atapi;
       if (ata_irq) fail("C18 a completion under nIEN raised a request (NP2kai setintr is a no-op)");
     end
 
+    // ==== C19: the MSF converter at its 4500-frame boundary ====
+    // The converter walks frames -> M:S:F in two phases: subtract 4500 while cv_x >= 4500 (the
+    // minutes), then 75 a step (the seconds), and the conversion ends when cv_x < 75. A mount of
+    // N sectors makes the converter's input N + 150 frames (the 150-frame lead-in of
+    // atapicmd.c's storemsf), so these six sizes pin the minute compare one frame below, exactly
+    // on and one frame above its edge, and the seconds step's last frames (74/75/76). Every
+    // expected M:S:F is arithmetic on that frame count, never this RTL's own answer.
+    begin
+      integer n, mm, ss, ff;
+      sel_cd;
+      for (int t = 0; t < 6; t++) begin
+        case (t)
+          0: n = 4349;   // 4499 frames: the minute compare is FALSE by one frame
+          1: n = 4350;   // 4500 frames: EXACTLY one minute step (the compare's true edge)
+          2: n = 4351;   // 4501 frames
+          3: n = 4424;   // 4574 frames: the seconds step's 74-frame tail
+          4: n = 4425;   // 4575 frames: exactly one whole 75-frame step after the minute
+          5: n = 4426;   // 4576 frames
+          default: n = 20;
+        endcase
+        mount_iso_sectors(n);
+        mm = (n + 150) / 4500;
+        ss = ((n + 150) / 75) % 60;
+        ff = (n + 150) % 75;
+        packet(8'h43, 8'h02, 0, 0, 0, 0, 0, 0, 8'd100, 0, "C19 READ TOC MSF");
+        expect_done("C19 READ TOC MSF");
+        expect_bytes('{8'h00, 8'h12, 8'h01, 8'h01,
+                       8'h00, 8'h14, 8'h01, 8'h00, 8'h00, 8'h00, 8'h02, 8'h00,
+                       8'h00, 8'h14, 8'hAA, 8'h00, 8'h00, bcd8(mm), bcd8(ss), bcd8(ff)},
+                     $sformatf("C19 READ TOC MSF at %0d sectors (%02d:%02d:%02d)", n, mm, ss, ff));
+      end
+    end
+
+    // ==== C20: CD-DA from a slow host: 20 ms from each slot-4 request to its acknowledge ====
+    // One audio sector is 1/75 s = 13.3 ms of sound. A drive that fetches one sector per host
+    // request, one request at a time, cannot keep up once the host takes longer than that per
+    // request, whatever the ring holds: the ring runs dry and the speakers get silence between
+    // sectors. The MiSTer's ARM answers a slot request in a time this core does not control (it
+    // differs between cards and Main_MiSTer builds). Here every request waits 20 ms. A 60-sector
+    // play (800 ms) must reach the speakers whole: every sample, in order, equal to the disc, and
+    // no silent sample between its first and its last.
+    begin
+      integer f0, f1, t, done_at;
+      pcd_secs = 120;              // track 1 data 0..9, audio from 10 to the lead-out at 120
+      rst_n = 0;
+      mount(1);
+      rst_n = 1;
+      repeat (8) @(negedge clk);
+      sel_cd;
+      wr(16'h074C, 8'h02);
+      packet(8'h00, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C20 first TUR after the mount");
+      c13_k = 0; c13_bad = 0; c13_gap = 0; c13_lba0 = 30; c13_want = 60 * 588;
+      use_real_cdda = 1;
+      host_delay = 2000000;         // 20 ms at this bench's 100 MHz clk
+      f0 = 30 + 150; f1 = 90 + 150;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C20 PLAY AUDIO MSF");
+      expect_done("C20 PLAY AUDIO MSF");
+      done_at = -1;
+      for (t = 0; t < 200; t++) begin           // up to 2 s, polled every 10 ms
+        repeat (1000000) @(negedge clk);
+        packet(8'h42, 0, 0, 8'h01, 0, 0, 0, 0, 8'd4, 0, "C20 poll");
+        if (rbuf[1] == 8'h13) begin done_at = t; break; end
+      end
+      repeat (6000000) @(negedge clk);          // 60 ms: the ring drains
+      $display("C20: %0d of %0d samples reached the speakers, %0d wrong, %0d silent gaps, play done after %0d0 ms",
+               c13_k, c13_want, c13_bad, c13_gap, done_at);
+      if (done_at < 0) fail("C20 the 800 ms play never completed in 2 s");
+      if (c13_gap != 0) fail($sformatf("C20 %0d silent samples inside the play: the ring ran dry behind a 20 ms host", c13_gap));
+      if (c13_k != c13_want) fail($sformatf("C20 %0d samples reached the speakers, want %0d", c13_k, c13_want));
+      if (c13_bad != 0) fail($sformatf("C20 %0d samples differ from the disc", c13_bad));
+      host_delay = 6;
+      use_real_cdda = 0;
+    end
+
+    // ==== C21: READ SUB-CHANNEL reports NP2kai's position, not the read-ahead ====
+    // NP2kai's dacurpos is the next sector its mixer loads: playdevaudio loads a sector and
+    // increments dacurpos before mixing it (ideio.c), so while sector S is heard the Q channel's
+    // absolute address is S + 1 - after k samples of the play, lba0 + ceil(k / 588) (np2_pos_lo/
+    // hi). The drive here reads ahead into the ring; every poll's address must be exactly that
+    // for the samples that had reached the speakers when the drive executed the poll, and
+    // "completed" (0x13) may only be reported once all of the play's samples have left it.
+    begin
+      integer f0, f1, t, pos, heard, worst, done_at, lo, hi;
+      c13_k = 0; c13_bad = 0; c13_gap = 0; c13_lba0 = 30; c13_want = 40 * 588;
+      use_real_cdda = 1;
+      host_delay = 100000;          // 1 ms
+      f0 = 30 + 150; f1 = 70 + 150;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C21 PLAY AUDIO MSF");
+      expect_done("C21 PLAY AUDIO MSF");
+      worst = 0; done_at = -1;
+      for (t = 0; t < 100; t++) begin           // every 10 ms
+        repeat (1000000) @(negedge clk);
+        packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C21 poll");
+        heard = c13_lba0 + (subq_k + 587) / 588;   // NP2kai's dacurpos for these samples
+        lo = np2_pos_lo(c13_lba0, subq_k); hi = np2_pos_hi(c13_lba0, subq_k);
+        pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;   // the absolute MSF (binary: not NEC mode)
+        if (rbuf[1] == 8'h13) begin
+          done_at = t;
+          if (c13_k < c13_want - 588)
+            fail($sformatf("C21 completed (0x13) with only %0d of %0d samples played", c13_k, c13_want));
+          break;
+        end
+        if (pos - heard > worst) worst = pos - heard;
+        if (heard - pos > worst) worst = heard - pos;
+        if (pos < lo || pos > hi)
+          fail($sformatf("C21 sub-channel reports LBA %0d after %0d samples, want NP2kai's %0d (%0d..%0d)",
+                         pos, subq_k, heard, lo, hi));
+      end
+      $display("C21: the reported position was at most %0d sector(s) from NP2kai's; completed after %0d0 ms", worst, done_at);
+      if (done_at < 0) fail("C21 the play never completed");
+      repeat (6000000) @(negedge clk);
+      if (c13_k != c13_want || c13_bad != 0 || c13_gap != 0)
+        fail($sformatf("C21 %0d/%0d samples, %0d wrong, %0d gaps", c13_k, c13_want, c13_bad, c13_gap));
+      use_real_cdda = 0;
+    end
+
+    // ==== C22: PAUSE, RESUME and STOP act on what is heard ====
+    // A PAUSE silences the speakers at once (the ring's read-ahead is dropped, nothing already
+    // fetched keeps playing) and holds the sector being heard; RESUME continues from the start
+    // of that sector, in order, with no gap; STOP silences at once too. (atapicmd.c: pauseresume
+    // and stop_daplay stop NP2kai's mixer callback from taking any more of the disc.)
+    begin
+      integer f0, f1, t, k_at, sec_at, pos, pmin;
+      c13_k = 0; c13_bad = 0; c13_gap = 0; c13_lba0 = 30; c13_want = 40 * 588;
+      use_real_cdda = 1;
+      host_delay = 100000;
+      f0 = 30 + 150; f1 = 70 + 150;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C22 PLAY AUDIO MSF");
+      repeat (15000000) @(negedge clk);         // 150 ms in
+      c13_hold = 1;
+      packet(8'h4B, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C22 PAUSE");
+      expect_done("C22 PAUSE");
+      repeat (2000) @(negedge clk);             // 20 us: the sample in the CDC pipe
+      k_at = c13_k; sec_at = c13_lba0 + c13_k / 588;
+      repeat (5000000) @(negedge clk);          // 50 ms
+      if (c13_k != k_at)
+        fail($sformatf("C22 %0d samples reached the speakers in the 50 ms after PAUSE", c13_k - k_at));
+      // NP2kai: a PAUSE leaves dacurpos one past the sector being heard (it was loaded), and a
+      // paused drive reports dacurpos + (rand() & 7). Over 32 polls the wander's low end shows:
+      // the smallest report must be NP2kai's dacurpos itself, not merely inside the window.
+      pmin = 1 << 30;
+      for (int q = 0; q < 32; q++) begin
+        packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C22 SUB-CHANNEL paused");
+        pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;
+        if (pos < pmin) pmin = pos;
+        if (rbuf[1] !== 8'h12 || pos < np2_pos_lo(c13_lba0, k_at) || pos > np2_pos_hi(c13_lba0, k_at) + 7)
+          fail($sformatf("C22 paused: status %02x at LBA %0d, want 0x12 at %0d..%0d (NP2kai's dacurpos + rand() & 7)",
+                         rbuf[1], pos, np2_pos_lo(c13_lba0, k_at), np2_pos_hi(c13_lba0, k_at) + 7));
+      end
+      if (pmin > np2_pos_hi(c13_lba0, k_at))
+        fail($sformatf("C22 paused: 32 reports never came down to NP2kai's dacurpos %0d (lowest %0d)",
+                       np2_pos_hi(c13_lba0, k_at), pmin));
+      c13_k = (c13_k / 588) * 588;              // RESUME restarts the sector that was being heard
+      packet(8'h4B, 0, 0, 0, 0, 0, 0, 0, 8'h01, 0, "C22 RESUME");
+      expect_done("C22 RESUME");
+      // the silence lasts until the refetched sector's first sample arrives (one 1 ms host
+      // request); from then on any silent sample is a gap
+      begin
+        integer k_res, n;
+        k_res = c13_k; n = 0;
+        while (c13_k == k_res && n < 1000000) begin @(negedge clk); n++; end
+        if (c13_k == k_res) fail("C22 nothing reached the speakers in the 10 ms after RESUME");
+      end
+      c13_hold = 0;
+      for (t = 0; t < 100; t++) begin
+        repeat (1000000) @(negedge clk);
+        packet(8'h42, 0, 0, 8'h01, 0, 0, 0, 0, 8'd4, 0, "C22 poll");
+        if (rbuf[1] == 8'h13) break;
+      end
+      repeat (6000000) @(negedge clk);
+      if (c13_k != c13_want || c13_bad != 0 || c13_gap != 0)
+        fail($sformatf("C22 after RESUME: %0d/%0d samples, %0d wrong, %0d gaps", c13_k, c13_want, c13_bad, c13_gap));
+      // STOP (START STOP UNIT, atapicmd.c stop_daplay) in the middle of a play
+      c13_k = 0; c13_bad = 0; c13_gap = 0;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C22 PLAY again");
+      repeat (15000000) @(negedge clk);
+      c13_hold = 1;
+      packet(8'h1B, 0, 0, 0, 8'h01, 0, 0, 0, 0, 0, "C22 START STOP UNIT");
+      repeat (2000) @(negedge clk);
+      k_at = c13_k;
+      repeat (5000000) @(negedge clk);
+      if (c13_k != k_at)
+        fail($sformatf("C22 %0d samples reached the speakers in the 50 ms after STOP", c13_k - k_at));
+      $display("C22: PAUSE held sector %0d, STOP after %0d samples, both silent at once", sec_at, k_at);
+      c13_hold = 0;
+      host_delay = 6;
+      use_real_cdda = 0;
+      pcd_secs = PCD_SECS;
+    end
+
+    // ==== C23: a sector finishing in the very cycle of a PAUSE or a STOP ====
+    // R4/R8: two events reach the player's positions in one cycle. A PAUSE holds the sector being
+    // heard, and a sector that finished in the PAUSE's own cycle has been heard: the held (and
+    // fetch) position is one past it. A STOP discards everything: position 0, whatever finished.
+    // The model ring is held (CDDA_REQ low) so nothing is fetched and the only movement is the
+    // forced pulse.
+    begin
+      integer f0, f1;
+      sel_cd;
+      cdda_req = 0; c23_quiet = 1;
+      f0 = 12 + 150; f1 = 19 + 150;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C23 PLAY AUDIO MSF");
+      // the first sector (12) has been fetched and is playing: one forced pulse of the model ring
+      // is ITS end, so give the player a fetched position past it the honest way - let the model
+      // fetch exactly one sector
+      cdda_req = 1;
+      wait (cd.dacurpos == 20'd13);
+      cdda_req = 0;
+      repeat (4000) @(negedge clk);
+      c23_op = 8'h4B;
+      packet(8'h4B, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C23 PAUSE with a sector finishing in its cycle");
+      c23_op = 8'h00;
+      if (cd.daplaypos !== 20'd13 || cd.dacurpos !== 20'd13 || cd.dalength !== 20'd6)
+        fail($sformatf("C23 PAUSE + played in one cycle: played %0d fetch %0d length %0d, want 13 13 6",
+                       cd.daplaypos, cd.dacurpos, cd.dalength));
+      packet(8'h4B, 0, 0, 0, 0, 0, 0, 0, 8'h01, 0, "C23 RESUME");
+      repeat (100) @(negedge clk);
+      c23_op = 8'h1B;
+      packet(8'h1B, 0, 0, 0, 8'h01, 0, 0, 0, 0, 0, "C23 STOP with a sector finishing in its cycle");
+      c23_op = 8'h00;
+      if (cd.daplaypos !== 20'd0 || cd.dacurpos !== 20'd0 || cd.daflag !== 3'd3)
+        fail($sformatf("C23 STOP + played in one cycle: played %0d fetch %0d flag %0d, want 0 0 3",
+                       cd.daplaypos, cd.dacurpos, cd.daflag));
+      $display("C23: PAUSE and STOP each merged a sector finishing in their own cycle");
+      cdda_req = 1; c23_quiet = 0;
+    end
+
+    // ==== C24: another disc mounted over a playing one ====
+    // The OSD mounts a second PCD while a track plays, without an eject first. The medium has
+    // gone away under the player: NP2kai's mixer finds the sxsi device not READY and stops with
+    // daflag 0x14, dacurpos left where it was (ideio.c playdevaudio). So from the mount on
+    // nothing of the old disc reaches the speakers (the ring's read-ahead is dropped), nothing of
+    // the new disc is fetched at the old play's position, READ SUB-CHANNEL answers 0x14 at
+    // NP2kai's position, and the TEST UNIT READY that reports the new disc stops the player
+    // (atapicmd.c: 0x13, position 0).
+    begin
+      integer f0, f1, k_at, req_at, pos;
+      pcd_secs = 120; disc_id = 0;
+      host_delay = 100000;          // 1 ms
+      mount(1);
+      repeat (500000) @(negedge clk);   // the header behind the 1 ms host
+      sel_cd;
+      packet(8'h00, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C24 TUR reporting the first disc");
+      packet(8'h00, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C24 TUR");
+      expect_done("C24 TUR");
+      c13_k = 0; c13_bad = 0; c13_gap = 0; c13_lba0 = 30; c13_want = 40 * 588;
+      use_real_cdda = 1;
+      f0 = 30 + 150; f1 = 70 + 150;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C24 PLAY AUDIO MSF");
+      expect_done("C24 PLAY AUDIO MSF");
+      repeat (15000000) @(negedge clk);         // 150 ms in
+      if (c13_k < 100 || c13_bad != 0)
+        fail($sformatf("C24 the first disc's play: %0d samples, %0d wrong", c13_k, c13_bad));
+      // the second disc, mounted over the first
+      c13_hold = 1;
+      disc_id = 1; make_pcd;
+      img_size = img.size();
+      @(negedge clk); img_mounted = 1;
+      repeat (2) @(negedge clk);
+      req_at = host_sec_reqs;
+      img_mounted = 0;
+      repeat (2000) @(negedge clk);             // 20 us: the sample in the CDC pipe
+      k_at = c13_k;
+      repeat (20000000) @(negedge clk);         // 200 ms: more than the ring holds
+      if (c13_k != k_at)
+        fail($sformatf("C24 %0d samples reached the speakers in the 200 ms after the mount", c13_k - k_at));
+      if (host_sec_reqs != req_at)
+        fail($sformatf("C24 %0d sector requests of the new disc after the mount", host_sec_reqs - req_at));
+      packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C24 SUB-CHANNEL after the mount");
+      expect_done("C24 SUB-CHANNEL after the mount");
+      pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;
+      if (rlen != 16 || rbuf[1] !== 8'h14 || pos < np2_pos_lo(30, k_at) || pos > np2_pos_hi(30, k_at))
+        fail($sformatf("C24 SUB-CHANNEL after the mount: status %02x at LBA %0d, want 0x14 at %0d..%0d",
+                       rbuf[1], pos, np2_pos_lo(30, k_at), np2_pos_hi(30, k_at)));
+      packet(8'h00, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C24 TUR reporting the second disc");
+      if (pk_status !== 8'h51) fail($sformatf("C24 TUR after the mount: status %02x, want 51 (the change)", pk_status));
+      packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C24 SUB-CHANNEL after the TUR");
+      pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;
+      if (rbuf[1] !== 8'h13 || pos < 0 || pos > 7)
+        fail($sformatf("C24 SUB-CHANNEL after the TUR: status %02x at LBA %0d, want 0x13 at 0..7", rbuf[1], pos));
+      $display("C24: a mount over a play after %0d samples: silent at once, no sector fetched, 0x14 at LBA %0d",
+               k_at, np2_pos_lo(30, k_at));
+      c13_hold = 0;
+    end
+
+    // ==== C25: the core reset stops CD-DA ====
+    // NP2kai runs ideio_reset on every machine reset (cbus/cbuscore.c resetfn[]): it zeroes the
+    // IDE state, so the play stops (daplaying 0), and devinit sets daflag 0x15 (ideio.c). From the
+    // reset on the speakers are silent and no audio sector is fetched; the disc stays mounted,
+    // and READ SUB-CHANNEL then answers 0x15 with no position (atapicmd.c readsubch: the
+    // position fields are filled only for a daflag other than 0x15).
+    begin
+      integer f0, f1, k_at, req_at;
+      c13_k = 0; c13_bad = 0; c13_gap = 0; c13_lba0 = 30; c13_want = 40 * 588;
+      f0 = 30 + 150; f1 = 70 + 150;
+      packet(8'h47, 0, 0, 8'(f0 / 4500), 8'((f0 / 75) % 60), 8'(f0 % 75),
+             8'(f1 / 4500), 8'((f1 / 75) % 60), 8'(f1 % 75), 0, "C25 PLAY AUDIO MSF");
+      expect_done("C25 PLAY AUDIO MSF");
+      repeat (15000000) @(negedge clk);         // 150 ms in
+      if (c13_k < 100 || c13_bad != 0)
+        fail($sformatf("C25 the play before the reset: %0d samples, %0d wrong", c13_k, c13_bad));
+      c13_hold = 1;
+      @(negedge clk); rst_n = 0;
+      repeat (2) @(negedge clk);
+      req_at = host_sec_reqs;
+      repeat (98) @(negedge clk); rst_n = 1;
+      repeat (2000) @(negedge clk);
+      k_at = c13_k;
+      repeat (20000000) @(negedge clk);         // 200 ms
+      if (c13_k != k_at)
+        fail($sformatf("C25 %0d samples reached the speakers in the 200 ms after the reset", c13_k - k_at));
+      if (host_sec_reqs != req_at)
+        fail($sformatf("C25 %0d audio sector requests after the reset", host_sec_reqs - req_at));
+      sel_cd;
+      wr(16'h074C, 8'h02);
+      packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C25 SUB-CHANNEL after the reset");
+      expect_done("C25 SUB-CHANNEL after the reset");
+      expect_bytes('{8'h00, 8'h15, 8'h00, 8'h12, 8'h01, 8'h00, 8'h00, 8'h00,
+                     8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00},
+                   "C25 SUB-CHANNEL after the reset (0x15, no position)");
+      $display("C25: a reset after %0d samples of a play: silent at once, no sector fetched, 0x15", k_at);
+      c13_hold = 0;
+      host_delay = 6;
+      use_real_cdda = 0;
+      pcd_secs = PCD_SECS; disc_id = 0;
+    end
+
     if (errors == 0) begin
       // ==== VERDICT ====
       $display("TB_PC9821_ATAPI: PASS");
@@ -1043,7 +1461,7 @@ module tb_pc9821_atapi;
   end
 
   initial begin
-    #400_000_000;
+    #5_000_000_000;
     $fatal(1, "TB_PC9821_ATAPI: TIMEOUT");
   end
 

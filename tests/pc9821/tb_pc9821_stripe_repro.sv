@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_STRIPE_REPRO: the owner's horizontal stripe under the CONTENDED case the earlier value benches never drove. The planewin-draw lane drew a full-screen picture with a raster flush per row and read every byte back right, but it drove the scanout and the CPU one after the other; this bench drives them TOGETHER through the DEPLOYED route - the real pc9821_memory_subsystem (so the response-route queue is in the path), the real pc9821_gvram, the real sdram_sync_bridge (the controller on clk_sys, here 50 MHz) and the real src/memory/sdram.v controller - with the scanout's line fetch ticking every raster line on its own port while the CPU runs a plane-window row stream (the graphics library's rep movsw / rep stosw shape: consecutive 16-bit stores down a row, the LAST one a partial byte), and compares every plane byte of the row against a software model.
+// TB_PC9821_STRIPE_REPRO: the observed horizontal stripe under the CONTENDED case the earlier value benches never drove. tb_pc9821_planewin_draw draws a full-screen picture with a raster flush per row and read every byte back right, but it drove the scanout and the CPU one after the other; this bench drives them TOGETHER through the DEPLOYED route - the real pc9821_memory_subsystem (so the response-route queue is in the path), the real pc9821_gvram, the real sdram_sync_bridge (the controller on clk_sys, here 50 MHz) and the real src/memory/sdram.v controller - with the scanout's line fetch ticking every raster line on its own port while the CPU runs a plane-window row stream (the graphics library's rep movsw / rep stosw shape: consecutive 16-bit stores down a row, the LAST one a partial byte), and compares every plane byte of the row against a software model.
 
 `default_nettype none
 
@@ -37,6 +37,8 @@ module tb_pc9821_stripe_repro;
   reg [7:0]  grcg_addr = 0;
   reg [7:0]  grcg_din = 0;
   wire       grcg_expand;
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
 
   reg        egc_enable = 0;
   reg [15:0] egc_access = 16'hFFF0;
@@ -68,12 +70,11 @@ module tb_pc9821_stripe_repro;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire       cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire       cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0]  tram_din;
@@ -131,19 +132,19 @@ module tb_pc9821_stripe_repro;
   wire        nWE, nRAS, nCAS, nCS, CKE;
   wire        busy;
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
 
   // Backend transaction counters: what the WCB actually issued.
   integer n_pair_wr = 0, n_single_wr = 0, n_rd = 0;
   integer n_wb4 = 0;   // the EGC/GRCG TWO-WORD WRITE burst (B_WB4)
-  // The WCB forwarding / write-back counters are gone with the write-combining buffer (r13/283):
+  // The WCB forwarding / write-back counters are gone with the write-combining buffer:
   // the scanout reads the M10K array directly and sees every store on the clk_sys it commits, so
   // the stripe this bench reproduced (a fetch reading behind a pending write-back) cannot arise.
   // ==== DUT ====
@@ -155,6 +156,7 @@ module tb_pc9821_stripe_repro;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -210,11 +212,11 @@ module tb_pc9821_stripe_repro;
   pc9821_memory_subsystem dut (.*);
 
   // The bridge: port 0 = the subsystem's mem_* bus (the CPU + loader), port 2 = the scanout line
-  // fetch (the subsystem's mem3_* bus). The bridge has three ports since r13/300 F5; port 2 was
+  // fetch (the subsystem's mem3_* bus). The bridge has three ports; port 2 was
   // the 86-PCM buffer in the SoC and is idle here, so the subsystem's scanout route (mem3_*) is
   // wired to it. The controller's fourth port is tied idle inside the bridge.
   sdram_sync_bridge #(
-      .FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .FAST_GRADE(1'b0)
+      .FREQ(`TB_SDRAM_FREQ), .FAST_GRADE(1'b0)
   ) bridge (
       .clk(clk), .resetn(~reset),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
@@ -272,7 +274,7 @@ module tb_pc9821_stripe_repro;
       cpu_write = wr;
       cpu_valid = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       cpu_valid = 1'b0; cpu_write = 1'b0; cpu_be = 4'hF;
@@ -349,7 +351,7 @@ module tb_pc9821_stripe_repro;
   localparam integer NT = 24;
 
   // One plane-window row: 40 16-bit stores at plane offsets wbase..wbase+79 on plane p. The last
-  // one is a single byte (the right-edge column the owner calls out).
+  // one is a single byte (the right-edge column the symptom shows).
   task automatic put_row(input [1:0] plane, input integer wb, input [7:0] seed);
     begin
       for (c = 0; c < 40; c = c + 1) begin
@@ -736,7 +738,7 @@ module tb_pc9821_stripe_repro;
     // ---- TRIAL 7 (DETERMINISTIC, fail-first): the scanout's fetch must see a CPU store that
     // landed in the write-combining buffer AFTER the line tick's flush. The tick flushes what is
     // dirty THEN, but the CPU keeps writing during the line's fetch, and a fetch burst that read
-    // SDRAM behind such a store would put the column's PREVIOUS value on the line - the owner's
+    // SDRAM behind such a store would put the column's PREVIOUS value on the line - the reported
     // "short strip from elsewhere in the picture". ----
     begin : stale_line
       integer lc;
@@ -783,12 +785,12 @@ module tb_pc9821_stripe_repro;
     // ---- TRIAL 7: a DISPLAY PAGE CHANGE while a line fetch is in flight. TH05's music room and
     // Rusty flip the display page at the frame boundary, so the first lines' fetches are the ones
     // in flight when scan_page moves. The burst must keep its OWN page; a forwarding tag built
-    // from the LIVE page takes the other page's write-combining word onto the line - the owner's
+    // from the LIVE page takes the other page's write-combining word onto the line - the reported
     // "short strip from elsewhere in the picture". ----
     begin : page_flip
       integer pf_k;
       // The page flips mid-fetch, repeatedly. The fetch latches scan_page_q and line_base_q at the
-      // line tick and its read is one clk_sys deep, so a flip cannot redirect a beat (r13/278's
+      // line tick and its read is one clk_sys deep, so a flip cannot redirect a beat (the earlier
       // bug); with the array in block RAM there is also no forwarding tag built from a live page.
       // The section drives the interleaving; the deterministic byte checks above are the verdict.
       scan_enable = 1'b1;

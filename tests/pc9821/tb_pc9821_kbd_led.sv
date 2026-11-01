@@ -29,7 +29,9 @@ module tb_pc9821_kbd_led;
   reg [10:0] ps2_key = 0;
 
   // ==== DUT ====
-  pc9821_kbd dut (
+  // Shrink the byte-presentation tick so back-to-back keys stay inside read_byte's
+  // budget (the real tick is SYS_CLOCK_HZ / 1280; tb_pc9821_kbd_pace pins the rate).
+  pc9821_kbd #(.XFER_TICK_CYCLES(26'd8)) dut (
       .clk(clk),
       .rst_n(rst_n),
       .cs(cs),

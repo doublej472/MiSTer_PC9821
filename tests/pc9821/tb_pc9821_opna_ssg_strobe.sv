@@ -148,7 +148,7 @@ module tb_pc9821_opna_ssg_strobe;
       .sel_dac_dat  ()
   );
 
-  // The SSG consumer, wired exactly as jt12_top.v:666-679 (cs_n = 0, so write = !wr_n).
+  // The SSG consumer, wired exactly as jt12_top.v:665-679 (`.cs_n ( 1'b0 )`, so write = !wr_n).
   jt49 u_psg (
       .rst_n  (~rst),
       .clk    (clk),
@@ -205,7 +205,7 @@ module tb_pc9821_opna_ssg_strobe;
     rst = 1'b0;
     repeat (8) @(negedge clk);
 
-    // (1) The reachable corruption (review finding P2):
+    // (1) The reachable corruption:
     // select SSG reg 7, write its data, then select FM reg 0xB1 (whose low nibble is
     // SSG register 1). With the wide strobe the trailing idle writes 0xA5 into
     // regarray[1]; with the one-host-clock strobe regarray[1] keeps its reset 0x00.

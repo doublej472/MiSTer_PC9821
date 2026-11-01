@@ -95,7 +95,7 @@ module tb_data_access;
         .vipt_tlb_dirty(vipt_tlb_dirty),
         .vipt_tlb_hit(vipt_tlb_hit),
         .vipt_tlb_is_vga_mem(vipt_tlb_is_vga_mem),
-        .vipt_tlb_phys_addr(vipt_tlb_phys_addr),
+        .vipt_tlb_phys_addr(vipt_tlb_phys_addr), .vipt_tlb_phys_hit_form(vipt_tlb_phys_addr), .vipt_tlb_phys_miss_form(vipt_tlb_phys_addr),
         .vipt_tlb_user(vipt_tlb_user),
         .vipt_tlb_writable(vipt_tlb_writable),
         .ds_flat(ds_flat),

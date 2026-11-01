@@ -53,6 +53,7 @@ module address_unit
 
     output logic [31:0] ind,
     output logic [31:0] ind_delta,
+    output logic        ind_delta_dword,   // ind_delta is +4 or -4, registered with it
     output logic [31:0] ind_linear,          // Registered relocated IND
     output logic        ind_linear_valid,    // Relocation matches current IND
     output logic [31:0] ea,
@@ -112,6 +113,22 @@ function automatic logic [2:0] onehot_idx(input logic [7:0] onehot);
                  onehot[7] ? 3'd7 : 3'd0;
 endfunction
 
+// Relocation as a 3:2 carry-save stage. Folding the segment base into the EA
+// sum removes one 32-bit carry chain from the linear path at zero cycles:
+//   a + b + s == (a^b^s) + (((a&b)|(b&s)|(a&s)) << 1)   (mod 2^32)
+// is exact for every operand, and the final carry-propagate adder is the one
+// the second '+' used to be. ea_offset_full still forms effective_addr in
+// parallel; POP-LIN FUSE below checks the fused relocation every issuing cycle.
+function automatic logic [31:0] relocate_csa32(
+    input logic [31:0] a,
+    input logic [31:0] b,
+    input logic [31:0] s
+);
+    automatic logic [31:0] carry;
+    carry = (a & b) | (b & s) | (a & s);
+    relocate_csa32 = (a ^ b ^ s) + {carry[30:0], 1'b0};
+endfunction
+
 wire [63:0] ea_terms = ea_scale_operands(
     ea_base_value, ea_index_value, ea_scale_r, ea_scale_to_base_r);
 wire [31:0] ea_term_a_live = ea_terms[63:32];
@@ -127,10 +144,20 @@ wire [31:0] ea_add_b = split_ea_use ? displacement : ea_simple_b;
 wire [31:0] ea_offset_full = ea_add_a + ea_add_b;
 wire [31:0] effective_addr = ea_is_16bit_r
                            ? {16'd0, ea_offset_full[15:0]} : ea_offset_full;
-wire [31:0] linear32 = ea_offset_full + issue_seg_base;
+wire [31:0] linear32 = relocate_csa32(ea_add_a, ea_add_b, issue_seg_base);
+// The 16-bit arm cannot be folded: it wraps (a + b) at 16 bits BEFORE the
+// segment base is added, so the base sees only that add's carry, not the
+// three-term sum's; it keeps its own shallow 16-bit add.
 wire [31:0] linear16 = {16'd0, ea_offset_full[15:0]} + issue_seg_base;
-wire [31:0] effective_linear = (ea_is_16bit_r || !issue_eff_mask)
-                             ? linear16 : linear32;
+// Below bit 16 the two arms are one sum: linear16's low half is
+// ((a + b) mod 2^16 + s) mod 2^16 == (a + b + s) mod 2^16, linear32's low
+// half. So the low half (the D-cache set index and the in-page offset) always
+// comes from the folded sum and only the high half selects between the arms;
+// the 16-bit arm's serial add is left to the page bits.
+// tests/equiv/addr_csa_low16.v proves it equal to the two-arm select.
+wire        effective_linear16 = ea_is_16bit_r || !issue_eff_mask;
+wire [31:0] effective_linear = {effective_linear16 ? linear16[31:16] : linear32[31:16],
+                                linear32[15:0]};
 // Alignment participates in same-cycle VIPT admission. It depends only on the
 // low address bits, so keep both full-width EA and relocation adders out of it.
 wire [3:0] issue_linear_low_sum = {2'b0, ea_add_a[1:0]} +
@@ -361,19 +388,35 @@ end
 // The address an issuing instruction's first memory access uses: the
 // forwarded ESP for a stack operation, the immediate for moffs, else the
 // ModR/M effective address. The issue edge captures exactly this value.
+// A push's pre-decrement is one 32-bit subtract: a 16-bit stack keeps its low
+// half, which is the wrapped SP.
+wire [31:0] issue_stack_dec = forwarded_esp - (instr.data32 ? 32'd4 : 32'd2);
 wire [31:0] issue_stack_offset = instr.stack_dir
     ? (ss_stack32 ? forwarded_esp : {16'd0, forwarded_esp[15:0]})
-    : (ss_stack32 ? forwarded_esp - (instr.data32 ? 32'd4 : 32'd2)
-                  : {16'd0, forwarded_esp[15:0] - (instr.data32 ? 16'd4 : 16'd2)});
+    : (ss_stack32 ? issue_stack_dec : {16'd0, issue_stack_dec[15:0]});
 assign issue_mem_linear = (instr.stack_op || instr.has_moffs)
                         ? relocate_issue(instr.stack_op ? issue_stack_offset : instr.immediate)
                         : effective_linear;
+
+// z486.sv sizes a RD W/WR W access by |IND_DELTA| == 4; the compare is formed
+// on the value as it is written, beside ind_delta, so the 32-bit compare is
+// not in front of mem_eff_size -> the paging request (tests/equiv/
+// ind_delta_dword.v; a translate_off fuse holds it every cycle).
+function automatic logic is_dword_stride(input logic [31:0] v);
+    is_dword_stride = (v == 32'd4) || (v == -32'd4);
+endfunction
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && (ind_delta_dword !== is_dword_stride(ind_delta)))
+        $fatal(1, "address_unit: ind_delta_dword %b disagrees with ind_delta %h", ind_delta_dword, ind_delta);
+// synthesis translate_on
 
 always_ff @(posedge clk) begin
     if (!reset_n) begin
         issue_ind_r <= 32'd0;
         ind_owner_issue_r <= 1'b0;
         ind_delta <= 32'd4;
+        ind_delta_dword <= 1'b1;
         issue_linear_r <= 32'd0;
         linear_owner_issue_r <= 1'b0;
         ind_linear_valid <= 1'b0;
@@ -383,6 +426,7 @@ always_ff @(posedge clk) begin
         ind_delta <= !instr.stack_op ? 32'd2 :
                      !instr.stack_dir ? (instr.data32 ? -32'd4 : -32'd2) :
                                         (instr.data32 ? 32'd4 : 32'd2);
+        ind_delta_dword <= instr.stack_op && instr.data32;
         if (instr.stack_op) begin
             issue_ind_r <= issue_stack_offset;
             ind_owner_issue_r <= 1'b1;
@@ -405,8 +449,10 @@ always_ff @(posedge clk) begin
             INDOP_PLUS_ALU: begin
                 automatic logic [31:0] operand2;
                 operand2 = jcc_word ? alu_value_hold : alu_value;
-                if (alu_source != ALUSRC_ZERO)
+                if (alu_source != ALUSRC_ZERO) begin
                     ind_delta <= operand2;
+                    ind_delta_dword <= is_dword_stride(operand2);
+                end
                 ind_owner_issue_r <= 1'b0;
                 ind_linear_valid <= 1'b1;
             end
@@ -421,8 +467,10 @@ always_ff @(posedge clk) begin
             INDOP_PLUS: begin
                 ind_owner_issue_r <= 1'b0;
                 ind_linear_valid <= 1'b1;
-                if (alu_source != ALUSRC_ZERO)
+                if (alu_source != ALUSRC_ZERO) begin
                     ind_delta <= alu_value;
+                    ind_delta_dword <= is_dword_stride(alu_value);
+                end
             end
             INDOP_IN_PLUS_D: begin
                 ind_owner_issue_r <= 1'b0;

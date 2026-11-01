@@ -1,10 +1,10 @@
-// tb_pc9821_iowait_release — the device_wr_wait re-check must be EVERY cycle once the
-// bus-time hold has expired (review r2-buffers F1, the shortest-stall rule).
+// tb_pc9821_iowait_release - the device_wr_wait re-check must be EVERY cycle once the
+// bus-time hold has expired (the shortest-stall rule).
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// A back-pressured device write is released within 2 cycles of the device freeing its buffer - the S_IOWAIT re-check runs EVERY CYCLE once the bus-time class hold (io_hold) has expired, and the class hold itself is untouched (the strobe is never early). FAIL-FIRST: on the pre-fix iobus the 11-bit io_hold wraps 0 -> 2047 under a still-high device_wr_wait (review r2-buffers F1), so the write re-checks the wait only once per 2048 cycles and a 0xA46C write whose wait outlasts the hold lands ~2047 dead cycles after the device freed up. This bench sweeps the wait length around the wrap point (1/2/3/5 cycles, the expiry crossing, and 64/200 cycles past it) and floods 16 back-to-back writes against a device busy 7 cycles of every 8; both name the miss and fail by thousands of cycles on the pre-fix tree. Warrant: pc9821_iobus.sv's own S_DEVWAIT contract (the read wait is re-checked every cycle - the pattern F1 should follow) and NP2kai's direction (a write is applied the moment the device can take it); the bounds are the class's own FSM shape (IO_MIN_HOLD = 4, r13/276), not a capture.
+// A back-pressured device write is released within 2 cycles of the device freeing its buffer - the S_IOWAIT re-check runs EVERY CYCLE once the bus-time class hold (io_hold) has expired, and the class hold itself is untouched (the strobe is never early). FAIL-FIRST: on the pre-fix iobus the 11-bit io_hold wraps 0 -> 2047 under a still-high device_wr_wait, so the write re-checks the wait only once per 2048 cycles and a 0xA46C write whose wait outlasts the hold lands ~2047 dead cycles after the device freed up. This bench sweeps the wait length around the wrap point (1/2/3/5 cycles, the expiry crossing, and 64/200 cycles past it) and floods 16 back-to-back writes against a device busy 7 cycles of every 8; both name the miss and fail by thousands of cycles on the pre-fix tree. Warrant: pc9821_iobus.sv's own S_DEVWAIT contract (the read wait is re-checked every cycle - the pattern F1 should follow) and NP2kai's direction (a write is applied the moment the device can take it); the bounds are the class's own FSM shape (IO_MIN_HOLD = 4), not a capture.
 //
 // TB_PC9821_IOWAIT_RELEASE: a back-pressured device write is released within 2 cycles
 // of the device freeing its buffer - the S_IOWAIT re-check runs EVERY CYCLE once the
@@ -13,8 +13,8 @@
 //
 // FAIL-FIRST: on the pre-fix iobus, S_IOWAIT does `else io_hold <= io_hold - 1` with
 // an 11-bit io_hold, so a write whose wait is still high when io_hold reaches 0
-// WRAPS 0 -> 2047 and re-checks `device_wr_wait` only once per 2048 cycles (review
-// r2-buffers F1). A 0xA46C write (the PCM86 write FIFO's back-pressure, the report's
+// WRAPS 0 -> 2047 and re-checks `device_wr_wait` only once per 2048 cycles.
+// A 0xA46C write (the PCM86 write FIFO's back-pressure, the report's
 // own example) whose wait outlasts the hold therefore lands ~2047 dead cycles after
 // the device freed up - at 50 MHz up to 41 us of pure avoidable stall per
 // back-pressured write, and a REP OUTSB stream to 0xA46C turns smooth back-pressure
@@ -23,10 +23,10 @@
 // of every 8; both fail on the pre-fix tree by thousands of cycles.
 //
 // Warrant: pc9821_iobus.sv's own S_DEVWAIT contract (the read wait is re-checked every
-// cycle, "the pattern F1 should follow") and NP2kai's direction - it applies the write
+// cycle, the pattern the write side follows) and NP2kai's direction - it applies the write
 // the moment the device can take it (WRQ/PCM86 buffer push is never delayed past the
-// device's own accept) - plus review r2-buffers F1's confirm-test shape. The cycle
-// bounds are the class's own FSM shape (IO_MIN_HOLD = 4, r13/276), not a capture.
+// device's own accept). The cycle
+// bounds are the class's own FSM shape (IO_MIN_HOLD = 4), not a capture.
 
 module tb_pc9821_iowait_release;
 
@@ -50,6 +50,7 @@ module tb_pc9821_iowait_release;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
 
   // ---- the device fabric: the iobus's byte transaction ----
   wire        device_io_wr, device_io_rd;
@@ -81,6 +82,7 @@ module tb_pc9821_iowait_release;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0]  dbg_gate;
@@ -124,8 +126,14 @@ module tb_pc9821_iowait_release;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -144,17 +152,11 @@ module tb_pc9821_iowait_release;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) bus (
       .ide_unit0_present(1'b0),.*);
 
-  // The shipped device decode (pc9821_device_select) so the 0xA46C write is a real
-  // device port (pcm_cs) exactly as pc9821_system's fabric routes it.
+  // The shipped device decode so the 0xA46C write is a real device port (pcm_cs) exactly as
+  // pc9821_system's fabric routes it: P5 made the ONE pc9821_device_select instance live inside
+  // pc9821_iobus, so `.*` above binds these to it.
   wire ata_cs, pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
-       opna_cs, pcm_cs, gameport_cs, gdc_cs;
-  pc9821_device_select device_select (
-      .addr(device_io_addr),
-      .pic_master_cs(pic_master_cs), .pic_slave_cs(pic_slave_cs), .pit_cs(pit_cs),
-      .interrupt_cs(interrupt_cs), .cal_cs(cal_cs), .kbd_cs(kbd_cs),
-      .ata_cs(ata_cs), .opna_cs(opna_cs), .pcm_cs(pcm_cs), .gameport_cs(gameport_cs),
-      .gdc_cs(gdc_cs)
-  );
+       opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
 
   integer errors = 0;
   integer cycle = 0;

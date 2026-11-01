@@ -124,27 +124,34 @@ kb_zero:
 /* artic_read: EAX = the 24-bit free-running counter (307200 Hz).       */
 /* ------------------------------------------------------------------ */
 artic_read:
+    /* EAX = the 24-bit ARTIC count; EBX/ECX/DX preserved whole. High byte, low word, high
+     * byte again: if the high byte moved, the low word was read at the wrap and its own value
+     * says which side (a small low word belongs to the new high byte). The previous
+     * low/high/low read double-counted a wrap landing between its first two reads (a +65536
+     * jump), and saved only BX/CX while writing EBX/ECX (crt31k found both on the core). */
+    push    ebx
+    push    ecx
     push    dx
-    push    bx
-    push    cx
-    mov     dx, 0x005c
-    in      ax, dx
-    movzx   ebx, ax
-    mov     dx, 0x005f
+    mov     dx, 0x005F
     in      al, dx
-    movzx   ecx, al
-    mov     dx, 0x005c
+    movzx   ebx, al                     /* H1 */
+    mov     dx, 0x005C
     in      ax, dx
-    cmp     ax, bx
-    jae     ar_nowrap
-    inc     ecx
-ar_nowrap:
-    movzx   eax, ax
-    shl     ecx, 16
+    movzx   ecx, ax                     /* L */
+    mov     dx, 0x005F
+    in      al, dx
+    movzx   eax, al                     /* H2 */
+    cmp     eax, ebx
+    je      ar_same
+    cmp     ecx, 0x8000
+    jb      ar_same                     /* L read after the wrap: H2 */
+    mov     eax, ebx                    /* L read before the wrap: H1 */
+ar_same:
+    shl     eax, 16
     or      eax, ecx
-    pop     cx
-    pop     bx
     pop     dx
+    pop     ecx
+    pop     ebx
     ret
 
 /* ------------------------------------------------------------------ */

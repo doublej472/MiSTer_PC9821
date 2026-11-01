@@ -5,7 +5,7 @@
 //
 // ---- where the expectation comes from ----
 //
-// THE ITF'S OWN SELF-TEST, disassembled from the owner's dump rather than
+// THE ITF'S OWN SELF-TEST, disassembled from the firmware dump rather than
 // inferred from our RTL. Its entry is BANK4@0x373 (physical 0xF8373; BANK4 maps
 // at 0xF8000, so file offset = physical - 0xF8000):
 //
@@ -80,7 +80,7 @@
 //
 //     So the bench spaces its accesses by a fixed gap, and the number is
 //     sourced rather than chosen. The core's per-class table now carries the
-//     8253 ports at the ITF floor (21 clk_sys, r13/244): that is 420 ns, just
+//     8253 ports at the ITF floor (21 clk_sys): that is 420 ns, just
 //     over the 407 ns of one source tick, and it is the BUS half of the gap
 //     alone. On the machine the same gap also carries the CPU's own OUT
 //     instruction time, so the bench keeps GAP_TICKS at 9 source ticks -- a

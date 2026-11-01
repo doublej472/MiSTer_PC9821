@@ -353,7 +353,7 @@ module tb_pc9821_block_io;
     // read earns an 8-sector burst (run_len_next >= 3), so LBA 12..19 land in the window; the
     // control proves LBA 13 is then served from it with no handshake, and after a remount the
     // same LBA must go back to hps_io and return the NEW image's words. (Nothing pinned this:
-    // a window that survived the remount passed every bench; bench-audit 2026-10-12.)
+    // a window that survived the remount passed every bench.)
     pulse_mount(64'd512 * 100, 1'b1);
     pulse_request(32'd10); host_serve(4'd1);
     pulse_request(32'd11); host_serve(4'd1);

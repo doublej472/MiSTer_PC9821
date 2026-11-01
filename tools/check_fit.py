@@ -47,25 +47,25 @@ import sys
 # registers does not appear at all.
 EXPECTED_RAM = {
     # NOT LISTED, AND DELIBERATELY: pc9821_watchdog_msg's message table is ~43 ALUTs of what
-    # should be memory, and it does NOT infer. A lane found the cause with a ten-candidate
+    # should be memory, and it does NOT infer. The cause was found with a ten-candidate
     # minimal repro: ONLY a synchronous read infers; every async form fails, including an
     # unguarded one and two with write ports, whose 4096 bits land in registers. The fix
     # costs one clk_sys cycle of latency in a 24 ms message, so it is cheap - but the array
     # is deliberately left out of this list rather than added, because adding it would fail
     # EVERY fit until the RTL is changed, and a guard that is always red is a guard nobody
-    # reads. Whichever lane makes the ROM synchronous should add its entry here in the same
+    # reads. Whichever change makes the ROM synchronous should add its entry here in the same
     # commit, and then the guard will mean what it says.
     # c48ef091 moved the text VRAM into pc9821_text_mem, so the key moved with it.
     "pc9821_text_mem:u_text_mem|pc9821_dpram:u_tram": "the text VRAM planes",
-    "pc9821_cg:u_cg|pc9821_dpram:u_ank": "the character generator (the ANK table; the JIS font is SDRAM-backed per r13/280)",
+    "pc9821_cg:u_cg|pc9821_dpram:u_ank": "the character generator (the ANK table; the JIS font is SDRAM-backed)",
     "pc9821_cg:u_cg": "the CG store (cg_ram)",
     "l1_cache:dcache_inst": "the z486 data cache",
     "l1_icache:icache_inst": "the z486 instruction cache",
     "pc9821_ata:ata": "the ATA sector buffer",
-    # The scanout line buffer is the array r13/232's global SYNTH_RESOURCE_AWARE_INFERENCE_FOR_BLOCK_RAM
+    # The scanout line buffer is the array the global SYNTH_RESOURCE_AWARE_INFERENCE_FOR_BLOCK_RAM
     # OFF rescues: without that setting Quartus demotes its 8,192 bits to registers. It has no
     # in-tree per-module guard (the out-of-tree EGC resource harness proves only the EGC), so it is listed
-    # here: a fit that loses the inference is caught by this check (r13/248 F4).
+    # here: a fit that loses the inference is caught by this check.
     "pc9821_gvram_scan:u_gvram_scan|altsyncram:line_buf_rtl_0": "the scanout line buffer",
     # The PC-9801-86 86-PCM block's 32 KiB sample buffer MOVED TO SDRAM
     # (sdram-offload: src/pcm86/pc9821_pcm86_buf.sv is the memory controller's

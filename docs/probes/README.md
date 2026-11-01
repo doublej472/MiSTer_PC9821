@@ -36,13 +36,13 @@ The files are byte-for-byte what the probe printed (DOS text, CRLF). Do not norm
 | `PEGC.TXT` | `pegcwatch`: the PEGC register state a game leaves behind |
 | `A20MAP-XE10.TXT` | `a20map`: how the A20 mask treats physical addresses |
 | `D8BANK-XE10.TXT` | `d8bank`: the `0xD8000` window per `0x063C` bank select |
+| `FDMODE-XE10.TXT` | `fdmode` (binary sha f0394f9bdd53e691), from a DOS prompt after a hard-disk boot, floppy drives empty: the FDD interface ports (0x00BE/0x00BF read FF), the PIC masks, the disk work bytes and INT 1Bh SENSE on DA/UA 0x90 and 0x70 |
 | `FLIP.TXT` | the `0xA4` display-page flip latch timing |
 | `KTDEMO-XE10.jpg` | a photograph of a text-mode demo on the machine (the reference for a CRTC attribute case) |
 | `SNDTEST-xe10.TXT` | `sndtest`: the OPNA calibration stimulus's transcript on the machine |
 | `SNDTEST-balance-2026-09-25.txt` | the SSG:FM within-recording balance table measured from paired SNDTEST recordings (`tools/sndtest_balance.py`); the recordings themselves are not committed |
 | `egc-conformance/` | the PC98_EGC_CONFORMANCE suite's CSVs on the Xe10 and on this core (see its README) - the oracle for `tools/gen_egc_compare_vectors.py` |
 | `gdc-conformance/` | the GDC conformance suite's CSVs at 2.5 MHz on the Xe10 and on this core (see its README) - the oracle for `tools/gen_gdc_compare_vectors.py` |
-| `int21-mister-2026-09-30/` | INT 21h telemetry from this core (a calibration run and a Touhou 5 trace) |
 | `itf-paired-7287bed6/` | the `D2` conventional-memory snapshot, cold and warm boot, on the Xe10 and on this core |
 
 ## Reading the timing captures

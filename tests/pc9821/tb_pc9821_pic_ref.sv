@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Drives the real pc9821_pic with every 8259 register the machine can reach - ICW1-4, OCW1/OCW2/OCW3 - and checks each result against NP2kai io/pic.c, one named case per register semantics. OCW3 special mask mode (ESMM/SMM) and OCW2 priority rotation (R/SL/EOI) are implemented and asserted, so those cases pass. ICW1 keeping the in-service register is asserted against NP2kai's own contract (io/pic.c:326-337 leaves the isr clear disabled inside #if 0; FAIL-FIRST against the old clear, review-interrupts F1). The four cases where NP2kai's model itself diverges from the datasheet (its RIS latches without RR, its ICW3 count ignores SNGL, its ICW4 ignores AEOI, its reset presets the IMR) print a WAIVED line instead of asserting NP2kai: three of them assert the RTL against QEMU hw/intc/i8259.c instead (RIS gated on RR, SNGL ending the sequence after ICW2, AEOI setting no ISR bit), and the reset IMR (RTL 0xFF; QEMU and MAME 0x00) is not asserted because the ITF programs the IMR before enabling interrupts. The vector takes ICW2 bits 7:3 only (pic.c `(icw[1] & 0xf8) | num`), asserted both tracked and at the acknowledge edge. AEOI is implemented in full against that datasheet/QEMU/ao486 answer: no ISR bit is set in AEOI mode and an OCW2 with R=1, SL=0, EOI=0 arms rotate-on-auto-EOI, so each acknowledge advances the priority pointer and the second of two pending levels is serviced (asserted). The in-service block is asserted to follow that rotation base too: with pry=3 an IRQ4 already in service blocks IRQ0 and permits IRQ3.
+// Drives the real pc9821_pic with every 8259 register the machine can reach - ICW1-4, OCW1/OCW2/OCW3 - and checks each result against NP2kai io/pic.c, one named case per register semantics. OCW3 special mask mode (ESMM/SMM) and OCW2 priority rotation (R/SL/EOI) are implemented and asserted, so those cases pass. ICW1 keeping the in-service register is asserted against NP2kai's own contract (io/pic.c:326-337 leaves the isr clear disabled inside #if 0; FAIL-FIRST against the old clear). The four cases where NP2kai's model itself diverges from the datasheet (its RIS latches without RR, its ICW3 count ignores SNGL, its ICW4 ignores AEOI, its reset presets the IMR) print a WAIVED line instead of asserting NP2kai: three of them assert the RTL against QEMU hw/intc/i8259.c instead (RIS gated on RR, SNGL ending the sequence after ICW2, AEOI setting no ISR bit), and the reset IMR (RTL 0xFF; QEMU and MAME 0x00) is not asserted because the ITF programs the IMR before enabling interrupts. The vector takes ICW2 bits 7:3 only (pic.c `(icw[1] & 0xf8) | num`), asserted both tracked and at the acknowledge edge. AEOI is implemented in full against that datasheet/QEMU/ao486 answer: no ISR bit is set in AEOI mode and an OCW2 with R=1, SL=0, EOI=0 arms rotate-on-auto-EOI, so each acknowledge advances the priority pointer and the second of two pending levels is serviced (asserted). The in-service block is asserted to follow that rotation base too: with pry=3 an IRQ4 already in service blocks IRQ0 and permits IRQ3.
 
 `default_nettype none
 
@@ -289,8 +289,8 @@ module tb_pc9821_pic_ref;
     // `picp->isr = 0` disabled inside `#if 0` (io/pic.c:331-334): a guest that
     // re-inits while an interrupt is in service keeps the in-service bit. QEMU
     // clears it (pic_reset_common) but the 8259A datasheet's ICW1 reset list
-    // does not name the ISR, and NP2kai is the primary software reference
-    // (review-interrupts F1). FAIL-FIRST: the old RTL answered 0x00 here (this
+    // does not name the ISR, and NP2kai is the primary software reference.
+    // FAIL-FIRST: the old RTL answered 0x00 here (this
     // case was a WAIVE); the contract is the stale 0x04.
     reset_pic();
     init_itf(8'h00);
@@ -377,7 +377,7 @@ module tb_pc9821_pic_ref;
     check("aeoi_rotate_second_service", int_vec, 8'h09);
 
     // ---- 13c. AEOI rotation advances from the ACKED IRQ, not the old base ----
-    // The bug (r13/328 finding 1): the rotate-on-AEOI arm incremented `pry`, so a lone IRQ3
+    // The bug: the rotate-on-AEOI arm incremented `pry`, so a lone IRQ3
     // acked at pry=0 moved the pointer to IRQ1's base instead of making IRQ3 lowest and IRQ4
     // highest (QEMU pic_intack: `priority_add = (irq + 1) & 7`). Case 13b cannot see it because
     // acking IRQ0 at pry=0 makes `pry+1` and `highest+1` the same. Fail-first: with the pointer

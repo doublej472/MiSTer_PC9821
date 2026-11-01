@@ -29,9 +29,19 @@ module shifter
 
     input  logic [31:0] alu_dst,
     input  logic [31:0] alu_src,
+    // The GPR operands, each read at one fixed size: op_size (the registered
+    // decode) and shift1_size (the size SHIFT1 captured).  The former
+    // gpr_*_shift_size reads used data_size = use_captured ? shift1_size :
+    // op_size, which put use_captured and op_size_du in front of the size
+    // format of the 8:1 view read; the operand muxes below now take the size
+    // arm by use_captured last (C3: q_shift_use_captured_r / op_size_du ->
+    // data_size -> Equal -> view format -> shifter).
+    // tests/equiv/shift_operand_size_split.v proves both forms equal.
     input  logic [31:0] gpr_src_op_size,
-    input  logic [31:0] gpr_dst_shift_size,
-    input  logic [31:0] gpr_src_shift_size,
+    input  logic [31:0] gpr_dst_op_size,
+    input  logic [31:0] gpr_dst_s1_size,
+    input  logic [31:0] gpr_src_s1_size,
+    output logic [1:0]  shift1_size_o,
     input  logic [31:0] immediate,
     input  logic [31:0] ecx,
     input  logic [31:0] sigma,
@@ -88,10 +98,20 @@ always @(posedge clk)
 // synthesis translate_on
 wire [5:0] width = op_size == 2'd0 ? 6'd8 :
                    op_size == 2'd1 ? 6'd16 : 6'd32;
-wire [31:0] width_mask = op_size == 2'd0 ? 32'h0000_00ff :
-                         op_size == 2'd1 ? 32'h0000_ffff : 32'hffff_ffff;
+// The operand's sign bit at op_size: fixed taps (width is only 8/16/32), so
+// the SAR fill and the width-boundary carry need no width-indexed bit select.
+wire dst_sign = op_size == 2'd0 ? alu_dst[7] :
+                op_size == 2'd1 ? alu_dst[15] : alu_dst[31];
 
 assign data_size = use_captured_source ? shift1_size : op_size;
+assign shift1_size_o = shift1_size;
+// A GPR operand at data_size: the read at shift1_size when the captured size
+// is in use, else the read at op_size (data_size's own two arms).
+function automatic logic [31:0] shift_operand_at_size(input logic use_cap,
+                                                      input logic [31:0] at_s1,
+                                                      input logic [31:0] at_op);
+    shift_operand_at_size = use_cap ? at_s1 : at_op;
+endfunction
 assign count_nonzero = count_raw_r != 5'd0;
 
 always_ff @(posedge clk) begin
@@ -119,7 +139,9 @@ always_comb begin
             4'd1:    source_value = sigma;
             // The only DSTREG source sites are BITTST, whose operand width is
             // the same width already selected for the shifter ALU operand.
-            4'd2:    source_value = gpr_dst_shift_size;
+            // Under !use_captured_source data_size is op_size, so the
+            // DSTREG operand is the op_size read.
+            4'd2:    source_value = gpr_dst_op_size;
             4'd4:    source_value = immediate;
             4'd5:    source_value = tmpb;
             4'd6:    source_value = tmpc;
@@ -158,8 +180,10 @@ always_comb begin
         ALUSRC_TMPC:         alu_value = tmpc;
         ALUSRC_TMPD:         alu_value = tmpd;
         ALUSRC_TMPB:         alu_value = tmpb;
-        ALUSRC_DSTREG:       alu_value = gpr_dst_shift_size;
-        ALUSRC_SRCREG:       alu_value = gpr_src_shift_size;
+        ALUSRC_DSTREG:       alu_value = shift_operand_at_size(use_captured_source,
+                                                               gpr_dst_s1_size, gpr_dst_op_size);
+        ALUSRC_SRCREG:       alu_value = shift_operand_at_size(use_captured_source,
+                                                               gpr_src_s1_size, gpr_src_op_size);
         ALUSRC_ECX:          alu_value = ecx;
         ALUSRC_IMM:          alu_value = immediate;
         ALUSRC_BITS_V:       alu_value = data_size == 2'd0 ? 32'd7 :
@@ -178,8 +202,19 @@ end
 
 wire [31:0] high_word = swap ? alu_value : source_value;
 wire [31:0] low_word  = swap ? source_value : alu_value;
+// A 16-bit SHLD/SHRD count of 17..31 shifts the 48-bit pattern dest:src:src
+// (SHLD) or src:src:dest (SHRD) on the 386/486, so bits shifted past the
+// source come from the source again (checked against 386 SingleStepTests).
+// SHRD gets the second source copy above the destination; SHLD puts src:src
+// in the upper half and selects it with count 64-c, leaving the dest:src
+// window and all count <= 16 taps where they were.
+wire [63:0] shift_input_w = !instr_is_shxd ? {high_word, low_word[15:0]} :
+                            swap ? {low_word[15:0], low_word[15:0],
+                                    high_word[15:0], low_word[15:0]} :
+                                   {16'd0, high_word[15:0], high_word[15:0],
+                                    low_word[15:0]};
 wire [63:0] shift_input = data_size == 2'd0 ? {high_word, low_word[7:0]} :
-                          data_size == 2'd1 ? {high_word, low_word[15:0]} :
+                          data_size == 2'd1 ? shift_input_w :
                                                 {high_word, low_word};
 wire [63:0] shifted = shift_input >> count;
 wire        is_sar = (shift_operation == SAR) && !instr_is_shxd;
@@ -257,15 +292,16 @@ always_comb begin
     setup_result = alu_dst;
     if (!instr_is_shxd) begin
         case (shift_operation)
-            RCL:     setup_result = (instr_cf << (width-1)) |
-                                    ((alu_dst & width_mask) >> 1);
+            // Fixed taps per width instead of a width-dependent bit placement
+            // and mask/shift chain (upstream 96f52b1; tests/equiv/shift_setup_taps.v).
+            RCL:     setup_result = op_size == 2'd0 ? {24'd0, instr_cf, alu_dst[7:1]} :
+                                    op_size == 2'd1 ? {16'd0, instr_cf, alu_dst[15:1]} :
+                                                         {instr_cf, alu_dst[31:1]};
             RCR:     setup_result = {alu_dst, instr_cf};
             SHL,
             SHR,
             SAL:     setup_result = 32'd0;
-            SAR:     setup_result = op_size == 2'd0 ? {32{alu_dst[7]}} :
-                                    op_size == 2'd1 ? {32{alu_dst[15]}} :
-                                                        {32{alu_dst[31]}};
+            SAR:     setup_result = {32{dst_sign}};
             default: setup_result = alu_dst;
         endcase
     end
@@ -289,7 +325,11 @@ always_ff @(posedge clk) begin
                 if (instr_is_shxd) begin
                     swap <= !shift_right;
                     overflow <= 1'b0;
-                    count <= shift_right ? raw_count : width - raw_count;
+                    // A left count past a 16-bit width selects src:src in
+                    // the upper half of shift_input: 64-c.
+                    count <= shift_right ? raw_count :
+                             raw_count > width ? 6'd0 - raw_count :
+                                                 width - raw_count;
                     operation <= shift_right ? ROR : ROL;
                     set_zsp <= 1'b1;
                 end else begin
@@ -300,7 +340,7 @@ always_ff @(posedge clk) begin
                     eq_width <= raw_count == width &&
                                 (shift_operation == SHL || shift_operation == SAL ||
                                  shift_operation == SHR || shift_operation == SAR);
-                    eq_width_cf <= shift_operation[0] ? alu_dst[width-1] : alu_dst[0];
+                    eq_width_cf <= shift_operation[0] ? dst_sign : alu_dst[0];
                     case (shift_operation)
                         ROL:     count <= width - reduced_count;
                         ROR:     count <= reduced_count[4:0];
@@ -422,7 +462,8 @@ always_comb begin
         2'd0:    shift2_live_reference = tmpc;
         2'd1:    shift2_live_reference = tmpe;
         2'd2:    shift2_live_reference = sigma;
-        2'd3:    shift2_live_reference = gpr_src_shift_size;
+        // SHIFT2 executes with use_captured_source set: data_size is shift1_size.
+        2'd3:    shift2_live_reference = gpr_src_s1_size;
         default: shift2_live_reference = 32'd0;
     endcase
 end

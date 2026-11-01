@@ -14,10 +14,10 @@ seconds -- and this keeps it, with the two things the shell could not do reliabl
     pid; if that pid is gone while the state is still "running" -- the build was
     killed -- this says so and exits 1 instead of polling a log that will never grow.
 
-  * IT WAITS ONLY FOR THIS TREE'S BUILD. The status lives inside the checkout, so lanes
+  * IT WAITS ONLY FOR THIS TREE'S BUILD. The status lives inside the checkout, so worktrees
     building in parallel never observe each other.
 
-Worker pattern (start, do other work, then block for the result):
+Background pattern (start, do other work, then block for the result):
   tools/build.py --detach
   ... write the doc, run the gate ...
   tools/wait_build.py            # blocks, then exits 0 (pass) or 1 (fail)

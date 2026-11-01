@@ -32,6 +32,13 @@ seed_sweep refuses to mix fits of different source (its identity check), so a ch
 --restart-stale (passed through after `--`) or a new run id. The host needs python3, rsync and
 the container runtime (CONTAINER_RUNTIME, passed with --remote-env CONTAINER_RUNTIME=docker).
 The sweep arguments after `--` are seed_sweep.py's own (--dir is ours and refused).
+
+REMOTE AND LOCAL ARE JUDGED THE SAME WAY. The pll_hdmi deploy gate is forwarded to the sweep on
+the host AND applied to the report fetched back here, and this tool exits nonzero when either
+fails: `--min-other-setup NS` (the floor; seed_sweep's default is -0.35 ns, `none` disables),
+`--min-positive` (only seeds with pll_hdmi > 0 ns), `--min-seeds N` (refuse a verdict from
+fewer than N measured seeds) and `--min-sdram-io NS` (the SDRAM pin interface's worst slack over
+every corner; seed_sweep's default is 0 ns, `none` disables). Both `run` and `report` take them.
 """
 from __future__ import annotations
 
@@ -111,8 +118,42 @@ def check_sweep_args(args: list[str]) -> list[str]:
     return args
 
 
+def add_gate_args(p: argparse.ArgumentParser) -> None:
+    """The seed_sweep.py deploy-gate flags (pll_hdmi and SDRAM I/O), on both `run` and `report`."""
+    p.add_argument("--min-other-setup", default=None, metavar="NS",
+                   help="forwarded to seed_sweep.py: the pll_hdmi setup-slack deploy floor "
+                        "(seed_sweep's default is -0.35 ns; `none` disables it)")
+    p.add_argument("--min-positive", action="store_true",
+                   help="forwarded: deploy only seeds with pll_hdmi > 0 ns")
+    p.add_argument("--min-seeds", type=int, default=None, metavar="N",
+                   help="forwarded: require N measured seeds before a verdict (use 6)")
+    p.add_argument("--min-sdram-io", default=None, metavar="NS",
+                   help="forwarded: the SDRAM pin-interface deploy floor over every corner "
+                        "(seed_sweep's default is 0 ns; `none` disables it)")
+
+
+def gate_args(args) -> list[str]:
+    """The pll_hdmi deploy-gate flags to forward to tools/seed_sweep.py.
+
+    They are the SAME decision remotely and locally: seed_sweep's --min-other-setup floor
+    (default -0.35 ns), --min-positive and --min-seeds N. Defaults here are None so an
+    unset flag leaves seed_sweep's own default in force.
+    """
+    out: list[str] = []
+    if getattr(args, "min_other_setup", None) is not None:
+        out += ["--min-other-setup", str(args.min_other_setup)]
+    if getattr(args, "min_positive", False):
+        out.append("--min-positive")
+    if getattr(args, "min_seeds", None) is not None:
+        out += ["--min-seeds", str(args.min_seeds)]
+    if getattr(args, "min_sdram_io", None) is not None:
+        out += ["--min-sdram-io", str(args.min_sdram_io)]
+    return out
+
+
 def sweep_command(py: str, run_dir: str, sweep_args: list[str], slot_dir: str, slot_max: int,
-                  slot_all: bool, max_load: float | None) -> str:
+                  slot_all: bool, max_load: float | None,
+                  gates: list[str] | None = None) -> str:
     cmd = [py, f"{run_dir}/tree/tools/seed_sweep.py", "--dir", f"{run_dir}/sweep",
            "--slot-dir", slot_dir, "--slot-max", str(slot_max)]
     if slot_all:
@@ -120,6 +161,7 @@ def sweep_command(py: str, run_dir: str, sweep_args: list[str], slot_dir: str, s
     if max_load is not None:
         cmd += ["--max-load", str(max_load)]
     cmd += sweep_args
+    cmd += gates or []
     return " ".join(shlex.quote(c) for c in cmd)
 
 
@@ -166,7 +208,7 @@ def cmd_run(args, rem: Remote) -> int:
     if max_load is None:
         max_load = float(rem.run("nproc").stdout.strip() or 0)
     cmd = sweep_command(args.remote_python, run_dir, sweep_args, slot_dir, args.slot_max,
-                        not args.no_slot_all, max_load or None)
+                        not args.no_slot_all, max_load or None, gate_args(args))
     env = " ".join(f"export {shlex.quote(e)};" for e in args.remote_env)
     # setsid + nohup: the sweep outlives this launcher and the ssh session. `exit` is written
     # when the sweep ends (any way but SIGKILL), so a waiter never has to guess from a pid.
@@ -239,8 +281,9 @@ def wait_and_fetch(args, rem: Remote, run_id: str) -> int:
             break
         time.sleep(args.poll)
     local = fetch(args, rem, run_id)
-    sh([sys.executable, str(REPO / "tools" / "seed_sweep.py"), "--dir", str(local), "--report"])
-    return 0 if code == 0 else 1
+    rep = sh([sys.executable, str(REPO / "tools" / "seed_sweep.py"), "--dir", str(local),
+              "--report", *gate_args(args)])
+    return 0 if code == 0 and rep.returncode == 0 else 1
 
 
 def cmd_fetch(args, rem: Remote) -> int:
@@ -251,7 +294,7 @@ def cmd_fetch(args, rem: Remote) -> int:
 def cmd_report(args, rem: Remote) -> int:
     local = fetch(args, rem, resolve_run_id(args))
     return sh([sys.executable, str(REPO / "tools" / "seed_sweep.py"), "--dir", str(local),
-               "--report", "--top", str(args.top)]).returncode
+               "--report", "--top", str(args.top), *gate_args(args)]).returncode
 
 
 def cmd_list(args, rem) -> int:
@@ -296,6 +339,15 @@ def selftest() -> int:
                       True, 40.0)
     assert "--slot-dir /s --slot-max 5 --slot-all --max-load 40.0 --profile base" in c, c
     assert "--dir /r/run1/sweep" in c
+    # The pll_hdmi deploy gate travels with the remote sweep, and the selftest proves it is
+    # forwarded rather than dropped (a remote run judged differently from a local one is the bug).
+    g = gate_args(argparse.Namespace(min_other_setup="-0.3", min_positive=True, min_seeds=6,
+                                     min_sdram_io="0.1"))
+    assert g == ["--min-other-setup", "-0.3", "--min-positive", "--min-seeds", "6",
+                 "--min-sdram-io", "0.1"], g
+    assert gate_args(argparse.Namespace()) == [], "unset flags must leave seed_sweep defaults"
+    c = sweep_command("python3", "/r/run1", ["--profile", "base"], "/s", 5, True, 40.0, g)
+    assert c.endswith("--min-other-setup -0.3 --min-positive --min-seeds 6 --min-sdram-io 0.1"), c
     r = Remote("h", ["-p", "2222"])
     assert r.ssh_argv("true")[-2:] == ["h", "true"] and "-p" in r.ssh_argv("true")
     print("remote_fit selftest: PASS")
@@ -338,10 +390,12 @@ def main() -> int:
     p.add_argument("--no-wait", action="store_true", help="launch and return")
     p.add_argument("--poll", type=int, default=60)
     p.add_argument("sweep_args", nargs=argparse.REMAINDER, help="after --: seed_sweep.py arguments")
+    add_gate_args(p)
     for name in ("status", "fetch", "list"):
         sub.add_parser(name)
     p = sub.add_parser("report")
     p.add_argument("--top", type=int, default=10)
+    add_gate_args(p)
     args = ap.parse_args()
     if args.selftest:
         return selftest()

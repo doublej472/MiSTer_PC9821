@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The mapped-read response-route queue (rt_beats/rt_left in pc9821_memory_subsystem) under a flood of outstanding reads: with the response side withheld, three reads are queued and their rt_beats slots read back as the ACCEPTED mem_burstcount sequence, the FOURTH read is REFUSED (map back-pressure at three outstanding) and the fifth with it, and when responses flow again each held read is accepted within 2 cycles of the head's RETIRE beat (back-pressure releases at rt_rd's advance, never at a counter expiry). Every owed beat reaches cpu_resp_valid exactly once, with its own tagged data, in accept order, and the queue drains to empty. FAIL-FIRST: on the pre-fix tree the 4th accept lands and the queue's 4th push fires the sim-only overflow guard (and 8 outstanding reads alias rt_wr == rt_rd so the queue reads EMPTY with 8 owed -- the delivered responses are gated off and the CPU deadlocks, review r2-buffers F2). The warrant is the responder contract in pc9821_memory_subsystem.sv itself plus r2-buffers F2's confirm-test shape; no magnitude comes from a capture.
+// The mapped-read response-route queue (rt_beats/rt_left in pc9821_memory_subsystem) under a flood of outstanding reads: with the response side withheld, three reads are queued and their rt_beats slots read back as the ACCEPTED mem_burstcount sequence, the FOURTH read is REFUSED (map back-pressure at three outstanding) and the fifth with it, and when responses flow again each held read is accepted within 2 cycles of the head's RETIRE beat (back-pressure releases at rt_rd's advance, never at a counter expiry). Every owed beat reaches cpu_resp_valid exactly once, with its own tagged data, in accept order, and the queue drains to empty. FAIL-FIRST: on the pre-fix tree the 4th accept lands and the queue's 4th push fires the sim-only overflow guard (and 8 outstanding reads alias rt_wr == rt_rd so the queue reads EMPTY with 8 owed -- the delivered responses are gated off and the CPU deadlocks). The warrant is the responder contract in pc9821_memory_subsystem.sv itself plus r2-buffers F2's confirm-test shape; no magnitude comes from a capture.
 //
 // TB_PC9821_RT_QUEUE: the mapped-read RESPONSE-ROUTE QUEUE (rt_beats/rt_left in
 // pc9821_memory_subsystem) under a flood of outstanding reads. A read accept queues
@@ -15,7 +15,7 @@
 //       FAIL-FIRST: on the pre-fix tree the 4th accept lands and the queue's 4th push
 //       hits the sim-only overflow $fatal at (rt_wr - rt_rd) == 3 (and 8 outstanding
 //       reads alias rt_wr == rt_rd so the queue reads EMPTY with 8 owed -- the
-//       responses are then GATED OFF and the CPU deadlocks; review r2-buffers F2).
+//       responses are then GATED OFF and the CPU deadlocks).
 //   (2) SHORTEST-STALL RELEASE: with responses flowing again, the held read is
 //       accepted within 2 cycles of the head's RETIRE (the freeing response beat) --
 //       back-pressure releases at rt_rd's advance, never at a counter expiry.
@@ -24,7 +24,7 @@
 //
 // The warrant is the responder contract in pc9821_memory_subsystem.sv itself
 // (accept-respond separation, the owed-beat QUEUE as the record that outlives the
-// accept) plus review r2-buffers F2's confirm test shape. No magnitude is taken from
+// accept) plus the deadlock's confirm test shape. No magnitude is taken from
 // a capture: the counts are the queue's own geometry (4 slots, 3-bit pointers).
 
 module tb_pc9821_rt_queue;
@@ -85,12 +85,11 @@ module tb_pc9821_rt_queue;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
@@ -124,7 +123,7 @@ module tb_pc9821_rt_queue;
   wire [7:0] mem_burstcount;
   wire mem_line_read, mem_valid, mem_write;
   reg mem_ready = 1, mem_resp_valid = 0, mem_line_resp_valid = 0;
-  // The GVRAM scanout's SDRAM requester (r13/35). The wildcard instantiation needs every port
+  // The GVRAM scanout's SDRAM requester. The wildcard instantiation needs every port
   // named; nothing here drives the scanout, so it accepts and never answers.
   wire [31:0] mem3_addr, mem3_din;
   wire  [3:0] mem3_be;
@@ -134,12 +133,14 @@ module tb_pc9821_rt_queue;
   reg         mem3_ready = 1, mem3_resp_valid = 0;
 
   // ==== DUT ====
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the wildcard instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   wire       grcg_expand;   // the GRCG's CG-mode bit 7, fed back from the subsystem
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
   reg        scan_enable = 0;
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
@@ -153,18 +154,18 @@ module tb_pc9821_rt_queue;
 
   wire [1:0] ems_state;
 
-  // The GVRAM write client's two-word payload (r13/137); this bench's backend ignores it.
+  // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
   wire [31:0] mem_din_hi;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -175,6 +176,7 @@ module tb_pc9821_rt_queue;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -296,7 +298,7 @@ module tb_pc9821_rt_queue;
     end
   end
 
-  // THE GVRAM REACHES THE SHARED BACKEND AGAIN (r13/35): its 256 KiB array is SDRAM-resident,
+  // THE GVRAM REACHES THE SHARED BACKEND AGAIN: its 256 KiB array is SDRAM-resident,
   // so a plane store is observed at pc9821_gvram's D1 boundary rather than at the array's old
   // port A, and mem_addr/mem_be on the backend are the same request one stage on.
   integer    gvram_writes = 0;
@@ -305,7 +307,7 @@ module tb_pc9821_rt_queue;
   reg [3:0]  last_gvram_lanes;  // the plain path's four byte enables, presented in ONE visit
   reg [1:0]  last_gvram_plane;  // the plain path's plane byte lane
   // The GVRAM's D1 accept, observed at the D1 boundary so the count is one per plane access
-  // whatever the SDRAM backend's latency (r13/35). A plain plane-window access now presents the
+  // whatever the SDRAM backend's latency. A plain plane-window access now presents the
   // base word, the CPU's byte enables and the plane in ONE visit (the backend walks the lanes), so
   // addr's low two bits are 0 and `lanes` carries what the old per-lane walk put in `be`.
   always @(posedge clk) begin
@@ -321,7 +323,7 @@ module tb_pc9821_rt_queue;
   // Whatever else changes, the mapper must never be told it was ACCEPTED while
   // another route owns the request the backend is serving: it would then treat
   // that route's completion as its own answer. The GVRAM was the historical firing
-  // of the old check here; since r13/35 its array is SDRAM-resident and it reaches
+  // of the old check here; its array is now SDRAM-resident and it reaches
   // this backend again on its own ports, so it is an owner alongside the LOADER and
   // the mapper, and the check below holds the LOADER half of that contract.
   always @(posedge clk) begin
@@ -365,7 +367,7 @@ module tb_pc9821_rt_queue;
     end
   endtask
 
-  // ==== THE RESPONSE-ROUTE QUEUE UNDER A FLOOD (review r2-buffers F2) ==========
+  // ==== THE RESPONSE-ROUTE QUEUE UNDER A FLOOD ==========
   integer errors_q = 0;
   task automatic failq(input [8*160-1:0] what);
     begin

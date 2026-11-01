@@ -2,7 +2,7 @@
 // key stream, from Main_MiSTer's bytes through the hps_io normalizer to pc9821_kbd.
 //
 // ==== WHAT THIS PROVES ====
-// No host stream puts a STOP make (0x60) in the guest's key stream unless the user pressed the one key NP2kai maps to STOP (Pause): an F11 tap must reach the guest as NOTHING (NP2kai sdl/kbtrans.c has no RETROK_F11 row - F11 is not STOP), and the framework's normalized Pause token (Main_MiSTer sends the E1 14 77 E1 F0 14 F0 77 make sequence at key RELEASE with no break, user_io.cpp "pause does not have a break code"; hps_io normalizes it to one {pressed,extended,0x77} event, sys/hps_io.sv:309) must reach the guest as the NP2kai tap pair 0x60 make + 0xE0 break and then SILENCE - no stuck STOP make and no typematic flood of a key that can never break.
+// No host stream puts a STOP make (0x60) in the guest's key stream unless the user pressed the one key NP2kai maps to STOP (Pause): an F11 tap must reach the guest as VF1 (0x52/0xD2) and a NumLock tap (the non-extended set-2 0x77) as keypad = (0x4D/0xCD), never as STOP, and the framework's normalized Pause token (Main_MiSTer sends the E1 14 77 E1 F0 14 F0 77 make sequence at key RELEASE with no break, user_io.cpp "pause does not have a break code"; hps_io normalizes it to one {pressed,extended,0x77} event, sys/hps_io.sv:309) must reach the guest as the NP2kai tap pair 0x60 make + 0xE0 break and then SILENCE - no stuck STOP make and no typematic flood of a key that can never break.
 //
 // The host side of this bench is the REAL chain, not an idealized one:
 //
@@ -54,6 +54,9 @@ module tb_pc9821_kbd_stop;
 
   // ==== DUT ====
   pc9821_kbd #(
+      // The STOP tap's break is presented one (shrunk) transfer tick after its make,
+      // inside read_byte_within's 12-clk bound (the real tick is SYS_CLOCK_HZ / 1280).
+      .XFER_TICK_CYCLES(26'd8),
       // The typematic window is shrunk so "silence" can be proven over several
       // repeat periods instead of real-time seconds. Values do not matter for
       // the tap: the fixed stream must contain NO repeat byte at all.
@@ -247,18 +250,25 @@ module tb_pc9821_kbd_stop;
     write_port(1'b1, 8'h5E);
     write_port(1'b1, 8'h05);
 
-    // ---- 1. F11 is not STOP. ----
-    // NP2kai maps host F11 to NO PC-98 key (sdl/kbtrans.c lrcnv101/lrcnv106
-    // carry RETROK_F1..F10 and no RETROK_F11 row; wx/kbtrans.cpp labels F11
-    // "VF1" but with that table's own inconsistent 0x73). qemu-pc98's set-1
-    // table maps F11 (0x57) to 0x60 as physical correspondence - secondary.
-    // Before the fix this delivered 0x60/0xE0: a whole phantom STOP tap from
-    // an ordinary function key (Set-2 0x78 sitting one code off the normalized
-    // Pause token's 0x77 - the mis-mapped neighbour).
+    // ---- 1. F11 and NumLock are not STOP. ----
+    // NP2kai's SDL tables map host F11 to no PC-98 key (sdl/kbtrans.c lrcnv101/lrcnv106
+    // carry RETROK_F1..F10 and no RETROK_F11 row); NP2kai wx/kbtrans.cpp labels it "VF1"
+    // (keystat.tbl 0x52), which is what the core gives it. qemu-pc98's set-1 table maps
+    // F11 (0x57) to 0x60 as physical correspondence - secondary. Before the STOP fix F11
+    // delivered 0x60/0xE0: a whole phantom STOP tap from an ordinary function key (Set-2
+    // 0x78 sitting one code off the normalized Pause token's 0x77). NumLock is the other
+    // neighbour: the NON-extended set-2 0x77 (Main_MiSTer ev2ps2 KEY_NUMLOCK), which the
+    // core gives keypad = (keystat.tbl 0x4d); only the extended 0x77 token is Pause.
     host_key(1'b1, 1'b0, 8'h78);   // F11 make
-    expect_silent(16, "F11 make");
+    read_byte_within(8'h52, 40);   // VF1, not STOP
     host_key(1'b0, 1'b0, 8'h78);   // F11 break
-    expect_silent(16, "F11 break");
+    read_byte_within(8'hD2, 40);
+    expect_silent(16, "F11 tap");
+    host_key(1'b1, 1'b0, 8'h77);   // NumLock make
+    read_byte_within(8'h4D, 40);   // keypad =, not STOP
+    host_key(1'b0, 1'b0, 8'h77);   // NumLock break
+    read_byte_within(8'hCD, 40);
+    expect_silent(16, "NumLock tap");
 
     // ---- 2. The normalized Pause token is a TAP: make then break. ----
     // One host event (the make sequence, sent at key release with no break);

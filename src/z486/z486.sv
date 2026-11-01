@@ -43,6 +43,12 @@ module z486
     parameter [1:0]  NO_ALLOC_CLASS = Z486_CACHE_NO_ALLOC,
     parameter [31:0] NO_ALLOC_BOUND = 32'h0800_0000,   // L1 tag reach (128 MiB)
     parameter        RAM_BOUND_ENABLE = 0,
+    // With template windows, a store to a page the compile-time template
+    // classifies as cacheable RAM posts through the direct store port as it
+    // does without windows (data_access st_postable); 0 sends every store
+    // through the classifying demand path (the behaviour before this knob).
+    // No effect without windows.
+    parameter        TEMPLATE_STORE_POST = 1,
 
     // CR0 after reset.  A real 486 resets with CD=NW=1 (caching disabled until
     // firmware clears them); the default keeps this core's historical
@@ -189,6 +195,7 @@ wire [31:0] OPR_R;                  // Read operand register, owned by the pagin
 wire [31:0] OPR_W;                  // Bus operation data registers
 wire [31:0] IND;                    // Internal address register
 wire [31:0] IND_DELTA;              // Signed microcode address stride
+wire        ind_delta_dword;        // |IND_DELTA| == 4, registered with IND_DELTA (address_unit)
 wire [31:0] ind_linear;             // Relocated linear address of IND
 wire        ind_linear_valid;
 wire [31:0] ea_reg;                 // Current instruction EA, owned by address_unit
@@ -203,6 +210,7 @@ reg [1:0]  srcreg_size_decode;      // Decoded srcreg_size (saved at i_issue, re
 // data unit's operand formatting and the dword decode. Preserved registers are
 // not duplicated by the fitter, so the copies are explicit.
 `Z486_KEEP reg [1:0] op_size_du;             // data unit operand size
+reg        op_size_du_is0, op_size_du_is1; // op_size_du == 0 / == 1, loaded with it
 `Z486_KEEP reg [1:0] op_size_dw;             // is_dword
 `Z486_KEEP reg [1:0] op_size_src_decode;
 `Z486_KEEP reg [1:0] srcreg_size_src;
@@ -297,6 +305,9 @@ wire         vipt_load_wb_is_alu_r;
 wire [1:0]   vipt_load_wb_size_r;
 wire [31:0]  vipt_load_wb_target_r;
 wire         vipt_load_wb_valid_r;
+wire [7:0]   vipt_load_wb_wmask_r;
+wire [31:0]  vipt_load_wb_view_hit_r;
+wire         vipt_load_wb_ah_r;
 // D2 instruction and issue
 wire         d2_vipt_ea_hazard;
 wire         d2_plain_load_overlap_ready;
@@ -406,9 +417,14 @@ wire [31:0] latched_pf_addr;  // Latched faulting linear address (for LPCR micro
 wire [63:0] k1q;                 // registered raw window at the prefetcher's D1 cursor
 wire [63:0] k1q_early;           // speculative next D1 window for entry ROM
 wire [5:0]  k1q_avail;               // bytes fetched beyond the D1 cursor
+wire [5:0]  k1q_avail_raw;           // k1q_avail = min(raw, lim): buffered bytes,
+wire [5:0]  k1q_avail_lim;           //   and the CS-limit bound
 wire [3:0]  k1p_adv;                 // D1 cursor advance this cycle (a prefix, or
                                     //   the instruction rest at handoff, 0-11)
 wire [3:0]  k1p_preread_adv;         // structural advance without D2 backpressure
+wire [3:0]  k1p_adv_u;               // the advance if D1 steps (availability aside)
+wire        k1p_step_ok;             // the preread cursor steps by it
+wire        k1p_commit_u;            // and the committed cursor with it
 wire [31:0] k2q;                // D2 literal window at pop_cursor + k2p_off
 wire [5:0]  k2q_avail;              // bytes fetched beyond that point
 wire [4:0]  dec_lit_off;            // literal offset from the pop cursor
@@ -419,6 +435,7 @@ wire       q_flush;                 // Flush queue (branch/jump) - combinational
 wire       pe_mode_toggle_now;      // CR0.PE changed this cycle: re-decode next bytes in new mode
 wire       uc_ctl_pref;             // Previous-cycle predecode: current uop is BUSOP_PREF
 wire       early_redirect;
+wire       q_flush_nb;              // q_flush with the branch uStep's redirect taken as 0
 
 // CR0.PE bit of the value being written.
 wire cr0_wr_bit0 = (uc_source == SRC_MDTMP) ? muldiv_result[0] :
@@ -472,6 +489,15 @@ wire        decoder_fetch_blocked;
 // Physical cache channels connect paging, memory arbitration, and x87.
 wire        dcache_req_valid;
 wire [31:0] dcache_req_phys_addr_raw;
+wire [31:0] dcache_req_phys_addr_m1;    // the request on mem_req's two arms
+wire [31:0] dcache_req_phys_addr_m0;
+wire        dcache_req_is_io_m1;
+wire        dcache_req_is_io_m0;
+wire        dcache_req_split_sel;
+wire        dcache_req_pre_sel;          // the pretranslated arm
+wire [31:0] dcache_req_pre_phys;
+wire [4:0]  dcache_req_route_m1;         // the routing attributes on mem_req's arms
+wire [4:0]  dcache_req_route_m0;
 wire [11:0] dcache_req_preread_offset;
 wire        dcache_req_preread_priority;
 wire        dcache_req_write;
@@ -512,10 +538,17 @@ wire        dcache_vipt_resolve_hit;
 wire [31:0] dcache_vipt_resolve_data;
 wire        vipt_tlb_hit;
 wire [31:0] vipt_tlb_phys_addr;
+wire [31:0] vipt_tlb_phys_hit_form;
+wire [31:0] vipt_tlb_phys_miss_form;
+wire [31:0] dcache_vipt_resolve_tlb_phys;
+wire [31:0] dcache_vipt_resolve_alt_phys;
+wire        dcache_vipt_resolve_use_tlb;
 wire        vipt_tlb_writable;
 wire        vipt_tlb_user;
 wire        vipt_tlb_dirty;
 wire        vipt_tlb_is_vga_mem;
+wire [19:0] st_sidecar_page;
+wire        memmap_post_ok;
 wire        icache_req_valid;
 wire [31:0] icache_req_phys_addr_raw;
 wire        icache_req_accepted;
@@ -567,6 +600,7 @@ wire        uc_p_wio;
 wire [11:0] prot_jump_addr;         // Protection-unit microcode redirect
 wire        gp_fault_trigger;       // Segmentation/protection #GP request
 wire        div_overflow;           // Data Unit divide exception request
+wire        div_overflow_cond;      // div_overflow without uc_exec
 
 wire seq_advance;
 seq_redirect_t seq_fault_redirect;
@@ -666,6 +700,7 @@ wire       recipe_rni;                       // Current uStep contains RNI
 wire       branch_ustep_redirect;     // bounded branch uStep redirects frontend
 wire       branch_ustep_rni;          // synthetic RNI, independent of execution stall
 wire       branch_ustep_exec;         // execute bounded branch uStep this cycle
+wire       branch_ustep_take;         // that uStep's branch is taken (condition only)
 recipe_meta_t d2_recipe;             // D2 instruction's generated recipe class
 wire       x87_direct_candidate;              // D2 entry is the direct x87 overlay
 wire       flags_backup_active;     // Set at i_issue/FLGSBA, cleared on interrupt_entry - guards FLAGSB writes
@@ -690,6 +725,7 @@ wire        prot_redirect_taken;
 // supplies a registered entry address when the current instruction ends.
 wire       d1_issue_direct;
 dec_entry_t d1_issue_entry;
+wire [31:0] d2_branch_disp;      // relative-branch displacement (decoder, registered window)
 // Every D2 instruction issues its first word from ROM port B.
 wire       pb_issue_b23 = pb_valid && (i_rni_delay || ~uc_active) &&
                           ~halted && !q_flush && !fault_suppress_delay_slot &&
@@ -736,6 +772,46 @@ wire       d2_vipt_issue_ready = d2_ready_base &&
 wire       i_issue_reference = (pb_issue_b23 || pb_issue) && d2_ready;
 assign     i_issue = (pb_issue_b23 || pb_issue) &&
                      (d2_vipt_load ? d2_vipt_issue_ready : d2_ready);
+
+// seq_advance (event_control) ORs i_issue with uc_exec, and a branch uStep
+// redirects only while uc_exec is high (hardwired_control.sv
+// `branch_ustep_exec = branch_ustep_rni && uc_exec`), so seq_advance never
+// depends on i_issue in a cycle the redirect is high. It therefore reads
+// i_issue_nb: i_issue with branch_redirect and its q_flush term taken as 0,
+// equal to i_issue whenever the uStep does not redirect. The forwarded flags
+// -> Jcc condition -> branch_redirect -> q_flush (fo ~370) -> i_issue ->
+// seq_advance -> the ROM port-A address path (a 110 MHz C4 path) is gone; the
+// same terms in the same order otherwise (tests/equiv/seq_advance_nb.v; two
+// translate_off fuses hold both premises every cycle).
+wire       pb_issue_nb;
+wire       pb_issue_b23_nb = pb_valid && (i_rni_delay || ~uc_active) &&
+                             ~halted && !q_flush_nb && !fault_suppress_delay_slot &&
+                             !interrupt_entry && !any_fault_issue;
+wire       d2_ready_base_nb = d2_payload_ready && !stall &&
+                              !any_fault_issue &&
+                              !(i_rni && tf_trap_pending && !single_step) &&
+                              !interrupt_at_boundary && !q_flush_nb &&
+                              !d2_vipt_ea_hazard && !ibp_issue_hold;
+wire       d2_ready_nb = d2_ready_base_nb &&
+                         !vipt_load_replay_r.valid && !vipt_load_slow_busy &&
+                         (!d2_vipt_candidate || d2_vipt_load) &&
+                         (!d2_vipt_rmw_candidate || d2_vipt_rmw) &&
+                         (!vipt_load_ex_r.valid || d2_vipt_pipe_ready ||
+                          d2_plain_load_overlap_ready);
+wire       d2_vipt_issue_ready_nb = d2_ready_base_nb &&
+                                    (!vipt_load_ex_r.valid ||
+                                     vipt_load_ex_probed_r);
+wire       i_issue_nb = (pb_issue_b23_nb || pb_issue_nb) &&
+                        (d2_vipt_load ? d2_vipt_issue_ready_nb : d2_ready_nb);
+// synthesis translate_off
+always_ff @(posedge clk) begin
+    if (reset_n && branch_ustep_redirect && !uc_exec)
+        $fatal(1, "SEQ-ADVANCE PREMISE: a branch uStep redirect without uc_exec");
+    if (reset_n && !branch_ustep_redirect && (i_issue_nb !== i_issue))
+        $fatal(1, "SEQ-ADVANCE COFACTOR: i_issue_nb=%b i_issue=%b with no redirect",
+               i_issue_nb, i_issue);
+end
+// synthesis translate_on
 
 // synthesis translate_off
 always_ff @(posedge clk) begin
@@ -804,9 +880,20 @@ ea_dec_t    skel_load_ea_dec; // Its EA decode, latched by the Address Unit
 dec_entry_t i;                // Current instruction (latched at i_issue; written far below)
 
 // Hold a successor whose base/index (or ESP) is a pending direct-load destination.
-wire [7:0] d2_ea_read_mask = i_bus.ea_base_onehot |
-                             i_bus.ea_index_onehot |
-                             (i_bus.stack_op ? 8'h10 : 8'h00);
+// Only an instruction that forms an address can read the EA one cycle early:
+// dec_ea_onehots ignores mod, so a register-direct operand (test al,al,
+// cmp cl,al, movzx ebx,al) is reported with the ModR/M rm field as its "EA
+// base" even though it has no EA.  Such a consumer reads its data operand in EX
+// from the forwarded load write-back (data_unit's gpr_ex_view) and must not be
+// held; the memory forms keep the i486 one-cycle pointer interlock.
+wire d2_mem_form = i_bus.stack_op ||
+                   (i_bus.has_modrm && !i_bus.has_moffs &&
+                    (i_bus.modrm[7:6] != 2'b11));
+wire [7:0] d2_ea_read_mask = d2_mem_form
+    ? (i_bus.ea_base_onehot |
+       i_bus.ea_index_onehot |
+       (i_bus.stack_op ? 8'h10 : 8'h00))
+    : 8'h00;
 // Plain-load WB data forwards into the D2 EA reader; ALU-load results do not.
 wire [7:0] vipt_load_wb_alu_dst_mask =
     (vipt_load_wb_valid_r && vipt_load_wb_is_alu_r)
@@ -898,13 +985,22 @@ function automatic [1:0] shift2_source_next_decode(input [5:0] source);
         default:    shift2_source_next_decode = 2'd0;
     endcase
 endfunction
+// Both decodes come from the ROM, formed on each port with the port select
+// (pb_slot) last; the reference below restates them on uc_next.
+wire       uc_next_captures_shift_source;
+wire [1:0] uc_next_shift2_source;
+// synthesis translate_off
 wire       uc_next_is_shift2 = uc_next[17:11] == ALUJMP_SHIFT2;
 wire       uc_next_is_src_shift =
     (uc_next[17:11] == ALUJMP_SHIFT) &&
     (uc_next[23:18] == SRC_SRCREG);
-wire       uc_next_captures_shift_source = uc_next_is_shift2 ||
-                                           uc_next_is_src_shift;
-wire [1:0] uc_next_shift2_source = shift2_source_next_decode(uc_next[23:18]);
+always @(posedge clk)
+    if (reset_n &&
+        ((uc_next_captures_shift_source !== (uc_next_is_shift2 || uc_next_is_src_shift)) ||
+         (uc_next_shift2_source !== shift2_source_next_decode(uc_next[23:18]))))
+        $fatal(1, "z486: the ROM's split shift2 decode %b/%0d disagrees with uc_next's",
+               uc_next_captures_shift_source, uc_next_shift2_source);
+// synthesis translate_on
 
 // synthesis translate_off
 // The immutable Intel ROM has only two plain SHIFT words whose source is
@@ -955,7 +1051,8 @@ memory #(
     .NO_ALLOC_ENABLE(NO_ALLOC_ENABLE),
     .NO_ALLOC_CLASS(NO_ALLOC_CLASS),
     .NO_ALLOC_BOUND(NO_ALLOC_BOUND),
-    .RAM_BOUND_ENABLE(RAM_BOUND_ENABLE)
+    .RAM_BOUND_ENABLE(RAM_BOUND_ENABLE),
+    .CLASS_SPLIT(1)
 ) memory_inst (
     .clk(clk),
     .reset_n(reset_n),
@@ -969,6 +1066,15 @@ memory #(
 
     .dcache_req_valid(dcache_req_valid),
     .dcache_req_phys_addr_raw(dcache_req_phys_addr_raw),
+    .dcache_req_phys_addr_m1(dcache_req_phys_addr_m1),
+    .dcache_req_phys_addr_m0(dcache_req_phys_addr_m0),
+    .dcache_req_is_io_m1(dcache_req_is_io_m1),
+    .dcache_req_is_io_m0(dcache_req_is_io_m0),
+    .dcache_req_split_sel(dcache_req_split_sel),
+    .dcache_req_pre_sel(dcache_req_pre_sel),
+    .dcache_req_pre_phys(dcache_req_pre_phys),
+    .dcache_req_route_m1(dcache_req_route_m1),
+    .dcache_req_route_m0(dcache_req_route_m0),
     .dcache_req_preread_offset(dcache_req_preread_offset),
     .dcache_req_preread_priority(dcache_req_preread_priority),
     .dcache_req_write(dcache_req_write),
@@ -1002,6 +1108,9 @@ memory #(
     .dcache_vipt_probe_direct_accepted(dcache_vipt_probe_direct_accepted),
     .dcache_vipt_resolve_valid(dcache_vipt_resolve_valid),
     .dcache_vipt_resolve_phys_addr_raw(dcache_vipt_resolve_phys_addr),
+    .dcache_vipt_resolve_tlb_phys_raw(dcache_vipt_resolve_tlb_phys),
+    .dcache_vipt_resolve_alt_phys_raw(dcache_vipt_resolve_alt_phys),
+    .dcache_vipt_resolve_use_tlb(dcache_vipt_resolve_use_tlb),
     .dcache_vipt_resolve_hit(dcache_vipt_resolve_hit),
     .dcache_vipt_resolve_data(dcache_vipt_resolve_data),
 
@@ -1045,6 +1154,15 @@ memory #(
 );
 
 // Prefetch Unit: 16-byte circular buffer
+// synthesis translate_off
+// pf_rdata (the icache's cpu_line) is a defined line only in an icache
+// completion cycle; l1_icache selects it by resp_valid_r on that contract.
+// Every prefetcher consumer that keeps the line as valid state (the queue fill,
+// the spec buffer seed) must sample it in such a cycle.
+always @(posedge clk)
+    if (reset_n && (prefetch_inst.good_ack || prefetch_inst.spec_data_now) && !icache_req_complete)
+        $fatal(1, "z486: the prefetcher consumed pf_rdata without an icache completion");
+// synthesis translate_on
 prefetch prefetch_inst (
     .clk(clk),
     .reset_n(reset_n),
@@ -1052,8 +1170,13 @@ prefetch prefetch_inst (
     .k1q(k1q),
     .k1q_early(k1q_early),
     .k1q_avail(k1q_avail),
+    .k1q_avail_raw(k1q_avail_raw),
+    .k1q_avail_lim(k1q_avail_lim),
     .k1p_adv(k1p_adv),
     .k1p_preread_adv(k1p_preread_adv),
+    .k1p_adv_u(k1p_adv_u),
+    .k1p_step_ok(k1p_step_ok),
+    .k1p_commit_u(k1p_commit_u),
     .k2q(k2q),
     .k2q_avail(k2q_avail),
     .k2p_off(dec_lit_off),
@@ -1100,8 +1223,13 @@ prefetch prefetch_inst (
 );
 
 // z486 speculative branch-target fetch
-wire [31:0] spec_disp      = i_bus.branch_rel8 ? {{24{i_bus.displacement[7]}}, i_bus.displacement[7:0]}
-                                          : i_bus.displacement;
+// The relative-branch displacement from the decoder's registered window
+// (d2_branch_disp, equal to the (branch_rel8 ? sext8 : ) i_bus.displacement
+// form whenever a relative branch completes D2 - the decoder's fuse and
+// tests/equiv/spec_branch_disp.v). The target is consumed only for a relative
+// branch (pf_spec_req's rel_branch_kind term, or d2_ret_pred, which replaces
+// the offset; the address unit's branch_relative).
+wire [31:0] spec_disp      = d2_branch_disp;
 // A 16-bit operand size truncates the new EIP to 16 bits.
 wire [31:0] spec_target_sum = EIP + ({27'd0, i_bus.length} + spec_disp);
 wire [31:0] spec_target_eip = i_bus.data32 ? spec_target_sum : {16'h0, spec_target_sum[15:0]};
@@ -1138,17 +1266,45 @@ end
 assign spec_target_off = d2_ret_pred ? rsb[rsb_top_r] : spec_target_eip;
 assign spec_target_lin = CS_base + spec_target_off;
 // A relative branch in D2 requests its target line; an EIP write cancels the request.
-wire        eip_write_now = branch_ustep_redirect || ret_redirect ||
-                            (uc_exec && ((uc_dest == DEST_EIP) || (uc_dest == DEST_eIP) ||
-                                         (uc_dest == DEST_IP) ||
-                                         (uc_dest == DEST_USTEP_RPTI_EIP)));
+wire        eip_write_other = ret_redirect ||
+                              (uc_exec && ((uc_dest == DEST_EIP) || (uc_dest == DEST_eIP) ||
+                                           (uc_dest == DEST_IP) ||
+                                           (uc_dest == DEST_USTEP_RPTI_EIP)));
+wire        eip_write_now = branch_ustep_redirect || eip_write_other;
 reg         d2_spec_sent_r;            // the D2 branch's target line is requested
 // A hardwired branch uStep that executes not taken no longer needs its line.
 wire        spec_owner_release = branch_ustep_exec && !branch_ustep_redirect;
-assign pf_spec_req = d2_resident && d2_push &&
+// The request formed on both values of the branch uStep's taken condition,
+// which selects last: the forwarded flags -> Jcc condition -> branch_redirect
+// -> eip_write_now / spec_owner_release -> pf_spec_req -> the prefetch spec
+// line was an SP limiter. With the condition taken the redirect is
+// branch_ustep_exec and no release happens; not taken, there is no redirect
+// and the release is branch_ustep_exec (spec_req_on_take; tests/equiv/
+// spec_req_take.v proves it equal to the single form for every input, and a
+// translate_off fuse compares them every cycle).
+function automatic logic spec_req_on_take(
+    input logic pre,      // everything but the branch uStep's terms
+    input logic ustep,    // branch_ustep_exec
+    input logic owner,    // pf_spec_owner_r
+    input logic take      // branch_ustep_take
+);
+    spec_req_on_take = take ? (pre && !ustep && !owner)
+                            : (pre && !(owner && !ustep));
+endfunction
+wire        pf_spec_req_pre = d2_resident && d2_push &&
+                              ((i_bus.rel_branch_kind != REL_BRANCH_NONE) || d2_ret_pred) &&
+                              !hardwired_off && !d2_spec_sent_r && !eip_write_other;
+assign pf_spec_req = spec_req_on_take(pf_spec_req_pre, branch_ustep_exec,
+                                      pf_spec_owner_r, branch_ustep_take);
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && (pf_spec_req !== (d2_resident && d2_push &&
                      ((i_bus.rel_branch_kind != REL_BRANCH_NONE) || d2_ret_pred) &&
                      !hardwired_off && !d2_spec_sent_r && !eip_write_now &&
-                     !(pf_spec_owner_r && !spec_owner_release);
+                     !(pf_spec_owner_r && !spec_owner_release))))
+        $fatal(1, "PF SPEC REQ SPLIT MISMATCH: req=%b exec=%b take=%b owner=%b",
+               pf_spec_req, branch_ustep_exec, branch_ustep_take, pf_spec_owner_r);
+// synthesis translate_on
 // A RET checks its prediction when its probe resolves in EX.
 wire        ret_pred_wrong = vipt_load_ex_r.valid && vipt_load_ex_probed_r &&
                              vipt_load_ex_r.is_ret &&
@@ -1254,8 +1410,13 @@ decoder decoder_inst (
     .k1q     (k1q),
     .k1q_early(k1q_early),
     .k1q_avail   (k1q_avail),
+    .k1q_avail_raw(k1q_avail_raw),
+    .k1q_avail_lim(k1q_avail_lim),
     .k1p_adv     (k1p_adv),
     .k1p_preread_adv(k1p_preread_adv),
+    .k1p_adv_u(k1p_adv_u),
+    .k1p_step_ok(k1p_step_ok),
+    .k1p_commit_u(k1p_commit_u),
     .k2q    (k2q),
     .k2q_avail  (k2q_avail),
     .k2p_off    (dec_lit_off),
@@ -1282,6 +1443,7 @@ decoder decoder_inst (
     .d2_push    (d2_push),
     .d1_issue_direct(d1_issue_direct),
     .d1_issue_entry(d1_issue_entry),
+    .d2_branch_disp(d2_branch_disp),
     .fetch_blocked(decoder_fetch_blocked)
 );
 
@@ -1381,6 +1543,7 @@ hardwired_control hardwired_control_inst (
     .mem_commit(recipe_mem_write),
     .shift_commit(recipe_shift_write),
     .q_flush(q_flush),
+    .q_flush_nb(q_flush_nb),
     .interrupt_entry(interrupt_entry),
     .interrupt_pending(interrupt_pending),
     .trap_active(tf_active_r || db_mode_r),
@@ -1405,6 +1568,7 @@ hardwired_control hardwired_control_inst (
     .x87_direct_candidate(x87_direct_candidate),
     .disabled(hardwired_off),
     .pb_issue(pb_issue),
+    .pb_issue_nb(pb_issue_nb),
     .pb_slot(pb_slot),
     .recipe_rni(recipe_rni),
     .recipe_state(recipe_state),
@@ -1412,6 +1576,7 @@ hardwired_control hardwired_control_inst (
     .fold_active(jcc_fold_active),
     .branch_ustep_rni(branch_ustep_rni),
     .branch_ustep_exec(branch_ustep_exec),
+    .branch_ustep_take(branch_ustep_take),
     .branch_redirect(branch_ustep_redirect)
 );
 
@@ -1549,20 +1714,66 @@ endfunction
 
 // Predecode from uc_next (the microword that becomes uc next cycle); register on
 // the same enable as uc so dly_gpr_*_pre_r tracks decode_dly_gpr(uc_dest).
-wire [5:0] dly_gpr_pre   = decode_dly_gpr(uc_next[30:24]);
+// uc_next[30:24] is port B's field when pb_slot (the D2 issue decision, late)
+// and port A's otherwise.  The decode and the lanes below are formed on each
+// port with pb_slot selecting the result, so pb_slot is the last LUT level in
+// front of dly_gpr_*_pre_r instead of the first (the fitted pb_issue -> pb_slot
+// -> q_early -> decode -> lanes -> dly_gpr_lanes_pre_r path):
+// f(sel ? b : a) = sel ? f(b) : f(a), tests/equiv/dly_pre_split.v.
+wire [6:0] uc_next_dest_a;
+wire [6:0] uc_next_dest_b;
+wire [5:0] dly_gpr_pre_a = decode_dly_gpr(uc_next_dest_a);
+wire [5:0] dly_gpr_pre_b = decode_dly_gpr(uc_next_dest_b);
+wire [5:0] dly_gpr_pre   = pb_slot ? dly_gpr_pre_b : dly_gpr_pre_a;
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && (dly_gpr_pre !== decode_dly_gpr(uc_next[30:24])))
+        $fatal(1, "z486: the split delay-slot predecode %b disagrees with uc_next's %b",
+               dly_gpr_pre, decode_dly_gpr(uc_next[30:24]));
+// synthesis translate_on
 reg        dly_gpr_we_pre_r;
 reg [2:0]  dly_gpr_sel_pre_r;
 reg [1:0]  dly_gpr_mode_pre_r;
+// The delay-slot write's GPR byte lanes [r*4 + b] (gpr_write_merge's en4 for
+// producer 4: register dst_norm(4), lanes be_of_mode) and its pend_write_mask
+// one-hot, decoded from the same predecode on the same enable, so the merge's
+// hit and the split-EA mask are one AND with the valid (tests/equiv/
+// dly_lanes_reg.v).
+function automatic [31:0] dly_lanes_of(input [2:0] sel, input [1:0] mode);
+    logic [2:0] r;
+    logic [3:0] be;
+    begin
+        r  = ((mode == FWD_BLO) || (mode == FWD_BHI)) ? {1'b0, sel[1:0]} : sel;
+        be = (mode == FWD_BLO) ? 4'h1 : (mode == FWD_BHI) ? 4'h2 :
+             (mode == FWD_W)   ? 4'h3 : 4'hF;
+        dly_lanes_of = {28'h0, be} << {r, 2'b00};
+    end
+endfunction
+reg [31:0] dly_gpr_lanes_pre_r;
+reg [7:0]  dly_gpr_onehot_pre_r;
 always_ff @(posedge clk) begin
     if (!reset_n) begin
         dly_gpr_we_pre_r <= 1'b0; dly_gpr_sel_pre_r <= 3'd0;
         dly_gpr_mode_pre_r <= FWD_D;
+        dly_gpr_lanes_pre_r <= dly_lanes_of(3'd0, FWD_D);
+        dly_gpr_onehot_pre_r <= 8'h01;
     end else if (microcode_rom_ce) begin
         dly_gpr_we_pre_r   <= dly_gpr_pre[5];
         dly_gpr_sel_pre_r  <= dly_gpr_pre[4:2];
         dly_gpr_mode_pre_r <= dly_gpr_pre[1:0];
+        dly_gpr_lanes_pre_r  <= pb_slot ? dly_lanes_of(dly_gpr_pre_b[4:2], dly_gpr_pre_b[1:0])
+                                        : dly_lanes_of(dly_gpr_pre_a[4:2], dly_gpr_pre_a[1:0]);
+        dly_gpr_onehot_pre_r <= pb_slot ? (8'h01 << dly_gpr_pre_b[4:2])
+                                        : (8'h01 << dly_gpr_pre_a[4:2]);
     end
 end
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && ((dly_gpr_lanes_pre_r !== dly_lanes_of(dly_gpr_sel_pre_r, dly_gpr_mode_pre_r)) ||
+                    (dly_gpr_onehot_pre_r !== (8'h01 << dly_gpr_sel_pre_r))))
+        $fatal(1, "z486: the delay-slot lanes %h / one-hot %b disagree with sel %0d mode %0d",
+               dly_gpr_lanes_pre_r, dly_gpr_onehot_pre_r, dly_gpr_sel_pre_r, dly_gpr_mode_pre_r);
+// synthesis translate_on
 
 // Delay-slot GPR write descriptor (a stale recipe slot word writes nothing).
 assign dly_gpr_we = i_rni_delay_ea && !recipe_slot_stale &&
@@ -1821,6 +2032,9 @@ segmentation_unit seg_unit (
     .seg_target       (seg_cmd_target),
     .exec_seg_cmd     (uc_seg_cmd),
     .exec_seg_target  (uc_seg_target),
+    .exec_cmd_valid   (uc_exec),
+    .issue_cmd        (i_issue),
+    .issue_target     (init_final_seg),
     .init_addr32      (i_bus.addr32),
     .init_stack_op    (i_bus.stack_op),
     .clear_descsw     (uc_dest == DEST_DESSTK),
@@ -1917,7 +2131,8 @@ segmentation_unit seg_unit (
     .au_issue_ea(ea_early),
     .au_ea(ea_reg),
     .au_ind(IND),
-    .au_ind_delta(IND_DELTA)
+    .au_ind_delta(IND_DELTA),
+    .au_ind_delta_dword(ind_delta_dword)
 );
 
 // synthesis translate_off
@@ -2026,7 +2241,6 @@ end
 //=============================================================================
 
 // Access width: |IND_DELTA| for RD W/WR W, else the source width.
-wire ind_delta_dword = (IND_DELTA == 32'd4) || (IND_DELTA == -32'd4);
 assign mem_eff_size = uc_is_word_op
                           ? ((ind_delta_dword && !uc_force_word) ? 2'd2 : 2'd1) :
                           uc_is_dword_op ? 2'd2 : srcreg_size;
@@ -2485,11 +2699,58 @@ localparam bit Z486_TEMPLATE_WINDOWS = VGA_ENABLE | APERTURE_ENABLE |
                                        ALIAS_ENABLE | WIN0_ENABLE |
                                        NO_ALLOC_ENABLE;
 
+// POSTED STORES UNDER THE TEMPLATE.  Every window is a compile-time constant,
+// so whether a 4 KB physical page is cacheable RAM is a constant function of
+// its PFN (z486_page_post_bits: {P, Wb}), up to two runtime inputs: window 0's
+// select (win0_unmapped) and the A20 gate.  The verdict is a few constant
+// range compares on the physical page: paged, the sidecar entry's PFN as the
+// TLB RAM returns it, beside the entry's tag compare (vipt_tlb_hit), which the
+// post decision already waits for; unpaged, the sidecar page register itself
+// (linear == physical).  CR0.PG selects the finished verdict last.  The A20
+// gate is qualified live: the verdict is the page's own, valid while the
+// active mask leaves the page unchanged (PC-98 and PC/AT: A20 on, or PFN bit 8
+// clear).  (Storing the verdict in a parallel sidecar RAM instead added an
+// M10K whose read address joined the D2 EA cone, and fitted worse.)  Off (and folded
+// away) without windows, with TEMPLATE_STORE_POST = 0, with the device-MMIO
+// window (a runtime base the template cannot see) or with a window that is not
+// page-aligned (the per-page verdict would not be exact).
+localparam bit Z486_MAP_PAGE_ALIGNED =
+    z486_window_page_aligned(VGA_ENABLE, VGA_BASE, VGA_TOP) &&
+    z486_window_page_aligned(APERTURE_ENABLE, APERTURE_BASE, APERTURE_TOP) &&
+    z486_window_page_aligned(ALIAS_ENABLE, ALIAS0_BASE, ALIAS0_TOP) &&
+    z486_window_page_aligned(ALIAS_ENABLE, ALIAS1_BASE, ALIAS1_TOP) &&
+    z486_window_page_aligned(ALIAS_ENABLE, ALIAS2_BASE, ALIAS2_TOP) &&
+    z486_window_page_aligned(WIN0_ENABLE, WIN0_BASE, WIN0_TOP) &&
+    (!NO_ALLOC_ENABLE || (NO_ALLOC_BOUND[11:0] == 12'h000));
+localparam bit Z486_STORE_POST = Z486_TEMPLATE_WINDOWS && TEMPLATE_STORE_POST &&
+                                 !ENABLE_DEVICE_MMIO && Z486_MAP_PAGE_ALIGNED;
+
+function automatic logic [1:0] page_post_bits(input logic [19:0] pfn);
+    page_post_bits = z486_page_post_bits(pfn,
+        VGA_ENABLE, VGA_CLASS, VGA_BASE, VGA_TOP,
+        APERTURE_ENABLE, APERTURE_CLASS, APERTURE_BASE, APERTURE_TOP,
+        ALIAS_ENABLE, ALIAS_CLASS,
+        ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
+        WIN0_ENABLE, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
+        NO_ALLOC_ENABLE, NO_ALLOC_CLASS, NO_ALLOC_BOUND);
+endfunction
+
+wire        st_post_paged = CR0[31];
+wire [19:0] st_post_pfn = st_post_paged ? vipt_tlb_phys_hit_form[31:12] : st_sidecar_page;
+wire [1:0]  st_post_bits = st_post_paged ? page_post_bits(vipt_tlb_phys_hit_form[31:12])
+                                          : page_post_bits(st_sidecar_page);
+wire        st_post_a20_ok = a20_enable ? ((st_post_pfn & ~A20_MASK_ON[31:12]) == 20'd0)
+                                        : ((st_post_pfn & ~A20_MASK_OFF[31:12]) == 20'd0);
+assign memmap_post_ok = Z486_STORE_POST && st_post_bits[1] &&
+                        !(st_post_bits[0] && win0_unmapped) && st_post_a20_ok;
+
 data_access data_access_inst (
     // Clock and reset
     .clk(clk),
     .reset_n(reset_n),
     .memmap_windows(Z486_TEMPLATE_WINDOWS),
+    .memmap_post_ok(memmap_post_ok),
+    .sidecar_page(st_sidecar_page),
     // L1 data cache: probe/resolve port and direct store port
     .dcache_vipt_probe_accepted(dcache_vipt_probe_accepted),
     .dcache_vipt_probe_direct_accepted(dcache_vipt_probe_direct_accepted),
@@ -2501,6 +2762,9 @@ data_access data_access_inst (
     .dcache_vipt_probe_offset(dcache_vipt_probe_offset),
     .dcache_vipt_probe_valid(dcache_vipt_probe_valid),
     .dcache_vipt_resolve_phys_addr(dcache_vipt_resolve_phys_addr),
+    .dcache_vipt_resolve_tlb_phys(dcache_vipt_resolve_tlb_phys),
+    .dcache_vipt_resolve_alt_phys(dcache_vipt_resolve_alt_phys),
+    .dcache_vipt_resolve_use_tlb(dcache_vipt_resolve_use_tlb),
     .dcache_vipt_resolve_valid(dcache_vipt_resolve_valid),
     .fast_store_be(fast_store_be),
     .fast_store_valid(fast_store_valid),
@@ -2519,6 +2783,8 @@ data_access data_access_inst (
     .vipt_tlb_hit(vipt_tlb_hit),
     .vipt_tlb_is_vga_mem(vipt_tlb_is_vga_mem),
     .vipt_tlb_phys_addr(vipt_tlb_phys_addr),
+    .vipt_tlb_phys_hit_form(vipt_tlb_phys_hit_form),
+    .vipt_tlb_phys_miss_form(vipt_tlb_phys_miss_form),
     .vipt_tlb_user(vipt_tlb_user),
     .vipt_tlb_writable(vipt_tlb_writable),
     .sidecar_bg_pre(sidecar_bg_pre),
@@ -2580,6 +2846,9 @@ data_access data_access_inst (
     .vipt_load_wb_is_alu_r(vipt_load_wb_is_alu_r),
     .vipt_load_wb_size_r(vipt_load_wb_size_r),
     .vipt_load_wb_target_r(vipt_load_wb_target_r),
+    .vipt_load_wb_wmask_r(vipt_load_wb_wmask_r),
+    .vipt_load_wb_view_hit_r(vipt_load_wb_view_hit_r),
+    .vipt_load_wb_ah_r(vipt_load_wb_ah_r),
     .vipt_load_wb_valid_r(vipt_load_wb_valid_r),
     // D2 instruction and issue
     .d2_vipt_ea_hazard(d2_vipt_ea_hazard),
@@ -2625,6 +2894,7 @@ data_access data_access_inst (
     .uc_is_mem_busop(uc_is_mem_busop),
     .uc_is_write(uc_is_write),
     .uc_p_pure_dly(uc_p_pure_dly),
+    .uc_bus_or_dly(uc_bus_or_dly),
     .x87_direct_mem_req(x87_direct_mem_req),
     .pop_direct_r(pop_direct_r),
     .rd_fast_finish(rd_fast_finish),
@@ -2706,6 +2976,8 @@ paging_unit #(.VGA_BASE(VGA_BASE), .VGA_TOP(VGA_TOP)) paging_inst (
     .vipt_fallback      (paging_owned_submit),
     .vipt_tlb_hit       (vipt_tlb_hit),
     .vipt_tlb_phys_addr (vipt_tlb_phys_addr),
+    .vipt_tlb_phys_hit_form (vipt_tlb_phys_hit_form),
+    .vipt_tlb_phys_miss_form(vipt_tlb_phys_miss_form),
     .vipt_tlb_writable  (vipt_tlb_writable),
     .vipt_tlb_user      (vipt_tlb_user),
     .vipt_tlb_dirty     (vipt_tlb_dirty),
@@ -2730,6 +3002,15 @@ paging_unit #(.VGA_BASE(VGA_BASE), .VGA_TOP(VGA_TOP)) paging_inst (
     // Demand-side physical request interface
     .dcache_req_valid   (dcache_req_valid),
     .dcache_req_phys_addr(dcache_req_phys_addr_raw),
+    .dcache_req_phys_addr_m1(dcache_req_phys_addr_m1),
+    .dcache_req_phys_addr_m0(dcache_req_phys_addr_m0),
+    .dcache_req_is_io_m1(dcache_req_is_io_m1),
+    .dcache_req_is_io_m0(dcache_req_is_io_m0),
+    .dcache_req_split_sel(dcache_req_split_sel),
+    .dcache_req_pre_sel(dcache_req_pre_sel),
+    .dcache_req_pre_phys(dcache_req_pre_phys),
+    .dcache_req_route_m1(dcache_req_route_m1),
+    .dcache_req_route_m0(dcache_req_route_m0),
     .dcache_req_preread_offset(dcache_req_preread_offset),
     .dcache_req_preread_priority(dcache_req_preread_priority),
     .dcache_req_write   (dcache_req_write),
@@ -2877,6 +3158,7 @@ wire gate_detect_now;
 wire instr_eip_written;
 wire misc2_flag;
 wire recipe_fallback_taken;
+wire recipe_fallback_cond;
 event_control #(.ENABLE_X87(ENABLE_X87)) event_control_inst (
     // Clock and reset
     .clk(clk),
@@ -2896,6 +3178,7 @@ event_control #(.ENABLE_X87(ENABLE_X87)) event_control_inst (
     .q_flush(q_flush),
     .d2_resident(d2_resident),
     .i_issue(i_issue),
+    .i_issue_seq(i_issue_nb),
     .i_first(i_first),
     .i_rni(i_rni),
     .i_rni_delay(i_rni_delay),
@@ -2961,6 +3244,7 @@ event_control #(.ENABLE_X87(ENABLE_X87)) event_control_inst (
     .seq_fault_redirect(seq_fault_redirect),
     .seq_boundary_redirect(seq_boundary_redirect),
     .recipe_fallback_taken(recipe_fallback_taken),
+    .recipe_fallback_cond(recipe_fallback_cond),
     .gate_detect_now(gate_detect_now),
     .gate_detect_cond(gate_detect_cond),
     .double_fault_start(double_fault_start),
@@ -3048,6 +3332,10 @@ end
 // Precise early CALL redirect at i_first; its branch uStep must not flush again.
 assign early_redirect = (branch_ustep_redirect && !early_redirected) || ret_redirect ||
                         early_call_redirect;
+// q_flush's cofactor at branch_ustep_redirect = 0 (equal to q_flush whenever
+// the branch uStep does not redirect); read only by i_issue_nb below.
+assign q_flush_nb = (uc_exec && uc_ctl_pref && !uc_pref_suppress_prev && !early_redirected)
+                  || ret_redirect || early_call_redirect || pe_mode_toggle_now;
 // A fault or interrupt abandons the instruction that owned an early redirect.
 // Clear that ownership before its handler's microcode PREF reaches q_flush.
 always_ff @(posedge clk or negedge reset_n) begin
@@ -3116,6 +3404,14 @@ microsequencer microsequencer_inst (
     .div_redirect_valid(div_overflow),
     .div_redirect_target(double_fault_start ? UADDR_DOUBLE_FAULT : UADDR_DIVIDE_ERROR),
     .gate_redirect(gate_detect_now),
+    // The same redirects' conditions without uc_exec (each *_valid above is
+    // uc_exec && its condition, or for the recipe also rmw_fallback_delay_r):
+    // the ROM address takes uc_exec in its last select.
+    .prot_redirect_cond(prot_result_now && prot_jump_valid),
+    .recipe_redirect_cond(recipe_fallback_cond),
+    .recipe_redirect_hold(rmw_fallback_delay_r),
+    .div_redirect_cond(div_overflow_cond),
+    .gate_redirect_cond(gate_detect_cond),
     .fault_redirect(seq_fault_redirect),
     .boundary_redirect(seq_boundary_redirect),
     // End of instruction: RNI, synthetic RNIs and the delay slot
@@ -3130,6 +3426,10 @@ microsequencer microsequencer_inst (
     // Microinstruction to the units (port A's ROM output, predecoded)
     .uc(uc),
     .uc_next(uc_next),
+    .uc_next_shift2_source(uc_next_shift2_source),
+    .uc_next_shift_captures(uc_next_captures_shift_source),
+    .uc_next_dest_a(uc_next_dest_a),
+    .uc_next_dest_b(uc_next_dest_b),
     .uc_source_shift(uc_source_shift),
     .uc_shift_source_class(uc_shift_source_class),
     .uc_shift2_source(uc_shift2_source),
@@ -3282,6 +3582,29 @@ always_ff @(posedge clk) begin
     end
 end
 
+// op_size_du's size compares, registered on the edges op_size_du is written
+// from the value written (the always_ff above, branch for branch), so the
+// data unit's sized operand reads select on a flop instead of a compare of
+// the fo ~400 op_size_du (tests/equiv/op_size_dec_reg.v).
+function automatic logic [1:0] size_is01(input logic [1:0] sz);
+    size_is01 = {sz == 2'd1, sz == 2'd0};
+endfunction
+always_ff @(posedge clk) begin
+    if (!reset_n) begin
+        {op_size_du_is1, op_size_du_is0} <= size_is01(2'd1);
+    end else if (i_issue && !halted) begin
+        {op_size_du_is1, op_size_du_is0} <= size_is01(i_bus.operand_size);
+    end else if (uc_exec) begin
+        case (uc_aluop)
+            ALUJMP_BITS8:  {op_size_du_is1, op_size_du_is0} <= size_is01(2'd0);
+            ALUJMP_BITS16: {op_size_du_is1, op_size_du_is0} <= size_is01(2'd1);
+            ALUJMP_BITS32: {op_size_du_is1, op_size_du_is0} <= size_is01(2'd2);
+            ALUJMP_BITSDE: {op_size_du_is1, op_size_du_is0} <= size_is01(op_size_src_decode);
+            default: ;
+        endcase
+    end
+end
+
 // GPR and internal registers
 always_ff @(posedge clk) begin
     automatic logic [31:0] external_dest_value;
@@ -3393,13 +3716,21 @@ always_ff @(posedge clk) begin
                         3'd5: DR7 <= dr7_value(external_dest_value);
                         default: ;
                     endcase
-                if (COUNTR[5:3] == 3'b100)
+                // Only a selector-writing bus op stores the selector. SAR/SLIM
+                // write descriptor fields, and SPTR (uc 5A7, the LFS/LGS
+                // protected-mode load) only aims DESPTR at the target's
+                // descriptor before the checks: its SRC_NEG1 value is not a
+                // selector, and storing it left FS/GS = FFFFh whenever the load
+                // then faulted (#NP/#GP), where a 486 keeps the old selector.
+                // The successful load stores the selector at uc 5AA (SDEL).
+                if (COUNTR[5:3] == 3'b100 && uc_buscode != BUSOP_SAR &&
+                    uc_buscode != BUSOP_SLIM && uc_buscode != BUSOP_SPTR)
                 case (COUNTR[5:0])
-                    6'h20: if (uc_buscode != BUSOP_SAR && uc_buscode != BUSOP_SLIM) ES <= external_dest_value[15:0];
-                    6'h22: if (uc_buscode != BUSOP_SAR && uc_buscode != BUSOP_SLIM) SS <= external_dest_value[15:0];
-                    6'h23: if (uc_buscode != BUSOP_SAR && uc_buscode != BUSOP_SLIM) DS <= external_dest_value[15:0];
-                    6'h24: if (uc_buscode != BUSOP_SAR && uc_buscode != BUSOP_SLIM) FS <= external_dest_value[15:0];
-                    6'h25: if (uc_buscode != BUSOP_SAR && uc_buscode != BUSOP_SLIM) GS <= external_dest_value[15:0];
+                    6'h20: ES <= external_dest_value[15:0];
+                    6'h22: SS <= external_dest_value[15:0];
+                    6'h23: DS <= external_dest_value[15:0];
+                    6'h24: FS <= external_dest_value[15:0];
+                    6'h25: GS <= external_dest_value[15:0];
                     default: ;
                 endcase
             end
@@ -3614,6 +3945,8 @@ data_unit data_unit_inst (
     .instr(i),
     .next_instr(i_bus),
     .op_size(op_size_du),
+    .op_size_is0(op_size_du_is0),
+    .op_size_is1(op_size_du_is1),
     .srcreg_size(srcreg_size_src),
     .op_size_src(op_size_src),
     .srcreg_size_src(srcreg_size_src),
@@ -3636,6 +3969,9 @@ data_unit data_unit_inst (
     .load_pipe_flush(q_flush || any_fault || interrupt_entry),
     .load_wb_dst(vipt_load_wb_dst_r),
     .load_wb_size(vipt_load_wb_size_r),
+    .load_wb_wmask(vipt_load_wb_wmask_r),
+    .load_wb_view_hit(vipt_load_wb_view_hit_r),
+    .load_wb_ah(vipt_load_wb_ah_r),
     .load_wb_data(vipt_load_wb_data),
     .load_wb_is_alu(vipt_load_wb_is_alu_r),
     .load_wb_alu_op(vipt_load_wb_alu_op_r),
@@ -3645,6 +3981,8 @@ data_unit data_unit_inst (
     .load_alu_dst_capture_data(vipt_load_alu_dst_capture_data),
     // Shorters (US5142635): bypasses around the register file
     .dly_gpr_forward(dly_gpr_forward),
+    .dly_gpr_lanes(dly_gpr_lanes_pre_r),
+    .dly_gpr_onehot(dly_gpr_onehot_pre_r),
     .eflags_fwd(eflags_fwd),
     .branch_condition_true(branch_condition_true),
     // Segmentation: I-bus base/index reads and address registers
@@ -3715,6 +4053,7 @@ data_unit data_unit_inst (
     .shift_result(shift_result),
     .muldiv_result(muldiv_result),
     .div_overflow(div_overflow),
+    .div_overflow_cond(div_overflow_cond),
     .alu_src(alu_src),
     .alu_src_hold(alu_src_r),
     .source_value_live(source_value_live),

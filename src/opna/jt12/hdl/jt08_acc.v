@@ -52,15 +52,15 @@
 // sign-extended: +-32,768, jt08_adpcm_acc.v), and ADPCM-B at +-2^14 (+-16,384):
 // +-147,456, which is inside 2^19 but EXCEEDS signed 18-bit (+-131,072).
 // THAT BOUND IS OURS, NOT THE DIE'S. The die sums into an 18-bit WRAPPING
-// accumulator (`ac_fm_accm1[0] &= 0x3ffff`, fmopna_impl.c:5336) and its output
-// shifter then rails at +-32768; its FM bound per channel is also smaller because
-// it masks each CHANNEL's output at 14 bits (`op_output[1] = output & 0x3fff`,
-// :2009), 6 x (+-4096) = +-24,576, where we sum the 24 carrier slots raw. So for
-// every input THIS BUILD can reach (ADPCM-B unwired: +-98,304 +-32,768 =
-// +-131,071, exactly signed-18 range) our clamp16 IS the die's rails; above
-// +-131,072 the die would WRAP (sign reversal) where we clamp. That corner needs
-// ADPCM-B (TODO item 38) and/or the per-channel FM mask resolved against the LLE
-// first - see TODO item 87.
+// accumulator (`ac_fm_accm1[0] &= 0x3ffff`, fmopna_impl.c:5321) and its output
+// shifter then rails at +-32768 (`ac_shifter_top = (chip->ac_fm_accm1[1] >> 15) & 7;`,
+// :5403). The die adds each carrier slot separately (`ac_fm_output_en =
+// chip->alg_output_l;`, :5351; each slot (op_output[2] & 0x1fff) >> 1, :5347), so its
+// FM bound is the same 24 x +-4096 = +-98,304 as ours. For every input THIS BUILD can
+// reach (ADPCM-B unwired: +-98,304 +-32,768 = -131,072..+131,047, exactly the signed-18
+// range) our clamp16 IS the die's rails; only an ADPCM-B contribution (ad_output << 2,
+// +-16,384, :5394) could push the die's sum past +-131,072 and wrap it where we clamp.
+// tb_pc9821_opna_junction_range pins the extremes.
 
 module jt08_acc(
     input               clk,

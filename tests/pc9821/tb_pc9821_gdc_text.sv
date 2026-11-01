@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GDC_TEXT:
-// The text GDC's character-generator paths: user CG RAM and the ANK fetch through the CG window including the row bit, the code register packing, and the tile/colour registers as readback. It also renders JIS kanji from the pack's FONT.ROM copy as a two-cell pair (left half then right half) at the dump's own address 0x1800 + (ku-0x21)*0xC00 + (ten-0x20)*0x20, with a spread of glyphs from the symbol, kana, level-1 and level-2 rows checked byte for byte against the dump, the pair's second cell drawing its half with no code of its own, and a pair never crossing a line. The GRCG's own mode/tile registers are no longer latched here (pc9821_grcg owns them and their four-plane write path, asserted by tb_pc9821_grcg.sv); what this bench still pins is the port-level fact that 0x7C/0x7E read 0xFF. No assertion here can see a colour swap in the pixel path. It also pins the port 0xA9 read answering the glyph byte of the code the guest just wrote rather than the previous code's asynchronous SDRAM block (the stale-glyph bug a driver's glyph loop hit). It also pins the CODE plane's 12-bit word index: with a display start (PRAM screen 0) of 0x1000 words - further than any word the boot configuration's 80x25 screen reaches - a plane holding one 2-byte code in every word and 0xE1 in every attribute byte must still fetch the code and draw the glyph, where a 13-bit code index reads the ATTRIBUTE plane as the code and the whole screen draws blank. It also pins the port-0xA4 display-page flip as an IMMEDIATE page-select: a write reaches the scan page on the next clk_sys wherever in the frame it lands - early on the last line, in the last dots before frame_end, and mid active region - because 0xA4 is a page-select mux outside the GDC (r13/343; MAME/NP2kai/QEMU all apply it at the write, and the real-machine probe shows the tear), reversing r13/323's frame-boundary latch. The machine-reset seed (lane dip-reset-seed) is pinned on this same record: pc9821_system re-seeds it from the iobus's reset-seed one-shot (one event for both configuration stores), and because pc9821_cg's own reset is clamped for the whole machine-reset window the walk must NOT be reset-held - a strobe landing INSIDE that window restores all 38 bytes (the 14-byte record first, then the mirror's 24) and is quiet within 40 clk_sys, so the record is whole before the CPU can leave its own reset and read the ITF's 0xFC681 marker (FAIL-FIRST: with the walk under `!rst_n_sys` the strobe is swallowed and the corrupt record survives the reset). It also pins the DIP PORT MIRROR at CG store 0x40..0x5B (code 0x0156), the 24 bytes BANK4@0xFC42D copies into the software-DIP ports during POST: bank A must sit at 0x50..0x5B and bank B at 0x40..0x4B - the swap the BANK3@0x2322 accessor helper encodes - each byte the machine DIP image of its row (bank A docs/probes/PORTS.TXT:258 (841E 7C 851E 02 861E 76 871E 3E), bank B the BANK4@0x4818 factory table), and every byte the ITF's odd-parity verify examines must satisfy it (FAIL-FIRST: the unseeded mirror is 24 even-parity zeroes, which that verify rejects at once); the same one restore walk re-seeds the mirror too, record first and whole within 40 clk_sys. With MODE FF1 bit 0 set, an ANK cell whose attribute has bit 4 draws its code as NP2kai's simple-graphics 2x4 block pattern (maketext.c's TXTATR_BG arm, font.c font_setchargraph, the NEC 0xF2 patch included) instead of the ANK glyph, and with bit 0 clear the same attribute bit is the vertical line again. It also renders the ver0.78 half-width rows (ku 0x29-0x2B): NP2kai draws those as a SINGLE cell, the grid slot's left half with no pair consumption (vram/maketext.c:280-296 leaves kanji2nd clear for kc 0x09-0x0B), checked raster for raster against FONT.ROM[0x7C20]'s own 'A' and against a tagged asymmetric glyph so a pair-consuming fix cannot pass (FAIL-FIRST: the pre-fix scanout drew nothing there, review-cg F6).
+// The text GDC's character-generator paths: user CG RAM and the ANK fetch through the CG window including the row bit, the code register packing, and the tile/colour registers as readback. It also renders JIS kanji from the pack's FONT.ROM copy as a two-cell pair (left half then right half) at the dump's own address 0x1800 + (ku-0x21)*0xC00 + (ten-0x20)*0x20, with a spread of glyphs from the symbol, kana, level-1 and level-2 rows checked byte for byte against the dump, the pair's second cell drawing its half with no code of its own, and a pair never crossing a line. The GRCG's own mode/tile registers are no longer latched here (pc9821_grcg owns them and their four-plane write path, asserted by tb_pc9821_grcg.sv); what this bench still pins is the port-level fact that 0x7C/0x7E read 0xFF. No assertion here can see a colour swap in the pixel path. It also pins the port 0xA9 read answering the glyph byte of the code the guest just wrote rather than the previous code's asynchronous SDRAM block (the stale-glyph bug a driver's glyph loop hit). It also pins the CODE plane's 12-bit word index: with a display start (PRAM screen 0) of 0x1000 words - further than any word the boot configuration's 80x25 screen reaches - a plane holding one 2-byte code in every word and 0xE1 in every attribute byte must still fetch the code and draw the glyph, where a 13-bit code index reads the ATTRIBUTE plane as the code and the whole screen draws blank. It also pins the port-0xA4 display-page flip as an IMMEDIATE page-select: a write reaches the scan page on the next clk_sys wherever in the frame it lands - early on the last line, in the last dots before frame_end, and mid active region - because 0xA4 is a page-select mux outside the GDC (MAME/NP2kai/QEMU all apply it at the write, and the real-machine probe shows the tear), reversing an earlier frame-boundary latch. The machine-reset seed is pinned on this same record: pc9821_system re-seeds it from the iobus's reset-seed one-shot (one event for both configuration stores), and because pc9821_cg's own reset is clamped for the whole machine-reset window the walk must NOT be reset-held - a strobe landing INSIDE that window restores all 38 bytes (the 14-byte record first, then the mirror's 24) and is quiet within 40 clk_sys, so the record is whole before the CPU can leave its own reset and read the ITF's 0xFC681 marker (FAIL-FIRST: with the walk under `!rst_n_sys` the strobe is swallowed and the corrupt record survives the reset). It also pins the DIP PORT MIRROR at CG store 0x40..0x5B (code 0x0156), the 24 bytes BANK4@0xFC42D copies into the software-DIP ports during POST: bank A must sit at 0x50..0x5B and bank B at 0x40..0x4B - the swap the BANK3@0x2322 accessor helper encodes - each byte the machine DIP image of its row (bank A docs/probes/PORTS.TXT:258 (841E 7C 851E 02 861E 76 871E 3E), bank B the BANK4@0x4818 factory table), and every byte the ITF's odd-parity verify examines must satisfy it (FAIL-FIRST: the unseeded mirror is 24 even-parity zeroes, which that verify rejects at once); the same one restore walk re-seeds the mirror too, record first and whole within 40 clk_sys. With MODE FF1 bit 0 set, an ANK cell whose attribute has bit 4 draws its code as NP2kai's simple-graphics 2x4 block pattern (maketext.c's TXTATR_BG arm, font.c font_setchargraph, the NEC 0xF2 patch included) instead of the ANK glyph, and with bit 0 clear the same attribute bit is the vertical line again. It also renders the ver0.78 half-width rows (ku 0x29-0x2B): NP2kai draws those as a SINGLE cell, the grid slot's left half with no pair consumption (vram/maketext.c:280-296 leaves kanji2nd clear for kc 0x09-0x0B), checked raster for raster against FONT.ROM[0x7C20]'s own 'A' and against a tagged asymmetric glyph so a pair-consuming fix cannot pass (FAIL-FIRST: the pre-fix scanout drew nothing there).
 
 
 module tb_pc9821_gdc_text;
@@ -26,8 +26,6 @@ module tb_pc9821_gdc_text;
   wire [7:0] tram_cpu_dout;
   // CG window byte port: the window itself is exercised end-to-end by
   // tb_pc9821_cg_window; here it is parked so (.*) stays complete.
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   reg  [4:0] cg_win_byte_sel = 0;
   reg  cg_win_rd = 0;
   wire [7:0] cg_win_dout;
@@ -42,7 +40,7 @@ module tb_pc9821_gdc_text;
   reg [17:0] font_ld_addr = 0;
   reg [15:0] font_ld_data = 0;
   reg font_ld_we = 0;
-  // The CG block's variable read wait (r13/280): the JIS read comes from SDRAM now, so the
+  // The CG block's variable read wait: the JIS read comes from SDRAM now, so the
   // bench's fmem stub below must answer the walker before the scanout samples.
   wire vsync_active, disp_on;
   // The configuration-image seed (pc9821_gdc_text's cfg_* block / pc9821_iobus's memory-switch
@@ -52,10 +50,9 @@ module tb_pc9821_gdc_text;
   wire       cfg_seed_reload = 1'b0;
   wire gfx_disp;   // the slave GDC's display latch, asserted by the case below
   wire vsync_irq_arm, vsync_irq;
-  wire vsync_edge;   // the frame boundary the IRQ rises on (r13/321); parked so (.*) stays complete
-  wire [7:0] grcg_mode_r = 8'h00;   // the GRCG mode; parked - the 0x7C read is open bus 0xFF (RDBACK.TXT:152)
+  wire vsync_edge;   // the frame boundary the IRQ rises on; parked so (.*) stays complete
   // The text plane now leaves the GDC as a colour and two opacity flags, not as
-  // an RGB byte (r12/33 D4). Reconstructing the old byte here keeps this bench's
+  // an RGB byte. Reconstructing the old byte here keeps this bench's
   // lit-dot assertions exactly as they were.
   wire        text_opaque, text_cell;
   wire [11:0] text_colour;
@@ -63,7 +60,7 @@ module tb_pc9821_gdc_text;
   wire        pix_h_active, pix_v_active;
   wire        gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB, r13/225 #2).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -86,7 +83,7 @@ module tb_pc9821_gdc_text;
   // The three analogue channels read back through the port, in the mirror's own byte order
   // {B, R, G} (the white-box peep this replaced was `dut.u_crtc.pal_mirror[3]`).
   reg [23:0] rgb_rd = 24'h0;
-  // The raster line each VSYNC event happens on (r13/321). `in_vsync` is the raw pulse, decoded
+  // The raster line each VSYNC event happens on. `in_vsync` is the raw pulse, decoded
   // combinationally from `vline`, and the vline register only advances on the pixel enable, so
   // reading dut.u_crtc.vline at the first clk_sys edge the pulse is high names the LINE the pulse rose on
   // (407 = VACTIVE + VFP) however many clk_sys the domain crossing costs. `irq_vline` is the same
@@ -111,7 +108,7 @@ module tb_pc9821_gdc_text;
   wire [15:0] dbg_sad;
   wire  [7:0] dbg_pitch;
   wire        dbg_col40, dbg_disp;
-  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter (r13/305)
+  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter
 
   // ==== DUT ====
   wire cg_rd_hold, cg_win_byte_hold;
@@ -323,7 +320,7 @@ module tb_pc9821_gdc_text;
 
   // Refetch the plane with the new code before sampling it. The frame boundary is the raster's
   // own frame_end, NOT a frame_cnt change: frame_cnt is the character blink's count and advances
-  // once per CSRFORM `timing` frames (audit rtl-audit-video F1), so it is no longer a frame
+  // once per CSRFORM `timing` frames, so it is no longer a frame
   // counter.
   task automatic next_frame;
     begin
@@ -349,7 +346,7 @@ module tb_pc9821_gdc_text;
 
   // The bench's own FRAME counter, for the waits that used to be "at least N frames have passed".
   // frame_cnt cannot serve: it is the character blink's count and advances once per CSRFORM
-  // `timing` frames (audit rtl-audit-video F1). Counting the same edges frame_cnt did (the
+  // `timing` frames. Counting the same edges frame_cnt did (the
   // raster's frame_end, once per frame from reset) keeps those waits at their original point.
   integer frame_ends = 0;
   always @(posedge clk_sys) if (rst_n_sys && dut.u_crtc.frame_end) frame_ends <= frame_ends + 1;
@@ -358,7 +355,7 @@ module tb_pc9821_gdc_text;
   // against THIS, which is what keeps the bench from carrying a second copy of the 14 bytes - the
   // same one-definition rule the OSD-action check inside follows.
   reg [7:0] cg_rec_powerup [0:13];
-  // The DIP port mirror's expected image (lane dip-mirror): bank A at store 0x50..0x5B
+  // The DIP port mirror's expected image: bank A at store 0x50..0x5B
   // and bank B at 0x40..0x4B. Capture-rows, not this RTL's own image: bank A is
   // docs/probes/PORTS.TXT:258 (841E 7C 851E 02 861E 76 871E 3E ...), bank B the
   // firmware's factory table (BANK4@0x4818: 8f 80 80 80 80 80 ...).
@@ -373,7 +370,7 @@ module tb_pc9821_gdc_text;
     rst_n_vid = 1;
     for (i = 0; i < 14; i = i + 1) cg_rec_powerup[i] = dut.u_cg.u_cg_ram.ram[13'h810 + i];
 
-    // ---- the DIP PORT MIRROR at CG store 0x40..0x5B: the POWER-UP image (lane dip-mirror)
+    // ---- the DIP PORT MIRROR at CG store 0x40..0x5B: the POWER-UP image
     // BANK4@0xFC42D copies these 24 bytes INTO the software-DIP ports during POST (bank A
     // from 0x50..0x5B, bank B from 0x40..0x4B, through the CG window at code 0x0156), and
     // BANK4@0xFC824 re-syncs them from the ports on the repair path. SETUP's per-index
@@ -463,9 +460,9 @@ module tb_pc9821_gdc_text;
       $display("FAIL analogue red read %02x", io_dout);
       errors = errors + 1;
     end
-    // The analogue table itself is pc9821_gfx_palette's RAM now (r13/227); what stays in
+    // The analogue table itself is pc9821_gfx_palette's RAM now; what stays in
     // this module is the write decode and its read mirror. The mirror keeps the FULL
-    // written bytes per channel (review readbacks.md's palette row: write 0xFF reads
+    // written bytes per channel (write 0xFF reads
     // 0xFF, not the nibble), so the entry is {B=06, R=04, G=02}. All THREE channels are
     // read back THROUGH THE PORT, which is a stronger check than the white-box peep
     // (`dut.u_crtc.pal_mirror[3]`) that the storage move had to repoint. ONE clk_sys is
@@ -543,7 +540,7 @@ module tb_pc9821_gdc_text;
       errors = errors + 1;
     end
 
-    // ... and the PHASE, which the count above cannot see (r13/321). The VSYNC PULSE is the sync
+    // ... and the PHASE, which the count above cannot see. The VSYNC PULSE is the sync
     // pulse: vline 407..414, i.e. VACTIVE + VFP through +VSYNC_W, 7 lines of front porch after the
     // last active line. The vblank IRQ rises ON that pulse's leading edge, so the guest's window
     // after the interrupt is 33 lines (66,462 clk_sys), not the 40 (80,560) an interrupt at the
@@ -554,7 +551,7 @@ module tb_pc9821_gdc_text;
     // on-card 2M-sample histogram measures directly: bit 5 high in 36 385 of 2 097 152 samples =
     // 1.735 % = 8 of 440 lines (docs/probes/GDC.TXT; the "12 lines / 2.8 %" this comment used to
     // cite divided the same count by 1 310 720 instead of the capture's own always-set 2^21). That
-    // also refutes NP2kai's 40-line blank-wide status (r13/321).
+    // also refutes NP2kai's 40-line blank-wide status.
     if (pulse_vline !== 10'd407 || irq_vline < 10'd407 || irq_vline > 10'd408) begin
       $display("FAIL VSYNC phase: pulse rose on vline %0d (want 407), IRQ on vline %0d (want 407-408)",
                pulse_vline, irq_vline);
@@ -607,7 +604,8 @@ module tb_pc9821_gdc_text;
       if (de_out) active_dots = active_dots + 1;
       if (!hs_out) sync_dots = sync_dots + 1;
     end
-    if (active_dots != 640 || sync_dots != 56) begin
+    // hsync = 8 x (hs + 1) dots, the uPD7220's field map (MAME upd7220.cpp:1243 `m_hs = (m_pr[3] & 0x1f) + 1`)
+    if (active_dots != 640 || sync_dots != 64) begin
       $display("FAIL line geometry active=%0d hsync=%0d", active_dots, sync_dots);
       errors = errors + 1;
     end
@@ -695,7 +693,7 @@ module tb_pc9821_gdc_text;
     read_io(8'hA9, value);
     if (value === 8'h5A) fail("a one-byte code 0x0056 read back user CG data");
 
-    // Negative case for the 0xA9 read gate (r5/03 P2): only the two-byte codes
+    // Negative case for the 0xA9 read gate: only the two-byte codes
     // whose LOW byte is 0x56/0x57 are this core's user-CG store. Write a byte
     // to page 0x29 (code 0x2956), then read the *different* code 0x2941 -- the
     // same page, low byte 0x41 -- and require it is not that byte. Before P2
@@ -714,8 +712,8 @@ module tb_pc9821_gdc_text;
     // CG store 0x810..0x81D (code 0x2056, lr = 1, rows 0..0xD). THIS BENCH DRIVES cfg_seed_en = 0,
     // so what is asserted here is the RAW store behind the static configuration view
     // (the view itself is tb_pc9821_cg_read_path's): a guest write moves the RAM, and
-    // the machine-reset seed's restore walk - now the walk's ONLY source, the OSD
-    // `Reset DIPs`/`Zero DIPs` actions having been removed at the owner's instruction -
+    // the machine-reset seed's restore walk - now the walk's ONLY source, there being no
+    // OSD `Reset DIPs`/`Zero DIPs` action -
     // writes the image back. One byte is also read through port 0xA9 to prove the path
     // a guest uses sees the same value.
     begin
@@ -755,7 +753,7 @@ module tb_pc9821_gdc_text;
         fail("the reset seed: the CG record's 0xA9 read lost the marker high byte");
     end
 
-    // ---- the DIP port mirror is re-seeded by the same restore walk (lane dip-mirror) ----
+    // ---- the DIP port mirror is re-seeded by the same restore walk ----
     // The power-up half of this contract is asserted at the top of the checks (before any
     // store write); what is pinned here is that the ONE restore walk covers the mirror too,
     // record first: after 16 clk_sys the record must already be whole while the mirror's 24
@@ -796,11 +794,11 @@ module tb_pc9821_gdc_text;
       end
     end
 
-    // ---- PRAM screen parameter writes (r12/08 F4) ------------------------
+    // ---- PRAM screen parameter writes ------------------------
     // Command 0x70 programs screen 0's {sad_lo, sad_hi, len_lo, len_hi} over four parameter
     // bytes; only the first two reach the scanout (pram_scr[0]/[1]), so only they are kept.
     // Screens 1-3 (0x74/0x78/0x7C) and every length byte are accepted and dropped - the
-    // GDC's PRAM is write-only, so those cells have no reader (r13/225 s2.4). The command
+    // GDC's PRAM is write-only, so those cells have no reader. The command
     // must still consume its four bytes, which the 0x70 write later in this section (the
     // 0x1000-word display-start case) proves.
     write_io(8'h62, 8'h70);
@@ -835,7 +833,7 @@ module tb_pc9821_gdc_text;
     if (dut.u_crtc.pram_scr[0] !== 8'h11 || dut.u_crtc.pram_scr[1] !== 8'h22)
       fail("a screen-1/2/3 PRAM command disturbed screen 0");
 
-    // ---- GRCG mode/tile read-back (r5/03 P4) ------------------------------
+    // ---- GRCG mode/tile read-back ------------------------------
     // The mode and tile registers moved out of this module into pc9821_grcg,
     // which owns their decode and the GVRAM write path they drive (see that
     // module's header and tb_pc9821_grcg.sv, which asserts the four-plane fill).
@@ -843,7 +841,7 @@ module tb_pc9821_gdc_text;
     // machine - probe2 /RDBACK wrote 0x5A there and read 0xFF anyway
     // (`port=007C before=FF wrote=5A after=FF back=FF`, docs/probes/RDBACK.TXT:152),
     // so the port reads 0xFF and NOT the live GRCG mode register this bench used to
-    // assert (NP2kai crtc_i7c, review iobus-tram F2 - the capture outranks it).
+    // assert (NP2kai crtc_i7c - the capture outranks it).
     // 0x7E has no read handler anywhere and stays 0xFF.
     // The writes are kept because 0x7C/0x7E are still decoded as the video
     // device's ports at this boundary, and the reads confirm this module does
@@ -882,7 +880,7 @@ module tb_pc9821_gdc_text;
     read_io(8'hA9, value);
     if (value !== 8'hFF) fail("CG window write outside the user area was not ignored");
 
-    // ---- gaiji (user-CG) scanout (r5/03 P1) -------------------------------
+    // ---- gaiji (user-CG) scanout -------------------------------
     // A two-byte code whose LOW byte is 0x56/0x57 renders from cg_ram, with a
     // positional half: the first cell of a pair takes +0 (left), the second
     // +0x800 (right), and a non-gaiji cell clears it. The 0xA5 bit-5 register
@@ -1060,7 +1058,7 @@ module tb_pc9821_gdc_text;
       reg [7:0] obs_a, obs_b;
       reg [255:0] g;
       integer s, wrong;
-      // 0x30/0x21 (亜) with the cleared 0x0020 in every second cell.
+      // 0x30/0x21 (the kanji JIS 0x3021) with the cleared 0x0020 in every second cell.
       g = sp_glyph[3];
       fill_jis_plane(8'h30, 8'h21, 8'h20, 8'h00);
       load_jis_glyph(8'h30, 8'h21, g);
@@ -1079,7 +1077,7 @@ module tb_pc9821_gdc_text;
         fail("a JIS pair's right half did not come from the pair's glyph");
     end
 
-    // ---- the ver0.78 half-width rows (ku 0x29-0x2B) draw ONE cell (review F6) ----
+    // ---- the ver0.78 half-width rows (ku 0x29-0x2B) draw ONE cell ----
     // NP2kai's maketext.c:280-296 gives every two-byte cell `bitmap[x] = (kc & 0x7f7f) << 4`
     // - the grid slot BASE - and sets kanji2nd for every non-gaiji code EXCEPT the ver0.78
     // rows kc 0x09-0x0B (:292-294), so those cells draw the slot's LEFT half alone in one
@@ -1137,7 +1135,7 @@ module tb_pc9821_gdc_text;
         $display("  ver0.78 half-width rows: 2 glyphs x 16 rasters matched NP2kai's single-cell draw");
     end
 
-    // ---- the 0xA9 read answers the CURRENT code (r13/258) ----
+    // ---- the 0xA9 read answers the CURRENT code ----
     // A driver's glyph loop writes the code (0xA1 then 0xA3) and reads 0xA9 right after, one
     // row per read. The guest's read has ONE device wait state (pc9821_iobus S_DEVWAIT) - a
     // registered block-RAM read - while the glyph's SDRAM block is still in flight, so the
@@ -1167,7 +1165,7 @@ module tb_pc9821_gdc_text;
         $display("  port 0xA9: the changed code's own glyph answered all 16 rows");
     end
 
-    // ---- the CODE fetch's word index is 12 bits, like the attribute's (r13/92 BUG 1) ----
+    // ---- the CODE fetch's word index is 12 bits, like the attribute's ----
     // The code plane is the TRAM's low 8 KiB (4096 words, bytes 2w and 2w+1) and the attribute
     // plane is 0x2000 + 2w, so the CODE arm's word index must be masked to 12 bits exactly as the
     // attribute arm's is. With 13 bits kept, a word w >= 0x1000 reads its code bytes at 2w, i.e.
@@ -1325,7 +1323,7 @@ module tb_pc9821_gdc_text;
     // Row 0's cache is filled a whole frame early (during row 24), so a display-start change that
     // commits at the frame boundary used to leave row 0 drawing the previous frame's mapping. The
     // fix commits at vline 431 and re-walks row 0 in the vline-432 slot, so the FIRST frame after
-    // the change draws the new mapping (r13/305, issue I2). Without the re-walk this case's
+    // the change draws the new mapping (issue I2). Without the re-walk this case's
     // rasters 1-15 all show the previous mapping's glyph.
     // Raster 0 is excluded on purpose: the scanout's cross-frame prefetch reads row 0 cell 0 during
     // vline 399, before the snapshot, so that one cell/one raster is inherently one frame behind - no
@@ -1389,7 +1387,7 @@ module tb_pc9821_gdc_text;
     // The row cache, the bank expression and the walker are shared with 80-column mode, but only
     // 80 columns was covered above and the walker's cell stride changes with v_col40 (two words
     // per cell). If the bank mapping were 80-column-only, or the walker's stride were not keyed on
-    // v_col40, the wrap alias would come back here and nowhere else (r13/305, issue I33). The
+    // v_col40, the wrap alias would come back here and nowhere else (issue I33). The
     // scenario is check_wrap_bank's: row 0 and row 24 cell 0 both JIS, row 24's cell 0 given its
     // own glyph, and row 24 must keep it. Cell 0 is TRAM word row*80 in BOTH modes (the 40-column
     // stride doubles only from cell 1), so the same code bytes carry it.
@@ -1424,18 +1422,18 @@ module tb_pc9821_gdc_text;
       repeat (2) spin_one_frame;
     end
 
-    // ---- the 0xA4 display-page flip applies IMMEDIATELY at the write (r13/343) ----
+    // ---- the 0xA4 display-page flip applies IMMEDIATELY at the write ----
     // ReC98's page_show(0xA4) selects the page the scanout reads (page.hpp). That bit is a
     // page-SELECT mux outside the GDC - it chooses which 32 KiB plane the chip's LOW15 address
     // counter reads - so it applies at the write, not at a display-scan load. MAME
     // (pc9801_v.cpp:441 `m_vram_disp`, used live at :64-68), NP2kai (io/gdc.c:733 `gdcs.disp`) and
     // qemu-pc98 (pc98-vga.c:3424 `vram16_disp_*`) all apply it combinationally, and the real
     // 33 MHz Xe capture (docs/probes/FLIP.TXT) shows the SPLIT that only apply-at-the-write can produce.
-    // r13/323's `if (frame_end) v_page <= display_page` was therefore wrong: it delayed the
+    // An earlier `if (frame_end) v_page <= display_page` was therefore wrong: it delayed the
     // guest's flip by up to a frame, so the game drew into the page the scanout still showed - the
     // erased sprite band that is the blackout. This case is FAIL-FIRST against that latch: each
     // arm writes at a point where a frame-end latch could not have applied it by the sample, so
-    // every arm fails on the pre-r13/343 tree and passes here.
+    // every arm fails on the frame-end-latch tree and passes here.
     begin : check_display_flip
       integer arm, hd;
       reg [8:0] vl;
@@ -1443,7 +1441,7 @@ module tb_pc9821_gdc_text;
       for (arm = 0; arm < 3; arm = arm + 1) begin
         // (vline, hdot):
         //   arm 0  vline 439 hdot 0   - early on the last line, a control
-        //   arm 1  vline 439 hdot 844 - the r13/323 drop window, the last dots before frame_end
+        //   arm 1  vline 439 hdot 844 - the frame-end latch's drop window, the last dots before frame_end
         //   arm 2  vline 200 hdot 400 - mid active region: the tear the probe records
         vl = (arm == 2) ? 9'd200 : 9'd439;
         hd = (arm == 0) ? 0 : ((arm == 1) ? 844 : 400);
@@ -1460,7 +1458,7 @@ module tb_pc9821_gdc_text;
         else $display("  display flip: 0xA4 write at vline %0d hdot %0d reached the scan page the next cycle", vl, hd);      end
     end
 
-    // ---- the walker never skipped a walk slot in this run (r13/305, issue I4) ----
+    // ---- the walker never skipped a walk slot in this run (issue I4) ----
     // A skipped walk is a contention timing failure with no other detector. The counter is
     // saturating and sticky, so on a bench whose walker has a whole row of slack it must be 0. It
     // is also the field pc9821_gfx_msg's record carries to the card. TAKEN HERE, before the
@@ -1472,7 +1470,7 @@ module tb_pc9821_gdc_text;
     end else
       $display("  walk skips: 0 (the walker never overran its row)");
 
-    // ---- the MACHINE-RESET seed reaches the CG record too (lane dip-reset-seed) ----
+    // ---- the MACHINE-RESET seed reaches the CG record too ----
     // The record, the DIP port mirror and the software-DIP bank are re-seeded by ONE event:
     // pc9821_system ORs the iobus's reset-seed one-shot into `cg_record_restore`, the same line
     // the two OSD actions use. pc9821_cg's own reset (`rst_n_sys`) is clamped for the WHOLE

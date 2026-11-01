@@ -38,13 +38,17 @@ module tb_pc9821_ems_itf;
   wire [1:0]  gvram_win_plane;
   wire [14:0] gvram_win_offset;
   wire        ems_open_bus, absent_area, fw_shadow_store;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   wire [3:0]  mem_be;
   wire [7:0]  mem_burstcount;
 
   wire [1:0] ems_state;
 
-  localparam [31:0] EMS_PAGE_BASE = 32'h0210_0000;
+  // The map reads only ems_page_base[31:20]: the port is pc9821_memory_subsystem's
+  // pack_base + PACK_BYTES + 0x48000 (pack_base = the map's 32 MiB default here), so its low
+  // 20 bits ARE the constant 0x48000 and the page arm is a bit splice
+  // (tools/check_memmap_addr_equiv.py PREMISES). Drive that same shape.
+  localparam [31:0] EMS_PAGE_BASE = 32'h0214_8000;   // 0x0200_0000 + 1 MiB + 0x48000
   // The GVRAM R plane's content at POST time: cleared, so the word the ITF
   // wrote under 0x22 (into the EMS page) is NOT what a 0x20 read answers.
   localparam [31:0] GVRAM_R_SENTINEL = 32'h0000_0000;
@@ -65,7 +69,7 @@ module tb_pc9821_ems_itf;
   pc9821_iobus bus (
       .ide_unit0_present(1'b0),
       .clk(clk), .reset(reset),
-      .bios_set(4'h0), .gdc_clock_5m(1'b0), .triple_fault_reset(1'b0),
+      .bios_set(4'h0), .gdc_clock_5m(1'b0), .fdd_dip_fixed(1'b0), .triple_fault_reset(1'b0),
       .cpu_addr(io_cpu_addr), .cpu_din(io_cpu_din), .cpu_be(io_cpu_be),
       .cpu_valid(io_cpu_valid), .cpu_write(io_cpu_write),
       .cpu_dout(io_cpu_dout), .cpu_ready(io_cpu_ready),
@@ -98,9 +102,8 @@ module tb_pc9821_ems_itf;
       .cpu_addr(mem_cpu_addr), .cpu_addr_raw(mem_cpu_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(mem_cpu_din), .cpu_be(mem_cpu_be),
       .cpu_burstcount(8'h0), .cpu_line_read(1'b0),
       .cpu_valid(mem_cpu_valid), .cpu_write(mem_cpu_write),
-      .cpu_dout(mem_cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(mem_cpu_dout),
       .cpu_ready(mem_cpu_ready), .cpu_resp_valid(mem_cpu_resp_valid),
-      .cpu_line_resp_valid(),
       .absent_area(absent_area), .ems_open_bus(ems_open_bus),
       .fw_shadow_store(fw_shadow_store),
       .gvram_window(gvram_window), .gvram_win_plane(gvram_win_plane),

@@ -1,11 +1,11 @@
-// tb_pc9821_ata_cmd_race — a COMMAND write landing in the SAME clk_sys cycle as
+// tb_pc9821_ata_cmd_race - a COMMAND write landing in the SAME clk_sys cycle as
 // the `block_done` completion that clears BSY must not vanish against the stale
-// transfer state (review2/pulses.md H8).
+// transfer state.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// A0x64E COMMAND write landing in the SAME clk as the block_done completion that retires the old transfer must not vanish against the stale transfer state (review2/pulses.md H8): the dispatch guard reads pre-update BSY/xfer_state, so post-fix the dispatch takes over against the POST-retire device exactly as if the completion had been observed a cycle earlier (the serialized NP2kai order), while a command write in a NON-completing transfer cycle is still ignored. The retiring handler's read-ahead re-issue is folded out of the takeover so the adapter serves exactly the requests the surviving transfers own.
+// A0x64E COMMAND write landing in the SAME clk as the block_done completion that retires the old transfer must not vanish against the stale transfer state: the dispatch guard reads pre-update BSY/xfer_state, so post-fix the dispatch takes over against the POST-retire device exactly as if the completion had been observed a cycle earlier (the serialized NP2kai order), while a command write in a NON-completing transfer cycle is still ignored. The retiring handler's read-ahead re-issue is folded out of the takeover so the adapter serves exactly the requests the surviving transfers own.
 //
 // The 0x64E dispatch guard reads `status_reg[7]`/`xfer_state` - pre-update
 // values - so a command write colliding with the very completion that retires

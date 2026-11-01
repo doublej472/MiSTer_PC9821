@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PCM86_FIFO:
-// The PC-9801-86's 86-PCM block against NP2kai, FIFO level rather than waveform: the reset values 0xA468 = 0x00 and 0xA46A = 0x32, 0xA466's full and empty bits at NP2kai's own thresholds (virbuf >= 0x8000 for full, virbuf <= stepmask for empty, so the empty boundary moves with the 0xA46A format field), the logical count saturating at 0x8000 and the oldest byte being dropped past it, the 0xA468 read substituting the interrupt for bit 4, and the buffer-low interrupt rising at the 0xA46A threshold and re-asserting on a bit-4-clear write while the buffer is still below threshold. The four spare ports NP2kai leaves as a dummy read (0xA462, 0xA464, 0xA46C, 0xA46E) are ASSERTED to answer pcm86_inpdummy's 0x00. And (review S6) the 0xA46C write FIFO back-pressures its writer when full -- twelve pushes at the strobe cadence with the SDRAM port withheld are all held and land byte-exact, never dropped -- which is what io_wr_wait and the bus's S_IOWAIT hold now guarantee. The remaining measured divergences are named and printed rather than asserted: a 0xA468 bit-7 rising edge does not restart the sample clock where pcm86_oa468 resets lastclock, and an arming write with the count already at or below the threshold raises the interrupt on the next cycle where NP2kai waits datawriteirqwait.
+// The PC-9801-86's 86-PCM block against NP2kai, FIFO level rather than waveform: the reset values 0xA468 = 0x00 and 0xA46A = 0x32, 0xA466's full and empty bits at NP2kai's own thresholds (virbuf >= 0x8000 for full, virbuf <= stepmask for empty, so the empty boundary moves with the 0xA46A format field), the logical count saturating at 0x8000 and the oldest byte being dropped past it, the 0xA468 read substituting the interrupt for bit 4, and the buffer-low interrupt rising at the 0xA46A threshold and re-asserting on a bit-4-clear write while the buffer is still below threshold. The four spare ports NP2kai leaves as a dummy read (0xA462, 0xA464, 0xA46C, 0xA46E) are ASSERTED to answer pcm86_inpdummy's 0x00. And the 0xA46C write FIFO back-pressures its writer when full -- twelve pushes at the strobe cadence with the SDRAM port withheld are all held and land byte-exact, never dropped -- which is what io_wr_wait and the bus's S_IOWAIT hold now guarantee. The remaining measured divergences are named and printed rather than asserted: a 0xA468 bit-7 rising edge does not restart the sample clock where pcm86_oa468 resets lastclock, and an arming write with the count already at or below the threshold raises the interrupt on the next cycle where NP2kai waits datawriteirqwait.
 
 // Reference: NP2kai (PRIMARY) cbus/pcm86io.c
 // (pcm86_oa468, pcm86_oa46a, pcm86_oa46c, pcm86_ia466, pcm86_ia468, pcm86_inpdummy)
@@ -233,7 +233,7 @@ module tb_pc9821_pcm86_fifo;
     // The boundary itself, from below: NP2kai pcm86_ia466 sets bit 7 on
     // `g_pcm86.virbuf >= PCM86_LOGICALBUF` (cbus/pcm86io.c:261), so one byte short
     // of 0x8000 is NOT full (and not empty). Without this the bench saw full only
-    // AT 0x8000 and a bit that rose a byte early passed (bench-audit mutation).
+    // AT 0x8000 and a bit that rose a byte early passed.
     for (k = 0; k < 16'h7FFF; k = k + 1) write_port(P_DATA, 8'h5A);
     read_466(v);
     if ((v & 8'hC0) !== 8'h00) fail("0xA466 reports full (or empty) one byte short of 0x8000 (NP2kai: virbuf >= 0x8000)");

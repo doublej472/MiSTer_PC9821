@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_CG_GAIJI_RECORD:
-// A user-defined character the guest writes into the CG store cells that also hold the configuration image (code 0x2056 - store 0x810..0x81D, the software-DIP record - and code 0x1256 row 7, store 0x0497) is what the text plane DRAWS for a cell carrying that code: with the configuration view ENABLED (cfg_seed_en = 1, as pc9821_system ties it), the machine's own INT 18h AH=1Ah sequence (A3=0x56, A1=DL, A5=0x00 then 0x20, 32 bytes through the 0xA4000 window - F000:EBD7 in the Xe10 BIOS) loading Flame Zapper Kotsujin's glyph 0 (CO2JIN.FNT, all zero - the game's SPACE, code 0x7620) must render a blank 16x16 pair, and a patterned glyph loaded at 0x7612 must render exactly the bytes written, row for row, in both halves. The CPU-side configuration view is unchanged: after the ITF's re-POST (cfg_seed_reload) the record still reads its static image through port 0xA9 (row 5 = 0xFF, row 8 = 0xAA). FAIL-FIRST: with the write gate suppressing guest stores to those twenty cells, the scanout drew the record bytes (04 C1 8C 81 CD FF 00 00 AA 55 67 86 8A FF) as the right half of every Kotsujin space - the red/yellow/white/pink garbage glyphs the owner's GAME OVER screenshot shows.
+// A user-defined character the guest writes into the CG store cells that also hold the configuration image (code 0x2056 - store 0x810..0x81D, the software-DIP record - and code 0x1256 row 7, store 0x0497) is what the text plane DRAWS for a cell carrying that code: with the configuration view ENABLED (cfg_seed_en = 1, as pc9821_system ties it), the machine's own INT 18h AH=1Ah sequence (A3=0x56, A1=DL, A5=0x00 then 0x20, 32 bytes through the 0xA4000 window - F000:EBD7 in the Xe10 BIOS) loading Flame Zapper Kotsujin's glyph 0 (CO2JIN.FNT, all zero - the game's SPACE, code 0x7620) must render a blank 16x16 pair, and a patterned glyph loaded at 0x7612 must render exactly the bytes written, row for row, in both halves. The CPU-side configuration view is unchanged: after the ITF's re-POST (cfg_seed_reload) the record still reads its static image through port 0xA9 (row 5 = 0xFF, row 8 = 0xAA). FAIL-FIRST: with the write gate suppressing guest stores to those twenty cells, the scanout drew the record bytes (04 C1 8C 81 CD FF 00 00 AA 55 67 86 8A FF) as the right half of every Kotsujin space - the red/yellow/white/pink garbage glyphs a GAME OVER screenshot showed.
 //
 // Expected values are the GUEST's bytes (the game's font file and a written pattern), not
 // this RTL's: the machine's CG store is guest-writable at these cells - the ITF's own
@@ -26,8 +26,6 @@ module tb_pc9821_cg_gaiji_record;
   reg [7:0] tram_cpu_din = 0;
   reg tram_cpu_we = 0;
   wire [7:0] tram_cpu_dout;
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   reg  [4:0] cg_win_byte_sel = 0;
   reg  cg_win_rd = 0;
   wire [7:0] cg_win_dout;
@@ -48,7 +46,6 @@ module tb_pc9821_cg_gaiji_record;
   wire vsync_irq_arm = 1'b0;
   wire vsync_irq;
   wire vsync_edge;
-  wire [7:0] grcg_mode_r = 8'h00;
   wire        text_opaque, text_cell;
   wire [11:0] text_colour;
   wire [9:0]  pix_dot;

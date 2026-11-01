@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: BSD-2-Clause
+// Copyright (c) 2014, Aleksander Osman, and the ao486_MiSTer contributors.
+// From ao486_MiSTer rtl/common/synchronizer.sv
+// (https://github.com/MiSTer-devel/ao486_MiSTer). Licence text: NOTICE, part 4.
+
 // `timescale 1ns / 1ps
 
 `default_nettype none

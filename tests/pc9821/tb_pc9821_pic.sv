@@ -1,4 +1,4 @@
-// tb_pc9821_pic — focused 8259 interrupt controller checks.
+// tb_pc9821_pic - focused 8259 interrupt controller checks.
 //
 // Verifies the pc9821_pic module in isolation: reset masking, the ICW1/ICW2
 // programming sequence, edge-triggered request latching (including the
@@ -16,7 +16,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The 8259: reset masking, ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE set-wins, review interrupts.md F5 / race-idiom S2; FAIL-FIRST against the old clear-wins fold).
+// The 8259: reset masking, ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE set-wins, race-idiom S2; FAIL-FIRST against the old clear-wins fold).
 //
 // The 8259: reset masking, ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE - set wins - or the request is lost forever; review interrupts.md F5 / race-idiom S2, FAIL-FIRST against the old clear-wins fold).
 
@@ -169,7 +169,7 @@ module tb_pc9821_pic;
     if (value !== 8'h00) fail("non-specific EOI did not clear the ISR");
 
     // A falling edge does not withdraw an unacknowledged request: raise
-    // IRQ1, let it latch, drop the level before INTA — INT stays high.
+    // IRQ1, let it latch, drop the level before INTA - INT stays high.
     ir_rise(8'h02);
     wait_int_high;
     if (!int_out) fail("INT did not assert on latched IRQ1");
@@ -281,7 +281,7 @@ module tb_pc9821_pic;
     if (value !== 8'h7F) fail("ICW1=0x11 sequence left a wrong IMR");
 
     // ------------------------------------------------------------------
-    // The same-cycle collision (race-idiom S2 / review interrupts.md F5): an old
+    // The same-cycle collision (race-idiom S2): an old
     // pulse set ir_latch[2], the line fell again, and a NEW pulse rises in the exact
     // clk edge where inta acknowledges bit 2. The old fold `(latch | set) & ~clr` let
     // the clear eat the set for the same bit - the new request vanished with no way

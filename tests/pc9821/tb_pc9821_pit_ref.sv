@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Runs the real pc9821_interrupts PIT (channels 0/1/2) and the interrupt it feeds - the same block the machine instantiates, with the master 8259 programmed as the ITF programs it - and checks every channel's mode 0/2/3 output period and the interrupt-on-terminal-count against NP2kai io/pit.c: mode 3 and 2 re-arm every period, mode 0 fires once, channel 1 and 2 are independent of channel 0, and IRQ0 lands on the master PIC's IRQ0. The uPD71054 read-back command is implemented and asserted (0xC2 on ch0 returns the status byte 0x36 in bits 6:0 after a completed count load - NULL COUNT is live: set by a control word, cleared when the load completes, the first byte of an LSB+MSB pair not counting - with bit 7 the channel's live OUT pin, asserted separately). NP2kai's channel-0 write that clears master IRR0 is waived: the machine's own IRQWD run shows the bit set before and after a latch command (docs/probes/IRQWD.TXT; confounded by the as-found mode-0 static OUT, so the falling-edge model in pit_irq_clear supersedes it). Two fail-first cases pin the word-read byte phase against NP2kai's PIT_FLAG_R (io/pit.c:224-239,248-249,348-358) and the Xe10 capture (r13/214-probe-fix.md:22-24,93-98): a counter latch does NOT reset the phase, so a latched pair is consumed high-then-low after one word read, and a mode-set control word DOES reset it, so the next word read is low-first. An MSB-only (RL=2) count read answers the count's HIGH byte (NP2kai io/pit.c:346-347, PIT_RL_H).
+// Runs the real pc9821_interrupts PIT (channels 0/1/2) and the interrupt it feeds - the same block the machine instantiates, with the master 8259 programmed as the ITF programs it - and checks every channel's mode 0/2/3 output period and the interrupt-on-terminal-count against NP2kai io/pit.c: mode 3 and 2 re-arm every period, mode 0 fires once, channel 1 and 2 are independent of channel 0, and IRQ0 lands on the master PIC's IRQ0. The uPD71054 read-back command is implemented and asserted (0xC2 on ch0 returns the status byte 0x36 in bits 6:0 after a completed count load - NULL COUNT is live: set by a control word, cleared when the load completes, the first byte of an LSB+MSB pair not counting - with bit 7 the channel's live OUT pin, asserted separately). NP2kai's channel-0 write that clears master IRR0 is waived: the machine's own IRQWD run shows the bit set before and after a latch command (docs/probes/IRQWD.TXT; confounded by the as-found mode-0 static OUT, so the falling-edge model in pit_irq_clear supersedes it). Two fail-first cases pin the word-read byte phase against NP2kai's PIT_FLAG_R (io/pit.c:224-239,248-249,348-358) and the Xe10 capture (docs/probes/PIT-fixed.TXT:146-147): a counter latch does NOT reset the phase, so a latched pair is consumed high-then-low after one word read, and a mode-set control word DOES reset it, so the next word read is low-first. An MSB-only (RL=2) count read answers the count's HIGH byte (NP2kai io/pit.c:346-347, PIT_RL_H).
 //
 // The masked-IRQ0 clear itself is NOT asserted here - it is covered by
 // tb_pc9821_pit_irq_clear (the machine-level IRQWD result). This bench's IRQ0
@@ -323,7 +323,7 @@ module tb_pc9821_pit_ref;
     // an LSB+MSB pair's first byte does not clear it (pit.c:292-296 returns
     // early), the second does. This is the documented 8254 mechanism for polling
     // a load to completion; a bit hard-wired to 1 makes such a driver spin
-    // forever (review timers.md F2).
+    // forever.
     reset_all();
     init_master(8'hFF);
     write_port(16'h0077, 8'h36);           // control word: sets NULL COUNT
@@ -357,14 +357,14 @@ module tb_pc9821_pit_ref;
     // NP2kai's latchcmd() stores the count and clears only PIT_FLAG_L; it never
     // touches PIT_FLAG_R (io/pit.c:224-239), the flag whose state picks the byte
     // a word read serves (io/pit.c:348-358). The real Xe10 agrees: its latch does
-    // NOT restore the two-byte read pointer (r13/214-probe-fix.md:22-24,93-98) -
+    // NOT restore the two-byte read pointer -
     // the root cause of the phantom 0xFFFA divisor captures. So after one word
     // read (phase -> MSB) a counter latch must return the pair HIGH byte first.
     // The old RTL reset the phase on the latch and answered low-first: FAIL-FIRST
     // on both bytes below. Values: mode 3's counting element right after a 0x1234
     // load is 0x1234 minus 2 per elapsed source tick (QEMU
     // hw/timer/i8254-pc98.c:91-107, and every mode-3 count of an even divisor is
-    // even, r13/214-probe-fix.md:22-24); the load-to-latch window is a few clk
+    // even); the load-to-latch window is a few clk
     // against a 20.3-clk tick, so the pair is 0x12 then 0x30..0x34.
     reset_all();
     init_master(8'hFF);

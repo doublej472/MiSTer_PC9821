@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_BOOT:
-  // The diagnostic pack boots through the real CPU, memory and I/O path and reaches its own result marker. The cycle count is ASSERTED, not printed: the real backend must reach the marker at exactly 930544 clk_sys (or 875223 with the deliberately-selected +FAST_MEM stub), so a timing regression fails the tier instead of moving a line nothing reads (r13/333 finding 5). REGRESSION PIN, NOT CONFORMANCE: the two counts are tripwires fitted to this tree's own runs - non-regression evidence, never correctness evidence - and a DELIBERATE timing change is blessed by re-running with +REBASE_CYCLES (which prints the new measured count instead of asserting the old one) and editing the two constants once in the same change, so a timing change cannot be laundered through by re-measuring silently (review benches N9).
+  // The diagnostic pack boots through the real CPU, memory and I/O path and reaches its own result marker. The cycle count is ASSERTED, not printed: the real backend must reach the marker at exactly 930533 clk_sys (or 875227 with the deliberately-selected +FAST_MEM stub), so a timing regression fails the tier instead of moving a line nothing reads. REGRESSION PIN, NOT CONFORMANCE: the two counts are tripwires fitted to this tree's own runs - non-regression evidence, never correctness evidence - and a DELIBERATE timing change is blessed by re-running with +REBASE_CYCLES (which prints the new measured count instead of asserting the old one) and editing the two constants once in the same change, so a timing change cannot be laundered through by re-measuring silently (review benches N9).
 
 
 module tb_pc9821_boot;
@@ -14,37 +14,38 @@ module tb_pc9821_boot;
   // than discovering when the next change is added.
   integer tb_cycles = 0;
   always @(posedge clk_sys) tb_cycles = tb_cycles + 1;
-  // r13/333 finding 5: the boot's deterministic cycle count IS the regression guard. The
+  // The boot's deterministic cycle count IS the regression guard. The
   // production tier (real backend, no plusargs -- what run_boot.sh and gate.py boot) reaches
   // its own result marker at exactly BOOT_CYCLES_REAL clk_sys; the deliberately-selected
   // +FAST_MEM immediate stub (see the BACKEND block) reaches it at BOOT_CYCLES_FAST. Both are
   // asserted where the count is reported below, so a timing change of ANY size is a fatal
   // failure rather than a printed note the gate never reads. Each number was MEASURED on this
-    // tree, not chosen. The current pair (930544 / 875223) includes post.s's explicit GDT/IDT
+    // tree, not chosen. The current pair (930533 / 875227) includes post.s's explicit GDT/IDT
     // initialization, which retimed the boot by +12 / +5 when it made the triple-fault stage
-    // independent of low-RAM power-up state (boot-firmware review F6); moving it again means
+    // independent of low-RAM power-up state; moving it again means
     // re-measuring and moving the literal in tests/pc9821/run_boot.sh and the docs with it.
     //
-    // RE-PINNED 2026-10-11 930530 -> 930544 / 875207 -> 875223 at the OWNER'S instruction: all +14 / +16
-    // from the z486 fork's fac8d54 (specdev: a speculative branch-target fetch never reads non-cacheable
-    // memory, so the boot's BIOS-ROM branch targets are fetched on demand); bisected per fork commit,
-    // Dhrystone unchanged. Measured with +REBASE_CYCLES.
+    // LAST MOVE 930529 -> 930533 / 875223 -> 875227, the z486 re-vendor at 860a4ef: +1 from the
+    // real-mode interrupt-entry EFLAGS split (real-mode delivery keeps clearing AC through its own
+    // copy of the 386 mask pair, one cycle longer: 930535 vs 930534 with/without it on dcc3e72); +3
+    // from microcode reads probing the L1 from any uStep (930530 without that commit). Earlier moves
+    // and their attributions are in the git history. This tier is VSYNC-locked at its endpoint and
+    // runs with paging off, so it is not the instrument for a CPU change: Dhrystone is.
     //
-    // RE-PINNED 2026-10-05 930535 -> 930530 / 875223 -> 875207 at the OWNER'S instruction.
-    // ATTRIBUTION IS A GROUP, NOT A CHANGE: the move predates the memory-window fix (which
-    // cannot affect this tier - it boots ram_size 32 MiB, where the retired device window's
-    // range was already uncached), and it accumulated across the recent z486 revendors and
-    // rebuilds without anyone re-running this tier. Both counts were MEASURED with
-    // +REBASE_CYCLES, not extrapolated.
-    //
-    // REGRESSION PIN, NOT CONFORMANCE (review benches N9): nothing external validates
+    // REGRESSION PIN, NOT CONFORMANCE: nothing external validates
     // these magnitudes - they are tripwires against UNINTENDED timing moves, not machine
     // conformance claims. The blessed-update mechanism is +REBASE_CYCLES: run the tier
     // with it once after a DELIBERATE timing change, take the printed measured count,
     // and edit these two constants in the same change (the run then passes on the new
     // count; without the plusarg every count move stays fatal).
-    localparam integer BOOT_CYCLES_REAL = 930544;
-    localparam integer BOOT_CYCLES_FAST = 875223;
+    localparam integer BOOT_CYCLES_REAL = 930533;
+    localparam integer BOOT_CYCLES_FAST = 875227;
+    // The REAL-CONTROLLER variant (`BOOT_REAL_SDRAM, tests/pc9821/run_boot_real.sh): the same boot
+    // with the core's SDRAM backend (split_sdram_backend over sdram_sync_bridge over sdram.v,
+    // ADQM=1, FAST_GRADE=0, at this tier's 50 MHz clk_sys) and sdram_chip_model with every
+    // protocol, -7 AC and tREFI check on. Pinned: every other count is fatal, and a controller
+    // change that moves it reports the new value with its attribution (0 would only report).
+    localparam integer BOOT_CYCLES_REAL_SDRAM = 942542;
     reg rebase_cycles = 1'b0;
   reg reset = 1;
   reg hps_apply_reset = 0;
@@ -96,7 +97,7 @@ module tb_pc9821_boot;
   // The CPU's own SHUTDOWN request (z486's triple-fault reset), which the
   // diagnostic pack raises once at the top of its POST. It must be consumed
   // INSIDE the core: with it raised, the CPU must restart with no stimulus
-  // from this bench at all (no `reset`, no `hps_apply_reset`). Before r12/12 it
+  // from this bench at all (no `reset`, no `hps_apply_reset`). Before a fix it
   // left the core as BUTTONS[1] and came back only through the HPS.
   wire soft_reset_req = dut.software_reset;
   reg  soft_reset_seen = 1'b0;
@@ -113,7 +114,7 @@ module tb_pc9821_boot;
     if (cpu_reset_req) reset_req_seen <= 1'b1;
     if (soft_reset_req) soft_reset_seen <= 1'b1;
     // The shutdown must be consumed locally. If the request is raised and the
-    // CPU-reset hold is never re-armed, the request went nowhere -- the r11/14
+    // CPU-reset hold is never re-armed, the request went nowhere -- the old
     // defect, where it left as BUTTONS[1] and only came back through the HPS.
     // Bounded so the regression names itself instead of timing out the bench.
     if (soft_reset_seen && !reset_released) begin
@@ -166,7 +167,7 @@ module tb_pc9821_boot;
   localparam integer BACKEND_WORDS_LOG2 = 24;
   // The OSD guest RAM size, as pc9821_system.sv codes it: log2(MiB), so 3'd5 is
   // 32 MiB, the size this bench's pack and checks assume. ram_size_max is the
-  // installed module's ceiling and is where the pack is placed (r13/47): this bench
+  // installed module's ceiling and is where the pack is placed: this bench
   // models a 64 MB module whose ceiling is this same 32 MiB, so the pack base is
   // unchanged from before the split and only the guest size moves below it.
   reg [2:0] ram_size = 3'd5;
@@ -180,7 +181,7 @@ module tb_pc9821_boot;
       .SYS_FREQ(50_000_000), .DCACHE_SET_BITS(4), .ICACHE_SET_BITS(4),
       .ENABLE_X87(1'b0),
       // The shipped configuration: the CD-ROM drive (with CD-DA) on bank 1's master, no disc mounted
-      // (build_profile.py's default since cd-default; owner 2026-10-10: the golden boots the CD build).
+      // (build_profile.py's default in every preset: the golden boots the CD build).
       .CDROM_EN(1'b1), .CDROM_AUDIO_EN(1'b1)
   // ==== DUT ====
   ) dut (
@@ -209,8 +210,8 @@ module tb_pc9821_boot;
       // The debug UART FIFO and its accept handshake live in the top level (z486_mister.sv),
       // which this tier does not build - and nothing here reads dbg_uart_byte either. Tying
       // accept high lets the report emitter free-run at one byte per clk_sys, which is the
-      // stream the pre-r13/326 logic produced and leaves the boot result unchanged.
-      .dbg_uart_accept(1'b1),
+      // stream the old (handshake-ignoring) logic produced and leaves the boot result unchanged.
+      .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0),
       .trace_trig(),
       .debug_post_code(debug_post_code), .debug_post_write(debug_post_write),
       .debug_bios_loaded(debug_bios_loaded), .cpu_cs(cpu_cs),
@@ -224,10 +225,11 @@ module tb_pc9821_boot;
   // This tier used to answer the CPU ITSELF: `ext_mem0_ready` hard-wired to 1'b1
   // and a response registered for the next cycle, so every access completed one
   // cycle after it was asked. That is not the machine. src/memory/sdram.v accepts
-  // ONE request at a time and only in IDLE (sdram.v:359-379), and answers a
-  // single-word read SIX cycles later -- measured, not read off a comment, by
-  // tests/pc9821/tb_pc9821_sdram.sv, which prints "a 1-word read was answered 6
-  // cycles after the accept". A backend that answers in one cycle cannot exhibit a
+  // ONE request at a time and only in IDLE (sdram.v:1169, `IDLE: if (~nce) begin`), and answers a
+  // single-word read several cycles later: SIX when this backend was chosen; today
+  // tests/pc9821/tb_pc9821_sdram.sv prints "a 1-word read was answered 7 cycles after the
+  // accept" at its 50 MHz, and tb_pc9821_sdram_sync MEASUREs valid->data 9 clk (8 after the
+  // accept) at the shipping 90 MHz. A backend that answers in one cycle cannot exhibit a
   // defect that depends on WHEN the answer arrives, and the route-isolation
   // regression was exactly that: an ownership record held for one cycle while the
   // backend answered several later. It passed every bench in this tree and was
@@ -239,9 +241,11 @@ module tb_pc9821_boot;
   // the default is the model's business and this contract is the tier's. The value
   // is not a guess: that parameter sets the model's host-side latency -- cycles
   // from seeing `ready` to seeing `resp_valid` -- and it was MEASURED at 1, 3, 4,
-  // 5, 6, 7, 8, 9 for parameters 0..7, so 4 produces exactly the controller's six,
-  // and 0 produces one, which is the stub this replaced. REGRESSION PIN, NOT
-  // CONFORMANCE (review benches N9): 4 is fitted to the controller's own six, not
+  // 5, 6, 7, 8, 9 for parameters 0..7, so 4 produced exactly the controller's six of
+  // the time, and 0 produces one, which is the stub this replaced. REGRESSION PIN, NOT
+  // CONFORMANCE: 4 is fitted to the controller's six of the time (kept so the boot
+  // golden stays comparable; the controller has since grown its ACT and DQ-capture
+  // stages, which only a real-controller boot sees), not
   // to a measured HPS/host-bridge round trip (the lost-week class that was found on
   // hardware is the measurement still owed here); to sweep the legal host latencies
   // deliberately, edit the parameter below across 0..7 with +REBASE_CYCLES and
@@ -274,6 +278,39 @@ module tb_pc9821_boot;
       .busy(), .accepts(), .beats()
   );
 
+`ifdef BOOT_REAL_SDRAM
+  // The core's own SDRAM backend at the deployed settings and a 64 MB module (one chip, the
+  // large geometry), every access through the real controller; the chip model is the store.
+  wire [15:0] rs_dq; wire [12:0] rs_a; wire [1:0] rs_ba, rs_dqm;
+  wire rs_nwe, rs_nras, rs_ncas, rs_ncs, rs_cke, rs_busy;
+  split_sdram_backend #(.FREQ(50_000_000), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(4)) u_mem_real (
+      .clk(clk_sys), .reset(reset), .refresh_allowed(1'b1), .sdram_size(2'd2), .busy(rs_busy),
+      .mem0_valid(ext_mem0_valid), .mem0_ready(slow_ready), .mem0_write(ext_mem0_write),
+      .mem0_addr(ext_mem0_addr), .mem0_din(ext_mem0_din), .mem0_din_hi(32'd0),
+      .mem0_gath(1'b0), .mem0_gath_extra(441'd0),
+      .mem0_dout(slow_dout), .mem0_resp_valid(slow_resp_valid), .mem0_be(ext_mem0_be),
+      .mem0_burstcount(ext_mem0_burstcount),
+      .mem1_valid(1'b0), .mem1_ready(), .mem1_write(1'b0), .mem1_addr(32'd0), .mem1_din(32'd0),
+      .mem1_dout(), .mem1_resp_valid(), .mem1_be(4'hF), .mem1_burstcount(8'd1),
+      .mem2_valid(1'b0), .mem2_ready(), .mem2_write(1'b0), .mem2_addr(32'd0), .mem2_din(32'd0),
+      .mem2_dout(), .mem2_resp_valid(), .mem2_be(4'hF), .mem2_burstcount(8'd1),
+      .mem3_valid(1'b0), .mem3_ready(), .mem3_write(1'b0), .mem3_addr(32'd0), .mem3_din(32'd0),
+      .mem3_dout(), .mem3_resp_valid(), .mem3_be(4'hF), .mem3_burstcount(8'd1),
+      .sdram_dq(rs_dq), .sdram_a(rs_a), .sdram_ba(rs_ba), .sdram_dqm(rs_dqm), .sdram_nwe(rs_nwe),
+      .sdram_nras(rs_nras), .sdram_ncas(rs_ncas), .sdram_ncs(rs_ncs), .sdram_cke(rs_cke));
+  sdram_chip_model #(.CAS(2), .FREQ_HZ(50_000_000), .GRADE(7), .REFRESH_INTERVAL(50_000_000 / 128_000)) u_rs_chip (
+      .clk(clk_sys), .DQ(rs_dq), .A(rs_a), .BA(rs_ba), .nRAS(rs_nras), .nCAS(rs_ncas), .nWE(rs_nwe), .nCS(rs_ncs));
+  // A dword of guest memory, read from the chip model: the large geometry puts byte address b at
+  // bank b[25:24], row b[23:11], dword column b[10:2], two 16-bit halves.
+  function automatic [31:0] mem_word(input [31:0] w);
+    reg [26:0] b;
+    begin
+      b = {w[24:0], 2'b00};
+      mem_word = {u_rs_chip.mem[{b[25:24], b[23:11], b[10:2], 1'b1}],
+                  u_rs_chip.mem[{b[25:24], b[23:11], b[10:2], 1'b0}]};
+    end
+  endfunction
+`else
   sdram_backend_model #(
       .ACCEPT_TO_RESP(4), .WRITE_BUSY(3), .LINE_RESP(0),
       .WORDS_LOG2(BACKEND_WORDS_LOG2)
@@ -285,6 +322,10 @@ module tb_pc9821_boot;
       .dout(slow_dout), .resp_valid(slow_resp_valid),
       .busy(), .accepts(), .beats()
   );
+  function automatic [31:0] mem_word(input [31:0] w);
+    mem_word = u_mem_slow.mem[w];
+  endfunction
+`endif
   // ==== STIMULUS ====
 
   task automatic send_word(input [26:0] addr, input [15:0] data);
@@ -372,7 +413,7 @@ module tb_pc9821_boot;
         $fatal(1, "the ROM pack was never loaded (2M cycles)");
     end
     // The pack is placed at the MODULE CEILING (ram_size_max), not at the selected
-    // guest size (r13/47), so a post-load OSD change leaves the pack exactly where it
+    // guest size, so a post-load OSD change leaves the pack exactly where it
     // is. Record the fixed base; the warm-reset phase at the end of this branch
     // asserts it does not move and that the pack's SDRAM bytes are unchanged.
     pack_base_after_load = dut.pack_base;
@@ -393,8 +434,8 @@ module tb_pc9821_boot;
         // Read straight out of the backend model's store, the same way this tier
         // already reads the TRAM below it: either instance holds the same bytes,
         // because both are driven by every access.
-        if (u_mem_slow.mem[24'h000400 >> 2] !== 32'h5A3C0BAD)
-          $fatal(1, "low RAM signature mismatch: %08x", u_mem_slow.mem[24'h100]);
+        if (mem_word(24'h000400 >> 2) !== 32'h5A3C0BAD)
+          $fatal(1, "low RAM signature mismatch: %08x", mem_word(24'h100));
         if (dut.u_crtc.u_text_mem.u_tram.ram[0] !== 8'h5A ||
             dut.u_crtc.u_text_mem.u_tram.ram[1] !== 8'h00 ||
             dut.u_crtc.u_text_mem.u_tram.ram[14'h2000] !== 8'hE1)
@@ -432,7 +473,7 @@ module tb_pc9821_boot;
   // ==== VERDICT ====
         if (!irq_ok)
           $fatal(1, "the interrupt self-test never passed (no POST 60)");
-        // The dead evidence channel the boot-firmware review found: POST 0x10 is emitted exactly
+        // A dead evidence channel: POST 0x10 is emitted exactly
         // twice per boot - once after the triple-fault re-entry and once after the `out 0xF0`
         // re-entry (post.s emits it right after tf_once_done, which both re-entries pass) - and
         // it was counted but never asserted, so a regression that skipped one re-entry's marker
@@ -444,12 +485,27 @@ module tb_pc9821_boot;
                  post_10_count);
         // The old video_off / FB_FORCE_BLANK port is gone with the ao486 framebuffer shell;
         // z486_mister.sv now ties FB_FORCE_BLANK = 1'b0, so there is nothing to assert here.
+`ifdef BOOT_REAL_SDRAM
+        $display("CYCLES used=%0d of 20000000 (%0d%% of the bound), backend=real controller",
+                 tb_cycles, tb_cycles / 200_000);
+        if (BOOT_CYCLES_REAL_SDRAM == 0)
+          $display("CYCLES UNPINNED: the real-controller boot measured %0d clk_sys (BOOT_CYCLES_REAL_SDRAM is not pinned)",
+                   tb_cycles);
+        else if (tb_cycles !== BOOT_CYCLES_REAL_SDRAM && !rebase_cycles)
+          $fatal(1, "CYCLES used=%0d: the real-controller boot must be exactly %0d",
+                 tb_cycles, BOOT_CYCLES_REAL_SDRAM);
+        else
+          $display("CYCLES ASSERTED: the real-controller boot is exactly %0d clk_sys", BOOT_CYCLES_REAL_SDRAM);
+        if (0) begin
+`else
         $display("CYCLES used=%0d of 20000000 (%0d%% of the bound), backend=%s",
                  tb_cycles, tb_cycles / 200_000, fast_mem ? "FAST_MEM stub" : "real timing");
-        // r13/333 finding 5: the exact comparison the tier was missing. Displaying the count
+        begin
+`endif
+        // The exact comparison the tier was missing. Displaying the count
         // let a timing regression move the boot by any amount under the 20M-cycle timeout and
         // stay green; this makes the production count (and the +FAST_MEM alternative) fatal.
-        // +REBASE_CYCLES is the BLESSED-UPDATE escape (review benches N9): a deliberate
+        // +REBASE_CYCLES is the BLESSED-UPDATE escape: a deliberate
         // timing change runs once with it, takes the printed measured count into the two
         // constants in the same change, and every OTHER run keeps the exact pin.
         if (rebase_cycles) begin
@@ -468,16 +524,17 @@ module tb_pc9821_boot;
           $display("CYCLES ASSERTED: the real-backend boot is exactly %0d clk_sys",
                    BOOT_CYCLES_REAL);
         end
+        end
         $display("VIDEO nonblack_pixels=%0d", nonblack);
         // ==== the OSD RAM size re-applies on a WARM (OSD) RESET ====
-        // r13/47: an OSD Reset IS a platform reset. The guest size must follow the OSD
+        // An OSD Reset IS a platform reset. The guest size must follow the OSD
         // selection on that reset -- it no longer waits for a core reload -- while
         // pack_base must NOT move, because the pack is already in SDRAM and the HPS
         // does not re-send it. The pack dword read back at the fixed base before and
         // after is the "still readable" half: the bytes did not move.
         begin : ram_size_warm_reset
           reg [31:0] pack_word_before, pack_word_after;
-          pack_word_before = u_mem_slow.mem[pack_base_after_load >> 2];
+          pack_word_before = mem_word(pack_base_after_load >> 2);
           ram_size = 3'd4;                       // 16 MiB, down from the 32 this run boots
           reset = 1;
           repeat (4) @(posedge clk_sys);
@@ -492,7 +549,7 @@ module tb_pc9821_boot;
           if (dut.pack_base !== pack_base_after_load)
             $fatal(1, "the warm reset moved the pack: pack_base %08x -> %08x",
                    pack_base_after_load, dut.pack_base);
-          pack_word_after = u_mem_slow.mem[pack_base_after_load >> 2];
+          pack_word_after = mem_word(pack_base_after_load >> 2);
           if (pack_word_after !== pack_word_before)
             $fatal(1, "the pack at the fixed base changed across the reset: %08x -> %08x",
                    pack_word_before, pack_word_after);

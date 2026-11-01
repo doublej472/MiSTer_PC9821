@@ -6,7 +6,7 @@ Usage:
 
 IDEPROBE (tools/hwprobe/ideprobe/ideprobe.s) is the real-machine PC-9821 IDE/ATA probe.
 It prints labelled hex records, one per line, under BEGIN:<section>/END:<section>
-markers. This script turns that raw text into the tables the owner reads when
+markers. This script turns that raw text into the tables read when
 diffing the Xe10 against src/pc9821/storage/pc9821_ata.sv and its benches.
 
 Sections handled: PORTMAP (registers, legacy bytes, the 0432 bank behaviour),

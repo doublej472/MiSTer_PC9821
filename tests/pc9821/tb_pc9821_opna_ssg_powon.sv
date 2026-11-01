@@ -1,7 +1,7 @@
-// tb_pc9821_opna_ssg_powon — the SSG register file's POWER-ON mixer state.
+// tb_pc9821_opna_ssg_powon - the SSG register file's POWER-ON mixer state.
 //
 // ==== WHAT THIS PROVES ====
-// The jt49 SSG register file powers up at NP2kai's opna_reset state (sound/opna.c:137-139: reg7 = 0xBF, reg15 = 0xFF, the rest 0). This is the CHIP-SIDE seed alone: the board read shadow follows the machine's 0x00 (probes/OPNA.TXT CHIPID), so the two no longer agree and the guest-visible read is the shadow's - what this bench pins is the never-written power-on mixer, silent where the reference is silent: register 7 reads back 0xBF before any write and the never-written power-on mixer produces the exact same output stream as a twin chip explicitly programmed 0xBF at the fastest tone period and maximum amplitude (review r2-resets F4; NP2kai psggeng.c:25 early-outs to exactly 0 at that mixer state, and a 0x00 power-on routes ALL tone and noise sources in).
+// The jt49 SSG register file powers up at NP2kai's opna_reset state (sound/opna.c:137-139: reg7 = 0xBF, reg15 = 0xFF, the rest 0). This is the CHIP-SIDE seed alone: the board read shadow follows the machine's 0x00 (probes/OPNA.TXT CHIPID), so the two no longer agree and the guest-visible read is the shadow's - what this bench pins is the never-written power-on mixer, silent where the reference is silent: register 7 reads back 0xBF before any write and the never-written power-on mixer produces the exact same output stream as a twin chip explicitly programmed 0xBF at the fastest tone period and maximum amplitude (NP2kai psggeng.c:25 early-outs to exactly 0 at that mixer state, and a 0x00 power-on routes ALL tone and noise sources in).
 //
 // The vendored jt49 SSG powers up with the register state NP2kai's opna_reset
 // gives the chip (sound/opna.c:137-139: s.reg[0x07] = 0xbf, s.reg[0x0f] = 0xff,
@@ -22,7 +22,7 @@
 //     opna->s.reg[0x0e] = 0xff;
 //     opna->s.reg[0x0f] = 0xff;
 // and the read model this core ships (pc9821_opna.sv's ssg_reg shadow) seeded
-// 7 = 0xBF / 15 = 0xFF for exactly this reason until the read-back lane moved
+// 7 = 0xBF / 15 = 0xFF for exactly this reason until the read-back fix moved
 // the SHADOW's register-7 seed to the MACHINE's 0x00 (docs/probes/OPNA.TXT
 // CHIPID: `0x18A with 0x188=07 ... : 00`). So the board shadow and this chip
 // seed NO LONGER agree, and that is deliberate and named: this bench pins the

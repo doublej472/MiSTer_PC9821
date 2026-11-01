@@ -1,12 +1,12 @@
-// pc9821_atapi_ref - the ATAPI CD-ROM drive AS IT WAS before the area-storage lane (284a2442), kept as the
+// pc9821_atapi_ref - the ATAPI CD-ROM drive AS IT WAS before its area restructuring (284a2442), kept as the
 // golden model of tb_pc9821_atapi_equiv: every restructuring of src/pc9821/storage/pc9821_atapi.sv is
 // proven against it by running the same random command stream through both and comparing every value
 // the guest reads. It is a byte-for-byte copy of that file with the module renamed. Do NOT edit it.
 //
 // PC-98 ATAPI CD-ROM on the built-in IDE: ALWAYS bank 1's MASTER (IDE unit 2), the hard disk
 // always bank 0's master (unit 0) - the stock CD-equipped Xe10's layout and NP2kai's default (HDD
-// at unit 0, CD at unit 2). Fixed by the owner on 2026-10-11, independent of the build and of the
-// media: the Xe10 capture's disk on bank 1 (docs/probes/IDE.TXT) is the owner's CF card in the
+// at unit 0, CD at unit 2). Fixed, independent of the build and of the
+// media: the Xe10 capture's disk on bank 1 (docs/probes/IDE.TXT) is a CF card in the
 // CD connector, a quirk of that one machine, not the layout to model.
 //
 // NP2kai is the primary reference for every register value and command answer here:
@@ -443,7 +443,7 @@ module pc9821_atapi_ref #(
       endcase
     endcase
   end
-  // No reset and no power-up value on the read register, or the ROM is refused (AGENTS.md).
+  // No reset and no power-up value on the read register, or the ROM is refused (docs/fitting.md).
   reg [15:0] rom_q;
   always @(posedge clk) rom_q <= rom[rom_addr];
 
@@ -1024,7 +1024,7 @@ module pc9821_atapi_ref #(
           dacurpos <= in_range(cdb_lba, totals) ? cdb_lba[19:0] : 20'd0;
         end else if (cdb[0] == 8'h45) begin
           // NP2kai reads the length as (cdb[7] << 16) | cdb[8], a typo for MMC's (cdb[7] << 8)
-          // | cdb[8]; no driver on the owner's disk issues 0x45 (storage report sec.3.2), so
+          // | cdb[8]; no driver on the tested disk issues 0x45 (storage report sec.3.2), so
           // MMC's field is used and the divergence is recorded in the report.
           daflag <= DA_PLAY; dacurpos <= cdb_lba[19:0]; dalength <= {4'd0, cdb_len78};
         end else begin   // 0x47 PLAY AUDIO MSF

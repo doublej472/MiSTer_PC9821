@@ -1,11 +1,11 @@
-// tb_pc9821_ata_retire_race — the read-ahead `block_done` completion landing in
+// tb_pc9821_ata_retire_race - the read-ahead `block_done` completion landing in
 // the SAME clk_sys cycle as the guest's last-word read must be consumed exactly
-// once (review2/pulses.md H7).
+// once.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The read-ahead block_done completion landing in the SAME clk the guest reads the last word of the current sector is consumed by exactly ONE handler (review2/pulses.md H7): the last-word handler owns the collision and the prefetch-latch arm stands down, so the old source-order outcome (two consumers, the latch surviving only because its NBA lost) becomes a folded decision. The completion's error record is written once per retire: after the collision prefetch_error equals block_error even when the completion errored (pre-fix abort_command's later clear erased the record), and the clean collision swaps exactly one sector (no phantom prefetch_valid, no double buffer flip).
+// The read-ahead block_done completion landing in the SAME clk the guest reads the last word of the current sector is consumed by exactly ONE handler: the last-word handler owns the collision and the prefetch-latch arm stands down, so the old source-order outcome (two consumers, the latch surviving only because its NBA lost) becomes a folded decision. The completion's error record is written once per retire: after the collision prefetch_error equals block_error even when the completion errored (pre-fix abort_command's later clear erased the record), and the clean collision swaps exactly one sector (no phantom prefetch_valid, no double buffer flip).
 //
 // The prefetch-latch handler and the last-word handler BOTH used to fire on
 // `X_PIO_READ && prefetch_busy && block_done` in the last word's read cycle:
@@ -232,7 +232,7 @@ module tb_pc9821_ata_retire_race;
     @(negedge clk);
     if (dut.prefetch_error !== 1'b1)
       fail("S1: prefetch_error did not record the retired completion's error (== block_error)");
-    if (dut.prefetch_error !== 1'b1)        // == block_error, spelled out for the review
+    if (dut.prefetch_error !== 1'b1)        // == block_error, spelled out
       fail("S1: prefetch_error != block_error after the collision");
     if (dut.prefetch_valid !== 1'b0)
       fail("S1: sector swap AND prefetch_valid set - the completion was consumed twice");

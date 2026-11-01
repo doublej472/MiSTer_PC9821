@@ -131,12 +131,12 @@ module tb_pc9821_fdd_two_units;
       if (which == 0) begin
         imgA[off+0] = c; imgA[off+1] = h; imgA[off+2] = r; imgA[off+3] = nn;
         imgA[off+4] = nsec[7:0]; imgA[off+5] = nsec[15:8];
-        imgA[off+6] = 8'h40;                                    // mfm_flg
+        imgA[off+6] = 8'h00;                                    // mfm_flg: 0x00 = MFM, the mode these reads use (0x40 = FM, NP2kai searchsector_d88)
         imgA[off+14] = size[7:0]; imgA[off+15] = size[15:8];
       end else begin
         imgB[off+0] = c; imgB[off+1] = h; imgB[off+2] = r; imgB[off+3] = nn;
         imgB[off+4] = nsec[7:0]; imgB[off+5] = nsec[15:8];
-        imgB[off+6] = 8'h40;
+        imgB[off+6] = 8'h00;
         imgB[off+14] = size[7:0]; imgB[off+15] = size[15:8];
       end
     end
@@ -207,6 +207,11 @@ module tb_pc9821_fdd_two_units;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx;
+  wire [7:0] fdd_tc;   // the physical track (pc9821_fdc's media_tc)
+  wire       fdd_hd;
+  wire       fdd_mf;
+  wire       fdd_2hd;
+  wire       fdd_rpm;
   wire        fdd_ready, fdd_rdy, fdd_hdrv, fdd_err;
   wire [7:0]  fdd_dout, fdd_hr, fdd_hn, fdd_hs;
 
@@ -230,7 +235,7 @@ module tb_pc9821_fdd_two_units;
       // No media-change tag: this bench's mounts are not ready changes (pc9821_fdc's media_chg).
       .media_chg(4'd0), .frame_tick(1'b0),
       .media_req(fdd_req), .media_req_hdr(fdd_req_hdr), .media_unit(fdd_unit),
-      .media_c(fdd_c), .media_h(fdd_h), .media_r(fdd_r), .media_n(fdd_n),
+      .media_c(fdd_c), .media_h(fdd_h), .media_tc(fdd_tc), .media_hd(fdd_hd), .media_mf(fdd_mf), .media_2hd(fdd_2hd), .media_rpm(fdd_rpm), .media_r(fdd_r), .media_n(fdd_n),
       .media_idx(fdd_idx),
       .media_ready(fdd_ready), .media_rdy(fdd_rdy), .media_hdrv(fdd_hdrv),
       .media_err(fdd_err), .media_dout(fdd_dout),
@@ -256,7 +261,7 @@ module tb_pc9821_fdd_two_units;
       .blk_fill_data(blk_fill_data),
       .present(fdd_present), .writeprotect(fdd_wp),
       .req(fdd_req), .req_hdr(fdd_req_hdr), .unit(fdd_unit),
-      .req_c(fdd_c), .req_h(fdd_h), .req_r(fdd_r), .req_n(fdd_n), .req_idx(fdd_idx),
+      .req_c(fdd_c), .req_h(fdd_h), .req_tc(fdd_tc), .req_hd(fdd_hd), .req_mf(fdd_mf), .req_2hd(fdd_2hd), .req_rpm(fdd_rpm), .req_r(fdd_r), .req_n(fdd_n), .req_idx(fdd_idx),
       .ready(fdd_ready), .rdy(fdd_rdy), .hdrv(fdd_hdrv), .err(fdd_err),
       .dout(fdd_dout), .adv(fdd_adv),
       .hdr_r(fdd_hr), .hdr_n(fdd_hn), .hdr_sects(fdd_hs)
@@ -485,11 +490,29 @@ module tb_pc9821_fdd_two_units;
     end
   endtask
 
+  // THE HEAD IS WHERE THE LAST SEEK LEFT IT. NP2kai reads a sector on the physical track
+  // (treg << 1) + hd and only matches the command's C against the header (fdd_d88.c
+  // searchsector_d88; READ/WRITE DATA replace treg with C only while it differs from the last
+  // SEEK's, io/fdc.c fdc_lasttreg), so - as the BIOS does - a data command for another
+  // cylinder is preceded by a SEEK there. The bench seeks only when the drive's track register
+  // is not already on the command's C, so every case keeps its own command stream otherwise.
+  task automatic seek_to(input [1:0] u, input [7:0] c);
+    begin
+      if (fdd_present[u[0]] && (u[1] == 1'b0) && (fdc.treg[u] != c)) begin
+        wr8(3'd1, 8'h0F); wr8(3'd1, {6'd0, u}); wr8(3'd1, c);
+        wait_irq(400000);
+        wr8(3'd1, 8'h08);   // SENSE INTERRUPT STATUS: drain the seek's completion
+        get_result;
+      end
+    end
+  endtask
+
   // READ DATA: opcode, then us|hd<<2, C, H, R, N, EOT, GPL, DTL (io/fdc.c:201-215).
   task automatic read_cmd(input [7:0] op, input [7:0] ushd,
                           input [7:0] c, input [7:0] h, input [7:0] r,
                           input [7:0] nn, input [7:0] eot);
     begin
+      seek_to(ushd[1:0], c);
       wr8(3'd1, op);
       wr8(3'd1, ushd); wr8(3'd1, c); wr8(3'd1, h); wr8(3'd1, r);
       wr8(3'd1, nn); wr8(3'd1, eot); wr8(3'd1, 8'h1B); wr8(3'd1, 8'hFF);

@@ -1,26 +1,29 @@
-// tb_pc9821_kbd_warmreset — the keyboard's warm-reset state and stale-event replay.
+// tb_pc9821_kbd_warmreset - the keyboard's warm-reset state and stale-event replay.
 //
 // ==== WHAT THIS PROVES ====
-// The keyboard's warm-reset state (review r2-resets F5): key_down is cleared by BOTH the module reset and the 8251 bit-3 keyboard reset, so the first make after either reset is delivered instead of swallowed as a re-send of a held key; the PS/2 event edge detector tracks through reset, so a completed event held on ps2_key with its toggle bit set cannot replay as a fresh key at reset release (the L2 replay); and ctrl_writes and the dbg telemetry are reset state - the first two control writes after a reset land in dbg_ctrl0/dbg_ctrl1 and none of the telemetry is X in 4-state sim (run under iverilog for the fail-first X-lock).
+// TB_PC9821_KBD_WARMRESET:
+// The keyboard's warm-reset state: key_down is cleared by the MODULE reset, so the first make after a card reset is delivered instead of swallowed as a re-send of a held key, while the 8251 bit-3 keyboard reset KEEPS it (NP2kai keyboard_resetsignal keeps keystat.ref), so a held key's break still reaches the guest and a duplicate make stays silent; the PS/2 event edge detector tracks through reset, so a completed event held on ps2_key with its toggle bit set cannot replay as a fresh key at reset release (the L2 replay); and ctrl_writes and the dbg telemetry are reset state - the first two control writes after a reset land in dbg_ctrl0/dbg_ctrl1 and none of the telemetry is X in 4-state sim (run under iverilog for the fail-first X-lock).
 //
-// (a) `key_down` is cleared by BOTH the module reset and the 8251 bit-3 keyboard
-//     reset, so the first make after either reset is DELIVERED instead of being
-//     swallowed as a "re-send of a held key" (review r2-resets F5.2). NP2kai's
-//     keyboard_resetsignal() (io/serial.c:111-119) resets the whole receive
-//     record - cmd, status, both queues, the pending parameter and the key
-//     state - and keystat_resendstat() re-announces what is still held; a core
-//     that keeps `key_down` across the reset can do neither: the make is eaten
-//     and the guest's key state wedges until the physical break.
+// (a) `key_down` is cleared by the MODULE reset, so the first make after it is
+//     DELIVERED instead of being swallowed as a "re-send of a held key".
+//     The 8251 bit-3 keyboard reset is different: NP2kai's
+//     keyboard_resetsignal() (io/serial.c:111-119) resets the receive record -
+//     cmd, status, both queues, the pending parameter and the repeat buffer -
+//     but KEEPS keystat.ref, so the held key's BREAK still matches and reaches
+//     the guest. Clearing it here (the old behaviour, an epoch bump on bit 3)
+//     broke that: the guest had been told the key was down, the 8251 reset does
+//     not touch the guest's state, and the release was swallowed - the key
+//     stuck down until it was pressed again.
 // (b) The PS/2 event edge detector tracks THROUGH reset, so a completed event
 //     held on ps2_key with the toggle bit still set cannot REPLAY as a fresh key
-//     at reset release (review r2-resets F5.1, the L2 replay). Before the fix
+//     at reset release (the L2 replay). Before the fix
 //     `ps2_key_prev` reset to 0 while the unreset `ps2_key_q`/`event_code` path
 //     kept the last event, and `ps_event = (ps2_key_q[1] != ps2_key_prev)` fired
 //     spuriously on the first cycle - the last key (or its X) came back.
 // (c) `ctrl_writes` and the dbg telemetry are reset state: after a module reset
 //     the FIRST two control writes land in dbg_ctrl0/dbg_ctrl1 (the "wrong 8251
-//     sequence" telemetry), and none of the telemetry is X in 4-state sim
-//     (review r2-resets F5.3/F5.4). Run under a 4-state simulator (iverilog) to
+//     sequence" telemetry), and none of the telemetry is X in 4-state sim.
+//     Run under a 4-state simulator (iverilog) to
 //     see the fail-first X-lock of `ctrl_writes <= ctrl_writes + 1`.
 //
 // ==== THE 4-STATE RUN ====
@@ -163,13 +166,20 @@ module tb_pc9821_kbd_warmreset;
     send_key(1'b1, 1'b0, 8'h5A);           // make 0x1C again, NO break since the last one
     read_byte(8'h1C);
 
-    // ==== (a) THE 8251 BIT-3 RESET MUST CLEAR key_down ====
-    // The ITF's own 0x3A -> 0x32 pair (BANK4@0x04BEA/0x04BF6).
+    // ==== (a) THE 8251 BIT-3 RESET MUST *KEEP* key_down ====
+    // The ITF's own 0x3A -> 0x32 pair (BANK4@0x04BEA/0x04BF6). NP2kai
+    // keyboard_resetsignal (io/serial.c:111-119) keeps keystat.ref - only the
+    // half-written parameter and the repeat buffer go - so a key held across
+    // the reset still has a matching BREAK (its release must reach the guest)
+    // and a re-delivered make is still the same physical press (M2: silent).
     write_port(1'b1, 8'h3A);
     write_port(1'b1, 8'h32);
     repeat (2) @(negedge clk);
-    send_key(1'b1, 1'b0, 8'h5A);           // make 0x1C again, NO break since the last one
-    read_byte(8'h1C);
+    send_key(1'b1, 1'b0, 8'h5A);           // duplicate make: MUST be silent
+    repeat (4) @(posedge clk); #1;
+    if (irq) fail("the 8251 bit-3 reset cleared key_down: a duplicate make was delivered");
+    send_key(1'b0, 1'b0, 8'h5A);           // ...and the held key's break must arrive
+    read_byte(8'h9C);
 
     // ==== (c) ctrl_writes / dbg telemetry are RESET state ====
     repeat (2) @(negedge clk);

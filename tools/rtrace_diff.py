@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rtrace_diff.py A.bin B.bin [--show N] [--persist N]: diff two instruction-trace dumps.
 
-The debug-UART method's third step (AGENTS.md, testing on a real MiSTer):
+The debug-UART method's third step (docs/mister-testing.md, the debug UART):
 once the sampler has placed the stall and the snoop has shown which memory is involved, the same
 trigger is run twice - a good run and a bad one, or two builds - and the two frozen traces
 (pc9821_dbg_cpu's 0x43 records, from a capture of the debug UART) are compared HERE.

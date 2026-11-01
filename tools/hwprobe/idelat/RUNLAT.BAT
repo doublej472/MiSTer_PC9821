@@ -4,7 +4,7 @@ REM  PC-9821 real-machine IDE READ latency probe  (th5-ide targets)
 REM  Copy IDELAT.COM + this file to a DOS disk. Run:  RUNLAT
 REM  Send back IDELAT.TXT (or the raw capture if a section hung).
 REM
-REM  IDELAT measures the numbers the th5-ide lane should aim for:
+REM  IDELAT measures the numbers the core's IDE path should aim for:
 REM    SETUP    bank + PIT telemetry + IDENTIFY geometry (read-only)
 REM    CAL      the status-poll cost shape (one bare status read vs
 REM             one full poll-loop iteration), the word-read cost,

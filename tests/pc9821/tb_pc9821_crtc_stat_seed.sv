@@ -1,14 +1,14 @@
-// tb_pc9821_crtc_stat_seed — the GDC status byte's resample flops at reset.
+// tb_pc9821_crtc_stat_seed - the GDC status byte's resample flops at reset.
 //
 // ==== WHAT THIS PROVES ====
-// The GDC status byte's resample family (review r2-resets F8) comes up at its reset state: the first two port-0x60 status reads after a reset return the reset raster's BLANK (bit 6) / NO-VSYNC (bit 5) values with bit 2 set and bit 0 a RESOLVED free-running toggle - stat_dr <= ~stat_dr is the same self-fed X-lock shape as audio_volume's channel counter and was X forever in 4-state sim - and the steady-state byte never goes X (run under iverilog for the fail-first X-lock).
+// The GDC status byte's resample family comes up at its reset state: the first two port-0x60 status reads after a reset return the reset raster's BLANK (bit 6) / NO-VSYNC (bit 5) values with bit 2 set and bit 0 a RESOLVED free-running toggle - stat_dr <= ~stat_dr is the same self-fed X-lock shape as audio_volume's channel counter and was X forever in 4-state sim - and the steady-state byte never goes X (run under iverilog for the fail-first X-lock).
 //
 // The vsync/blank/data-ready resample flops (`vs_sync_ff`, `de_ff`, `stat_dr`)
 // come up at their RESET state - 00/00 - so the first two GDC status reads
 // (port 0x60) after a reset return the reset raster's BLANK / NO-VSYNC values
-// with bit 0 a resolved free-running toggle, instead of X (review r2-resets F8,
-// "the rest of the stat_dr family"). `stat_dr <= ~stat_dr` is the same self-fed
-// X-lock shape as review r2-resets F2's channel counter: unseeded it is X
+// with bit 0 a resolved free-running toggle, instead of X (the rest of the
+// stat_dr family). `stat_dr <= ~stat_dr` is the same self-fed
+// X-lock shape as pc9821_audio_volume's channel counter: unseeded it is X
 // forever in 4-state simulation and bit 0 of every status read is garbage. The
 // ITF polls this port early, which is why the first reads must be defined.
 //
@@ -41,14 +41,16 @@ module tb_pc9821_crtc_stat_seed;
   // ==== DUT ====
   // The scanout side is idle; only the CPU-side port read matters here.
   pc9821_crtc dut (
+      .crt31k(1'b0),   // 0x09A8 bit 0 clear: the 24 kHz monitor range
+      .gfx_win_on(1'b0),   // no slave window here
       .clk_sys(clk_sys),
       .rst_n_sys(rst_n_sys),
+      .rst_n_vid(rst_n_sys),
       .pixel_ce(1'b1),
       .io_wr(io_wr),
       .io_addr(io_addr),
       .io_din(io_din),
-      .io_dout(io_dout),
-      .grcg_mode_r(8'hFF)
+      .io_dout(io_dout)
   );
 
   integer errors = 0;
@@ -70,7 +72,7 @@ module tb_pc9821_crtc_stat_seed;
     rst_n_sys = 1;             // release
     #1;
 
-    // ==== THE FIRST TWO READS AFTER RESET (review r2-resets F8's confirm) ====
+    // ==== THE FIRST TWO READS AFTER RESET ====
     // The flops hold their reset state 00/00 through the first read and track
     // the raster two clks later, so the first two reads are BLANK (bit 6 = 1,
     // ~de_ff[1] with de_ff = 0) / NO-VSYNC (bit 5 = 0) with bit 2 set and bit 0

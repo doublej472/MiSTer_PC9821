@@ -71,11 +71,9 @@ module tb_pc9821_sdram_preact;
   wire [1:0]  SDRAM_DQM;
   wire        nWE, nRAS, nCAS, nCS, CKE;
 
-  // HAS_DQM = 0 is the DE10 configuration (MiSTer modules have no DQM pins), the same shape the
-  // other SDRAM benches drive.
+  // ADQM = 0 (the default), the same shape the other SDRAM benches drive.
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .FAST_GRADE(1'b1)
   ) dut (
       .clk(clk), .resetn(resetn), .nce(1'b0), .refresh_allowed(1'b1),
@@ -98,11 +96,11 @@ module tb_pc9821_sdram_preact;
       .SDRAM_CKE(CKE)
   );
 
-  // The chip model checks tRP for real (review F1's confirm-method 2): a BankActivate that
+  // The chip model checks tRP for real: a BankActivate that
   // reaches a bank still inside its auto-precharge is fatal. The values are the controller's
   // own derived ones for this config -- 100 MHz, FAST_GRADE=1: T_RP = ns_to_cycles(18) = 2,
   // T_WR = ns_to_cycles(12) = 2 -- sourced from the JEDEC minima, not fitted to the RTL.
-  sdram_chip_model #(.CAS(CAS), .T_RP(2), .T_WR(2)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(2), .T_WR(2), .FREQ_HZ(FREQ), .GRADE(6)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
@@ -201,6 +199,8 @@ module tb_pc9821_sdram_preact;
   // selects the negative control (phase 2), where port 1 stays silent.
   task automatic read4_on_p0(input driven_b, output integer got, output [31:0] w0,
                              output [31:0] w1, output [31:0] w2, output [31:0] w3);
+    integer got1;
+    reg [31:0] last1;
     begin
       got = 0; w0 = 32'hDEAD_0000; w1 = 32'hDEAD_0001;
       w2 = 32'hDEAD_0002; w3 = 32'hDEAD_0003;
@@ -238,13 +238,32 @@ module tb_pc9821_sdram_preact;
           fail("port 1 was accepted before port 0's last response -- the accept order moved");
         valid1 = 0;
         guard = 0;
-        while (!resp_valid1 && guard < 400) begin @(posedge clk); guard = guard + 1; end
-        if (guard >= 400) fail("the reserved port-1 read never answered");
-        if (dout1 !== 32'hB0B0_1234) begin
+        // The reserved request was made with burst_cnt1 = 1, so it must answer exactly ONE word
+        // and raise burst_done1 with it. The reserved-take arm reads its burst/be/din from the
+        // PRE-ACT reservation's latches (S2-j): a take that read any other port's field (the
+        // burst_buf <= burst_cnt0 mutant, which would give this 1-entry read port 0's 4-dword
+        // shape) answers more than once and fails here, as well as in the RTL's own equality
+        // check (pnd_take_contract, sdram.v).
+        got1 = 0; last1 = 32'hxxxx_xxxx;
+        guard = 0;
+        while (!burst_done1 && guard < 400) begin
+          @(posedge clk);
+          if (resp_valid1) begin
+            got1  = got1 + 1;
+            last1 = dout1;
+          end
+          guard = guard + 1;
+        end
+        if (guard >= 400)
+          fail("the reserved port-1 read never raised burst_done1");
+        if (got1 != 1) begin
+          fail("the reserved 1-entry read produced != 1 response -- the take read the wrong port's burst");
+          $display("     got %0d responses, last %08x", got1, last1);
+        end else if (last1 !== 32'hB0B0_1234) begin
           fail("the reserved request read the wrong cells");
-          $display("     got %08x want B0B01234", dout1);
+          $display("     got %08x want B0B01234", last1);
         end else
-          $display("NOTE sdram_preact: the reserved port-1 read returned B0B01234");
+          $display("NOTE sdram_preact: the reserved port-1 read returned B0B01234 in exactly one response");
         while (busy) @(posedge clk);
         repeat (4) @(posedge clk);
       end

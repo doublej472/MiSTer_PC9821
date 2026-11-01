@@ -86,6 +86,8 @@ module paging_unit
     input               vipt_fallback,
     output              vipt_tlb_hit,
     output       [31:0] vipt_tlb_phys_addr,
+    output       [31:0] vipt_tlb_phys_hit_form,   // vipt_tlb_phys_addr when vipt_tlb_hit
+    output       [31:0] vipt_tlb_phys_miss_form,  // vipt_tlb_phys_addr when !vipt_tlb_hit
     output              vipt_tlb_writable,
     output              vipt_tlb_user,
     output              vipt_tlb_dirty,
@@ -133,6 +135,22 @@ module paging_unit
     output logic        dcache_req_is_vga_mem,// Physical VGA aperture
     output logic        dcache_req_is_pcd,    // Page-level cache disable (PCD) for this access
     output logic        dcache_req_is_locked, // Locked read (LOCK#): bypass the L1
+    // The request's address and I/O verdict, for pretrans_present low, as they
+    // are when mem_req is high (_m1) and low (_m0), with mem_req as the select,
+    // and the pretranslated arm: the cache unit classifies each arm and selects
+    // the class last (CLASS_SPLIT).
+    output logic [31:0] dcache_req_phys_addr_m1,
+    output logic [31:0] dcache_req_phys_addr_m0,
+    output logic        dcache_req_is_io_m1,
+    output logic        dcache_req_is_io_m0,
+    output logic        dcache_req_split_sel,
+    output logic        dcache_req_pre_sel,     // pretrans_present: the request is _pre_phys (I/O 0)
+    // The request's routing attributes with mem_req fixed at 1 / 0 (all arms,
+    // the pretranslated one included): {valid, is_io, is_inta, is_vga_mem,
+    // write}, for the bus unit's split launch decision (CLASS_SPLIT).
+    output logic [4:0]  dcache_req_route_m1,
+    output logic [4:0]  dcache_req_route_m0,
+    output logic [31:0] dcache_req_pre_phys,
 
     input               dcache_req_accepted,  // Demand-side request accepted this cycle
     input               dcache_req_complete,  // Demand-side request complete
@@ -279,6 +297,8 @@ paging_tlb #(.VGA_BASE(VGA_BASE), .VGA_TOP(VGA_TOP)) tlb_inst (
     .vipt_linear_addr(vipt_linear_addr),
     .vipt_hit       (vipt_tlb_hit),
     .vipt_physical_addr(vipt_tlb_phys_addr),
+    .vipt_physical_hit_form(vipt_tlb_phys_hit_form),
+    .vipt_physical_miss_form(vipt_tlb_phys_miss_form),
     .vipt_writable  (vipt_tlb_writable),
     .vipt_user      (vipt_tlb_user),
     .vipt_dirty     (vipt_tlb_dirty),
@@ -594,6 +614,33 @@ wire [11:0] dcache_req_offset = pretrans_present ? pretrans_phys[11:0] :
                                 req_mem_present   ? req_linear[11:0] :
                                                     dcache_req_phys_addr_r[11:0];
 assign dcache_req_phys_addr = {dcache_req_frame, dcache_req_offset};
+
+// The request address split for the cache unit's classification, so the
+// late selects pick a finished class instead of steering the address mux in
+// front of the memory-map window compares (Shannon: f(s) = s ? f(1) : f(0)).
+// mem_req carries the segment-limit/#GP verdict (z486.sv gp_fault_trigger),
+// the latest input of the request; it reaches the address only through
+// idle_data_req -> early_wr_idx_drive/early_wr_present. pretrans_present
+// carries the access width (microcode -> mem_eff_size -> idle_mem_crossing).
+// The request is pretrans_present ? pretrans_phys : (mem_req ? _m1 : _m0), with
+// both mem_req arms formed for pretrans_present low; its I/O verdict is
+// pretrans_present ? 0 : (mem_req ? _io_m1 : _io_m0).
+// tests/equiv/req_class_split.v proves the arms against the expressions above
+// for every input.
+wire        early_wr_idx_drive_m1 = s_idle && !mem_servicing && mem_write && !mem_is_io;
+wire        early_wr_present_m1   = early_wr_idx_drive_m1 && !idle_mem_crossing &&
+                                    !mem_check_only && live_store_posts;
+assign dcache_req_phys_addr_m1 = {
+    early_wr_present_m1   ? early_phys[31:12] :
+    req_mem_present       ? req_mem_phys[31:12] : dcache_req_phys_addr_r[31:12],
+    early_wr_idx_drive_m1 ? linear_addr[11:0] :
+    req_mem_present       ? req_linear[11:0] : dcache_req_phys_addr_r[11:0]};
+// mem_req low: no early write drives.
+assign dcache_req_phys_addr_m0 = req_mem_present ? {req_mem_phys[31:12], req_linear[11:0]}
+                                                 : dcache_req_phys_addr_r;
+assign dcache_req_split_sel = mem_req;
+assign dcache_req_pre_sel   = pretrans_present;
+assign dcache_req_pre_phys  = pretrans_phys;
 assign dcache_req_preread_offset = dcache_req_offset;
 // Conservatively reserve the preread port for any registered demand request.
 // IO-like requests do not consume the cache, but retaining that distinction
@@ -631,6 +678,8 @@ assign dcache_direct_wdata = dcache_req_valid_r
                                               linear_addr[1:0]);
 assign x87_req_wdata = dcache_io_wdata_r;
 assign dcache_req_is_io = (early_present || req_mem_present) ? 1'b0 : dcache_req_is_io_r;
+assign dcache_req_is_io_m1 = (early_wr_present_m1 || req_mem_present) ? 1'b0 : dcache_req_is_io_r;
+assign dcache_req_is_io_m0 = req_mem_present ? 1'b0 : dcache_req_is_io_r;
 assign dcache_req_is_inta = (early_present || req_mem_present) ? 1'b0 : dcache_req_is_inta_r;
 assign dcache_req_is_x87 = (early_present || req_mem_present) ? 1'b0 : dcache_req_is_x87_r;
 wire        early_is_vga_mem   = pretrans_present ?
@@ -639,6 +688,25 @@ wire        early_is_vga_mem   = pretrans_present ?
 assign dcache_req_is_vga_mem = early_present ? early_is_vga_mem :
                                req_mem_present ? req_is_vga_mem :
                                z486_page_in_window(dcache_req_phys_addr_r[31:12], VGA_BASE, VGA_TOP);
+// The routing attributes on both mem_req arms (early_present at mem_req = 1
+// is early_wr_present_m1 || pretrans_present, at 0 pretrans_present), for
+// the bus unit's split direct-launch decision; tests/equiv/req_route_split.v.
+wire        early_present_r1  = early_wr_present_m1 || pretrans_present;
+wire        vga_rest          = req_mem_present ? req_is_vga_mem :
+                                z486_page_in_window(dcache_req_phys_addr_r[31:12], VGA_BASE, VGA_TOP);
+wire        write_rest        = req_mem_present ? req_is_write : dcache_req_write_r;
+assign dcache_req_route_m1 = {
+    dcache_req_valid_r || req_mem_dcache_candidate || early_present_r1,
+    (early_present_r1 || req_mem_present) ? 1'b0 : dcache_req_is_io_r,
+    (early_present_r1 || req_mem_present) ? 1'b0 : dcache_req_is_inta_r,
+    early_present_r1 ? early_is_vga_mem : vga_rest,
+    pretrans_present ? 1'b0 : early_wr_present_m1 ? 1'b1 : write_rest};
+assign dcache_req_route_m0 = {
+    dcache_req_valid_r || req_mem_dcache_candidate || pretrans_present,
+    (pretrans_present || req_mem_present) ? 1'b0 : dcache_req_is_io_r,
+    (pretrans_present || req_mem_present) ? 1'b0 : dcache_req_is_inta_r,
+    pretrans_present ? early_is_vga_mem : vga_rest,
+    pretrans_present ? 1'b0 : write_rest};
 assign icache_req_valid = icache_req_valid_r || fast_pf_candidate;
 assign icache_req_phys_addr = icache_req_valid_r ? icache_req_phys_addr_r : fast_pf_phys;
 // PCD only qualifies reads: they decide whether a miss may allocate.  The

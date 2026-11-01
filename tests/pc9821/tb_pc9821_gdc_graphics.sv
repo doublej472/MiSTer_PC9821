@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // The GDC graphics mode against NP2kai io/gdc.c and vram/makegrph.c (PRIMARY) and QEMU pc98-vga.c: the fixed 24 kHz 848x440 / 640x400 raster in graphics mode (the 15 kHz and 31 kHz selects on 0x6A/0x6E are UNIMPLEMENTED), the CRTC registers 0x70-0x7A (the machine probe reads their reset values back, a reference disagreement the core follows the machine on), the SCROLL display-start word with the partition-2 wrap, the slave CSRFORM line repeat, and the graphics GDC's START/STOP compositor gate. Both Round-3 mismatches are fixed and asserted: the scanout fetch is enabled by mode1[7] (the DISP) and a burst that crosses the 32 KiB plane end clamps per burst instead of reading the next plane.
-// The GDC graphics mode against NP2kai io/gdc.c and vram/makegrph.c (PRIMARY) and QEMU pc98-vga.c: the fixed 24 kHz 848x440 / 640x400 raster in graphics mode (the 15 kHz and 31 kHz selects on 0x6A/0x6E are UNIMPLEMENTED, as the module's own note says), the CRTC registers 0x70-0x7A (NP2kai and QEMU are write-only and answer 0xFF while the machine probe docs/probes/GDC.TXT reads their reset values back, so the core follows the machine and this is a reference disagreement, not a defect), the SCROLL display-start word (byte address = word*2, NP2kai's LOW15(word<<1)) with the partition-2 wrap, the slave CSRFORM line repeat (lr=2 holds each GDC line on two raster lines; mode1[4]'s blank-vs-duplicate arm is not modelled, which r13/96 already records), and the graphics GDC's START/STOP compositor gate. It finds TWO mismatches: (1) a scanout line whose base is within 79 bytes of the 32 KiB plane end does not wrap per column as both references' LOW15/mask do, so its last columns read the NEXT plane; (2) the scanout fetch is gated by the TEXT GDC's DISP+START (pc9821_system's scan_enable) instead of the graphics GDC's START, so a program that starts only the graphics GDC shows black where NP2kai and QEMU show graphics. Every case prints one line with its verdict.
+// The GDC graphics mode against NP2kai io/gdc.c and vram/makegrph.c (PRIMARY) and QEMU pc98-vga.c: the fixed 24 kHz 848x440 / 640x400 raster in graphics mode (the 15 kHz and 31 kHz selects on 0x6A/0x6E are UNIMPLEMENTED, as the module's own note says), the CRTC registers 0x70-0x7A (NP2kai and QEMU are write-only and answer 0xFF while the machine probe docs/probes/GDC.TXT reads their reset values back, so the core follows the machine and this is a reference disagreement, not a defect), the SCROLL display-start word (byte address = word*2, NP2kai's LOW15(word<<1)) with the partition-2 wrap, the slave CSRFORM line repeat (lr=2 holds each GDC line on two raster lines; mode1[4]'s blank-vs-duplicate arm is not modelled, which the bench records as a known deviation), and the graphics GDC's START/STOP compositor gate. It finds TWO mismatches: (1) a scanout line whose base is within 79 bytes of the 32 KiB plane end does not wrap per column as both references' LOW15/mask do, so its last columns read the NEXT plane; (2) the scanout fetch is gated by the TEXT GDC's DISP+START (pc9821_system's scan_enable) instead of the graphics GDC's START, so a program that starts only the graphics GDC shows black where NP2kai and QEMU show graphics. Every case prints one line with its verdict.
 
 `default_nettype none
 
@@ -30,7 +30,6 @@ module tb_pc9821_gdc_graphics;
   reg  io_wr = 0, io_rd = 0;
   reg  [7:0] io_addr = 0, io_din = 0;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   wire gfx_access_page;
   wire [15:0] gfx_line_addr;
   wire        gfx_walk_page;   // the packed walk's page bit; parked here so (.*) stays complete
@@ -41,8 +40,6 @@ module tb_pc9821_gdc_graphics;
   reg  [17:0] font_ld_addr = 0;
   reg  [15:0] font_ld_data = 0;
   reg         font_ld_we = 0;
-  wire [15:0] cg_code_win;
-  wire        cg_lr_win;
   wire  [4:0] cg_win_byte_sel = 5'd0;
   wire        cg_win_rd = 1'b0;
   wire  [7:0] cg_win_dout;
@@ -57,7 +54,7 @@ module tb_pc9821_gdc_graphics;
   wire        vsync_active;
   wire        vsync_irq_arm = 1'b0;
   wire        vsync_irq;
-  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on (r13/321); parked for (.*)
+  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on; parked for (.*)
   wire        disp_on;            // mode1[7] && the TEXT GDC's START: pc9821_system routes this to scan_enable
   wire        gfx_disp;           // the graphics GDC's own START/STOP latch: the mixer's grph_disp
   wire        gfx_egc_gate;
@@ -67,14 +64,14 @@ module tb_pc9821_gdc_graphics;
   wire [15:0] dbg_sad;
   wire  [7:0] dbg_pitch;
   wire        dbg_col40, dbg_disp;
-  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter (r13/305)
+  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter
   wire        text_opaque, text_cell;
   wire [11:0] text_colour;
   wire  [9:0] pix_dot;
   wire        pix_h_active, pix_v_active;
   wire        gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB, r13/225 #2).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -119,8 +116,8 @@ module tb_pc9821_gdc_graphics;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg         grcg_we = 1'b0;
   reg  [7:0]  grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -136,9 +133,9 @@ module tb_pc9821_gdc_graphics;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),
@@ -406,8 +403,8 @@ module tb_pc9821_gdc_graphics;
 
   // Wait n frame boundaries, so the frame-end configuration snapshot has taken the last write.
   // The boundary is the raster's own frame_end, NOT a frame_cnt change: frame_cnt is the
-  // character blink's count and advances once per CSRFORM `timing` frames (audit
-  // rtl-audit-video F1), so it is no longer a frame counter. frame_end can hold for more than
+  // character blink's count and advances once per CSRFORM `timing` frames,
+  // so it is no longer a frame counter. frame_end can hold for more than
   // one clk here (pixel_ce is not 1:1), so the wait leaves the pulse before taking the next.
   task automatic next_frame();
     begin
@@ -540,7 +537,7 @@ module tb_pc9821_gdc_graphics;
     //    handler, so both answer 0xFF; the machine probe reads the reset values back
     //    (docs/probes/GDC.TXT: 70=00 72=0F 74=10 76=00 78=00 7A=00, "no writes were made").
     //    The WRITE is FIVE BITS wide - NP2kai's crtc_o70 does `dat &= 0x1f` before
-    //    storing (io/crtc.c:10-17, review iobus-tram F7), so the latch and its readback
+    //    storing (io/crtc.c:10-17), so the latch and its readback
     //    carry value & 0x1F and 0xA5 reads back 0x05.
     // ---------------------------------------------------------------
     begin : crtc_case
@@ -608,14 +605,14 @@ module tb_pc9821_gdc_graphics;
     // ---------------------------------------------------------------
     // 7. mode1[4]: 200-line mode's blank arm. NP2kai makegrph.c:155 and QEMU
     //    pc98-vga.c:4475 blank the repeated raster line when mode1[4] is set; this core
-    //    keeps the duplicate (r13/96 section 4 records it as deliberate - KNOWN-DEVIATION).
+    //    keeps the duplicate (deliberate - KNOWN-DEVIATION).
     // ---------------------------------------------------------------
     write_io(8'h68, 8'h09);   // mode1 bit4 = 1 (200-line)
     capture_raster(9'd1);
     if ({cap_r[0], cap_g[0], cap_b[0]} !== BLUE) begin
       fail("line_double_mode1_4_blank: expected the core's duplicate (blue) in the 200-line mode");
     end else begin
-      $display("KNOWN-DEVIATION line_double_mode1_4_blank: core raster 1 col 0 = %02x%02x%02x (GDC line 0 duplicated); NP2kai makegrph.c:155 and QEMU pc98-vga.c:4475 blank the repeated line when mode1[4] is set - documented in r13/96 section 4",
+      $display("KNOWN-DEVIATION line_double_mode1_4_blank: core raster 1 col 0 = %02x%02x%02x (GDC line 0 duplicated); NP2kai makegrph.c:155 and QEMU pc98-vga.c:4475 blank the repeated line when mode1[4] is set - a documented deviation",
                cap_r[0], cap_g[0], cap_b[0]);
       notes = notes + 1;
     end

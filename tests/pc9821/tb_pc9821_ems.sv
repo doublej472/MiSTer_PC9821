@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // Every non-0x2x/non-0xEx write to 0x043F leaves the EMS window state alone: after 0x22 enables the 64 KiB page, the BIOS's pre-mov-cr0 cache-flush write 0xA0 - and 0x80/0xC4 - still serve the EMS page at 0xB0000 instead of resetting the window to the VRAM planes, exactly as qemu's mem_bankctl_write acts only on 0x20 (EMS) and 0xE0 (bank) (pc98-mem.c:684-701). FAIL-FIRST: before this fix every other nibble took the else arm, reset ems_state to the identity, and 0xB0000 fell back to VRAM - an EMM386-style driver that enables 0x22 and then toggles paging with the BIOS's 0xA0 flush lost its page.
 //
-// The defect is memmap-audit-ems-FINDINGS.md F1 (P1): pc9821_iobus's 0x043F
+// The defect: pc9821_iobus's 0x043F
 // write arm returned ems_state to the identity for every nibble except 0x2x
 // (and 0xEx kept it), so the 486 cache flush 0x043F=0xA0 the firmware emits
 // immediately before every `mov cr0` (BANK7@0x5F83, BANK4@0x6020/0x6044)
@@ -11,7 +11,7 @@
 // (pc98-mem.c:684-701) switches on data & 0xf0 and acts only in the 0x20 and
 // 0xE0 cases - 0x80/0xA0/0xC0 fall through with the EMS state untouched - and
 // that is the expected value here. The route itself is the one
-// tb_pc9821_memory_map pins for the three measured states (EMS.TXT, r12/29):
+// tb_pc9821_memory_map pins for the three measured states (EMS.TXT):
 // state 1 serves ems_page_base + offset (64 KiB), state 0 leaves the GVRAM R
 // plane at 0xB0000 alone.
 //
@@ -47,7 +47,7 @@ module tb_pc9821_ems;
   wire [1:0]  gvram_win_plane;
   wire [14:0] gvram_win_offset;
   wire        ems_open_bus, absent_area, fw_shadow_store;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   wire [3:0]  mem_be;
   wire [7:0]  mem_burstcount;
 
@@ -55,7 +55,11 @@ module tb_pc9821_ems;
   // exactly as pc9821_system wires it.
   wire [1:0] ems_state;
 
-  localparam [31:0] EMS_PAGE_BASE = 32'h0210_0000;
+  // The map reads only ems_page_base[31:20]: the port is pc9821_memory_subsystem's
+  // pack_base + PACK_BYTES + 0x48000 (pack_base = the map's 32 MiB default here), so its low
+  // 20 bits ARE the constant 0x48000 and the page arm is a bit splice
+  // (tools/check_memmap_addr_equiv.py PREMISES). Drive that same shape.
+  localparam [31:0] EMS_PAGE_BASE = 32'h0214_8000;   // 0x0200_0000 + 1 MiB + 0x48000
 
   // ==== DUT ====
   // Stage A's write-protect seam. Declared because pc9821_iobus is instantiated with `.*`
@@ -70,7 +74,7 @@ module tb_pc9821_ems;
   pc9821_iobus bus (
       .ide_unit0_present(1'b0),
       .clk(clk), .reset(reset),
-      .bios_set(4'h0), .gdc_clock_5m(1'b0), .triple_fault_reset(1'b0),
+      .bios_set(4'h0), .gdc_clock_5m(1'b0), .fdd_dip_fixed(1'b0), .triple_fault_reset(1'b0),
       .cpu_addr(io_cpu_addr), .cpu_din(io_cpu_din), .cpu_be(io_cpu_be),
       .cpu_valid(io_cpu_valid), .cpu_write(io_cpu_write),
       .cpu_dout(io_cpu_dout), .cpu_ready(io_cpu_ready),
@@ -107,9 +111,8 @@ module tb_pc9821_ems;
       .cpu_addr(mem_cpu_addr), .cpu_addr_raw(mem_cpu_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(mem_cpu_din), .cpu_be(mem_cpu_be),
       .cpu_burstcount(8'h0), .cpu_line_read(1'b0),
       .cpu_valid(mem_cpu_valid), .cpu_write(mem_cpu_write),
-      .cpu_dout(mem_cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(mem_cpu_dout),
       .cpu_ready(mem_cpu_ready), .cpu_resp_valid(mem_cpu_resp_valid),
-      .cpu_line_resp_valid(),
       .absent_area(absent_area), .ems_open_bus(ems_open_bus),
       .fw_shadow_store(fw_shadow_store),
       .gvram_window(gvram_window), .gvram_win_plane(gvram_win_plane),

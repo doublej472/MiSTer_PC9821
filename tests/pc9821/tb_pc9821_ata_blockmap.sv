@@ -1,4 +1,4 @@
-// tb_pc9821_ata_blockmap — port 0x0432, the IDE bank select, ports only.
+// tb_pc9821_ata_blockmap - port 0x0432, the IDE bank select, ports only.
 //
 // The contract, and where it comes from:
 //
@@ -34,8 +34,7 @@
 //       - 0x0432 = 0x00 -> the task file floats: 0x0642-0x064E at 0x0E, the
 //         odd partner of each register at 0xFF, and 0x74C/0x74E at 0x0F -- read
 //         at the DOS prompt with the register untouched in probes/JOY.TXT and
-//         probes/WIN.TXT. 0x0640 reads 0xFF in the fresh ATA.TXT (r13/215,
-//         confirmed twice); the older captures had 0x0E there. The ROM's own
+//         probes/WIN.TXT. 0x0640 reads 0xFF in the fresh ATA.TXT (confirmed twice); the older captures had 0x0E there. The ROM's own
 //         probe ends with `out 0x432,0` (BANK3@0x87D4), which is why DOS leaves
 //         it at 0x00.
 //   * Bank 0 is the slot pair with no interface on this machine: the ROM's rule
@@ -55,9 +54,9 @@
 //     (firmware/freebios/pc98ide.bin), which read-modify-writes 0x0432 and so
 //     satisfied bit 7; commit ad01e35 deleted that firmware, leaving the gate
 //     with no evidence at all.
-//   * THE CORE'S LAYOUT IS FIXED (owner, 2026-10-11), and it is NOT the owner's machine's: the
+//   * THE CORE'S LAYOUT IS FIXED, and it is NOT the probed machine's: the
 //     hard disk is always bank 0's master and bank 1 is the CD-ROM's (or empty), the stock
-//     CD-equipped Xe10's layout and NP2kai's default (HDD unit 0, CD unit 2). The owner's Xe10
+//     CD-equipped Xe10's layout and NP2kai's default (HDD unit 0, CD unit 2). The probed Xe10
 //     answers at bank 1 only because its CF card sits in the CD connector. So this bench takes
 //     the machine's VALUES (the live-bank answers, the empty-bank float) and puts them at the
 //     core's banks: the disk answers at channel bit 0 CLEAR and the float is at bit 0 set. The
@@ -82,7 +81,7 @@
 //      interface, in both directions).
 //   4. A command issued after the ROM's bank select reaches the drive: it
 //      completes, the task file the drive accepted is readable, 0x0433 reports
-//      the CONNECT flag (NP2kai's ideio_i433; review readbacks.md P5), and the
+//      the CONNECT flag (NP2kai's ideio_i433), and the
 //      status read clears the interrupt without moving that flag.
 //   5. The ROM's own ISR bracket (BANK3 file offset 0x1A0C), in order: the 0x80
 //      park write leaves the register alone, the drive's bank byte connects the
@@ -99,7 +98,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_BLOCKMAP:
-// The 0x0432 IDE bank select as the machine has it: a write with bit 7 set is a no-op (so the ROM's own save-and-restore bracket leaves the interface connected), which channel is connected is decided by bit 0 rather than a byte comparison, the task file answers at the hard disk's channel - bit 0 clear, bank 0's master, the fixed layout (owner 2026-10-11; the stock Xe10's and NP2kai's unit 0) - and floats at the other (the values measured on the owner's Xe10, whose empty bank was 0x00 and live bank 0x01: an empty bank leaves every task-file register at 0x0E with 0x74C/0x74E at 0x0F and their odd partners at 0xFF; the live bank answers 0x064E = 0x50 with 0x074C = 0x50 and 0x074E = 0x00), a task-file write follows the same window, and a command issued after the bank select reaches the drive.
+// The 0x0432 IDE bank select as the machine has it: a write with bit 7 set is a no-op (so the ROM's own save-and-restore bracket leaves the interface connected), which channel is connected is decided by bit 0 rather than a byte comparison, the task file answers at the hard disk's channel - bit 0 clear, bank 0's master, the fixed layout (the stock Xe10's and NP2kai's unit 0) - and floats at the other (the values measured on the probed Xe10, whose empty bank was 0x00 and live bank 0x01: an empty bank leaves every task-file register at 0x0E with 0x74C/0x74E at 0x0F and their odd partners at 0xFF; the live bank answers 0x064E = 0x50 with 0x074C = 0x50 and 0x074E = 0x00), a task-file write follows the same window, and a command issued after the bank select reaches the drive.
 
 
 module tb_pc9821_ata_blockmap;
@@ -230,7 +229,7 @@ module tb_pc9821_ata_blockmap;
       expect_port(16'h074C, 8'h0F, "0x74C floats at 0x0F");
       expect_port(16'h074E, 8'h0F, "0x74E floats at 0x0F like 0x74C");
       // The second channel's task file (0x740-0x74A) is the same measured float
-      // (r12/23): the machine reads 0x0F at each even register and 0xFF at each
+      //: the machine reads 0x0F at each even register and 0xFF at each
       // odd partner (probes/PORTS.TXT `0740 0F 0742 0F 0744 0F 0746 0F 0748 0F
       // 074A 0F`, with 0741/0743/.../074B at 0xFF). Undecoded before this
       // change, so every one of them answered open bus 0xFF.
@@ -282,12 +281,12 @@ module tb_pc9821_ata_blockmap;
     expect_port(16'h0644, 8'h01, "a floating-bank write reached nothing");
 
     // 0x0640 is consume-on-read, so the machine's own probe does not sample it
-    // (R10.TXT marks it "--", with 0x0641). r13/215's fresh ATA.TXT reads it 0xFF
-    // with the bank floating -- the second fresh confirmation (r13/213 had one) --
+    // (R10.TXT marks it "--", with 0x0641). The fresh ATA.TXT reads it 0xFF
+    // with the bank floating -- the second fresh confirmation --
     // which is also the ATA data register's own rule while DRQ is clear. Reading
     // it is safe in this bench because no transfer is in flight.
     write_byte(16'h0432, 8'h01);
-    expect_port(16'h0640, 8'hFF, "0x0640 floats at 0xFF (r13/215)");
+    expect_port(16'h0640, 8'hFF, "0x0640 floats at 0xFF");
 
     // 5. The bank the machine answers at: the ROM's own sequence. The readback
     //    carries content in the low bits too, so a decoder that only stored
@@ -314,7 +313,7 @@ module tb_pc9821_ata_blockmap;
     write_byte(16'h064E, 8'h10);          // RECALIBRATE
     // 0x0433 is the source-identification port and answers the CONNECT flag
     // (NP2kai ideio_i433 bit 1 = "the selected bank has a connected device",
-    // cbus/ideio.c:660-675; review readbacks.md P5) - not an IRQ-pending bit.
+    // cbus/ideio.c:660-675) - not an IRQ-pending bit.
     // The machine reads 0x00 there with nothing pending AND the bank at 0x00
     // (the fingerprint table in probes/JOY.TXT and probes/WIN.TXT, `0433300`),
     // which every model answers alike. It is read before 0x064E, because a

@@ -56,6 +56,14 @@ module microsequencer
     input  logic        div_redirect_valid,
     input  logic [11:0] div_redirect_target,
     input  logic        gate_redirect,
+    // The redirect conditions without uc_exec: each *_valid above is
+    // uc_exec && its condition (the recipe's also ORs recipe_redirect_hold),
+    // fused below.  The port-A address takes uc_exec in its last select.
+    input  logic        prot_redirect_cond,
+    input  logic        recipe_redirect_cond,
+    input  logic        recipe_redirect_hold,
+    input  logic        div_redirect_cond,
+    input  logic        gate_redirect_cond,
     input  seq_redirect_t fault_redirect,     // highest-priority fault target
     input  seq_redirect_t boundary_redirect,  // interrupt/reset boundary target
 
@@ -73,6 +81,10 @@ module microsequencer
     // port B's at issue) and its predecoded fields
     output logic [50:0] uc,
     output logic [50:0] uc_next,              // the word that becomes uc next cycle
+    output logic [1:0]  uc_next_shift2_source,  // uc_next's SHIFT2 source class (port select last)
+    output logic        uc_next_shift_captures, // uc_next captures a shift operand (port select last)
+    output logic [6:0]  uc_next_dest_a,       // port A's destination field (uc_next[30:24] when !pb_slot)
+    output logic [6:0]  uc_next_dest_b,       // port B's destination field (uc_next[30:24] when pb_slot)
     output logic [5:0]  uc_source_shift,
     output logic [3:0]  uc_shift_source_class,
     output logic [1:0]  uc_shift2_source,
@@ -105,10 +117,11 @@ wire [6:0] uc_aluop = uc[17:11];
 wire [2:0] uc_opcode = uc[10:8];
 wire [11:0] uc_ljump_target = {uc_source, uc_alu_src};
 wire [11:0] return_target = return_stack[return_sp - 2'd1];
-wire reljump_taken = uc_exec && !repeat_active &&
-                     reljump_condition(uc_aluop, conditions) &&
-                     !prot_redirect_prev &&
-                     !jcc_fold_active && !branch_ustep_rni;
+wire reljump_cond = !repeat_active &&
+                    reljump_condition(uc_aluop, conditions) &&
+                    !prot_redirect_prev &&
+                    !jcc_fold_active && !branch_ustep_rni;
+wire reljump_taken = uc_exec && reljump_cond;
 wire pref_suppress_taken = reljump_taken &&
     (uc_aluop == ALUJMP_JNcond || uc_aluop == ALUJMP_JCNTNZ ||
      uc_aluop == ALUJMP_JCNT1 || uc_aluop == ALUJMP_LOOPnE);
@@ -127,97 +140,269 @@ wire rni_base = (((uc_opcode == 3'b000) || (uc_opcode == 3'b010)) &&
 assign i_rni = rni_base || jcc_fold_active || branch_ustep_rni ||
                load_wb_retire;
 
+// uaddr_next's terms above the port-B continuation: reset, the boundary
+// event, a fault (the arm is only selected when one of them is valid).
+function automatic logic [11:0] uaddr_next_hi(input logic rst_n, input logic bnd_v,
+                                              input logic [11:0] bnd_t,
+                                              input logic [11:0] flt_t);
+    uaddr_next_hi = !rst_n ? 12'h000 : bnd_v ? bnd_t : flt_t;
+endfunction
+// The last level of uaddr_next: the two late selects over the three arms.
+function automatic logic [11:0] uaddr_next_pick(input logic pb, input logic adv,
+                                                input logic [11:0] arm_pb,
+                                                input logic [11:0] arm_step,
+                                                input logic [11:0] arm_hold);
+    uaddr_next_pick = pb ? arm_pb : adv ? arm_step : arm_hold;
+endfunction
+
+// The EX redirect as a function of the execute enable and the uc_exec-free
+// redirect conditions, in the priority the RTL always had (later wins):
+// relative jump, the long-jump/call/return word, protection, recipe, SET_RPL,
+// divide, call gate; and, with ex low, a recipe rejection held from an
+// earlier overlay word (recipe_redirect_hold).  uc_exec reaches it from the
+// stall cone (D$ ready -> stall_fast_store -> uc_exec, fo ~300), so the ROM
+// address forms it for both values and picks with uc_exec last.
+function automatic seq_redirect_t exec_redirect_of(
+    input logic        ex,
+    input logic        rel_c,
+    input logic [6:0]  aluop,
+    input logic [11:0] rel_target,
+    input logic        vm_i,
+    input logic        pe_i,
+    input logic        cpl_nz,
+    input logic        prot_prev,
+    input logic [11:0] ljump_target,
+    input logic [11:0] ret_target,
+    input logic        prot_c,
+    input logic [11:0] prot_t,
+    input logic        rec_c,
+    input logic        rec_hold,
+    input logic [11:0] rec_t,
+    input logic        set_rpl,
+    input logic        div_c,
+    input logic [11:0] div_t,
+    input logic        gate_c
+);
+    seq_redirect_t r;
+    r = '0;
+    if (ex) begin
+        if (rel_c) begin
+            r.valid = 1'b1;
+            r.target = rel_target;
+        end
+        case (aluop)
+            ALUJMP_LJMP86: if (vm_i) begin
+                r.valid = 1'b1;
+                r.target = ljump_target;
+            end
+            ALUJMP_LJMPP: if (pe_i && !vm_i) begin
+                r.valid = 1'b1;
+                r.target = ljump_target;
+            end
+            ALUJMP_LJMPNP: if (pe_i && cpl_nz) begin
+                r.valid = 1'b1;
+                r.target = ljump_target;
+            end
+            ALUJMP_LCALL: begin
+                r.valid = 1'b1;
+                r.target = ljump_target;
+            end
+            ALUJMP_LJUMP: if (!prot_prev) begin
+                r.valid = 1'b1;
+                r.target = ljump_target;
+            end
+            ALUJMP_RETURN: begin
+                r.valid = 1'b1;
+                r.target = ret_target;
+            end
+            default: ;
+        endcase
+        if (prot_c) begin
+            r.valid = 1'b1;
+            r.target = prot_t;
+        end
+        if (rec_c || rec_hold) begin
+            r.valid = 1'b1;
+            r.target = rec_t;
+        end
+        if (set_rpl) begin
+            r.valid = 1'b1;
+            r.target = UADDR_MORE_PRIVILEGE;
+        end
+        if (div_c) begin
+            r.valid = 1'b1;
+            r.target = div_t;
+        end
+        if (gate_c) begin
+            r.valid = 1'b1;
+            r.target = UADDR_CALL_GATE_386;
+        end
+    end else if (rec_hold) begin
+        // Recipe rejection may be registered after its speculative overlay
+        // word has executed. It owns no architectural micro-op in that cycle,
+        // so it redirects the ROM while uc_exec remains suppressed. This keeps
+        // the VIPT/TLB result out of the same-cycle ROM-address cone.
+        r.valid = 1'b1;
+        r.target = rec_t;
+    end
+    exec_redirect_of = r;
+endfunction
+
+wire [11:0] reljump_target = uc_addr + 12'd1 + {{6{uc_alu_src[5]}}, uc_alu_src};
+seq_redirect_t exec_redirect_x1;
+seq_redirect_t exec_redirect_x0;
 seq_redirect_t exec_redirect;
+assign exec_redirect_x1 = exec_redirect_of(1'b1, reljump_cond, uc_aluop, reljump_target,
+    vm, pe, cpl_nonzero, prot_redirect_prev, uc_ljump_target, return_target,
+    prot_redirect_cond, prot_redirect_target, recipe_redirect_cond, recipe_redirect_hold,
+    recipe_redirect_target, set_rpl_redirect, div_redirect_cond, div_redirect_target,
+    gate_redirect_cond);
+assign exec_redirect_x0 = exec_redirect_of(1'b0, reljump_cond, uc_aluop, reljump_target,
+    vm, pe, cpl_nonzero, prot_redirect_prev, uc_ljump_target, return_target,
+    prot_redirect_cond, prot_redirect_target, recipe_redirect_cond, recipe_redirect_hold,
+    recipe_redirect_target, set_rpl_redirect, div_redirect_cond, div_redirect_target,
+    gate_redirect_cond);
+assign exec_redirect = uc_exec ? exec_redirect_x1 : exec_redirect_x0;
 
 wire rom_addr_ce = rom_base_ce;
 assign rom_q_ce = rom_base_ce && !q_hold;
 
+// synthesis translate_off
+// The pre-split EX redirect (the valid inputs, each uc_exec && its condition),
+// and the premises that make the cofactored form equal to it.
+seq_redirect_t exec_redirect_reference;
 always_comb begin
-    exec_redirect = '0;
+    exec_redirect_reference = '0;
 
     if (uc_exec) begin
         if (reljump_taken) begin
-            exec_redirect.valid = 1'b1;
-            exec_redirect.target = uc_addr + 12'd1 +
+            exec_redirect_reference.valid = 1'b1;
+            exec_redirect_reference.target = uc_addr + 12'd1 +
                                    {{6{uc_alu_src[5]}}, uc_alu_src};
         end
 
         case (uc_aluop)
             ALUJMP_LJMP86: if (vm) begin
-                exec_redirect.valid = 1'b1;
-                exec_redirect.target = uc_ljump_target;
+                exec_redirect_reference.valid = 1'b1;
+                exec_redirect_reference.target = uc_ljump_target;
             end
             ALUJMP_LJMPP: if (pe && !vm) begin
-                exec_redirect.valid = 1'b1;
-                exec_redirect.target = uc_ljump_target;
+                exec_redirect_reference.valid = 1'b1;
+                exec_redirect_reference.target = uc_ljump_target;
             end
             ALUJMP_LJMPNP: if (pe && cpl_nonzero) begin
-                exec_redirect.valid = 1'b1;
-                exec_redirect.target = uc_ljump_target;
+                exec_redirect_reference.valid = 1'b1;
+                exec_redirect_reference.target = uc_ljump_target;
             end
             ALUJMP_LCALL: begin
-                exec_redirect.valid = 1'b1;
-                exec_redirect.target = uc_ljump_target;
+                exec_redirect_reference.valid = 1'b1;
+                exec_redirect_reference.target = uc_ljump_target;
             end
             ALUJMP_LJUMP: if (!prot_redirect_prev) begin
-                exec_redirect.valid = 1'b1;
-                exec_redirect.target = uc_ljump_target;
+                exec_redirect_reference.valid = 1'b1;
+                exec_redirect_reference.target = uc_ljump_target;
             end
             ALUJMP_RETURN: begin
-                exec_redirect.valid = 1'b1;
-                exec_redirect.target = return_target;
+                exec_redirect_reference.valid = 1'b1;
+                exec_redirect_reference.target = return_target;
             end
             default: ;
         endcase
 
         if (prot_redirect_valid) begin
-            exec_redirect.valid = 1'b1;
-            exec_redirect.target = prot_redirect_target;
+            exec_redirect_reference.valid = 1'b1;
+            exec_redirect_reference.target = prot_redirect_target;
         end
         if (recipe_redirect_valid) begin
-            exec_redirect.valid = 1'b1;
-            exec_redirect.target = recipe_redirect_target;
+            exec_redirect_reference.valid = 1'b1;
+            exec_redirect_reference.target = recipe_redirect_target;
         end
         if (set_rpl_redirect) begin
-            exec_redirect.valid = 1'b1;
-            exec_redirect.target = UADDR_MORE_PRIVILEGE;
+            exec_redirect_reference.valid = 1'b1;
+            exec_redirect_reference.target = UADDR_MORE_PRIVILEGE;
         end
         if (div_redirect_valid) begin
-            exec_redirect.valid = 1'b1;
-            exec_redirect.target = div_redirect_target;
+            exec_redirect_reference.valid = 1'b1;
+            exec_redirect_reference.target = div_redirect_target;
         end
         if (gate_redirect) begin
-            exec_redirect.valid = 1'b1;
-            exec_redirect.target = UADDR_CALL_GATE_386;
+            exec_redirect_reference.valid = 1'b1;
+            exec_redirect_reference.target = UADDR_CALL_GATE_386;
         end
     end
-
-    // Recipe rejection may be registered after its speculative overlay word
-    // has executed. It owns no architectural micro-op in that cycle, so let
-    // it redirect the ROM while uc_exec remains suppressed. This keeps the
-    // VIPT/TLB result out of the same-cycle ROM-address cone.
     if (recipe_redirect_valid && !uc_exec) begin
-        exec_redirect.valid = 1'b1;
-        exec_redirect.target = recipe_redirect_target;
+        exec_redirect_reference.valid = 1'b1;
+        exec_redirect_reference.target = recipe_redirect_target;
     end
 end
+always @(posedge clk)
+    if (reset_n) begin
+        if ((prot_redirect_valid !== (uc_exec && prot_redirect_cond)) ||
+            (recipe_redirect_valid !== ((uc_exec && recipe_redirect_cond) || recipe_redirect_hold)) ||
+            (div_redirect_valid !== (uc_exec && div_redirect_cond)) ||
+            (gate_redirect !== (uc_exec && gate_redirect_cond)))
+            $fatal(1, "microsequencer: a redirect valid is not uc_exec && its condition (prot %b/%b recipe %b/%b/%b div %b/%b gate %b/%b)",
+                   prot_redirect_valid, prot_redirect_cond, recipe_redirect_valid,
+                   recipe_redirect_cond, recipe_redirect_hold, div_redirect_valid,
+                   div_redirect_cond, gate_redirect, gate_redirect_cond);
+        if (exec_redirect !== exec_redirect_reference)
+            $fatal(1, "microsequencer: cofactored exec_redirect %b/%03x != reference %b/%03x",
+                   exec_redirect.valid, exec_redirect.target,
+                   exec_redirect_reference.valid, exec_redirect_reference.target);
+    end
+// synthesis translate_on
 
+// The next port-A address, in priority order (lowest first): hold, the
+// sequential step (seq_advance), an EX redirect, the port-B continuation
+// (pb_slot: an instruction issuing from port B continues at its next word),
+// a fault, the boundary event, reset (uaddr_next_reference below).
+// seq_advance and pb_slot are the D2 issue decision, the latest terms on the
+// ROM address (vipt hit -> d2_ready -> seq_advance and pb_issue -> pb_slot ->
+// rom_addr -> the M10K address register).  They are cofactored out: the three
+// arms below are formed from every other term, and the two late selects pick
+// among them in the last LUT level.  tests/equiv/uaddr_next_cofactor.v proves
+// the form equal to the priority chain for every input (shipped text).
+wire        uaddr_hi_v = !reset_n || boundary_redirect.valid || fault_redirect.valid;
+wire [11:0] uaddr_hi   = uaddr_next_hi(reset_n, boundary_redirect.valid, boundary_redirect.target,
+                                       fault_redirect.target);
+// The hold and step arms are formed for both uc_exec values (exec_redirect_x1
+// / _x0) and uc_exec picks each, so uc_exec meets the address one select
+// before seq_advance / pb_slot (tests/equiv/uaddr_exec_cofactor.v).
+`Z486_KEEP_COMB wire [11:0] uaddr_arm_hold_x1 = uaddr_hi_v ? uaddr_hi :
+                                                exec_redirect_x1.valid ? exec_redirect_x1.target : uaddr;
+`Z486_KEEP_COMB wire [11:0] uaddr_arm_hold_x0 = uaddr_hi_v ? uaddr_hi :
+                                                exec_redirect_x0.valid ? exec_redirect_x0.target : uaddr;
+`Z486_KEEP_COMB wire [11:0] uaddr_arm_step_x1 = uaddr_hi_v ? uaddr_hi :
+                                                exec_redirect_x1.valid ? exec_redirect_x1.target : uaddr + 12'd1;
+`Z486_KEEP_COMB wire [11:0] uaddr_arm_step_x0 = uaddr_hi_v ? uaddr_hi :
+                                                exec_redirect_x0.valid ? exec_redirect_x0.target : uaddr + 12'd1;
+wire [11:0] uaddr_arm_hold = uc_exec ? uaddr_arm_hold_x1 : uaddr_arm_hold_x0;
+wire [11:0] uaddr_arm_step = uc_exec ? uaddr_arm_step_x1 : uaddr_arm_step_x0;
+`Z486_KEEP_COMB wire [11:0] uaddr_arm_pb   = uaddr_hi_v ? uaddr_hi : pb_entry_r + 12'd1;
+assign uaddr_next = uaddr_next_pick(pb_slot, seq_advance,
+                                    uaddr_arm_pb, uaddr_arm_step, uaddr_arm_hold);
+// synthesis translate_off
+logic [11:0] uaddr_next_reference;
 always_comb begin
-    uaddr_next = uaddr;
+    uaddr_next_reference = uaddr;
     if (seq_advance)
-        uaddr_next = uaddr + 12'd1;
+        uaddr_next_reference = uaddr + 12'd1;
     if (exec_redirect.valid)
-        uaddr_next = exec_redirect.target;
-    // An instruction issuing from port B continues at its next word.
+        uaddr_next_reference = exec_redirect.target;
     if (pb_slot)
-        uaddr_next = pb_entry_r + 12'd1;
+        uaddr_next_reference = pb_entry_r + 12'd1;
     if (fault_redirect.valid)
-        uaddr_next = fault_redirect.target;
+        uaddr_next_reference = fault_redirect.target;
     if (boundary_redirect.valid)
-        uaddr_next = boundary_redirect.target;
+        uaddr_next_reference = boundary_redirect.target;
     if (!reset_n)
-        uaddr_next = 12'h000;
+        uaddr_next_reference = 12'h000;
 end
+always @(posedge clk)
+    if (reset_n && (uaddr_next !== uaddr_next_reference))
+        $fatal(1, "microsequencer: cofactored uaddr_next %03x != priority chain %03x",
+               uaddr_next, uaddr_next_reference);
+// synthesis translate_on
 
 wire [11:0] rom_addr = uaddr_next;
 wire [50:0] rom_q;
@@ -258,6 +443,10 @@ ucode_rom microcode_rom_inst (
     .q_ce(rom_q_ce),
     .q_sel_b(pb_slot),
     .q_early(rom_q_early),
+    .q_early_shift2_source(uc_next_shift2_source),
+    .q_early_shift_captures(uc_next_shift_captures),
+    .q_dest_a(uc_next_dest_a),
+    .q_dest_b(uc_next_dest_b),
     .q(rom_q),
     .q_shift_source(uc_source_shift),
     .q_shift_source_class(uc_shift_source_class),

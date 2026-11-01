@@ -4,9 +4,9 @@
 // The three gamma-correction curves are one 256x8 M10K per channel behind the MiSTer gamma_bus: a write to lane R, G or B at an address lands in that channel's table, and a pixel presented on RGB_in comes out of RGB_out through that table (or straight through when gamma_en is low) exactly two ce_pix edges later, value- and cycle-identical to the register-array module it replaced across a fully seeded table, every one of the 256 indices on all three channels, and ce_pix gaps.
 //
 // ---- the oracle is the OLD module, written out again ----
-// r13/67 replaced gamma_fast's three curves with one simple-dual-port RAM per channel:
+// A rewrite replaced gamma_fast's three curves with one simple-dual-port RAM per channel:
 // a write-only port on clk_sys and a separately-registered read port on clk_vid, whose
-// registered output plays the part the old registered look-up did (r13/60's true dual
+// registered output plays the part the old registered look-up did (an earlier true dual
 // port inferred only one of the three, because a dual-clock block RAM cannot carry the
 // read on both of pc9821_dpram's ports). That is a pipeline-latency change unless it is
 // done exactly right, so this bench runs the OLD module's structure as a second
@@ -63,7 +63,7 @@ module tb_pc9821_gamma;
   );
 
   // ==== the OLD module as the oracle ====
-  // The pre-r13/67 gamma_fast: three register arrays, a write case and the
+  // The old gamma_fast: three register arrays, a write case and the
   // registered look-up. This is the behaviour the RAM version must equal.
   wire        gamma_en = gamma_bus[19];
   wire        gamma_wr = gamma_bus[18];

@@ -36,8 +36,7 @@ module tb_pc9821_pegc;
   reg  [31:0] cpu_din = 0;
   reg  [3:0]  cpu_be = 4'hF;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   wire [3:0]  bank_a, bank_b;
   wire        plane_mode, vram_en;
 
@@ -45,9 +44,8 @@ module tb_pc9821_pegc;
       .clk(clk), .reset(reset),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write), .cpu_line_read(cpu_line_read),
       .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
       .bank_a(bank_a), .bank_b(bank_b),
       .plane_mode(plane_mode), .vram_en(vram_en)
   );
@@ -63,7 +61,7 @@ module tb_pc9821_pegc;
   // Accept and response in the same cycle is the z486 hazard the responder
   // contract forbids: assert it on every cycle, not only at the checks.
   always @(posedge clk) begin
-    if (!reset && cpu_ready && (cpu_resp_valid || cpu_line_resp_valid))
+    if (!reset && cpu_ready && cpu_resp_valid)
       $fatal(1, "TB_PC9821_PEGC: accept and response in one cycle");
   end
 
@@ -226,29 +224,31 @@ module tb_pc9821_pegc;
     store_byte(15'h01A0, 8'h99);
     expect_byte(15'h01A0, 8'h00, "0xE01A0 (past the pattern) reads 0x00");
 
-    // ---- 7. the line form is answered, not stalled (no hang for an icache fill) ----
+    // ---- 7. a line read is answered as FOUR word beats, not stalled (no hang for an
+    // ---- icache fill): each beat is the register file's dword, repeated (P3 deleted the
+    // ---- 128-bit `{4{cpu_dout}}` copy; the beats are the word response itself) ----
     @(negedge clk);
     cpu_addr = 15'h0004; cpu_be = 4'hF; cpu_write = 0; cpu_line_read = 1; cpu_valid = 1;
     begin : line_probe
-      integer g;
-      reg seen_ready, seen_resp;
-      seen_ready = 0; seen_resp = 0;
+      integer g, beats;
+      reg seen_ready;
+      seen_ready = 0; beats = 0;
       for (g = 0; g < 40; g = g + 1) begin
         @(negedge clk);
         if (cpu_ready) seen_ready = 1;
-        if (cpu_line_resp_valid) begin
-          seen_resp = 1;
-          if (cpu_line_dout !== {4{32'h0005_CDAB}}) begin
-            $display("FAIL: line read answered %032x, want the dword repeated x4",
-                     cpu_line_dout);
+        if (cpu_resp_valid) begin
+          beats = beats + 1;
+          if (cpu_dout !== 32'h0005_CDAB) begin
+            $display("FAIL: line beat %0d answered %08x, want the dword repeated x4",
+                     beats, cpu_dout);
             errors = errors + 1;
           end
         end
-        if (seen_ready && seen_resp) g = 40;
+        if (seen_ready && beats == 4) g = 40;
         if (g == 0) cpu_valid = 0;
       end
-      if (!seen_ready || !seen_resp) begin
-        $display("FAIL: line read delivered ready=%b resp=%b", seen_ready, seen_resp);
+      if (!seen_ready || beats != 4) begin
+        $display("FAIL: line read delivered ready=%b beats=%0d", seen_ready, beats);
         errors = errors + 1;
       end
     end

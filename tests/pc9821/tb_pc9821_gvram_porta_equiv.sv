@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_PORTA_EQUIV: a CYCLE-EXACT EQUIVALENCE (characterization, not a hardware claim) for the CPU-request -> GVRAM write-enable cone - the fitted lightoc build's worst same-clock family, ext_addr_r -> u_gmem's altsyncram port-A write captures. The array's port-A pins {en, we, be, addr, din} must be bit-identical on EVERY capturing clk_sys edge (and en/we idle-identical every cycle) to a golden computed from the documented semantics in independent arithmetic: the device-alias/window decode transcribed from pc9821_memory_subsystem/pc9821_memory_map, the one-visit walk and G_IDLE/G_RDC/G_RMWC tails of pc9821_gvram_arb, the GRCG capture-cycle presentation of pc9821_grcg (TDW pair bursts incl the both-pairs form, RMW mixed / 0xFF read-skip / 0x00 dead lane / holed datums, TCR read runs) and the EGC unit walk and column write issue of pc9821_egc (WS_CPU word-unit bursts and byte-unit singles, COMPAREREAD runs), with the RMW merge bytes from the golden's own array image. The same stream through the device aliases (the 15-16 MiB mirror, window-0 bias, the PEGC high alias and the EMS-shaded window, whose silence is pinned), posted back-to-back stores with the accept stall, read-after-write same/adjacent words, scanout line ticks during a walk, mid-walk 0x7C/0x7E writes, win0_sel/sys16m_en/ems_state changes between requests, a mid-walk reset and a cpu_run stall (the array is not reset: captures up to the reset edge are kept and pinned, later ones must vanish). The altsyncram has no input-register stage (OUTDATA_REG_A=UNREGISTERED, no INDATA/WRCONTROL/ADDRESS regs), so the block's edge capture IS the port contract this pins.
+// TB_PC9821_GVRAM_PORTA_EQUIV: a CYCLE-EXACT EQUIVALENCE (characterization, not a hardware claim) for the CPU-request -> GVRAM write-enable cone - an 80 MHz fit's worst same-clock family, ext_addr_r -> u_gmem's altsyncram port-A write captures. The array's port-A pins as the array reads them ({en, we, addr} on EVERY capturing clk_sys edge, {be, din} on every capturing write edge) must be bit-identical (and en/we idle-identical every cycle) to a golden computed from the documented semantics in independent arithmetic: the device-alias/window decode transcribed from pc9821_memory_subsystem/pc9821_memory_map, the one-visit walk and G_IDLE/G_RDC/G_RMWC tails of pc9821_gvram_arb, the GRCG capture-cycle presentation of pc9821_grcg (TDW pair bursts incl the both-pairs form, RMW mixed / 0xFF read-skip / 0x00 dead lane / holed datums, TCR read runs) and the EGC unit walk and column write issue of pc9821_egc (WS_CPU word-unit bursts and byte-unit singles, COMPAREREAD runs), with the RMW merge bytes from the golden's own array image. The same stream through the device aliases (the 15-16 MiB mirror, window-0 bias, the PEGC high alias and the EMS-shaded window, whose silence is pinned), posted back-to-back stores with the accept stall, read-after-write same/adjacent words, scanout line ticks during a walk, mid-walk 0x7C/0x7E writes, win0_sel/sys16m_en/ems_state changes between requests, a mid-walk reset and a cpu_run stall (the array is not reset: captures up to the reset edge are kept and pinned, later ones must vanish). The altsyncram has no input-register stage (OUTDATA_REG_A=UNREGISTERED, no INDATA/WRCONTROL/ADDRESS regs), so the block's edge capture IS the port contract this pins.
 //
 // TB_PC9821_GVRAM_PORTA_EQUIV: a CYCLE-EXACT EQUIVALENCE bench for the CPU-request ->
 // GVRAM write-enable cone (the fitted lightoc build's worst same-clock family: the
@@ -40,8 +40,7 @@
 //     never reads the DUT: the RMW merge bytes come from the golden's own image).
 //  [interleave-identity] back-to-back stores with the second presented while the first
 //     walk drains (the accept stall), read-after-write to the same and the adjacent word
-//     (the array is the read-after-write view; the write-combining buffer is gone since
-//     r13/283, so "buffer hit/miss" here means exactly these raw interleavings), scanout
+//     (the array is the read-after-write view; the write-combining buffer is gone, so "buffer hit/miss" here means exactly these raw interleavings), scanout
 //     line ticks during a walk (the port-B share whose forward rides these same pins) and
 //     an access-page change between requests all keep the port stream identical.
 //  [mid-request-config-identity] a `out 0x7C`/`0x7E` (grcg_we) landing while a GRCG RMW
@@ -126,12 +125,11 @@ module tb_pc9821_gvram_porta_equiv;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
@@ -171,6 +169,8 @@ module tb_pc9821_gvram_porta_equiv;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   wire       grcg_expand;
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
 
   reg        scan_enable = 0;
   reg        scan_line_tick = 0;
@@ -201,6 +201,7 @@ module tb_pc9821_gvram_porta_equiv;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -644,8 +645,11 @@ module tb_pc9821_gvram_porta_equiv;
     if (!reset || p_en || p_we) begin
       checks = checks + 1;
       if (ev_i < ev_n && ev_cyc[ev_i] == cyc) begin
-        if (p_en !== 1'b1 || p_we !== ev_we[ev_i] || p_be !== ev_be[ev_i] ||
-            p_addr !== ev_addr[ev_i] || p_din !== ev_din[ev_i]) begin
+        // The byte enables and the datum are compared on a write only: pc9821_gvram_mem reads
+        // them only under a_en && a_we (the arbiter presents them unconditionally since C7-dc;
+        // tools/check_seq_equiv.py's gvram_mem lemma), so a read's are not part of the port.
+        if (p_en !== 1'b1 || p_we !== ev_we[ev_i] || p_addr !== ev_addr[ev_i] ||
+            (ev_we[ev_i] && (p_be !== ev_be[ev_i] || p_din !== ev_din[ev_i]))) begin
           $display("FAIL %0s: porta capture at cyc %0d: got en=%b we=%b be=%h addr=%h din=%h, want en=1 we=%b be=%h addr=%h din=%h",
                    ev_tag[ev_i], cyc, p_en, p_we, p_be, p_addr, p_din,
                    ev_we[ev_i], ev_be[ev_i], ev_addr[ev_i], ev_din[ev_i]);
@@ -1068,9 +1072,12 @@ module tb_pc9821_gvram_porta_equiv;
     cpu_valid = 0;
     cpu_write = 0;
     repeat (1) @(negedge clk);
-    ioctl_download = 1;                 // cpu_run drops; the gvram group resets with it
-    truncate_after(cyc);
+    ioctl_download = 1;
+    // cpu_run is the loader's REGISTER (docs/timing.md, the download gate): it drops one
+    // clk_sys after the download rises, at the loader's edge, and the gvram group resets with it.
+    // So the stall edge is the NEXT interval's: this interval's captures still commit.
     @(negedge clk);
+    truncate_after(cyc);
     @(negedge clk);
     ioctl_download = 0;
     repeat (3) @(negedge clk);
@@ -1079,7 +1086,7 @@ module tb_pc9821_gvram_porta_equiv;
     cov_stall = cov_stall + 1;
 
     // ================= SECTION 9: the analytically-proven corners, now driven =================
-    // The merge review re-proved these four classes bit-exact on paper; each had no
+    // These four classes were proved bit-exact on paper; each had no
     // stimulus, and an un-driven proof is silent forever. Each is now pinned end to end
     // (the golden is the same independent decode/schedule as everywhere else, so a
     // regression in any class is a stream mismatch).

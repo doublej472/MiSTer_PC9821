@@ -2,7 +2,7 @@
 
 // A TWO-REQUESTER guest-memory backend for the GVRAM benches: the same shape
 // sdram_backend_model.sv reproduces from src/memory/sdram.v, but with the two requesters the GVRAM
-// now has (r13/35) - the CPU's D1 accesses and the scanout's line fetch - against ONE store, so a
+// now has - the CPU's D1 accesses and the scanout's line fetch - against ONE store, so a
 // write through the CPU port is visible to a scanout read of the same word.
 //
 // It arbitrates the two ports (a request already in flight owns the store) and reproduces the

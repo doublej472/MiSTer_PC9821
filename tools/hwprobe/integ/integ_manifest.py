@@ -24,7 +24,7 @@ The manifest format is documented in integ.s. A file is checked over its first
 min(size, --max-bytes) bytes, so a 500 MB game file costs a few seconds, not minutes; the
 whole-file CRC in the 'F' row is over exactly those bytes, and INTEG reads exactly that many.
 
-The image is the owner's and is never committed; this tool only reads it.
+The image is the user's and is never committed; this tool only reads it.
     integ_manifest.py --selftest      # round-trips a synthetic volume (mtools if present)
 """
 from __future__ import annotations

@@ -4,8 +4,8 @@
 // TB_PC9821_EGC_MASK_PATTERN:
 // The EGC's mask register and its fgbg colour-quad / pattern selection, driven directly at the pc9821_egc D1 port, against NP2kai's egc_writebyte / egc_writeword: the mask register's byte-lane placement on the addressed lane (full, partial and zero masks merged into the destination byte-by-byte), the fgbg&0x6000 fgc/bgc quads expanded per plane from the fg/bg low nibble, the fgbg-selected pattern register as a colour source, and the srcmask NP2kai's EGCOPE_SHIFTW2 / EGCOPE_SHIFTB apply in each of the four fgbg selections and every ope mode.
 //
-// Sections A-C and F1/F2 pass; D2, E1-E3 and F3 are DEVIATIONS from NP2kai and
-// an earlier review recorded them. This bench therefore
+// Sections A-C and F1/F2 pass; D2, E1-E3 and F3 are DEVIATIONS from NP2kai.
+// This bench therefore
 // FAILs on the current RTL by design.
 //
 // NOTE the scope: the D1 backend is this bench's own behavioural client (one byte per
@@ -196,7 +196,7 @@ module tb_pc9821_egc_mask_pattern;
       cpu_offset = off; cpu_plane = plane; cpu_din = din; cpu_be = be;
       cpu_write = wr; cpu_valid = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // The negedge below is the old release's own wait, kept so the +1 stays in the cadence.

@@ -41,16 +41,6 @@ module pc9821_crtc_ref (
     //       mode2_textshift)       [7] gdc.clock[0]  [8] gdc.clock[1]
     //   [9] analog 256 (GDCANALOG_256)             [10] analog 256E
     output wire [10:0] gdc_ff2_state,
-    // The GRCG's live mode register (pc9821_grcg, through
-    // pc9821_memory_subsystem). The 0x7C guest read no longer answers it: that
-    // port is WRITE-ONLY and its byte read is open bus 0xFF (the machine capture
-    // docs/probes/RDBACK.TXT:152). No other logic in this module consumes the
-    // register either, so this input is DEAD-but-wired: pc9821_system and the
-    // test DUT (pc9821_gdc_text_dut) still drive it, and unpicking that
-    // connection is a wider change than a read-port fix.
-    /* verilator lint_off UNUSEDSIGNAL */   // reason: see above - the port is kept wired, not read
-    input  wire [7:0] grcg_mode_r,
-    /* verilator lint_on UNUSEDSIGNAL */
 
     // TRAM CPU port (memory bridge; 0xA0000-0xA3FFF)
     input  wire [13:0] tram_cpu_addr,
@@ -484,7 +474,7 @@ module pc9821_crtc_ref (
   // unmasked in gdc.palnum (io/gdc.c:841) and gdc_ia8 returns it verbatim (:913-919),
   // so `out 0xA8,0xAB / in 0xA8` reads 0xAB - the register is architecturally 8 bits
   // (the PEGC 256-colour palette indexes through it, gdc.c:854). The old 4-bit
-  // register answered 0x0B (review-cg F1). Who consumes it, exactly as NP2kai splits
+  // register answered 0x0B. Who consumes it, exactly as NP2kai splits
   // it: the DAC takes palnum & 15 (gdc.c:862 gdc_setanalogpal) and the read mirror
   // below takes the MASKED palnum & 15 (the PEGC 256-colour mirror is out of scope).
   reg [7:0] pal_sel;
@@ -493,12 +483,12 @@ module pc9821_crtc_ref (
   // 0xAA/0xAC/0xAE answers the whole byte the guest wrote. NP2kai stores the
   // full byte in gdc.anareg and reads it back verbatim (io/gdc.c:860-953); the
   // old mirror kept only io_din[3:0] and answered 0x0F where the guest wrote
-  // 0xFF (review readbacks.md, the palette row). The PIXEL table still takes the
+  // 0xFF. The PIXEL table still takes the
   // low nibble (pal_wr_data): the 16-colour DAC is 4 bits wide and the visual is
   // right - only the readback shape was wrong. IMMEDIATE semantics like the
   // registers it replaces; one 24-bit output register is its read port.
   // 16 entries, indexed by palnum & 15: the Xe10's own 16-colour analogue palette.
-  // NP2kai's 256-entry anareg[palnum*3+c] mirror (review-cg F7) is the PEGC's
+  // NP2kai's 256-entry anareg[palnum*3+c] mirror is the PEGC's
   // 256-colour palette, which is out of scope here - reverted for area (the 256-entry
   // register array cost ~6 Kbit of logic on a ~99%-full device).
   //
@@ -755,7 +745,7 @@ module pc9821_crtc_ref (
             8'h00: mode2_16color <= io_din[0];
             // num 1: mode2 bit 1. It moves no pixel in any reference, but a guest
             // RMW of 0x6A must round-trip it (NP2kai returns the live gdc.mode2,
-            // io/gdc.c:703; review readbacks.md P6).
+            // io/gdc.c:703).
             8'h01: mode2_ff2b1 <= io_din[0];
             // num 3: the EGC/PEGC register write enable. A real guard, not decoration:
             // the firmware always brackets the bits below with it (master.lib EGC_ON;
@@ -791,7 +781,7 @@ module pc9821_crtc_ref (
         // The six CRTC render registers, stored FIVE bits wide: NP2kai's crtc_o70
         // does `dat &= 0x1f` before storing any of pl/bl/cl/ssl/sur/sdr
         // (io/crtc.c:10-17), so `out 70h,0FFh` reads back 0x1F there and the
-        // sur/sdr/pl fields carry no bits above 4 (review iobus-tram F7).
+        // sur/sdr/pl fields carry no bits above 4.
         5'd6:    crtc_pl  <= io_din & 8'h1F;
         5'd7:    crtc_bl  <= io_din & 8'h1F;
         5'd8:    crtc_cl  <= io_din & 8'h1F;
@@ -823,23 +813,26 @@ module pc9821_crtc_ref (
 
   // vsync, blanking and the data-ready line resampled into clk_sys for status reads. The
   // bit duties are measured on the real machine with a 2M-sample histogram: bit 2 always
-  // set, bit 5 ~2.7% (VSYNC), bit 6 ~37% (the blank interval), bit 0 ~50%. Driving bit 6
+  // set, bit 5 ~2.7% (VSYNC), bit 6 ~23.4% (the horizontal blank, 208/848: docs/probes/TIME.TXT
+  // `high 1.7% of the time and bit6 23.4%`; NP2kai io/gdc.c gdc_i60 `if ((remain % gdc.rasterclock) < gdc.hsyncclock)`
+  // raises it once per LINE, vertical-blank lines included; its phase in the line is unmeasured, todo item 23),
+  // bit 0 ~50%. Driving bit 6
   // from the real blanking and bit 0 from a DOT-rate toggle makes every guest poll end.
   //
   // BIT 0'S RATE: the toggle is clocked by `pixel_ce` - the PIXEL_HZ-derived dot enable - and
   // NOT by clk_sys, because a clk_sys count is not a time (AGENTS.md's rates rule: raising
-  // clk_sys must not move a guest-visible time; audit rtl-audit-video F6). Before this the bit
+  // clk_sys must not move a guest-visible time). Before this the bit
   // toggled every clk_sys, so its period halved at 100 MHz (tb_pc9821_sysclk_invariance pins
   // the fix). THE REAL PERIOD IS UNMEASURED and this choice is not evidence for it: the
   // machine capture measures the DUTY alone (docs/probes/GDC.TXT's 2^21-sample histogram at
   // 0x60 has bit 0 set in exactly half its samples), no reference gives the data-ready rate,
   // and the period a real uPD7220 holds it at is unknown - so the dot rate is a stand-in that
   // is at least profile-invariant and of the right order (the DR line is a display signal).
-    // Reset state (review r2-resets F8): vs_sync_ff/de_ff are the rest of the stat_dr family
+    // Reset state: vs_sync_ff/de_ff are the rest of the stat_dr family
     // and reset to 00/00, so the first two GDC status reads after a reset return the reset
     // raster's BLANK (bit 6 = ~de_ff[1]) / NO-VSYNC (bit 5) values the probe measured instead
     // of X - the ITF polls this port early. stat_dr is the documented self-fed toggle (`stat_dr
-    // <= ~stat_dr`, no reset): its power-up seed (gdc review F14) resolves the X-lock its
+    // <= ~stat_dr`, no reset): its power-up seed resolves the X-lock its
     // inversion would otherwise lock in 4-state sim, and it free-runs from there (bit 0 is
     // ~50 % either way). The two resample chains sample live inputs and self-correct in two clocks.
     /* verilator lint_off PROCASSINIT */   // the initialisers are the registers' power-up values
@@ -854,7 +847,7 @@ module pc9821_crtc_ref (
     end else begin
       vs_sync_ff[0] <= in_vsync;
       vs_sync_ff[1] <= vs_sync_ff[0];
-      de_ff[0] <= de_out;
+      de_ff[0] <= h_active;   // bit 6 is the per-line horizontal blank (see above)
       de_ff[1] <= de_ff[0];
     end
     if (pixel_ce) stat_dr <= ~stat_dr;   // the DOT rate, so clk_sys cannot move it (see above)
@@ -1096,8 +1089,8 @@ module pc9821_crtc_ref (
     else if (pixel_ce) f_wrap_r <= (vline == VACTIVE - 10'd1);
   end
   /* verilator lint_off UNUSEDSIGNAL */   // f_line[9] has no reader: the fetch splits it into
-  // the char row [8:4] and the font raster row [3:0]. KNOWN LIMITATION (audit rtl-audit-video
-  // F4, NOT fixed here): VACTIVE is min(lf, VTOTAL - 1) and VTOTAL is clamped to 575 lines, so a
+  // the char row [8:4] and the font raster row [3:0]. KNOWN LIMITATION
+  // (NOT fixed here): VACTIVE is min(lf, VTOTAL - 1) and VTOTAL is clamped to 575 lines, so a
   // guest SYNC block can make 574 lines active - text rows 0..35, not the default block's 0..24.
   // f_row (5 bits) then TRUNCATES rows 32..35 onto rows 0..3, so a >512-line frame fetches the
   // wrong TRAM row (pc9821_cg.sv's walker row is 5 bits too). The bank rule (row==0) ? 2 :
@@ -1188,7 +1181,7 @@ module pc9821_crtc_ref (
   // draws from the block at (kc & 0x7f7f) << 4. The kanji pair consumes two cells (below);
   // the ver0.78 rows draw the slot's LEFT half ALONE in one cell (`kanji2nd` stays clear
   // for kc 0x09-0x0B, maketext.c:292-294) - the half-width glyphs of the NEC extension
-  // rows, which this module drew as NOTHING (review-cg F6).
+  // rows, which this module drew as NOTHING.
   wire        f_jis      = f_two_byte && !f_gaiji && !f_ver078;   // the PAIR-consuming class
   wire        f_jis_any  = f_two_byte && !f_gaiji;   // ...plus the ver0.78 singles
   // The gaiji half is POSITIONAL, not code bit 7: on the Xe10, KTDEMO's lone [0xD6,'A'] then
@@ -1213,7 +1206,7 @@ module pc9821_crtc_ref (
   // Without it, a kanji code in a line's last cell made the next line's column 0 draw that
   // glyph's RIGHT half - the wrong glyph, at a cell the machine draws as a fresh character.
   wire        f_pair2nd = f_jis2nd && !last_cell;
-  // The gaiji twin of the mask above (review F4): last_cell's fetch is the next
+  // The gaiji twin of the mask above: last_cell's fetch is the next
   // line's column 0 and NP2kai resets gaiji1st per line (maketext.c:238,
   // declared inside the line loop), so a carried positional half must not
   // survive the line wrap either - the wrap cell is a fresh LEFT half and its
@@ -1313,7 +1306,7 @@ module pc9821_crtc_ref (
   reg [ 7:0] r_font;
   reg        r_jis_ok;     // the rendered cell is a JIS kanji whose glyph is in the store
   reg        r_jis_2nd;    // the rendered cell is a kanji pair's RIGHT half
-  reg        r_gaiji_2nd;  // ...or a same-code gaiji pair's RIGHT half (review F5)
+  reg        r_gaiji_2nd;  // ...or a same-code gaiji pair's RIGHT half
   // The previous fetched cell's class and code: the pair-coherence test for
   // r_gaiji_2nd below (NP2kai maketext.c:274-277 propagates the cursor across a
   // gaiji pair only when the two cells carry the same code).
@@ -1396,7 +1389,7 @@ module pc9821_crtc_ref (
   // The row-cache cells draw from the cache exactly as the ANK do; r_jis_ok is false for
   // a row the grid does not hold (ku above 0x7C), which keeps those cells blank rather
   // than showing a wrapped address's glyph. It covers the kanji left cells, the ver0.78
-  // half-width rows (review-cg F6, maketext.c:280-296), and the pair's right cell, whose
+  // half-width rows (maketext.c:280-296), and the pair's right cell, whose
   // own code is ignored (maketext.c:254 `if (kanji2nd)` comes first). That right cell
   // carries no code of its own on the machine (the ITF's TEXTDISP.X86 leaves it at the
   // cleared 0x0020, and NP2kai/QEMU ignore it), so it usually arrives here as the ANK
@@ -1437,7 +1430,7 @@ module pc9821_crtc_ref (
   // The CHARACTER BLINK's count is frame_cnt[5:4] (the duty test below), so this register is
   // stepped by 16: bits [5:4] run 0,1,2,3 and wrap, which IS NP2kai's `count & 3`. Advancing it
   // once per cur_timing frames is what the old every-frame step was missing - it blinked 16 of
-  // every 64 frames regardless of the CSRFORM field (audit rtl-audit-video F1).
+  // every 64 frames regardless of the CSRFORM field.
   reg  [5:0] frame_cnt;
   always @(posedge clk_sys)
     if (!rst_n_sys) begin
@@ -1475,7 +1468,7 @@ module pc9821_crtc_ref (
   // NP2kai propagates the cursor to the pair's right cell: the left cell flags 0x80 and
   // maketext then sets bit 8 on cell+1 (vram/maketext.c:337). That mark is on the left cell
   // of ANY 16-dot pair - kanji (maketext.c:258) and gaiji with matching code
-  // (maketext.c:274-277) - so both r_jis_2nd and r_gaiji_2nd (review F5) count.
+  // (maketext.c:274-277) - so both r_jis_2nd and r_gaiji_2nd count.
   wire [11:0] csr_prev = r_wordidx[11:0] - (v_col40 ? 12'd2 : 12'd1);
   wire        csr_pair = csr_enable && csr_blink && (r_jis_2nd || r_gaiji_2nd) &&
                          ({4'b0, csr_prev} == csr_word) && csr_row_ok;
@@ -1499,8 +1492,8 @@ module pc9821_crtc_ref (
   // `color[cur_line] |= 256` regardless of TXTATR_ST and blinkdisp, and
   // text_table[256+m] = text_table[m ^ 0x80] is a reverse toggle), so the cursor
   // is a solid inverted block on an invisible or blink-blanked cell (blank
-  // inverted = solid) and stays visible through the blink phases (reviews F2,
-  // F3). The line overlays run outside all of it.
+  // inverted = solid) and stays visible through the blink phases.
+  // The line overlays run outside all of it.
   wire glyph_data = glyph_on && r_attr[0] && !blink_off;
   wire pix_on = (glyph_data ^ reverse ^ csr_here) || ul_on || vl_on;
 
@@ -1637,7 +1630,7 @@ module pc9821_crtc_ref (
     pal256_r_q <= pal256_r[pal_sel];
     pal256_b_q <= pal256_b[pal_sel];
   end
-  // POWER-UP DETERMINISM FOR THE READ MIRROR (gdc review F14). The three lane RAMs are
+  // POWER-UP DETERMINISM FOR THE READ MIRROR. The three lane RAMs are
   // written only by guest I/O, so with no seed a 4-state simulation answers X on the
   // 0xAA/0xAC/0xAE reads forever. The seed is the same NEC 16-colour
   // power-on table (itf.rom 0x042F, {R,G,B}) that pc9821_gfx_palette's `pal_power_on` starts
@@ -1677,7 +1670,7 @@ module pc9821_crtc_ref (
       // One FULL BYTE per lane (green, red, blue), zero-extending the RGB444 power-on
       // value exactly as the single 24-bit array's implicit assignment always did
       // (deliberate no-behaviour-change lint fix); the seed's purpose is only that the
-      // read-back is never X (gdc review F14). {12'h0, po} was byte [7:0] = po[7:0],
+      // read-back is never X. {12'h0, po} was byte [7:0] = po[7:0],
       // byte [15:8] = {4'h0, po[11:8]}, byte [23:16] = 8'h00, split here byte for byte.
       pal_g[pal_i] = po[7:0];
       // `po` is 12 bits wide, so po[15:8] is illegal (Quartus 10232, Verilator
@@ -1757,7 +1750,7 @@ module pc9821_crtc_ref (
       5'd10: io_dout_r = crtc_sur;
       5'd11: io_dout_r = crtc_sdr;
       // 0x7C's BYTE READ IS OPEN BUS 0xFF: the port is WRITE-ONLY, and the machine
-      // outranks NP2kai's live grcg.modereg (io/crtc.c:46-50, review iobus-tram F2).
+      // outranks NP2kai's live grcg.modereg (io/crtc.c:46-50).
       // probes/RDBACK.TXT:152 wrote a byte a live register could not miss and read open
       // bus anyway: `port=007C before=FF wrote=5A after=FF back=FF`. That also refutes
       // this arm's earlier reading of one as-found byte ("the write-only model also gives
@@ -1772,11 +1765,11 @@ module pc9821_crtc_ref (
       // bit 1 included (P6: the FF2 num-1 latch round-trips).
       5'd4:  io_dout_r = {4'b0000, mode2_wren, mode2_egc, mode2_ff2b1, mode2_16color};
       // NP2kai gdc_ia8 returns gdc.palnum VERBATIM in analogue modes (io/gdc.c:913-919):
-      // out 0xA8,0xAB / in 0xA8 reads 0xAB, not 0x0B (review-cg F1). The ANALOGUE path is
+      // out 0xA8,0xAB / in 0xA8 reads 0xAB, not 0x0B. The ANALOGUE path is
       // untouched: the machine capture that settles the DIGITAL path below ran in
       // DIGITAL mode (probes/RDBACK.TXT:147 mode bytes FF1/FF2 = 18/00).
       // The DIGITAL bytes read back MASKED with 0x77 (bits 0-2 + 4-6; bit 3 undefined,
-      // bit 7 unused): probes/RDBACK.TXT:148-151 `00A8 wrote=AB after=23`,
+      // bit 7 unused): probes/RDBACK.TXT:148-151 `port=00A8 before=37 wrote=AB after=23`,
       // `00AA/AC/AE wrote=FF after=77`. Both software models answer the raw byte
       // (NP2kai gdc_ia8/iaa/iac/iae, io/gdc.c:913-954), so the capture is the sole source.
       // The mask is applied at the READ PORT only: the capture proves the read, and the

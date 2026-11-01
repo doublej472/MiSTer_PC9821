@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// pc9821_fdc's Phase-1 data path against NP2kai io/fdc.c: with media mounted, READ DATA (0x02/0x06/0x0C and their MF variants) takes its eight parameters, walks R..EOT, and is ended either by the DMA engine's TERMINAL COUNT (which NP2kai forces R=1 into the result for, with C unchanged) or by EOT (which advances C), always answering the seven-byte result {ST0,ST1,ST2,C,H,R,N}; with MT the head flips and the other side of the SAME cylinder is read before C advances; a missing sector answers ST0 IC0 with ST1 ND; a write against this read-only medium answers IC0 with ST1 NW; READ ID reports the crcn-th header of the track with C from the track register and R/N from the header; the MSR carries RQM|DIO|CB with the drive-busy bit and NDM through the transfer and returns to idle at the result drain; and a drive with NO media keeps the probe subset's deferred answer, which is why media_present is part of the contract. The DMA model strobes one byte per DRQ with TC coincident with the final strobe, exactly pc9821_dmac's S_DEV. A non-DMA (ND) READ DATA read by polling MSR delivers exactly the medium's bytes even when each sector's bytes arrive after a fetch delay: RQM is shown only while a byte is there (NP2kai fdc_dataread drops RQM between sectors).
+// pc9821_fdc's Phase-1 data path against NP2kai io/fdc.c: with media mounted, READ DATA (0x02/0x06/0x0C and their MF variants) takes its eight parameters, walks R..EOT, and is ended either by the DMA engine's TERMINAL COUNT (which NP2kai forces R=1 into the result for, with C unchanged) or by EOT (which advances C), always answering the seven-byte result {ST0,ST1,ST2,C,H,R,N}; with MT the head flips and the other side of the SAME cylinder is read before C advances; a missing sector answers ST0 IC0 with ST1 ND; a write against this read-only medium answers IC0 with ST1 NW; READ ID reports the crcn-th header of the track with C from the track register and R/N from the header; the MSR carries RQM|DIO|CB with the drive-busy bit and NDM through the transfer and returns to idle at the result drain; and a drive with NO media keeps the probe subset's deferred answer, which is why media_present is part of the contract. The DMA model strobes one byte per DRQ with TC coincident with the final strobe, exactly pc9821_dmac's S_DEV. A non-DMA (ND) READ DATA read by polling MSR delivers exactly the medium's bytes even when each sector's bytes arrive after a fetch delay: RQM is shown only while a byte is there (NP2kai fdc_dataread drops RQM between sectors). While RQM is dropped between a PIO read's bytes the MSR keeps CB beside DIO (0x50, never DIO alone: NP2kai fdc_dataread clears only RQM and NDM).
 //
 // pc9821_fdc's Phase-1 DATA PATH against NP2kai io/fdc.c, driven through the real ports
 // with a media that answers the sector seam and a DMA engine that answers the device
@@ -72,7 +72,7 @@ module tb_pc9821_fdc_read;
       // No media-change tag: this bench's mounts are not ready changes (pc9821_fdc's media_chg).
       .media_chg(4'd0), .frame_tick(1'b0),
       .media_req(media_req), .media_req_hdr(media_req_hdr), .media_unit(media_unit),
-      .media_c(media_c), .media_h(media_h), .media_r(media_r), .media_n(media_n),
+      .media_c(media_c), .media_h(media_h), .media_tc(), .media_hd(), .media_mf(), .media_2hd(), .media_rpm(), .media_r(media_r), .media_n(media_n),
       .media_idx(media_idx),
       .media_ready(media_ready), .media_rdy(media_rdy), .media_hdrv(media_hdrv),
       .media_err(media_err), .media_dout(media_dout),
@@ -185,7 +185,7 @@ module tb_pc9821_fdc_read;
   integer fails = 0;
   integer i, n;
   initial begin
-    #40_000_000;
+    #1_000_000_000;
     $fatal(1, "TB_PC9821_FDC_READ: watchdog timeout (no verdict reached)");
   end
 
@@ -254,6 +254,10 @@ module tb_pc9821_fdc_read;
     end
   endtask
 
+  // A missing sector ends at the controller's second index pulse, up to two revolutions of the
+  // slowest spindle (300 rpm) after the command: 2/5 s of the instance's SYS_CLOCK_HZ (the
+  // module default, 50 MHz), plus slack (pc9821_fdc X_NDW; tb_pc9821_fdc_nd_search pins it).
+  localparam integer ND_WAIT = 2 * (50_000_000 / 5) + 100_000;
   task automatic wait_irq(input integer maxc);
     begin
       n = 0;
@@ -394,7 +398,7 @@ module tb_pc9821_fdc_read;
     miss_en = 1;
     arm_dma(4096);
     read_cmd(8'h06, 8'h00, 8'h00, 8'h00, 8'h01, 8'h03, 8'h08);
-    wait_irq(4000);
+    wait_irq(ND_WAIT);
     get_result;
     expecti(g_rlen, 7, "T5 result length");
     expect8(g_rs[0], 8'h40, "T5 ST0 = IC0 (readsector :417-427)");
@@ -542,15 +546,21 @@ module tb_pc9821_fdc_read;
     // fetch delay, the reader must still collect EXACTLY the 2048 medium bytes - no 0x80 idle
     // byte or stale data byte inserted while a sector is being located.
     begin
-      integer got, polls;
+      integer got, polls, npoll_bad;
       reg [7:0] m, b;
       wr8(3'd1, 8'h03); wr8(3'd1, 8'hDF); wr8(3'd1, 8'h03);   // SPECIFY, ND = 1
       rdy_delay = 40;
       dm_n = 0;
       read_cmd(8'h06, 8'h00, 8'h00, 8'h00, 8'h01, 8'h03, 8'h02);
-      got = 0; polls = 0;
+      got = 0; polls = 0; npoll_bad = 0;
       begin rd8(3'd0); m = rd_val; end
       while (polls < 200000 && !(((m & 8'hC0) == 8'hC0) && ((m & 8'h20) == 0))) begin
+        // RQM dropped while the next byte is fetched: NP2kai's `status &= ~(RQM | NDM)`
+        // (io/fdc.c fdc_dataread) clears only those two bits, so a drive that is still reading
+        // keeps CB (0x10) alongside DIO (0x40): MSR 0x50, never DIO alone.
+        if (((m & 8'h80) == 0) && ((m & 8'h40) != 0) && (m & 8'h10) == 0) begin
+          npoll_bad = npoll_bad + 1;
+        end
         if (((m & 8'hC0) == 8'hC0) && ((m & 8'h20) != 0)) begin
           begin rd8(3'd1); b = rd_val; end
           if (got < 4096) dm_bytes[got] = b;
@@ -559,6 +569,7 @@ module tb_pc9821_fdc_read;
         begin rd8(3'd0); m = rd_val; end
         polls = polls + 1;
       end
+      expecti(npoll_bad, 0, "T13 MSR with RQM dropped mid-transfer keeps CB beside DIO (0x50)");
       expecti(got, 2048, "T13 a PIO reader polling RQM collects exactly the two sectors' bytes");
       if (got == 2048) begin
         check_sector(0, 8'h01);

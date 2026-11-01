@@ -11,27 +11,30 @@ A hand-written C(n,2) list is exactly the kind of thing that loses one, and losi
 invisible: the check still exists, the gate still passes, and it simply cannot see the one
 event it was written for.
 
-That has already happened here. The WORD form of the response check named all ten pairs;
-the LINE form named nine, missing `gvram && map`. Nothing in the tree could see the
+That has already happened here. The word form of the response check named all ten pairs;
+the line form named nine, missing `gvram && map`. Nothing in the tree could see the
 omission, because a missing term in a disjunction is not a failure - it is a smaller
-disjunction.
+disjunction. (The line form itself is gone as of P3: a cache-line fill is four word beats
+answered on the routes' own `<route>_cpu_resp_valid`, so there is one response vocabulary
+and this check holds the two lists it still has - accept and word response.)
 
 TWO VOCABULARIES, because the merge of pc9821_tram_bridge and pc9821_cg_window into
 pc9821_window_responder changed what a "route" is at each level:
 
   RESPONDERS - the modules that can ANSWER one request. Their signals are
-    <route>_cpu_ready / _cpu_resp_valid / _cpu_line_resp_valid. The TRAM bridge and the CG
-    byte window are ONE responder now (they were the same eight-state byte walk, and the
-    route select guarantees they are never in flight together), so this is FOUR routes:
-    win/open/gvram/map, C(4,2) = 6 pairs. Their lists are the accept, respond and
-    respond-line checks.
+    <route>_cpu_ready / _cpu_resp_valid (a line read's beats are the word responses, so
+    there is no separate line signal). The TRAM bridge and the CG byte window are ONE
+    responder now (the same byte walk, and the route select guarantees they are never in
+    flight together), and the PEGC register file is a route of its own, so this is FIVE
+    routes: win/open/gvram/peg/map, C(5,2) = 10 pairs. Their lists are the accept and
+    respond checks.
 
-  ADDRESS ROUTES - the one-hot select side of the memory map. Still FIVE routes, and their
-    pair contract is still C(5,2) = 10: the route-overlap check names the six pairs among
-    tram/cg_win/open/gvram, and the map-under-another-owner check names map against each of
-    them. This half is NOT optional after the merge - sharing one responder gives the two
-    windows a NEW way to be wrong, an address that selects both would hand one engine two
-    routes - so the tool checks it too rather than quietly dropping to four routes.
+  ADDRESS ROUTES - the one-hot select side of the memory map. SIX routes, so the pair
+    contract is C(6,2) = 15: the route-overlap check names the pairs among
+    tram/cg_win/open/gvram/peg_reg, and the map-under-another-owner check names map against
+    each of them. This half is NOT optional after the merge - sharing one responder gives the
+    two windows a NEW way to be wrong, an address that selects both would hand one engine two
+    routes - so the tool checks it too rather than quietly dropping a route.
 
 Both vocabularies are named by their SIGNAL name per route rather than by a suffix
 convention, so a rename is a failure here instead of a silently smaller count.
@@ -60,7 +63,9 @@ SRC = ROOT / "src/pc9821/core/pc9821_memory_subsystem.sv"
 # bridge and the CG window share the `win` prefix because they are one responder; the PEGC
 # register file's route is `peg` (pc9821_pegc).
 RESP_ROUTES = ["win", "open", "gvram", "peg", "map"]
-RESP_SUFFIXES = ["_cpu_ready", "_cpu_resp_valid", "_cpu_line_resp_valid"]
+# A route's line response is its word response now (P3 deleted the 128-bit line form), so
+# there are two lists per route, not three.
+RESP_SUFFIXES = ["_cpu_ready", "_cpu_resp_valid"]
 
 # The six ADDRESS routes, as the signal each is named by in its own pair lists. `map` is the
 # mapper's live request (its select is the complement, so it has no `<route>_select`).

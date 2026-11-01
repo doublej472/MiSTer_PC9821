@@ -32,14 +32,13 @@
 //     resp_valid per 32-bit read word, then burst_done for the whole burst.
 //     [source: sdram.v's port comments]
 //
-//  4. A PARTIAL-BYTE WRITE PRESERVES THE OTHER BYTES. With HAS_DQM=0 -- the DE10
-//     configuration, since MiSTer SDRAM modules have no DQM pins -- the controller has
-//     no way to mask a write at the chip, so it must read the original word and merge
+//  4. A PARTIAL-BYTE WRITE PRESERVES THE OTHER BYTES. With ADQM=0 (the default) the
+//     controller does not mask a write at the chip, so it must read the original word and merge
 //     locally. That is the RMW_READ state, and it is invisible to any consumer unless
 //     it is wrong. A full-word write followed by a one-byte write and a read-back is
 //     the end-to-end test of it.
 //     [source: sdram.v's RMW_READ comment "Boards without DQM must read the original
-//      dword and merge bytes locally", and z486_mister.sv's HAS_DQM(1'b0)]
+//      dword and merge bytes locally"]
 //
 //  5. THE GEOMETRY DECODE MOVES THE BANK BITS. The RTL selects the bank from
 //     addr[25:24] for a 128 MB module and addr[24:23] otherwise, and asserts a second
@@ -60,7 +59,7 @@ module tb_pc9821_sdram;
   localparam integer T_RCD = 1;                     // ns_to_cycles(18) at 50 MHz = 1
   localparam integer CAS   = 2;                     // CAS_I = 2 below 100 MHz
   // ns_to_cycles(60) at 50 MHz = 3. This was 4, taken from the FREQ<=75MHz shortcut T_RC
-  // used to have; the shortcut under-counted tRC/tWR above 66.7MHz (review F6) and is gone
+  // used to have; the shortcut under-counted tRC/tWR above 66.7MHz and is gone
   // from sdram.v, so the derived ceiling is what the controller emits and what this monitor
   // must assert against.
   localparam integer T_RC  = 3;
@@ -69,7 +68,7 @@ module tb_pc9821_sdram;
   // check the refresh path never had -- the fix under test (a counter margin for the two-cycle
   // gate plus one in-flight transaction) is what makes the interval <= TREFI_CYCLES.
   localparam integer TREFI_CYCLES = (FREQ/1000) * 64 / 8192;   // 390
-  // The chip model's own AutoRefresh interval check (review F3's regression net). tREFI is 390
+  // The chip model's own AutoRefresh interval check (the dropped-refresh regression net). tREFI is 390
   // cycles here; the drop defect (a pending refresh lost at the free-running counter's wrap)
   // leaves a ~865-cycle gap, while a refresh DELIBERATELY blocked across the wrap (check G2)
   // legitimately lands up to ~540 cycles after its predecessor. 700 separates the two.
@@ -89,7 +88,7 @@ module tb_pc9821_sdram;
   reg  [3:0]  be0 = 4'hF, be1 = 4'hF;
   reg  [3:0]  burst_cnt0 = 4'd1, burst_cnt1 = 4'd1;
   reg  [1:0]  sdram_size = 2'd2;                    // 2 = 64MB (the DE10 default shape)
-  reg         refresh_allowed = 1'b1;               // dropped by check G2 (review F3)
+  reg         refresh_allowed = 1'b1;               // dropped by check G2
   wire        busy;
 
   wire [15:0] DQ;
@@ -99,12 +98,10 @@ module tb_pc9821_sdram;
   wire        nWE, nRAS, nCAS, nCS;
   wire        CKE;
 
-  // HAS_DQM = 1'b0 is the DE10 configuration (z486_mister.sv), because MiSTer SDRAM
-  // modules have no DQM pins -- which is why the controller must do read-modify-write
-  // for a partial byte write instead of masking at the chip.
+  // ADQM = 0 (the default): the controller does a read-modify-write for a partial byte
+  // write instead of masking it at the chip.
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .FAST_GRADE(1'b1)
   ) dut (
       .clk(clk), .resetn(resetn), .nce(1'b0), .refresh_allowed(refresh_allowed),
@@ -125,11 +122,12 @@ module tb_pc9821_sdram;
       .SDRAM_CKE(CKE)
   );
 
-  // The model checks tRP and the AutoRefresh interval for real (review F11's gap, now closed):
+  // The model checks tRP and the AutoRefresh interval for real:
   // an ACT into a bank still precharging $fatals, and an AutoRefresh gap over REFRESH_INTERVAL
   // $fatals. T_RP/T_WR are the controller's derived values for this config (50 MHz, FAST_GRADE
   // = 1: ns_to_cycles(18) = 1 and ns_to_cycles(12) = 1), sourced from the JEDEC minima.
-  sdram_chip_model #(.CAS(CAS), .T_RP(1), .T_WR(1), .REFRESH_INTERVAL(REFRESH_GAP_MAX)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(1), .T_WR(1), .REFRESH_INTERVAL(REFRESH_GAP_MAX),
+                   .FREQ_HZ(FREQ), .GRADE(6)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
@@ -446,8 +444,8 @@ module tb_pc9821_sdram;
     repeat (20) @(posedge clk);
 
     // ---- Check D: the DQM-less partial write preserves the other bytes ----
-    // HAS_DQM=0 (the DE10 configuration) means a partial write cannot be masked at the
-    // chip, so the controller must read the original word and merge locally. Straight
+    // With ADQM=0 a partial write is not masked at the chip, so the controller must read
+    // the original word and merge locally. Straight
     // through sdram.v's RMW_READ path, and invisible to a consumer unless it is wrong.
     do_write(0, 27'h002000, 32'h1122_3344, 4'hF);
     do_write(0, 27'h002000, 32'h0000_00AA, 4'h1);
@@ -502,7 +500,7 @@ module tb_pc9821_sdram;
     end
     repeat (20) @(posedge clk);
 
-    // ---- Check E2: the two-word write belongs to PORT 0 (audit M2) ----
+    // ---- Check E2: the two-word write belongs to PORT 0 ----
     // The controller's opt-in pair (burst_cnt == 2) takes its second payload word from PORT 0's
     // `din0_hi`, and no other requester has such an input: the port comments and the header both
     // say "port 0's two-word pair". Every other count - and every other port - means ONE word per
@@ -577,7 +575,7 @@ module tb_pc9821_sdram;
     // Bit 10 is the sharp one: it is the column MSB at 64MB and a ROW bit at 32MB, and the
     // 32MB column expression {1'b0, req_addr[9:2]} discards it - so if the two branches
     // were ever crossed, this is the bit that would alias.
-    // [source: sdram.v:388-405, the three per-size assignments]
+    // [source: sdram.v:1418-1421, `col0 = req_large_buf ? addr_buf[10:2] : {1'b0, addr_buf[9:2]};`]
     //
     // NOT tested, and why: addr[26], the 128MB chip select. The chip model decides what to
     // do from nCS alone (`wire cmd = nCS ? CMD_NOP : ...`), so it treats the second chip as
@@ -635,7 +633,7 @@ module tb_pc9821_sdram;
                  refresh_cmds - seen, trefi_worst, TREFI_CYCLES);
     end
 
-    // ---- Check G2: a BLOCKED refresh is DEFERRED, not DROPPED (review F3) ----
+    // ---- Check G2: a BLOCKED refresh is DEFERRED, not DROPPED ----
     // need_refresh used to clear whenever the free-running refresh counter wrapped through 0
     // (W = clog2(REFRESH_CYCLES+1) = 9 bits here: the request sets at 350 and the wrap-clear
     // landed 162 cycles later at 512), so a service blocked by !refresh_allowed across that
@@ -672,7 +670,7 @@ module tb_pc9821_sdram;
           @(posedge clk); waitc = waitc + 1;
         end
         if (refresh_cmds == anchor) begin
-          fail("NO refresh after a blocked window -- the pending refresh was dropped (review F3)");
+          fail("NO refresh after a blocked window -- the pending refresh was dropped");
           trefi_check_en = 1'b1;
         end else if ((cyc - release_cyc) > 60) begin
           fail("the blocked refresh was DROPPED, not deferred -- it waited out the counter wrap instead of firing at the release");

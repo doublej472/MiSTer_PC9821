@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GRCG_RMW: the GRCG's stores and tile-compare reads against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, timed per store/read for the four shapes the r13/260/264 audit priced - the RMW footprint erase, the TDW tile clear, the 32-bit forms of both, and the TCR read - and checked BYTE-EXACT so the collapse to one client visit per CPU word cannot pass by writing the wrong bytes: the TDW datum is ignored, the RMW merge is per PLANE BIT ((old & ~d) | (tile & d)) with data 0xF0, 0xFF (the read-skip) and 0x00 (a no-op), a two-column 16-bit and a four-column 32-bit store, the active-low plane mask, a partial-lane byte store, and the TCR read's per-byte ~(OR of (plane ^ tile)).
+// TB_PC9821_GRCG_RMW: the GRCG's stores and tile-compare reads against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, timed per store/read for the four shapes an earlier measurement priced - the RMW footprint erase, the TDW tile clear, the 32-bit forms of both, and the TCR read - and checked BYTE-EXACT so the collapse to one client visit per CPU word cannot pass by writing the wrong bytes: the TDW datum is ignored, the RMW merge is per PLANE BIT ((old & ~d) | (tile & d)) with data 0xF0, 0xFF (the read-skip) and 0x00 (a no-op), a two-column 16-bit and a four-column 32-bit store, the active-low plane mask, a partial-lane byte store, and the TCR read's per-byte ~(OR of (plane ^ tile)).
 
 `default_nettype none
 
@@ -26,8 +26,8 @@ module tb_pc9821_grcg_rmw;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -52,9 +52,9 @@ module tb_pc9821_grcg_rmw;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -72,7 +72,7 @@ module tb_pc9821_grcg_rmw;
   
 
   // ==== BACKEND TRANSACTION COUNTER ====
-  // The GVRAM is block RAM now (r13/283), so there are no backend transactions to count: the
+  // The GVRAM is block RAM now, so there are no backend transactions to count: the
   // counter the report prints stays at zero and the cost columns read as clk_sys/unit alone.
   integer cb_all = 0, cb_wr = 0, cb_rd = 0;
 
@@ -146,7 +146,7 @@ module tb_pc9821_grcg_rmw;
   reg [31:0] dw;
 
   // ======================= TIMING PHASES =======================
-  // 16 rows x 1 word per "sprite"; 40 sprites per phase, the r13/260/264 instrument.
+  // 16 rows x 1 word per "sprite"; 40 sprites per phase.
   localparam integer SPR_ROWS = 16;
   localparam integer N_SPR    = 40;
   localparam integer LINE_COLS = 80;

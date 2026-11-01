@@ -1,13 +1,15 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC block's parameter read-back and mode read-back against NP2kai (review readbacks.md P2/P3/P6 and the palette row): 0x62 pops the text GDC's parameter queue (CSRR 0xE0 answers {CSRW0, CSRW1, CSRW2&3, 0, 0} and LPEN 0xC0 the three never-written LPEN slot bytes 00 00 00, one byte per read, 0xFF when empty), 0xA2 does the same for the graphics GDC instead of returning a second status byte (the machine's own `GDC status 60 A0 A2: 05 04 ff` pins the empty answer at 0xFF) and 0xA0 status bit 0 flags that queue nonempty (read-back data available), 0x6A echoes MODE FF2 bit 1 (the FF2 num-1 latch round-trips instead of reading 0), and the 16-colour palette data ports answer the FULL byte the guest wrote (write 0xFF, read 0xFF - the old nibble shape answered 0x0F), the 0xA8 index register round-trips the FULL byte (`out 0xA8,0xAB / in 0xA8` reads 0xAB, not 0x0B: NP2kai io/gdc.c:841 stores `gdc.palnum = dat` unmasked and :913-919 returns it verbatim), the 16-colour palette read mirror is 16 entries indexed palnum & 15 (the Xe10's 16-colour palette), and the PEGC 256-colour mirror is 256 entries at the UNMASKED 8-bit index with full-byte channels read back verbatim (NP2kai anareg[16*3 + palnum*4 + c], io/gdc.c:852-953; MAME returns 0 in 256-colour mode - the recorded divergence, capture-pending), with the 16-entry mirror unchanged after the mode round trip. FAIL-FIRST: on the pre-fix tree the index reads 0x0B, and the 0x15 write aliases onto entry 5 (masked). Plus the CG block's three register ports: 0xA1/0xA3/0xA5 READ BACK their latches (docs/probes/PORTS.TXT reads 00A1=2F 00A3=57 00A5=0F with the open ports 0xA7/0xAB/0xAD/0xAF beside them all FF, and six more read-only captures repeat those bytes), where NP2kai's cgromia1 (a read handler only at index 4) and the old open-0xFF arm are both wrong.
+// The GDC block's parameter read-back and mode read-back against NP2kai (and the palette row): 0x62 pops the text GDC's parameter queue (CSRR 0xE0 answers {CSRW0, CSRW1, CSRW2&3, 0, 0} and LPEN 0xC0 the three never-written LPEN slot bytes 00 00 00, one byte per read, 0xFF when empty), 0xA2 does the same for the graphics GDC, whose CSRR answer is the Xe10's {EAD[7:0], EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]} (docs/probes/gdc-conformance/xe10-2.5MHz/GDCCURS.CSV raw_curd; GDCWG's WG row reads F8 in byte 2) instead of returning a second status byte (the machine's own `GDC status 60 A0 A2: 05 04 ff` pins the empty answer at 0xFF) and 0xA0 status bit 0 flags that queue nonempty (read-back data available), 0x6A echoes MODE FF2 bit 1 (the FF2 num-1 latch round-trips instead of reading 0), and the 16-colour analogue palette data ports answer the LOW NIBBLE of the byte the guest wrote with the upper four bits 0 (the probed Xe10, docs/probes/PEGCRD-XE10.TXT: wrote R=FF G=00 B=7F read 0F 00 0F; wrote 12 34 56 read 02 04 06; entries 5A and A5 index the 16-entry table as 0A and 05), the 0xA8 index register round-trips the FULL byte (`out 0xA8,0xAB / in 0xA8` reads 0xAB, not 0x0B: NP2kai io/gdc.c:841 stores `gdc.palnum = dat` unmasked and :913-919 returns it verbatim), the 16-colour palette read mirror is 16 entries indexed palnum & 15 (the Xe10's 16-colour palette), and the PEGC 256-colour mirror is 256 entries at the UNMASKED 8-bit index with full-byte channels read back verbatim (NP2kai anareg[16*3 + palnum*4 + c], io/gdc.c:852-953; MAME returns 0 in 256-colour mode - the recorded divergence, capture-pending), with the 16-entry mirror unchanged after the mode round trip. FAIL-FIRST: on the pre-fix tree the index reads 0x0B, the 0x15 write aliases onto entry 5 (masked), and the 16-colour channels read the full byte instead of the capture's nibble. Plus the CG block's three register ports: 0xA1/0xA3/0xA5 READ BACK their latches (docs/probes/PORTS.TXT reads 00A1=2F 00A3=57 00A5=0F with the open ports 0xA7/0xAB/0xAD/0xAF beside them all FF, and six more read-only captures repeat those bytes), where NP2kai's cgromia1 (a read handler only at index 4) and the old open-0xFF arm are both wrong. The slave's 0xA0 status bit 2 (FIFO empty) is the queue's complement - 0x04 empty, 0x01 once a read-back is armed (Xe10 capture docs/probes/RDBACK.TXT:172-173) - and the six CRTC render registers 0x70..0x7A read back as found (00 0F 10 00 00 00, RDBACK.TXT:82-87) and store five bits each (NP2kai crtc_o70 `dat &= 0x1f`). The graphics display/access page latches 0xA4/0xA6 read back their own bit (as found 0, RDBACK.TXT:100-101).
 //
-// The GDC block's parameter read-back and mode read-back against NP2kai (review
-// readbacks.md P2/P3/P6 and the palette row): 0x62 pops the text GDC's parameter
+// The GDC block's parameter read-back and mode read-back against NP2kai
+// (P2/P3/P6 and the palette row): 0x62 pops the text GDC's parameter
 // queue (CSRR 0xE0 answers {CSRW0, CSRW1, CSRW2&3, 0, 0} and LPEN 0xC0 the three
 // never-written LPEN slot bytes 00 00 00, one byte per read, 0xFF when empty),
-// 0xA2 does the same for the graphics GDC instead of returning a second status
+// 0xA2 does the same for the graphics GDC, whose CSRR answer is the Xe10's {EAD[7:0],
+// EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]} (GDCCURS.CSV raw_curd; the master's
+// 0x62 shape has no capture and stays NP2kai's) instead of returning a second status
 // byte (the machine's own `GDC status 60 A0 A2: 05 04 ff` pins the empty answer
 // at 0xFF) and 0xA0 status bit 0 flags that queue nonempty (read-back data
 // available), 0x6A echoes MODE FF2 bit 1 (the FF2 num-1 latch round-trips
@@ -56,7 +58,7 @@
 //     the slave raises bit 0 while its parameter read-back queue holds bytes and
 //     drops it when drained. The 2M-sample histogram's dead bit 0 at 0xA0
 //     (the machine's probe results "GDC status") does not refute that: the
-//     probe never arms a slave read-back (tools/hwprobe/probe2/probe2.s:1488-1540
+//     probe never arms a slave read-back (tools/hwprobe/probe2/probe2.s:1684-1730, `sec_gdc:`
 //     samples the bare status port), so the queue is empty all capture and
 //     "hardwired 0" is indistinguishable from "empty" - NP2kai is the authority.
 //     [source: NP2kai io/gdc.c, the primary reference]
@@ -64,13 +66,15 @@
 //  4. THE 0x6A BIT-1 ROUND-TRIP. NP2kai gdc_i6a returns the live gdc.mode2
 //     (io/gdc.c:700-704), whose bit 1 its FF2 dat-2/3 form toggles
 //     (io/gdc.c:501-530); the RTL hardwired the bit to 0, so a guest RMW of 0x6A
-//     lost it (review readbacks.md P6).
+//     lost it.
 //
-//  5. THE PALETTE SHAPE. NP2kai stores the whole written byte per channel in
+//  5. THE PALETTE SHAPE (CORRECTED by docs/probes/PEGCRD-XE10.TXT: the measured Xe10 reads the
+//     16-colour analogue palette back as the LOW NIBBLE only, `WROTE_R=FF G=00 B=7F READ_R=0F
+//     G=00 B=0F`; the paragraph below records the NP2kai model the capture outranks). NP2kai stores the whole written byte per channel in
 //     gdc.anareg and reads it back verbatim (gdc_oaa/oac/oae + gdc_iaa/iac/iae,
 //     io/gdc.c:852-953). The RTL stored io_din[3:0] and answered 0x0F for a
 //     written 0xFF - the visual is 4-bit (a 16-colour DAC) but the READBACK is
-//     the full byte (review readbacks.md, the palette row). This is the
+//     the full byte. This is the
 //     ANALOGUE (16-colour) path only: the machine's DIGITAL read-back is masked
 //     with 0x77 and is a separate finding below (finding 4d), NOT a change here.
 //
@@ -94,7 +98,7 @@
 //     `00AA/00AC/00AE wrote=FF after=77` (the 0x77 mask). The rows are in the
 //     MACHINE section below; docs/probes/RDBACK.TXT holds the bytes.
 //
-//  FAIL-FIRST (review-cg F1): on the pre-fix tree the 0xA8 index reads 0x0B for
+//  FAIL-FIRST: on the pre-fix tree the 0xA8 index reads 0x0B for
 //  0xAB; the mirror is 16-entry masked (palnum 0x15 and 0x05 are one entry).
 //
 //  5. 0xA1/0xA3/0xA5 READ BACK their latches. This was P7's opposite ("write-only,
@@ -131,7 +135,6 @@ module tb_pc9821_readback_gdc;
   reg  [7:0] io_din = 0;
   wire [7:0] io_dout;
 
-  reg [7:0] grcg_mode_r = 8'h00;
 
   reg [13:0] tram_cpu_addr = 0;
   reg [7:0] tram_cpu_din = 0;
@@ -142,8 +145,6 @@ module tb_pc9821_readback_gdc;
   reg [15:0] font_ld_data = 0;
   reg font_ld_we = 0;
 
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   reg [4:0] cg_win_byte_sel = 0;
   reg cg_win_rd = 0;
   wire [7:0] cg_win_dout;
@@ -213,6 +214,28 @@ module tb_pc9821_readback_gdc;
     end
   endtask
 
+  // One GDCCURS/GDCWG capture row on the graphics GDC: CSRW (e0 e1 e2), MASK (m0 m1) when
+  // `set_mask`, then CSRR and the five bytes the machine answered.
+  task automatic curd_row(input [8*48-1:0] name, input [7:0] e0, input [7:0] e1, input [7:0] e2,
+                          input set_mask, input [7:0] m0, input [7:0] m1,
+                          input [7:0] x0, input [7:0] x1, input [7:0] x2, input [7:0] x3, input [7:0] x4);
+    reg [7:0] v;
+    reg [39:0] got;
+    begin
+      write_io(8'hA2, 8'h49); write_io(8'hA0, e0); write_io(8'hA0, e1); write_io(8'hA0, e2);
+      if (set_mask) begin write_io(8'hA2, 8'h4A); write_io(8'hA0, m0); write_io(8'hA0, m1); end
+      write_io(8'hA2, 8'hE0);
+      read_io(8'hA2, v); got[39:32] = v; read_io(8'hA2, v); got[31:24] = v;
+      read_io(8'hA2, v); got[23:16] = v; read_io(8'hA2, v); got[15:8] = v;
+      read_io(8'hA2, v); got[7:0] = v;
+      check(name, {8'h00, got[39:32]}, {8'h00, x0});
+      check(name, {8'h00, got[31:24]}, {8'h00, x1});
+      check(name, {8'h00, got[23:16]}, {8'h00, x2});
+      check(name, {8'h00, got[15:8]},  {8'h00, x3});
+      check(name, {8'h00, got[7:0]},   {8'h00, x4});
+    end
+  endtask
+
   task automatic write_io(input [7:0] portnum, input [7:0] data);
     begin
       @(negedge clk_sys); io_addr = portnum; io_din = data; io_wr = 1;
@@ -237,6 +260,48 @@ module tb_pc9821_readback_gdc;
     rst_n_sys = 1;
     repeat (4) @(negedge clk_sys);
 
+    // ==== the six CRTC render registers 0x70..0x7A read back ================
+    // As found on the Xe10 (docs/probes/RDBACK.TXT:82-87 `0070=00 0072=0F 0074=10 0076=00
+    // 0078=00 007A=00`), each read is its own register; then a write stores five bits
+    // (NP2kai crtc_o70 `dat &= 0x1f`, io/crtc.c:10-17), so six distinct bytes read back
+    // at their own ports and 0xFF reads 0x1F.
+    read_io(8'h70, value); check("crtc_70_as_found", {8'h00, value}, 16'h0000);
+    read_io(8'h72, value); check("crtc_72_as_found", {8'h00, value}, 16'h000F);
+    read_io(8'h74, value); check("crtc_74_as_found", {8'h00, value}, 16'h0010);
+    read_io(8'h76, value); check("crtc_76_as_found", {8'h00, value}, 16'h0000);
+    read_io(8'h78, value); check("crtc_78_as_found", {8'h00, value}, 16'h0000);
+    read_io(8'h7A, value); check("crtc_7a_as_found", {8'h00, value}, 16'h0000);
+    write_io(8'h70, 8'h01); write_io(8'h72, 8'h02); write_io(8'h74, 8'h03);
+    write_io(8'h76, 8'h04); write_io(8'h78, 8'h05); write_io(8'h7A, 8'hE6);
+    read_io(8'h70, value); check("crtc_70_roundtrip", {8'h00, value}, 16'h0001);
+    read_io(8'h72, value); check("crtc_72_roundtrip", {8'h00, value}, 16'h0002);
+    read_io(8'h74, value); check("crtc_74_roundtrip", {8'h00, value}, 16'h0003);
+    read_io(8'h76, value); check("crtc_76_roundtrip", {8'h00, value}, 16'h0004);
+    read_io(8'h78, value); check("crtc_78_roundtrip", {8'h00, value}, 16'h0005);
+    read_io(8'h7A, value); check("crtc_7a_roundtrip_masked_5_bits", {8'h00, value}, 16'h0006);
+    write_io(8'h70, 8'hFF);
+    read_io(8'h70, value); check("crtc_70_ff_reads_1f", {8'h00, value}, 16'h001F);
+    write_io(8'h70, 8'h00); write_io(8'h72, 8'h0F); write_io(8'h74, 8'h10);   // as found again
+    write_io(8'h76, 8'h00); write_io(8'h78, 8'h00); write_io(8'h7A, 8'h00);
+
+    // 0x64 reads 0x1F after the guest writes 0x1F (docs/probes/RDBACK.TXT:78 `0064=1F`; the
+    // probe had written it first, so a latch and a constant both fit), not open bus.
+    write_io(8'h64, 8'h1F);
+    read_io(8'h64, value); check("port_64_as_found_1f", {8'h00, value}, 16'h001F);
+
+    // ==== the graphics page latches 0xA4 (display) and 0xA6 (access) read back ====
+    // As found 0 (docs/probes/RDBACK.TXT:100-101 `00A4=00 ... 00A6=00`); NP2kai io/gdc.c
+    // gdc_ia4/gdc_ia6 return the display and access page latches, each at its own port.
+    read_io(8'hA4, value); check("page_a4_as_found", {8'h00, value}, 16'h0000);
+    read_io(8'hA6, value); check("page_a6_as_found", {8'h00, value}, 16'h0000);
+    write_io(8'hA4, 8'h01);
+    read_io(8'hA4, value); check("page_a4_display_set", {8'h00, value}, 16'h0001);
+    read_io(8'hA6, value); check("page_a6_unmoved_by_a4", {8'h00, value}, 16'h0000);
+    write_io(8'hA4, 8'h00); write_io(8'hA6, 8'h01);
+    read_io(8'hA4, value); check("page_a4_unmoved_by_a6", {8'h00, value}, 16'h0000);
+    read_io(8'hA6, value); check("page_a6_access_set", {8'h00, value}, 16'h0001);
+    write_io(8'hA6, 8'h00);
+
     // ==== P2: the text GDC's parameter read-back (0x62) ====================
     // CSRW 0x49 takes three parameter bytes; CSRR 0xE0 queues five answer bytes.
     write_io(8'h62, 8'h49);       // CSRW
@@ -255,8 +320,8 @@ module tb_pc9821_readback_gdc;
     // consumes): the queue head is still CSRR byte 0, and the two reads after it
     // serve both bytes in order.
     write_io(8'h62, 8'hE0);
-    if (dut.u_crtc.gdc_snd[dut.u_crtc.gdc_snd_ptr] !== 8'h12) begin
-      $display("MISMATCH queue head: rtl=%02x np2kai=12", dut.u_crtc.gdc_snd[dut.u_crtc.gdc_snd_ptr]);
+    if (dut.u_crtc.gdc_snd_head !== 8'h12) begin
+      $display("MISMATCH queue head: rtl=%02x np2kai=12", dut.u_crtc.gdc_snd_head);
       errors = errors + 1;
     end
     read_io(8'h62, value); check("read_serves_the_head", {8'h00, value}, 16'h0012);
@@ -292,10 +357,17 @@ module tb_pc9821_readback_gdc;
     write_io(8'hA2, 8'hE0);       // slave CSRR
     read_io(8'hA2, value); check("slave_csrr_byte0", {8'h00, value}, 16'h00ab);
     read_io(8'hA2, value); check("slave_csrr_byte1", {8'h00, value}, 16'h00cd);
-    read_io(8'hA2, value); check("slave_csrr_byte2_masked", {8'h00, value}, 16'h0003);
-    read_io(8'hA2, value); check("slave_csrr_byte3_zero", {8'h00, value}, 16'h0000);
-    read_io(8'hA2, value); check("slave_csrr_byte4_zero", {8'h00, value}, 16'h0000);
+    // The Xe10's five CURD bytes (docs/probes/gdc-conformance/xe10-2.5MHz/GDCCURS.CSV
+    // raw_curd; NP2kai's {CSRW0, CSRW1, CSRW2 & 3, 0, 0} is refuted): CSRW dAD 0 -> mask 0001.
+    read_io(8'hA2, value); check("slave_csrr_byte2_f0_or_ead17_16", {8'h00, value}, 16'h00f3);
+    read_io(8'hA2, value); check("slave_csrr_byte3_mask_lo", {8'h00, value}, 16'h0001);
+    read_io(8'hA2, value); check("slave_csrr_byte4_mask_hi", {8'h00, value}, 16'h0000);
     read_io(8'hA2, value); check("slave_queue_drained_is_ff", {8'h00, value}, 16'h00ff);
+    // GDCCURS.CSV raw_curd rows (CSRW EAD/dAD, then CSRR) and GDCWG.CSV's WG row (`28-88-F8-FF-FF`).
+    curd_row("capture_FF-FF-F1-00-80", 8'hFF, 8'hFF, 8'hF1, 0, 8'h00, 8'h00, 8'hFF, 8'hFF, 8'hF1, 8'h00, 8'h80);
+    curd_row("capture_FF-FF-F3-01-00", 8'hFF, 8'hFF, 8'h03, 0, 8'h00, 8'h00, 8'hFF, 8'hFF, 8'hF3, 8'h01, 8'h00);
+    curd_row("capture_00-00-F0-00-04", 8'h00, 8'h00, 8'hA0, 0, 8'h00, 8'h00, 8'h00, 8'h00, 8'hF0, 8'h00, 8'h04);
+    curd_row("capture_28-88-F8-FF-FF", 8'h28, 8'h88, 8'h08, 1, 8'hFF, 8'hFF, 8'h28, 8'h88, 8'hF8, 8'hFF, 8'hFF);
     // The slave's LPEN answers its OWN para[29..31] - 00 00 00 whatever the
     // CSRFORM capture holds (and that capture's byte 0 is still the line step).
     write_io(8'hA2, 8'h4B);
@@ -317,8 +389,13 @@ module tb_pc9821_readback_gdc;
     // is set while the 0xA2 queue holds bytes and clears when it drains. A
     // status read of 0xA0 does NOT pop (only 0xA2 does), so the flag is pollable.
     read_io(8'hA0, value); check("a0_status_bit0_empty_queue", {15'h0, value[0]}, 16'h0000);
+    // BIT 2 (FIFO empty) follows the same queue. The Xe10 captured the slave status as 0x04 before
+    // arming a read-back and 0x01 after (docs/probes/RDBACK.TXT:172 `00A0 status before arm = 04 ;
+    // after 0xE0 arm = 01`, and :173 `after 0xC0 arm = 01`): bit 2 CLEARS while data is queued.
+    check("a0_status_bit2_empty_queue_set", {15'h0, value[2]}, 16'h0001);
     write_io(8'hA2, 8'hE0);       // slave CSRR: five bytes queued
     read_io(8'hA0, value); check("a0_status_bit0_five_queued", {15'h0, value[0]}, 16'h0001);
+    check("a0_status_bit2_queued_clear", {15'h0, value[2]}, 16'h0000);
     read_io(8'hA2, value);        // pop 1 of 5
     read_io(8'hA0, value); check("a0_status_bit0_four_left", {15'h0, value[0]}, 16'h0001);
     read_io(8'hA2, value);        // pop 2 of 5
@@ -327,6 +404,7 @@ module tb_pc9821_readback_gdc;
     read_io(8'hA0, value); check("a0_status_bit0_one_left", {15'h0, value[0]}, 16'h0001);
     read_io(8'hA2, value);        // pop 5 of 5
     read_io(8'hA0, value); check("a0_status_bit0_drained", {15'h0, value[0]}, 16'h0000);
+    check("a0_status_bit2_drained_set", {15'h0, value[2]}, 16'h0001);
 
     // ==== P6: MODE FF2 bit 1 round-trips through 0x6A =====================
     write_io(8'h6A, 8'h02);       // FF2 num 1 OFF
@@ -337,15 +415,35 @@ module tb_pc9821_readback_gdc;
     read_io(8'h6A, value); check("mode2_bit1_survives_other_writes", {8'h00, value}, 16'h0003);
     write_io(8'h6A, 8'h02);       // num 1 OFF again
     read_io(8'h6A, value); check("mode2_bit1_clears_again", {8'h00, value}, 16'h0001);
-    // ==== the palette readback shape: full byte, not the nibble ============
-    write_io(8'hA8, 8'h05);       // palette index 5
-    write_io(8'hAA, 8'hFF);       // G
-    write_io(8'hAC, 8'hAB);       // R
-    write_io(8'hAE, 8'hCD);       // B
-    read_io(8'hAA, value); check("palette_g_full_byte", {8'h00, value}, 16'h00ff);
-    read_io(8'hAC, value); check("palette_r_full_byte", {8'h00, value}, 16'h00ab);
-    read_io(8'hAE, value); check("palette_b_full_byte", {8'h00, value}, 16'h00cd);
-    // ==== the 0xA8 index register round-trips the FULL byte (review-cg F1) ===
+    // ==== the 16-colour analogue palette reads back the LOW NIBBLE ==========
+    // docs/probes/PEGCRD-XE10.TXT (the measured Xe10, 16-colour analogue mode, 0x9A0 index 0x04
+    // read 1): `16  ENTRY=02 WROTE_R=FF G=00 B=7F READ_R=0F G=00 B=0F` - the upper four bits of
+    // 0xAA/0xAC/0xAE read 0. NP2kai io/gdc.c gdc_iaa/iac/iae answers the whole byte; the capture
+    // outranks it (recorded divergence). ENTRY=5A and A5 index the 16-entry table as 0x0A / 0x05.
+    begin : pal16_capture
+      reg [7:0] e [0:5];  reg [7:0] wr [0:5]; reg [7:0] wg [0:5]; reg [7:0] wb [0:5];
+      reg [7:0] rr [0:5]; reg [7:0] rg [0:5]; reg [7:0] rb [0:5];
+      integer k;
+      e[0]=8'h00; wr[0]=8'h00; wg[0]=8'h00; wb[0]=8'h00; rr[0]=8'h00; rg[0]=8'h00; rb[0]=8'h00;
+      e[1]=8'h01; wr[1]=8'h12; wg[1]=8'h34; wb[1]=8'h56; rr[1]=8'h02; rg[1]=8'h04; rb[1]=8'h06;
+      e[2]=8'h02; wr[2]=8'hFF; wg[2]=8'h00; wb[2]=8'h7F; rr[2]=8'h0F; rg[2]=8'h00; rb[2]=8'h0F;
+      e[3]=8'h0B; wr[3]=8'h5A; wg[3]=8'hA5; wb[3]=8'h3C; rr[3]=8'h0A; rg[3]=8'h05; rb[3]=8'h0C;
+      e[4]=8'h5A; wr[4]=8'h11; wg[4]=8'h22; wb[4]=8'h33; rr[4]=8'h01; rg[4]=8'h02; rb[4]=8'h03;
+      e[5]=8'hA5; wr[5]=8'h44; wg[5]=8'h55; wb[5]=8'h66; rr[5]=8'h04; rg[5]=8'h05; rb[5]=8'h06;
+      for (k = 0; k < 6; k = k + 1) begin
+        write_io(8'hA8, e[k]);
+        write_io(8'hAA, wg[k]); write_io(8'hAC, wr[k]); write_io(8'hAE, wb[k]);
+        read_io(8'hAA, value); check("pal16_cap_g", {8'h00, value}, {8'h00, rg[k]});
+        read_io(8'hAC, value); check("pal16_cap_r", {8'h00, value}, {8'h00, rr[k]});
+        read_io(8'hAE, value); check("pal16_cap_b", {8'h00, value}, {8'h00, rb[k]});
+      end
+      // The 5A and A5 rows wrote entries 0x0A and 0x05; a read at the aliased 8-bit index sees them.
+      write_io(8'hA8, 8'h0A);
+      read_io(8'hAC, value); check("pal16_cap_5A_is_0A", {8'h00, value}, 16'h0001);
+      write_io(8'hA8, 8'h05);
+      read_io(8'hAA, value); check("pal16_cap_A5_is_05", {8'h00, value}, 16'h0005);
+    end
+    // ==== the 0xA8 index register round-trips the FULL byte ===
     // NP2kai io/gdc.c:841 `gdc.palnum = dat` and :913-919 return gdc.palnum
     // verbatim, so 0xAB in is 0xAB out; the old 4-bit register answered 0x0B.
     write_io(8'hA8, 8'hAB);
@@ -357,9 +455,9 @@ module tb_pc9821_readback_gdc;
     write_io(8'hAA, 8'h77);       // entry 5 green (0x15 & 15 = 5)
     write_io(8'hA8, 8'h05);
     write_io(8'hAA, 8'h33);       // entry 5 green again (overwrites)
-    read_io(8'hAA, value); check("entry5_own_byte", {8'h00, value}, 16'h0033);
+    read_io(8'hAA, value); check("entry5_own_byte", {8'h00, value}, 16'h0003);
     write_io(8'hA8, 8'h15);
-    read_io(8'hAA, value); check("palnum15_masks_to_entry5", {8'h00, value}, 16'h0033);
+    read_io(8'hAA, value); check("palnum15_masks_to_entry5", {8'h00, value}, 16'h0003);
     // The DAC index stays palnum & 15 (io/gdc.c:862 gdc_setanalogpal).
     if (dut.u_crtc.pal_wr_idx !== 4'd5) begin
       $display("MISMATCH display index: rtl=0x%02x np2kai=0x05 (gdc.c:862 palnum & 15)",
@@ -428,12 +526,7 @@ module tb_pc9821_readback_gdc;
     // The 16-bit `in ax,7Ch` form is NOT touched by this fix and is not
     // exercised here: the machine never probed it (TODO item 42).
     // [source: docs/probes/RDBACK.TXT:152, a real PC-9821Xe10]
-    grcg_mode_r = 8'h5A;
-    read_io(8'h7C, value); check("grcg_7c_byte_read_is_ff_with_mode_5a", {8'h00, value}, 16'h00ff);
-    grcg_mode_r = 8'h00;
-    read_io(8'h7C, value); check("grcg_7c_byte_read_is_ff_with_mode_00", {8'h00, value}, 16'h00ff);
-    grcg_mode_r = 8'hFF;
-    read_io(8'h7C, value); check("grcg_7c_byte_read_is_ff_with_mode_ff", {8'h00, value}, 16'h00ff);
+    read_io(8'h7C, value); check("grcg_7c_byte_read_is_ff", {8'h00, value}, 16'h00ff);
 
     // ==== the CG code/line registers READ BACK their latches ================
     // The machine's own read-only scans drive a byte at 0xA1/0xA3/0xA5 - PORTS.TXT's
@@ -496,7 +589,7 @@ module tb_pc9821_readback_gdc;
     write_io(8'h6A, 8'h01);       // num 0 ON: 16-colour
     write_io(8'h6A, 8'h06);
     write_io(8'hA8, 8'h05);
-    read_io(8'hAA, value); check("sixteen_colour_mirror_unchanged", {8'h00, value}, 16'h0033);
+    read_io(8'hAA, value); check("sixteen_colour_mirror_unchanged", {8'h00, value}, 16'h0003);
 
     // ==== A COMMAND ABORTS AN UNFINISHED SYNC BLOCK (both GDCs) ==============
     // NP2kai gdc_work's command branch reloads `item->ptr = gdc_cmd[data].pos;
@@ -535,7 +628,7 @@ module tb_pc9821_readback_gdc;
     write_io(8'hA2, 8'hE0);       // CSRR
     read_io(8'hA2, value); check("sync_abort_slave_csrw_lo", {8'h00, value}, 16'h009a);
     read_io(8'hA2, value); check("sync_abort_slave_csrw_hi", {8'h00, value}, 16'h00bc);
-    read_io(8'hA2, value); check("sync_abort_slave_csrw_b2", {8'h00, value}, 16'h0002);
+    read_io(8'hA2, value); check("sync_abort_slave_csrw_b2", {8'h00, value}, 16'h00f2);
     check("sync_abort_slave_al_kept",  {6'd0, dut.u_gdc2.gdc2_sal},  16'h0190);
     check("sync_abort_slave_vbp_kept", {10'd0, dut.u_gdc2.gdc2_svbp}, 16'd25);
     check("sync_abort_slave_mask_lo", {8'h00, dut.u_gdc2.gdc2_mask[0]}, 16'h0011);

@@ -14,8 +14,8 @@
 // {E,G,R,B}, in the pixel fold's lane order (0 = blue at 0xA8000, 1 = red, 2 = green,
 // 3 = intensity), so nothing permutes.
 //
-// THIS MODULE ALSO OWNS THE GVRAM'S PER-OPERATION COST (the acceptance period below): by
-// owner direction the machine's drawing pace is the specification for this device, and the
+// THIS MODULE ALSO OWNS THE GVRAM'S PER-OPERATION COST (the acceptance period below): the
+// machine's drawing pace is the specification for this device, and the
 // constants are the Xe10 capture's own - see the GVRAM_PERIODS block.
 `default_nettype none
 
@@ -38,15 +38,19 @@ module pc9821_gvram_arb #(
     input  wire [14:0]  win_offset,        // bits are the byte lane, which the plain path takes from cpu_be
     /* verilator lint_on UNUSEDSIGNAL */
     input  wire [31:0]  cpu_din,
+    // cpu_din's per-byte 0x00 / 0xFF flags, formed by pc9821_gvram_share on each of its operands
+    // before its select (gvr_din_z / gvr_din_f; docs/timing.md C7-dz)
+    input  wire [3:0]   cpu_din_z,
+    input  wire [3:0]   cpu_din_f,
     input  wire [3:0]   cpu_be,
     input  wire         cpu_line_read,
     input  wire         cpu_valid,
     input  wire         cpu_write,
     output wire [31:0]  cpu_dout,
-    output wire [127:0] cpu_line_dout,
+    output wire [31:0]  cpu_line_word,
     output wire         cpu_ready,
     output wire         cpu_resp_valid,
-    output wire         cpu_line_resp_valid,
+    output wire         cpu_line_word_valid,
 
     // ---- The engine gates the dispatch reads (from pc9821_grcg and the EGC enable) ----
     input wire grcg_expand_gate,   // the GRCG's mode bit 7: it owns stores
@@ -54,22 +58,31 @@ module pc9821_gvram_arb #(
     input wire egc_gate,           // the EGC's real enable (0x6A num 2 AND 0x7C bit 7)
 
     // ---- GRCG client port (pc9821_grcg) ----
-    input  wire        grcg_cl_valid,
-    input  wire        grcg_cl_write,
-    input  wire [15:0] grcg_cl_addr,
-    input  wire [3:0]  grcg_cl_be,
-    input  wire [31:0] grcg_cl_wdata,
-    input  wire [3:0]  grcg_cl_wbe,
+    // The GRCG's presentation arrives as its TWO ARMS (pc9821_grcg's raw taps): the capture
+    // cycle's live operands (grcg_cl_cap_*) and the latched image (grcg_cl_hold_*), with
+    // grcg_cl_cap choosing between them. Its muxed form is rebuilt below exactly as the GRCG
+    // builds it; the port-A presentation is formed on each arm and grcg_cl_cap selects last.
     input  wire        grcg_cl_cap,        // the GRCG's capture-cycle presentation is the live arm
-    input  wire        grcg_cl_cap_rmw,    // raw arm taps (see pc9821_grcg): mode[6] /
-    input  wire [3:0]  grcg_cl_hold_be,    // be_q / rmw_q / cl_datum0_r /
-    input  wire        grcg_cl_hold_rmw,   // cl_mergeable_r, so the lane/we cone reads
-    input  wire [3:0]  grcg_cl_hold_datum0,   // the arms' own operands and cl_cap alone
-    input  wire [3:0]  grcg_cl_hold_mergeable, // lands on the final mux selects
+    input  wire        grcg_cl_cap_rmw,    // mode[6]
+    input  wire        grcg_cl_cap_burst,  // tdw_burst
+    input  wire        grcg_cl_cap_pair_high, // pair_high (the TDW burst's address bit 1)
+    input  wire [15:0] grcg_cl_cap_addr,
+    input  wire [3:0]  grcg_cl_cap_wbe,
+    input  wire [31:0] grcg_cl_cap_wdata,
+    input  wire [63:0] grcg_cl_cap_wdata2,
+    input  wire [3:0]  grcg_cl_cap_be,     // the GRCG's cpu_be
+    input  wire        grcg_cl_hold_valid,
+    input  wire        grcg_cl_hold_write,
+    input  wire        grcg_cl_hold_burst,
+    input  wire [15:0] grcg_cl_hold_addr,
+    input  wire [3:0]  grcg_cl_hold_wbe,
+    input  wire [31:0] grcg_cl_hold_wdata,
+    input  wire [63:0] grcg_cl_hold_wdata2,
+    input  wire [3:0]  grcg_cl_hold_be,    // be_q
+    input  wire        grcg_cl_hold_rmw,   // rmw_q
+    input  wire [3:0]  grcg_cl_hold_datum0,    // cl_datum0_r
+    input  wire [3:0]  grcg_cl_hold_mergeable, // cl_mergeable_r
     input  wire [31:0] grcg_cl_tile,
-    input  wire        grcg_cl_rmw,
-    input  wire        grcg_cl_burst,
-    input  wire [63:0] grcg_cl_wdata2,
     output wire        grcg_cl_ready,
     input  wire [31:0] grcg_cpu_dout,
     input  wire        grcg_cpu_ready,
@@ -137,10 +150,21 @@ module pc9821_gvram_arb #(
   wire        cc_ready;
   wire        cc_write;
   wire [15:0] cc_addr;
-  wire [31:0] cc_wdata;
   wire [3:0]  cc_wbe;
   wire [31:0] cc_rdata;
   wire        cc_done;
+
+  // The GRCG's muxed presentation, rebuilt from its two arms exactly as pc9821_grcg forms it
+  // (`cl_valid = cap_store | cl_valid_r`, `cl_write = cap_store ? 1'b1 : cl_write_r`, ...).
+  wire        grcg_cl_valid  = grcg_cl_cap | grcg_cl_hold_valid;
+  wire        grcg_cl_write  = grcg_cl_cap ? 1'b1               : grcg_cl_hold_write;
+  wire        grcg_cl_burst  = grcg_cl_cap ? grcg_cl_cap_burst  : grcg_cl_hold_burst;
+  wire [15:0] grcg_cl_addr   = grcg_cl_cap ? grcg_cl_cap_addr   : grcg_cl_hold_addr;
+  wire  [3:0] grcg_cl_wbe    = grcg_cl_cap ? grcg_cl_cap_wbe    : grcg_cl_hold_wbe;
+  wire [31:0] grcg_cl_wdata  = grcg_cl_cap ? grcg_cl_cap_wdata  : grcg_cl_hold_wdata;
+  wire [31:0] grcg_cl_wdata2_hi = grcg_cl_cap ? grcg_cl_cap_wdata2[63:32] : grcg_cl_hold_wdata2[63:32];
+  wire  [3:0] grcg_cl_be     = grcg_cl_cap ? grcg_cl_cap_be     : grcg_cl_hold_be;
+  wire        grcg_cl_rmw    = grcg_cl_cap ? grcg_cl_cap_rmw    : grcg_cl_hold_rmw;
 
   // Client 1 -- the scanout's line fetch is a sibling (pc9821_gvram_scan) that reads the
   // array's own port B, so it never appears on this module's port A.
@@ -222,16 +246,21 @@ module pc9821_gvram_arb #(
                     cc_owns_grcg  ? grcg_cl_write : egc_cl_write;
   assign cc_addr  = cc_owns_plain ? c_cl_addr :
                     cc_owns_grcg  ? grcg_cl_addr : egc_cl_addr;
-  assign cc_wdata = cc_owns_plain ? c_cl_wdata :
-                    cc_owns_grcg  ? grcg_cl_wdata : egc_cl_wdata;
+  // The client's write data is read only by the port-A presentation, which forms it per arm
+  // (`x_wdata`); this muxed copy is the benches' probe of the accepted datum and drives nothing.
+  /* verilator lint_off UNUSEDSIGNAL */   // a bench probe (tb_pc9821_memory_subsystem, tb_pc9821_rt_queue)
+  wire [31:0] cc_wdata = cc_owns_plain ? c_cl_wdata :
+                         cc_owns_grcg  ? grcg_cl_wdata : egc_cl_wdata;
+  /* verilator lint_on UNUSEDSIGNAL */
   assign cc_wbe   = cc_owns_plain ? c_cl_wbe :
                     cc_owns_grcg  ? grcg_cl_wbe : egc_cl_wbe;
   // The multi-word write exists on the EGC's and the GRCG's arms; the plain client presents
-  // zero, and the backend reads it only when cc_burst is high.
+  // zero, and the backend reads it only when cc_burst is high. Its low word rides port A in the
+  // issue cycle (formed per arm in the port-A block below); the FSM latches the high word here.
   wire        cc_burst;
-  wire [63:0] cc_wdata2;
-  assign cc_burst  = (cc_owns_egc && egc_cl_burst) || (cc_owns_grcg && grcg_cl_burst);
-  assign cc_wdata2 = cc_owns_grcg ? grcg_cl_wdata2 : egc_cl_wdata2;
+  wire [31:0] cc_wdata2_hi;
+  assign cc_burst     = (cc_owns_egc && egc_cl_burst) || (cc_owns_grcg && grcg_cl_burst);
+  assign cc_wdata2_hi = cc_owns_grcg ? grcg_cl_wdata2_hi : egc_cl_wdata2[63:32];
 
   wire cc_plain_ready = cc_owns_plain && cc_ready;
   wire cc_grcg_ready  = cc_owns_grcg  && cc_ready;
@@ -261,14 +290,27 @@ module pc9821_gvram_arb #(
   // stated price on this path.
   // z486 presents a dword-aligned address with the enables in cpu_be, so byte lane
   // k sits at plane offset {win_offset[14:2], k}.
-  // A 128-bit line read is 16 consecutive bytes of ONE plane: 16 column reads,
-  // taking that plane's lane from each. This route MUST assemble cpu_line_dout, or
-  // z486's line fill reads nothing. Its states are declared above.
+  // A line read is 16 consecutive bytes of ONE plane: 16 column reads, taking that
+  // plane's lane from each. The L1 wants FOUR WORD BEATS, so the route accepts
+  // the line read at the walk's start (the CPU is stalled on the fill's beat counter)
+  // and strobes cpu_line_word_valid as each group of four columns - one dword of the
+  // line - completes. It holds only the 32-bit word under construction, never the line.
+  // Its states are declared above.
 
   reg [3:0]   c_be;
   reg [1:0]   c_plane;
+  // The access page, latched beside c_plane at the accept. A LINE read's column walk addresses
+  // this, never the live `access_page`: the line read is accepted at the walk's start, z486 then
+  // drops its request, and pc9821_gvram_share may grant a waiting visit mid-walk, after which the
+  // share's page output (this module's `access_page`) is the VISIT's page (pc9821_gdc2 latches
+  // one per draw). Pinned by tb_pc9821_gvram_line_page.
+  reg         c_page;
   reg [31:0]  c_dout_r;
-  reg [127:0] c_line_r;
+  // The line read's CURRENT WORD: the four plane bytes of columns 4N..4N+3, shifted in one
+  // per column. Stabled on cpu_line_word_valid (the cycle after a group's fourth column).
+  reg [31:0]  c_line_word_r;
+  reg         c_line_beat_q;   // one-cycle strobe: word N is complete
+  reg         c_line_ready_q;  // one-cycle accept for a LINE read at the walk's start
   reg [4:0]   c_line_n;
   reg [14:0]  c_line_base;
   reg         c_line_mode;
@@ -285,22 +327,17 @@ module pc9821_gvram_arb #(
 
   // The zero-datum flags of the CPU's store datum, latched beside c_cl_wdata so the plain
   // arm of lane_datum0 is a register like the engines' arms.
-  wire  [3:0] cpu_din_datum0 = {(cpu_din[31:24] == 8'h00), (cpu_din[23:16] == 8'h00),
-                                (cpu_din[15:8]  == 8'h00), (cpu_din[7:0]   == 8'h00)};
+  wire  [3:0] cpu_din_datum0 = cpu_din_z;
   // The capture arm's merge-eligible flags (byte != 0x00 && != 0xFF), the same precompute
   // on the live datum the zero flags are; the GRCG's cl_datum0/cl_mergeable muxes (and
   // their cap_tdw override select) are deliberately NOT in this cone.
-  wire  [3:0] cpu_din_datmid = {(cpu_din[31:24] != 8'h00) && (cpu_din[31:24] != 8'hFF),
-                                (cpu_din[23:16] != 8'h00) && (cpu_din[23:16] != 8'hFF),
-                                (cpu_din[15:8]  != 8'h00) && (cpu_din[15:8]  != 8'hFF),
-                                (cpu_din[7:0]   != 8'h00) && (cpu_din[7:0]   != 8'hFF)};
+  wire  [3:0] cpu_din_datmid = ~cpu_din_z & ~cpu_din_f;
 
   // ---------------------------------------------------------------------------
   // GVRAM_PERIODS - the machine's per-operation drawing cost, as a TIME
   // ---------------------------------------------------------------------------
-  // OWNER-AUTHORIZED (lane gvram-latency-fix, 2026-09-25): for the GVRAM the standing
-  // r13/322 rule - "this hold is not a target to match; the machine's slow-VRAM figures are
-  // slow-VRAM artifacts, not a specification" - is REVERSED. The machine's drawing pace IS
+  // For the GVRAM the general rule - "this hold is not a target to match; the machine's
+  // slow-VRAM figures are slow-VRAM artifacts, not a specification" - is REVERSED. The machine's drawing pace IS
   // the specification for this device, so the GVRAM's per-access cost is modelled from the
   // Xe10's own capture. The constants are the CAPTURE's, never our RTL's, and the address
   // (a byte/word through a plane window) and the direction are the CPU's, which is the
@@ -344,18 +381,18 @@ module pc9821_gvram_arb #(
   // and the walk (1 clk per write lane, 2 per read lane) is far inside every period, so a
   // stream measures the captured cost itself.
   //
-  // AN ISOLATED STORE'S READY IS STILL ITS OWN ACCEPT (r13/322's decouple): what this
+  // AN ISOLATED STORE'S READY IS STILL ITS OWN ACCEPT (the decoupled store): what this
   // period bounds is the RATE the device takes accesses at, which is exactly what a
   // machine's posted write stalls on - the first store of a burst is not held, the burst's
   // sustained rate is the captured one.
   //
   // NOT MODELLED HERE (and why): the 0xA6 access-page switch (+1374 clk_sys/sprite in the
   // same capture) is an I/O-BUS cost, not a GVRAM plane access, and belongs to
-  // pc9821_iobus's class floors (a separate owner decision). The EGC's own backend requests are the
+  // pc9821_iobus's class floors (a separate decision). The EGC's own backend requests are the
   // ENGINE's produce steps: the
   // capture's EGC rows are gross-only with no matched control (the decoder's own note), so
   // no EGC-specific constant exists to charge them with and this seam does not invent one -
-  // that engine's pace is r13/269's pipeline, a separate seam.
+  // that engine's pace is its own pipeline's, a separate seam.
   localparam [15:0] GVRAM_RD_HOLD = 16'((SYS_CLOCK_HZ * 64'd478 + 64'd500_000_000) / 64'd1_000_000_000);
   localparam [15:0] GVRAM_WR_HOLD = 16'((SYS_CLOCK_HZ * 64'd142 + 64'd500_000_000) / 64'd1_000_000_000);
   localparam [15:0] GVRAM_GR_HOLD = 16'((SYS_CLOCK_HZ * 64'd104 + 64'd500_000_000) / 64'd1_000_000_000);
@@ -373,7 +410,7 @@ module pc9821_gvram_arb #(
   //   * the EGC's requests are the ENGINE's own produce steps, not CPU accesses: the capture has
   //     no matched control for the EGC rows (the decoder's own note: they are gross-only), so no
   //     EGC-specific constant exists to charge them with, and this seam does not invent one. The
-  //     EGC's pace is its own pipeline (r13/269, a separate seam) and its requests neither arm nor
+  //     EGC's pace is its own pipeline (a separate seam) and its requests neither arm nor
   //     wait on this period.
   // The transaction's class, read in its ACCEPT cycle. The plain client's direction is its own
   // latch there (c_write_q is the access it presents), the GRCG's is its registered cl_write (a
@@ -476,8 +513,11 @@ module pc9821_gvram_arb #(
       cs          <= C_IDLE;
       c_be        <= 4'd0;
       c_plane     <= 2'd0;
+      c_page      <= 1'b0;
       c_dout_r    <= 32'd0;
-      c_line_r    <= 128'd0;
+      c_line_word_r <= 32'd0;
+      c_line_beat_q <= 1'b0;
+      c_line_ready_q <= 1'b0;
       c_line_n    <= 5'd0;
       c_line_base <= 15'd0;
       c_line_mode <= 1'b0;
@@ -490,28 +530,30 @@ module pc9821_gvram_arb #(
     end else begin
       if (cc_plain_ready) c_cl_valid <= 1'b0;
       c_store_ready_q <= 1'b0;   // one-cycle pulse: set below on the accept, cleared here otherwise
+      c_line_beat_q  <= 1'b0;    // likewise: set on a line word's fourth column
+      c_line_ready_q <= 1'b0;    // and the line read's accept, set in C_IDLE below
       case (cs)
         C_IDLE: if (cpu_valid && cc_owns_plain) begin
           c_be        <= cpu_be;
           c_plane     <= win_plane;
+          c_page      <= access_page;
           c_dout_r    <= 32'd0;
-          // c_line_r IS NOT CLEARED HERE, and that is a CONTRACT, not an omission (-10 ALMs /
-          // -15 ALUTs module-alone). The
-          // 128-bit line datum is read ONLY through `cpu_line_dout`, and every reader of that
-          // takes it under the STROBE `cpu_line_resp_valid` - pc9821_memory_subsystem's line mux
-          // selects it on `gvram_cpu_line_resp_valid`, pc9821_system registers data and strobe
-          // together, and z486's caches consume it only in the `mem_line_resp_valid` arm
-          // (src/z486/l1_cache.sv:1021, src/z486/l1_icache.sv:760). AT THE STROBE EVERY LANE HOLDS
-          // THIS ACCESS'S DATA: a line read walks C_VAL/C_WAIT writing lane
-          // `{c_line_n[3:0], 3'b000}` for c_line_n = 0..15 - c_line_n is reset to 0 below, and
-          // the only exit from C_WAIT is the 16th fill - so all 16 bytes have landed before
-          // C_RESP/C_RESP2 can strobe. The RESET clear stays: it is what keeps the value defined
-          // (never X) between power-up and the first line read.
+          // c_line_word_r IS NOT CLEARED HERE, and that is a CONTRACT, not an omission: the
+          // word is read ONLY under the STROBE `cpu_line_word_valid`, and at every beat the
+          // word holds THIS access's data - a line read shifts four columns into it before
+          // each strobe, c_line_n is reset to 0 below, and the only exit from C_WAIT is the
+          // 16th column. The RESET clear stays: it keeps the value defined (never X) between
+          // power-up and the first line read.
           c_line_n    <= 5'd0;
           c_line_base <= {win_offset[14:4], 4'b0000};
           c_line_mode <= cpu_line_read;
           c_write_q   <= cpu_write;
           if (cpu_line_read) begin
+            // A LINE READ IS ACCEPTED AT THE WALK'S START: the beats stream through the
+            // walk, so the accept cannot wait for its end (the L1 loads its four-beat counter
+            // at the accept). The walk's duration is unchanged; only the accept moves, and the
+            // fill therefore completes four clk_sys earlier.
+            c_line_ready_q <= 1'b1;
             cs <= C_VAL;
           end else begin
             // Present the one-visit access in the accept cycle: the request's word is the
@@ -530,18 +572,19 @@ module pc9821_gvram_arb #(
 
         C_VAL: begin
           c_cl_valid <= 1'b1;
-          c_cl_addr  <= {access_page, c_col};
+          c_cl_addr  <= {c_page, c_col};
           c_cl_wdata <= 32'd0;
           c_cl_wbe   <= 4'hF;
           cs         <= C_WAIT;
         end
 
         C_WAIT: if (cc_plain_done) begin
-          // The line datum is COLLECTED BY SHIFTING: each column's byte enters at the top and the
-          // register moves down a byte, so after the 16 columns the first one sits at [7:0] - the
-          // same 128 bits the indexed byte write built, without a 16-way write decode. (Only the
-          // strobed value is read, see the contract above; tb_pc9821_gvram_arb_equiv.)
-          c_line_r <= {cc_rdata[{c_plane, 3'b000} +: 8], c_line_r[127:8]};
+          // Each column's byte shifts into the WORD from the top, so after a group of four
+          // columns the first one sits at [7:0] - the line's dword N, little-endian, the same
+          // byte order. The strobe is registered on
+          // the group's fourth column so the subsystem samples the completed word next cycle.
+          c_line_word_r <= {cc_rdata[{c_plane, 3'b000} +: 8], c_line_word_r[31:8]};
+          if (c_line_n[1:0] == 2'd3) c_line_beat_q <= 1'b1;
           if (c_line_n == 5'd15) begin
             c_line_n <= 5'd16;
             cs       <= C_RESP;
@@ -657,7 +700,7 @@ module pc9821_gvram_arb #(
   //   * `cc_lane_be` is `cpu_be` on the GRCG's arm, and z486 moves cpu_be for its NEXT access the
   //     cycle after the decoupled ready;
   //   * the GRCG's tile word is read LIVE from its register file, and the guest's `out 0x7E` can
-  //     now run while the walk drains (it could not while the walk held the CPU).
+  //     run while the walk drains (the walk does not hold the CPU).
   reg  [3:0]  m_lane_be;
   reg [31:0]  m_tile;
   wire [31:0] w_tile    = m_mode ? m_tile    : grcg_cl_tile;
@@ -668,15 +711,14 @@ module pc9821_gvram_arb #(
   // that datum byte, so a zero datum leaves the merged word equal to the old one at EVERY plane -
   // no old value to read and nothing to write. Such a lane is DEAD and the walk steps over it, so a
   // store that changes nothing (a sprite erase's empty mask row, the audit's data-0x00 case) stops
-  // paying a read and a write per lane. Every other enabled lane is live. The old read test asked
-  // the whole 32-bit mask, so a single-plane put or a mixed 32-bit datum paid a read on every lane.
+  // paying a read and a write per lane. Every other enabled lane is live.
   // `lane_datum0_hold` is PRECOMPUTED at the GRCG's data registers: the GRCG exports the exact
   // byte-zero image of its own cl_wdata (its capture mux included), so no byte comparators sit
   // on the 32-bit cc_wdata mux - the write-data mux and the comparators are OUTSIDE the
   // gma_we cone this feeds, and the value is bit-exact for the GRCG RMW zero-lane skip.
   // The skip applies ONLY under lane_rmw_hold, which requires cc_owns_grcg, and then the owner mux
   // below could only ever pick the GRCG's flags: the plain path's own flags (c_cl_datum0, dropped)
-  // and the EGC's (egc_cl_datum0, now unused here) are never selected where the result is used
+  // and the EGC's (egc_cl_datum0, unused here) are never selected where the result is used
   // (tools/equiv/arb_lane_skip.sv proves lane_skip_hold unchanged).
   wire [3:0]  lane_datum0_hold = grcg_cl_hold_datum0;
   wire        lane_rmw_hold = ef_wr && cc_owns_grcg && grcg_cl_hold_rmw;
@@ -706,7 +748,7 @@ module pc9821_gvram_arb #(
   // read while the GRCG owns the transaction and no walk is in flight - `lane_live` and
   // `gr_merge` select the capture arm on exactly this condition, and the raw-tap
   // bit-exactness proof assumes it (the cl_cap && m_mode case would read the hold taps
-  // where the old operand-muxed form read the capture's - unreachable, but asserted now,
+  // where an operand-muxed form would read the capture's - unreachable, and asserted here,
   // not just proven on paper). It holds because cap_store is gated on the GRCG's own
   // cpu_valid (which includes cc_owns_grcg) and the GRCG captures only from its G_IDLE,
   // which the no-accept-mid-walk discipline (check (3)) keeps clear of the walk. The one
@@ -773,24 +815,21 @@ module pc9821_gvram_arb #(
   wire walk_act    = m_mode || walk_first;
   wire walk_gr     = walk_act && cc_owns_grcg;
 
-  wire [7:0]  ef_byte = cc_wdata[{w_lane[1:0], 3'b000} +: 8];
+  // The presented word: the address and byte enables here (the FSM latches the address and the
+  // partial-burst check reads the enables); its data, `ef_data` = walk_gr ? w_tile : !walk_act ?
+  // cc_wdata : the lane byte replicated, is formed per arm in the port-A block below.
   wire [15:0] ef_addr = !walk_act ? cc_addr : {w_base, w_lane[1:0]};
   wire  [3:0] ef_wbe  = walk_gr ? cc_wbe :
                         !walk_act ? cc_wbe :
                         (4'h1 << cc_byte_lane);
-  wire [31:0] ef_data = walk_gr ? w_tile :
-                        !walk_act ? cc_wdata :
-                        {4{ef_byte}};
 
   // ---- The GRCG's ONE-VISIT store ----
   // walk_gr marks the store walk: each enabled CPU byte lane is resolved with the GRCG's merge, not
   // the plain path's one-plane byte. `gr_mask` is the merge's 32-bit byte mask - the plane enable
   // ~mode[3:0] broadcast per plane, ANDed with the CPU data byte for RMW - so the merge computes
   // (old & ~mask) | (tile & mask): TDW gets tile where enabled, RMW gets (old & ~d) | (tile & d)
-  // per PLANE BIT, which no 4-bit plane mask can express.
-  wire [31:0] gr_emask  = { {8{cc_wbe[3]}}, {8{cc_wbe[2]}}, {8{cc_wbe[1]}}, {8{cc_wbe[0]}} };
-  wire  [7:0] gr_d      = cc_wdata[{w_lane[1:0], 3'b000} +: 8];
-  wire [31:0] gr_mask   = grcg_cl_rmw ? (gr_emask & {4{gr_d}}) : gr_emask;
+  // per PLANE BIT, which no 4-bit plane mask can express. G_RMWC's write is its only reader, so
+  // it is formed per arm in the port-A block below (`x_gr_mask`).
   // A GRCG RMW lane whose datum byte is 0xFF needs no read: the merge is the tile whatever old was
   // (the read-skip), and a datum byte of 0x00 needs no access at all (the lane
   // is dead above). Any OTHER datum byte with a bit inside a plane DOES need the old word, because
@@ -805,7 +844,7 @@ module pc9821_gvram_arb #(
               (cap_arm ? (lane_rmw_cap  && cpu_din_datmid[w_first_cap[1:0]])
                        : (lane_rmw_hold && grcg_cl_hold_mergeable[w_lane_hold[1:0]]));
 
-  // ---- The EGC's read pass as ONE burst, now over the array ----
+  // ---- The EGC's read pass as ONE burst over the array ----
   // The unit's enabled columns are a contiguous run; the client asks for all of them at once and
   // receives one word per cl_done, in column order. The run's length is the access's own byte
   // enables (a 16-bit unit asks for two columns, not four).
@@ -821,10 +860,9 @@ module pc9821_gvram_arb #(
   wire burst_fits = cc_burst && cc_write && !m_mode;
 `ifdef VERILATOR
   // ---------------------------------------------------------------------------
-  // CROSS-MODULE INVARIANTS AS ASSERTIONS (gvram-arb review F5/F6 + data-race review
-  // F2/F3). Each check pins a contract that used to live in a comment only - the reviews
-  // found the dispatch/done routing holds together through these invariants and nothing
-  // asserted them. They cost nothing in synthesis (`ifdef VERILATOR`) and run in every
+  // CROSS-MODULE INVARIANTS AS ASSERTIONS (the $error texts name each check by
+  // its number). The dispatch/done routing holds together through these invariants, and
+  // each check pins one of them. They cost nothing in synthesis (`ifdef VERILATOR`) and run in every
   // bench that builds this module. R8 of docs/single-cycle-event-discipline.md: a
   // comment that documents a race names the assertion that pins it.
   // ---------------------------------------------------------------------------
@@ -834,44 +872,44 @@ module pc9821_gvram_arb #(
     if (cc_burst && cc_write && !m_mode && (ef_wbe != 4'hF))
       $error("pc9821_gvram_arb: partial write burst (ef_wbe=%b) - the two-word path writes full words",
              ef_wbe);
-    // (1) A DONE IS BORN OF A TRANSACTION (gvram-arb F6.1, exact form): every `b_done_r`
+    // (1) A DONE IS BORN OF A TRANSACTION (exact form): every `b_done_r`
     //     cycle follows a cycle in which a transaction was in flight OR being accepted
     //     (`cc_ready` covers the one-lane walk and the no-op, whose done issues in their own
-    //     accept cycle). NB the F6.1 text states the stronger `b_done_r |-> any_inflight` at
-    //     the done CYCLE - that form is false for the EGC's posted write: its S_HOLD tail
+    //     accept cycle). NB the stronger `b_done_r |-> any_inflight` at
+    //     the done CYCLE is false for the EGC's posted write: its S_HOLD tail
     //     exits one cycle before the burst's done lands (the done is deliberately UNOBSERVED,
     //     req_acc cleared at the presentation and S_WR_B_ACC advancing on the accept), so the
     //     owner latch may re-evaluate at that done cycle without mis-routing anything anyone
     //     waits for. The wedge class that remains is a MASKED done with a waiter, pinned by
     //     (2) below.
     if (!reset && b_done_r && !txn_live_q)
-      $error("pc9821_gvram_arb: a done pulse with no transaction accepted or in flight the cycle before (F6.1)");
-    // (2) NO MASKED DONE WITH A WAITER (data-race F3's no-re-present rule): `cc_done =
+      $error("pc9821_gvram_arb: a done pulse with no transaction accepted or in flight the cycle before (check 1)");
+    // (2) NO MASKED DONE WITH A WAITER (the no-re-present rule): `cc_done =
     //     b_done_r && !cc_ready` deletes a completion when a request is accepted in the done
     //     cycle, so while any client is in flight awaiting that completion the two must not
     //     coincide or the waiting FSM (G_STW/G_TDW/S_WR_ACC/S_RD_RESP/C_MWAIT/C_WAIT) hangs
     //     forever. The unobserved posted-write done (nobody in flight) is the one masked pulse
     //     the design allows.
     if (!reset && b_done_r && cc_ready && any_inflight)
-      $error("pc9821_gvram_arb: a done masked by a same-cycle accept while a client is in flight - the waiting client wedges (data-race F3)");
-    // (3) NO ACCEPT MID-WALK (data-race F2's ordering premise): the posted EGC write
+      $error("pc9821_gvram_arb: a done masked by a same-cycle accept while a client is in flight - the waiting client wedges (check 2)");
+    // (3) NO ACCEPT MID-WALK (the ordering premise): the posted EGC write
     //     advances on its ACCEPT and has no write buffer to forward from, so read-after-
     //     write ordering rests on the array accepting no client until the walk drains.
     //     Structural in cc_ready's expression today; pinned so it stays so.
     if (!reset && cc_ready && ((gstate != G_IDLE) || m_mode))
-      $error("pc9821_gvram_arb: a client accepted mid-drain - the posted write's read-after-write ordering has no WCB to fall back on (data-race F2)");
-    // (4) THE BURST'S MERGE-REDUCTION PRECONDITION (gvram-arb F5): the two-word path
+      $error("pc9821_gvram_arb: a client accepted mid-drain - the posted write's read-after-write ordering has no WCB to fall back on (check 3)");
+    // (4) THE BURST'S MERGE-REDUCTION PRECONDITION: the two-word path
     //     writes cc_wdata2 raw and never consults gr_mask/gr_merge, so a GRCG RMW burst is
     //     legal only when the merge reduces to the tile - a 0xFF datum per presented word.
     //     The GRCG's pair test enforces exactly this today; if its burst classification
     //     ever loosens, this fires instead of planes being silently corrupted.
     if (!reset && cc_ready && cc_burst && cc_write && cc_owns_grcg && grcg_cl_rmw &&
         (grcg_cl_wdata != 32'hFFFF_FFFF))
-      $error("pc9821_gvram_arb: GRCG RMW burst with datum %08x - the burst path drops the merge, so a burst needs a 0xFF datum (F5)",
+      $error("pc9821_gvram_arb: GRCG RMW burst with datum %08x - the burst path drops the merge, so a burst needs a 0xFF datum (check 4)",
              grcg_cl_wdata);
   end
 
-  // (5) THE DECOUPLED-STORE OWNER-LATCH CONTRACT, first half (data-race F2/F3): the
+  // (5) THE DECOUPLED-STORE OWNER-LATCH CONTRACT, first half (checks 2 and 3): the
   //     in-flight owner latch must not follow the live cpu_write/gate drop mid-walk - a
   //     decoupled store's ready is seen by z486 the cycle the walk starts, so the CPU's
   //     request signals are already moving for the next access while this walk drains.
@@ -894,7 +932,7 @@ module pc9821_gvram_arb #(
     end
   end
 
-  // (6) ... second half (gvram-arb F6.3): the arb latches the tile word and the lane
+  // (6) ... second half: the arb latches the tile word and the lane
   //     enables at the accept but reads the GRCG's `cl_rmw`/`cl_wbe`/`cl_wdata` LIVE into
   //     gr_mask/gr_emask/gr_d deep into the walk, so the GRCG must hold those from its
   //     capture until its own cl_done. It does (rmw_q/cl_wbe_r/cl_wdata_r held until the
@@ -913,7 +951,7 @@ module pc9821_gvram_arb #(
       if (walk_gr && gr_walk_d &&
           ((grcg_cl_rmw != grcg_cl_rmw_d) || (grcg_cl_wbe != grcg_cl_wbe_d) ||
            (grcg_cl_wdata != grcg_cl_wdata_d)))
-        $error("pc9821_gvram_arb: the GRCG's cl_rmw/cl_wbe/cl_wdata moved mid-walk - it must hold them until its own cl_done (F6.3)");
+        $error("pc9821_gvram_arb: the GRCG's cl_rmw/cl_wbe/cl_wdata moved mid-walk - it must hold them until its own cl_done (check 6)");
       gr_walk_d       <= walk_gr;
       grcg_cl_rmw_d   <= grcg_cl_rmw;
       grcg_cl_wbe_d   <= grcg_cl_wbe;
@@ -936,74 +974,231 @@ module pc9821_gvram_arb #(
   // The array-access FSM
   // ---------------------------------------------------------------------------
   // The state and its registers are declared above, beside the walk that reads `gstate` for its own
-  // accept cycle. `g_walk` is the walk's access arm - it presents the lane `w_lane` names, in the
-  // accept cycle as well as inside the walk - and g_single is everything else the G_IDLE state
-  // dispatches: the one-word access, the client bursts, and the non-line column walk.
-  wire g_walk   = (gstate == G_IDLE) && walk_act;
-  wire g_single = (gstate == G_IDLE) && accept_ok && !m_mode && cc_valid && !cc_lane_many;
+  // accept cycle. In the port-A block below, `x_g_walk` is the walk's access arm - it presents the
+  // lane `w_lane` names, in the accept cycle as well as inside the walk - and x_g_single is
+  // everything else the G_IDLE state dispatches: the one-word access, the client bursts, and the
+  // non-line column walk.
 
   // Port A's presented access. The G_IDLE arms are the dispatch; the other states are the
   // multi-cycle tails. `ef_*` is stable across a walk's whole run (the client holds it) and a
   // single access samples it in the accept cycle, so no per-access latch is needed except the
   // address and payload the tails name.
-  always @* begin
-    gma_en   = 1'b0;
-    gma_we   = 1'b0;
-    gma_addr = b_addr_q;
-    gma_din  = 32'd0;
-    gma_be   = 4'hF;
-    case (gstate)
-      G_IDLE: begin
-        if (g_walk) begin
-          gma_en   = 1'b1;
-          gma_addr = ef_addr;
-          gma_din  = ef_data;
-          gma_be   = ef_wbe;
-          gma_we   = ef_wr && !gr_merge;
-        end else if (g_single) begin
-          gma_en   = 1'b1;
-          gma_addr = ef_addr;
-          if (cc_rd_burst) begin
-            gma_we = 1'b0;
-          end else if (burst_fits) begin
-            gma_din = cc_wdata2[31:0];
-            gma_be  = 4'hF;
-            gma_we  = 1'b1;
-          end else if (!cc_burst) begin
-            gma_din = ef_data;
-            gma_be  = ef_wbe;
-            gma_we  = ef_wr && !gr_merge;
+  //
+  // THE PRESENTATION IS FORMED ON EACH ARM OF THE GRCG CAPTURE AND `grcg_cl_cap` SELECTS LAST
+  // (docs/timing.md, C7-tail). grcg_cl_cap is the GRCG's store_accept, which carries the whole
+  // CPU-request decode (the plane-window select, cpu_run, the share's cpu_req), and every
+  // presentation term read it in series: cl_cap -> cc_write -> ef_wr -> the lane enables -> w_lane
+  // -> the byte select -> ef_data -> gma_din, ~11 ns behind the capture in the fitted paths. The
+  // block below is the presentation above (cc_* -> ef_* -> gr_* -> the access case) written once
+  // and elaborated twice: arm 1 with the capture's operands (grcg_cl_cap_*, cl_valid/cl_write 1)
+  // and cl_cap = 1, arm 0 with the latched image (grcg_cl_hold_*) and cl_cap = 0. That is the
+  // Shannon expansion of the old function on grcg_cl_cap, exact in EVERY state (no invariant), so
+  // each gma_* equals the old one in every cycle; tools/check_seq_equiv.py --pair proves it over
+  // pc9821_grcg + pc9821_gvram_arb against their earlier text. The FSM above keeps reading the
+  // muxed cc_*/ef_* (its D inputs are not M10K endpoints), so this is the ONLY copy that drives port
+  // A, and an edit to the presentation above must be made here too (the proof catches a mismatch).
+  // The capture arm is expanded once more on the GRCG's TDW class: arm 1 is the
+  // capture with tdw_burst = 0, arm 2 with tdw_burst = 1 and pair_high = 0, arm 3 with
+  // tdw_burst = 1 and pair_high = 1, and the last select is (grcg_cl_cap, tdw_burst, pair_high).
+  // tdw_burst sits behind the CPU datum's 00/FF compare; expanded this way it reaches only the
+  // final 4:1 select, not the whole dispatch (x_lane_many -> x_g_single -> the address and
+  // enable muxes) to the M10K. Exact in every state: the GRCG's capture operands are
+  // cl_cap_burst = tdw_burst, cl_cap_addr[1:0] = {tdw_burst && pair_high, 1'b0}, cl_cap_wbe =
+  // ~mode[3:0] (independent of the class), cl_cap_wdata = tdw_burst ? 32'hFFFF_FFFF : cpu_din.
+  genvar pk;
+  generate
+    for (pk = 0; pk < 4; pk = pk + 1) begin : pq
+      localparam CAP   = (pk >= 1);
+      localparam BURST = (pk >= 2);
+      localparam PH    = (pk == 3);
+      // this arm's GRCG presentation (pc9821_grcg: cl_* = cap_store ? cl_cap_* : cl_hold_*)
+      wire        a_valid  = CAP ? 1'b1               : grcg_cl_hold_valid;
+      wire        a_write  = CAP ? 1'b1               : grcg_cl_hold_write;
+      wire        a_burst  = CAP ? BURST              : grcg_cl_hold_burst;
+      wire [15:0] a_addr   = CAP ? {grcg_cl_cap_addr[15:2], PH, 1'b0} : grcg_cl_hold_addr;
+      wire  [3:0] a_wbe    = CAP ? grcg_cl_cap_wbe    : grcg_cl_hold_wbe;
+      wire [31:0] a_wdata  = CAP ? (BURST ? 32'hFFFF_FFFF : cpu_din) : grcg_cl_hold_wdata;
+      wire [31:0] a_wdata2 = CAP ? grcg_cl_cap_wdata2[31:0] : grcg_cl_hold_wdata2[31:0];
+      wire        a_rmw    = CAP ? grcg_cl_cap_rmw    : grcg_cl_hold_rmw;
+      // the client mux (cc_*), on this arm
+      wire        x_valid  = cc_owns_plain ? c_cl_valid : cc_owns_grcg ? a_valid  : egc_cl_valid;
+      wire        x_write  = cc_owns_plain ? cpu_write  : cc_owns_grcg ? a_write  : egc_cl_write;
+      wire [15:0] x_addr   = cc_owns_plain ? c_cl_addr  : cc_owns_grcg ? a_addr   : egc_cl_addr;
+      wire [31:0] x_wdata  = cc_owns_plain ? c_cl_wdata : cc_owns_grcg ? a_wdata  : egc_cl_wdata;
+      wire  [3:0] x_wbe    = cc_owns_plain ? c_cl_wbe   : cc_owns_grcg ? a_wbe    : egc_cl_wbe;
+      wire        x_burst  = (cc_owns_egc && egc_cl_burst) || (cc_owns_grcg && a_burst);
+      wire [31:0] x_wdata2 = cc_owns_grcg ? a_wdata2 : egc_cl_wdata2[31:0];   // the low word
+      wire        x_lane_many = (cc_owns_plain && c_many && !c_line_mode) ||
+                                (cc_owns_grcg && a_write && !a_burst);
+      // the walk (ef_wr, the lane enables, w_lane, walk_*), on this arm
+      wire        x_ef_wr      = m_mode ? m_write : (cc_owns_plain ? c_write_q : x_write);
+      wire        x_cap_arm    = CAP && !m_mode;
+      // THE MERGE FLAG IS FORMED FOR THE GRCG OWNER ALONE. x_walk_gr carries cc_owns_grcg,
+      // so the flag is 0 for the plain and EGC owners, and for the GRCG owner every owner term above
+      // is a constant (x_ef_wr = m_mode ? m_write : a_write, x_valid = a_valid, x_lane_many =
+      // a_write && !a_burst, the lane enables from the GRCG's own be). Written that way it is the
+      // same function with cc_owns_grcg as its LAST AND, instead of the owner decode running on
+      // through the live-lane enables, the first-lane encoder and the mergeable-flag select to
+      // p_we (the 80 MHz fits' second C7 route: ext_write_r -> line_read -> cc_owns_egc_comb ->
+      // own_grcg -> x_live_hold -> x_lane_hold -> Mux -> p_we -> the M10K write decode).
+      wire        xg_ef_wr    = m_mode ? m_write : a_write;
+      wire        xg_rmw_hold = xg_ef_wr && grcg_cl_hold_rmw;
+      wire        xg_rmw_cap  = xg_ef_wr && grcg_cl_cap_rmw;
+      wire  [3:0] xg_live_hold = (m_mode ? m_lane_be : grcg_cl_hold_be) &
+                                 ~(xg_rmw_hold ? lane_datum0_hold : 4'd0);
+      wire  [3:0] xg_live_cap  = cpu_be & ~(xg_rmw_cap ? cpu_din_datum0 : 4'd0);
+      /* verilator lint_off UNUSEDSIGNAL */   // bit 2 is the no-live-lane code, read as lane 0
+      wire  [2:0] xg_first_cap  = first_live(xg_live_cap);
+      wire  [2:0] xg_first_hold = first_live(xg_live_hold);
+      /* verilator lint_on UNUSEDSIGNAL */
+      wire  [1:0] xg_lane_hold  = m_mode ? m_lane[1:0] : xg_first_hold[1:0];
+      wire        xg_walk_first = (gstate == G_IDLE) && accept_ok && !m_mode && a_valid &&
+                                  (a_write && !a_burst) &&
+                                  (x_cap_arm ? (|xg_live_cap) : (|xg_live_hold));
+      wire        xg_walk_act   = m_mode || xg_walk_first;
+      wire        xg_merge      = xg_walk_act &&
+                  (x_cap_arm ? (xg_rmw_cap  && cpu_din_datmid[xg_first_cap[1:0]])
+                             : (xg_rmw_hold && grcg_cl_hold_mergeable[xg_lane_hold]));
+      // THE WALK DECISION AND ITS LANE ARE SHANNON-EXPANDED ON THE GRCG OWNER (docs/timing.md C7-own).
+      // Formed through the owner mux they ran owner -> x_ef_wr -> the RMW zero-skip -> the live
+      // lanes -> the first-lane encoder -> x_walk_act -> p_en -> the M10K write decode (the 100 MHz
+      // fits' owner route: ext_valid_r -> line_read -> cc_owns_plain -> x_ef_wr -> x_live_cap ->
+      // x_lane -> x_walk_act -> gma_en). Each is the GRCG owner's form (xg_*, above: every
+      // owner term a constant) or the other owners' form (no zero-skip, the hold enables c_be, and
+      // only the plain owner walks), with cc_owns_grcg the LAST select: f = g ? f|g=1 : f|g=0,
+      // exact in every state. On the burst arms (a_burst = 1) the GRCG form of the walk is the
+      // constant 0, so the CPU datum's 00/FF compare leaves them entirely.
+      // tools/check_seq_equiv.py --pair proves the pair equal to its earlier text.
+      /* verilator lint_off UNUSEDSIGNAL */   // bit 2 is the no-live-lane code, read as lane 0
+      wire  [2:0] x_first_ng  = first_live(cpu_be);
+      wire  [2:0] x_first_hng = first_live(c_be);
+      /* verilator lint_on UNUSEDSIGNAL */
+      wire  [1:0] x_lane_hold_ng = m_mode ? m_lane[1:0] : x_first_hng[1:0];
+      wire  [1:0] x_lane_nog  = x_cap_arm ? x_first_ng[1:0] : x_lane_hold_ng;
+      wire        x_walk_first_ng = (gstate == G_IDLE) && accept_ok && !m_mode && cc_owns_plain &&
+                                    c_cl_valid && c_many && !c_line_mode &&
+                                    (x_cap_arm ? (|cpu_be) : (|c_be));
+      wire  [1:0] xg_lane      = x_cap_arm ? xg_first_cap[1:0] : xg_lane_hold;
+      wire  [1:0] x_lane       = cc_owns_grcg ? xg_lane : x_lane_nog;
+      wire [15:2] x_base       = m_mode ? m_base : x_addr[15:2];
+      wire        x_walk_first = cc_owns_grcg ? xg_walk_first : x_walk_first_ng;
+      wire        x_walk_act   = m_mode || x_walk_first;
+      wire        x_walk_gr    = x_walk_act && cc_owns_grcg;
+      // the presented word (ef_*) and the GRCG merge (gr_*), on this arm
+      // The replicated byte is presented only for a walk the GRCG does NOT own (x_ef_data's last
+      // arm; x_walk_gr = x_walk_act && cc_owns_grcg selects the tile first). A non-GRCG owner has
+      // no RMW zero-skip, so its capture-arm live lanes are cpu_be alone and its lane (x_lane_nog)
+      // never waits on the CPU datum's 00/FF compare (the datum -> first lane -> the byte mux ->
+      // gma_din route was the 80 MHz fits' third C7 route).
+      wire  [7:0] x_ef_byte_nog = x_wdata[{x_lane_nog, 3'b000} +: 8];
+      // [15:2] is x_base whether or not the access walks (a non-walking access has m_mode = 0, so
+      // x_base is x_addr[15:2]): only the lane bits wait for the walk decision.
+      wire [15:0] x_ef_addr = {x_base, x_walk_act ? x_lane[1:0] : x_addr[1:0]};
+      wire  [3:0] x_ef_wbe  = x_walk_gr ? x_wbe :
+                              !x_walk_act ? x_wbe :
+                              (4'h1 << cc_byte_lane);
+      wire [31:0] x_ef_data = x_walk_gr ? w_tile :
+                              !x_walk_act ? x_wdata :
+                              {4{x_ef_byte_nog}};
+      wire [31:0] x_gr_emask = { {8{x_wbe[3]}}, {8{x_wbe[2]}}, {8{x_wbe[1]}}, {8{x_wbe[0]}} };
+      // x_gr_mask is read only in G_RMWC, and G_RMWC implies m_mode (tools/check_arb_resp_inv.py,
+      // by induction over the real cluster), where x_cap_arm = 0 and x_lane = m_lane[1:0]; the
+      // datum-dependent capture lane is not on this path. The fuse below checks it every cycle.
+      wire  [7:0] x_gr_d_m   = x_wdata[{m_lane[1:0], 3'b000} +: 8];
+      wire [31:0] x_gr_mask  = a_rmw ? (x_gr_emask & {4{x_gr_d_m}}) : x_gr_emask;
+      // The earlier forms of the two cuts above: the lane the capture arm resolved from the datum.
+      // Not read by the design; the VERILATOR fuse below and tools/check_arb_resp_inv.py (by
+      // induction) compare against them.
+      /* verilator lint_off UNUSEDSIGNAL */
+      wire  [7:0] x_gr_d_old = x_wdata[{x_lane[1:0], 3'b000} +: 8];
+      wire  [7:0] x_ef_byte_old = x_wdata[{x_lane[1:0], 3'b000} +: 8];
+      /* verilator lint_on UNUSEDSIGNAL */
+`ifdef VERILATOR
+      always @(posedge clk) begin
+        if (!reset && gstate == G_RMWC && x_gr_d_m != x_gr_d_old)
+          $error("pc9821_gvram_arb: pq[%0d] G_RMWC merge byte differs from the earlier lane form", pk);
+        if (!reset && x_walk_act && !cc_owns_grcg && x_ef_byte_nog != x_ef_byte_old)
+          $error("pc9821_gvram_arb: pq[%0d] replicated byte differs from the earlier lane form", pk);
+      end
+`endif
+      wire        x_gr_merge = cc_owns_grcg && xg_merge;
+      wire x_rd_burst   = x_burst && !x_write && !m_mode;
+      wire x_burst_fits = x_burst && x_write && !m_mode;
+      wire x_g_walk     = (gstate == G_IDLE) && x_walk_act;
+      wire x_g_single   = (gstate == G_IDLE) && accept_ok && !m_mode && x_valid && !x_lane_many;
+      // the access case, on this arm
+      reg         p_en, p_we;
+      reg  [15:0] p_addr;
+      reg  [31:0] p_din;
+      reg   [3:0] p_be;
+      always @* begin
+        p_en   = 1'b0;
+        p_we   = 1'b0;
+        p_addr = b_addr_q;
+        p_din  = 32'd0;
+        p_be   = 4'hF;
+        case (gstate)
+          G_IDLE: begin
+            // THE ADDRESS, DATA AND ENABLES ARE PRESENTED WHETHER OR NOT THE PORT IS ENABLED
+            // (docs/timing.md C7-dc). pc9821_gvram_mem reads a_addr only under a_en, and a_din/a_be only
+            // under a_en && a_we (its writes, its a_dout read and its read-during-write bypass, whose
+            // unconditional rdw_din_q/rdw_be_q capture is read only behind rdw_hit_q), so their
+            // values in a cycle the walk/single decision leaves the port idle are never observed;
+            // presenting them unconditionally takes that decision (the CPU datum's 00/FF class,
+            // the owner, the period gate) out of the address, data and byte-enable cones. The burst
+            // word is the single access's (x_g_single needs !x_lane_many; a walk needs x_lane_many or
+            // m_mode, which x_burst_fits excludes), so the class picks the datum, not the decision.
+            // tools/check_seq_equiv.py --pair proves the pair equal on the port as the memory
+            // observes it, and that pc9821_gvram_mem observes no more than that.
+            p_addr = x_ef_addr;
+            p_din  = (x_burst_fits && !x_lane_many) ? x_wdata2 : x_ef_data;
+            p_be   = (x_burst_fits && !x_lane_many) ? 4'hF : x_ef_wbe;
+            if (x_g_walk) begin
+              p_en   = 1'b1;
+              p_we   = x_ef_wr && !x_gr_merge;
+            end else if (x_g_single) begin
+              p_en   = 1'b1;
+              p_we   = x_rd_burst ? 1'b0 : x_burst_fits ? 1'b1 : (x_ef_wr && !x_gr_merge);
+            end
           end
-        end
+          G_RMWC: begin
+            p_en   = 1'b1;
+            p_we   = 1'b1;
+            p_addr = b_addr_q;
+            p_din  = (gma_dout & ~x_gr_mask) | (w_tile & x_gr_mask);
+            p_be   = 4'hF;
+          end
+          G_W2B: begin
+            p_en   = 1'b1;
+            p_we   = 1'b1;
+            // The two-word burst's second word at the NEXT 15-bit offset of the
+            // SAME page. The plain `+ 16'd1` carried into the page bit at
+            // {page, 0x7FFF} and wrote the other page's offset 0, where every
+            // GVRAM path in NP2kai wraps the offset at 15 bits (LOW15,
+            // mem/memvram.c:42,114,136 and mem/memegc.c:1131,1327) and this
+            // module's own column walk c_col already wraps the same way
+            // (aliases.md A8).
+            p_addr = {b_addr_q[15], (b_addr_q[14:0] + 15'd1)};
+            p_din  = b_w2_hi_q;
+            p_be   = 4'hF;
+          end
+          G_RBC: if (rb_left_n != 3'd1) begin
+            p_en   = 1'b1;
+            p_we   = 1'b0;
+            p_addr = rb_word + 16'd1;
+          end
+          default: ;
+        endcase
       end
-      G_RMWC: begin
-        gma_en   = 1'b1;
-        gma_we   = 1'b1;
-        gma_addr = b_addr_q;
-        gma_din  = (gma_dout & ~gr_mask) | (w_tile & gr_mask);
-        gma_be   = 4'hF;
-      end
-      G_W2B: begin
-        gma_en   = 1'b1;
-        gma_we   = 1'b1;
-        // The two-word burst's second word at the NEXT 15-bit offset of the
-        // SAME page. The plain `+ 16'd1` carried into the page bit at
-        // {page, 0x7FFF} and wrote the other page's offset 0, where every
-        // GVRAM path in NP2kai wraps the offset at 15 bits (LOW15,
-        // mem/memvram.c:42,114,136 and mem/memegc.c:1131,1327) and this
-        // module's own column walk c_col already wraps the same way
-        // (aliases.md A8).
-        gma_addr = {b_addr_q[15], (b_addr_q[14:0] + 15'd1)};
-        gma_din  = b_w2_hi_q;
-        gma_be   = 4'hF;
-      end
-      G_RBC: if (rb_left_n != 3'd1) begin
-        gma_en   = 1'b1;
-        gma_we   = 1'b0;
-        gma_addr = rb_word + 16'd1;
-      end
-      default: ;
-    endcase
+    end
+  endgenerate
+
+  always @* begin
+    gma_en   = grcg_cl_cap ? (grcg_cl_cap_burst ? (grcg_cl_cap_pair_high ? pq[3].p_en : pq[2].p_en) : pq[1].p_en) : pq[0].p_en;
+    gma_we   = grcg_cl_cap ? (grcg_cl_cap_burst ? (grcg_cl_cap_pair_high ? pq[3].p_we : pq[2].p_we) : pq[1].p_we) : pq[0].p_we;
+    gma_addr = grcg_cl_cap ? (grcg_cl_cap_burst ? (grcg_cl_cap_pair_high ? pq[3].p_addr : pq[2].p_addr) : pq[1].p_addr) : pq[0].p_addr;
+    gma_din  = grcg_cl_cap ? (grcg_cl_cap_burst ? (grcg_cl_cap_pair_high ? pq[3].p_din : pq[2].p_din) : pq[1].p_din) : pq[0].p_din;
+    gma_be   = grcg_cl_cap ? (grcg_cl_cap_burst ? (grcg_cl_cap_pair_high ? pq[3].p_be : pq[2].p_be) : pq[1].p_be) : pq[0].p_be;
   end
 
   assign cc_rdata = b_rdata;
@@ -1090,7 +1285,7 @@ module pc9821_gvram_arb #(
               rb_left_n <= rd_cnt;
               gstate    <= G_RBC;
             end else if (burst_fits) begin
-              b_w2_hi_q <= cc_wdata2[63:32];
+              b_w2_hi_q <= cc_wdata2_hi;
               gstate <= G_W2B;
             end
             else if (ef_wr && gr_merge) gstate <= G_RMWC;
@@ -1169,7 +1364,10 @@ module pc9821_gvram_arb #(
   // ready is still its ACCEPT and its walk still drains behind the CPU, but the GVRAM takes the
   // next access only after the captured per-operation time, so a STREAM's sustained cost is the
   // machine's (see tb_pc9821_gvram_latency). A single store after an idle GVRAM is not held.
-  assign cpu_ready           = cc_owns_plain ? ((cs == C_RESP) || c_store_ready_q) :
+  // A line read pulses its accept in C_IDLE's next cycle (c_line_ready_q) and never in C_RESP
+  // (c_line_mode gates that arm off), so the walk's end does not re-accept it.
+  assign cpu_ready           = cc_owns_plain ? (((cs == C_RESP) && !c_line_mode) ||
+                                                c_store_ready_q || c_line_ready_q) :
                                cc_owns_grcg  ? grcg_cpu_ready : egc_cpu_ready;
   // THE RESPONSE SIDE IS ROUTED BY THE RESPONSES, NOT BY THE LIVE OWNER (docs/timing.md TB).
   // The owner mux `cc_owns_plain ? plain : cc_owns_grcg ? grcg : egc` put the whole live
@@ -1186,7 +1384,7 @@ module pc9821_gvram_arb #(
   //    and any_inflight may be 0 (pc9821_egc S_HOLD); in that cycle cs is C_IDLE and the GRCG
   //    idle (the EGC owned the port the cycle before, so neither could take a request).
   //    tools/check_arb_resp_inv.py proves these by induction over the real cluster.
-  // The EGC strobe is NOT gated by the live owner. The old mux gated it, so the two forms differ
+  // The EGC strobe is NOT gated by the live owner. A gated form would differ from this one
   // only if the live owner has left the EGC in the strobe's cycle (T1, one after S_HOLD's ready
   // cycle T0), and no legal execution reaches that: z486 holds its request through the ready
   // edge (src/z486/bus_unit.sv `if (ready) begin`, which clears ext_valid_r AT it) and the throttle
@@ -1194,8 +1392,8 @@ module pc9821_gvram_arb #(
   // so cpu_req is high through T0 and pc9821_gvram_share's grant (`gdc_valid && !cpu_req && ...`)
   // lands at T1's end at the earliest: in T1 the port still presents the CPU, whose line_read is 0
   // (ext_valid_r is 0, and `direct_rd_pending` keeps it off the bus) and whose EGC gate cannot move
-  // (no I/O while a read is outstanding), so the old mux chose the EGC too. The new form is
-  // therefore cycle-identical to the old mux in every legal execution; ungated, it would also
+  // (no I/O while a read is outstanding), so an owner mux chooses the EGC too. This form is
+  // therefore cycle-identical to the owner mux in every legal execution; ungated, it would also
   // answer that unreachable state rather than mask it. tools/equiv/arb_resp_route.sv proves the
   // strobes, the line strobe and the strobed datum equal the owner mux in every state the
   // invariants allow except that one (tb_pc9821_egc_resp_owner guards the routing with a GDC visit
@@ -1207,7 +1405,8 @@ module pc9821_gvram_arb #(
                                egc_cpu_resp_valid;
   assign cpu_dout            = grcg_cpu_resp_valid ? grcg_cpu_dout :
                                egc_cpu_resp_valid  ? egc_cpu_dout : c_dout_r;
-  assign cpu_line_resp_valid = plain_resp2 && c_line_mode;
+  // The line read's word strobe: one cycle per group of four columns, in line order.
+  assign cpu_line_word_valid = c_line_beat_q;
 `ifdef VERILATOR
   // The three implications the response routing above rests on (proven by
   // tools/check_arb_resp_inv.py; asserted here so every bench that builds the arbiter checks them).
@@ -1220,7 +1419,7 @@ module pc9821_gvram_arb #(
       $error("pc9821_gvram_arb: an EGC response strobe beside a plain or GRCG one - the response routing's third implication failed");
   end
 `endif
-  assign cpu_line_dout       = c_line_r;
+  assign cpu_line_word       = c_line_word_r;
 
   // ---------------------------------------------------------------------------
   // Graphics telemetry counters. Free-running; read as DELTAS between records (2 s at

@@ -3,21 +3,15 @@
 #
 # The rest of this gate measures the CPU through the PC-98 fabric: one end-to-end
 # verdict per bench, hundreds of thousands of cycles away from the instruction that
-# produced it. z486 ships the CPU's own contract tests, and the local patch is a
-# CPU-behaviour change (the fourth change in docs/z486-local-patch.md), so a
-# regression in it has to be reported by a test that names the instruction. That is
+# produced it. z486 ships the CPU's own contract tests, and the fork's PC-98 changes
+# (docs/z486-local-patch.md) alter CPU behaviour, so a regression in them has to be
+# reported by a test that names the instruction. That is
 # this tier. It is Verilator-only, like the rest of the gate.
 #
 # The regression tests for the fourth, fifth and sixth changes are
 # `seg_limit_dcache_miss`, `sreg_absent_gdt_load` and `gp_double_fault_deliver`,
 # the seventh change's is `div_cyrix_probe`, and the eighth change's (upstream
-# PR #2) is `spec_fetch_cpl_leak`. Their files are tracked in
-# tests/z486/ instead of inside the submodule: the
-# patch mechanism is `git diff`-shaped, and a new-file entry in it is dropped by
-# the next regeneration (`git -C src/z486 diff`) -- measured when they were
-# added. They are installed into the suite's programs/ before
-# the run, which is where the suite's own runners look for a test (it scans
-# programs/*.json).
+# PR #2) is `spec_fetch_cpl_leak`. All are fork-tracked under src/z486/tests/programs/.
 #
 # `sreg_absent_gdt_load` is the fifth change's regression test: a segment-register
 # load whose GDT descriptor is absent (all zeros) with an all-zero IDT must escalate
@@ -30,7 +24,7 @@
 # `div_cyrix_probe` is the seventh change's (upstream PR #1): real Intel/AMD 486
 # silicon perturbs SF/ZF/PF/AF as an undocumented side effect of unsigned DIV and
 # Cyrix leaves them unchanged, so pre-CPUID detection software uses that to
-# discriminate. It is carried verbatim from the PR and installed here.
+# discriminate. It is carried verbatim from the PR.
 #
 # `spec_fetch_cpl_leak` is the eighth change's (upstream PR #2): z486's
 # branch-target line buffer survived a front-end flush keyed only on its linear
@@ -48,56 +42,16 @@
 # slots (both first-operand encodings, 8/16/32-bit, add/or/sub, base-register and
 # ES-override EAs, cold-cache second operands, plus the different-destination and
 # separated controls), twice (cold and warm), against a hand-computed table.
-Keep it in this tier: it is the cheapest workload that
+# Keep it in this tier: it is the cheapest workload that
 # reaches the deferred-load / registered-writeback interlock from a real program.
 #
 # Fails on any of: a test that fails (the runner exits non-zero), a run that does
 # not end at 100%, or a run whose total is implausibly small -- so a runner that
 # silently ran nothing (a missing .json, a stale binary) cannot pass.
 #
-# The bdca3b9 re-vendor's eight review-regression programs (`aaa_halfcarry`,
-# `aas_halfborrow`, `bittst_after_wide_shift`, `ed_seg_limit_check`,
-# `enter_check_cross_pf`, `neg_size_carry`, `rcl_count`, `shld_overflow`) are
-# fork-tracked under src/z486/tests/programs/ and named below like the earlier
-# fail-first programs: the count floor is the measured 89.
-#
-# The e5120a2 re-vendor (storeq forwarding replacing the store-patch queues) adds
-# seven more programs - `partial_reg`, `flag_sequences`, `far_jump_pm`,
-# `far_jump_real`, `smc_basic`, `smc_same_line`, `smc_store_patch_stress` - and
-# fixes the AAA/AAS expected values; the count floor rises to the measured 96.
-#
-# The three real-mode PC-98 diagnostics (`seg_verdict_real`, `ed_stack_real`,
-# `mcb_walk_real`) are tracked under tests/z486/ and installed below, so the
-# floor is the measured 99 (2026-10 real-mode CPU-test round).
-#
-# The 4c8ebc3 re-vendor adds five more fork-tracked programs - `int_vec_telemetry`
-# (the dbg_vec_fetch/dbg_vec_num regression), `seg_limit_edge`, `seg_stack_wrap_rm`
-# (the ab145c7 segmented-memory boundary cases), `store_fwd_word`, `store_fwd_word_rm`
-# (the 16-bit store->load forwarding program and its real-mode twin) - and the
-# count floor rises to the measured 104.
-#
-# The 2026-10-04 re-vendor (paging grace, the expand-down B-bit, the shifter's
-# deferred-flag capture, the fault-delivery CPL/branch-kind fixes) adds thirteen
-# more fork-tracked programs - `cpl3_retry`/`cpl3_call_retry`/`cpl3_enter_retry`/
-# `cpl3_push_retry`/`cpl3_pushw_retry` (entry CPL0 and the #GP/stack retries),
-# `expand_down_b_bit`/`expand_down_stack` (the registered ED/D-B bits),
-# `paging_grace` (the fault-pulse demand hold-off), `pf_store_held`/`pf_store_jcc`
-# (restarting a faulting store with its own ESP), `shifter_stack_flags` (the
-# deferred shift-flag result), `unreal_cs_cpl` (the entry CPL0 without a CS
-# rewrite) and `v86_user_page` (the V86 implicit-supervisor DPL) - and the count
-# floor rises to the measured 147.
-#
-# The 2026-10-07 re-vendor onto the fork's curated series on upstream 4bfdde0 carries
-# 288 programs, every one fork-tracked (this tier installs nothing), and drops
-# `int_vec_telemetry`: its check read dbg_vec_fetch telemetry the CPU no longer has, so
-# it passed vacuously (the fork's src/z486/docs/fork-rebase-policy.md records why). The count
-# floor rises to the measured 288.
-#
-# The later 2026-10-07 re-vendor onto the fork's `27df73f` adds `spec_fetch_cpl_buffer`
-# (a branch-target line buffered at CPL 0 must not run at CPL 3): 289.
-#
-# The 2026-10-11 re-vendor onto the fork's `0ebf0d0` adds the hazard-audit programs
-# (`hz_*`, `smc_spec_demote_rm`) and `throttle_rep_stosd`: 309.
+# MIN_TESTS below is the program count measured at the re-vendor that last raised it. The
+# named programs grepped after the run are fail-first regressions: a 100% summary without one
+# of them means a re-vendor dropped it.
 #
 # Requires nasm: it is the suite's own declared assembler dependency (the runners
 # assemble each program before simulating it), and a missing toolchain is a loud
@@ -107,7 +61,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SUITE=src/z486/tests
-LOG=${Z486_SUITE_LOG:-/tmp/z486_protected_mode.log}
+LOG=${Z486_SUITE_LOG:-.build/z486-suite/protected_mode.log}
+mkdir -p "$(dirname "$LOG")"
 # A floor, not the exact count: the suite grows upstream, and demanding equality
 # would turn an upstream test addition into a gate failure, while dropping to 1/1
 # (one test still passing after the rest stopped being discovered) must fail.
@@ -118,20 +73,8 @@ command -v nasm >/dev/null || {
   exit 1
 }
 
-# src/z486 is vendored with the local patch already applied, so there is nothing to apply.
-
-# The six fail-first regressions below are now FORK-TRACKED directly under
-# src/z486/tests/programs/ (the 2026-10-03 fork rebase tracks its own programs as
-# source), so they are NOT installed here anymore: installing the stale tests/z486/
-# copies over them would clobber the fork's newer tracked versions. The runner
-# discovers the tracked files itself; the grep checks below still pin each one.
-
-
-# Nothing is installed into the vendored tree any more (2026-10-07): the PC-98 programs
-# this tier used to keep in tests/z486/ (the real-mode diagnostics, the Zet98-derived
-# checks, the long-REP progress checks) are fork-tracked under src/z486/tests/programs/,
-# so the vendored tree is a plain copy of the fork. The runner discovers them itself; the
-# grep checks below still pin each one.
+# src/z486 is a plain copy of the fork and every program is fork-tracked under
+# src/z486/tests/programs/, so nothing is installed: the runner discovers them itself.
 
 make -C "$SUITE" obj_dir/Vtb_protected_mode
 
@@ -177,8 +120,8 @@ grep -qE '^PASS +wb_order_same_dst' "$PLAIN" || {
   echo "FAIL: the suite did not run and pass wb_order_same_dst" >&2
   exit 1
 }
-# The real-mode PC-98 diagnostics installed above: a 100% summary without one of
-# them means the install dropped it, this tier's missing-file failure mode.
+# The real-mode PC-98 diagnostics: a 100% summary without one of them means a
+# re-vendor dropped it, this tier's missing-file failure mode.
 grep -qE '^PASS +seg_verdict_real' "$PLAIN" || {
   echo "FAIL: the suite did not run and pass seg_verdict_real" >&2
   exit 1
@@ -191,8 +134,8 @@ grep -qE '^PASS +mcb_walk_real' "$PLAIN" || {
   echo "FAIL: the suite did not run and pass mcb_walk_real" >&2
   exit 1
 }
-# The Zet98-cross-referenced CPU tests installed above: a 100% summary without
-# one of them means the install dropped it, this tier's missing-file failure mode.
+# The Zet98-cross-referenced CPU tests: a 100% summary without one of them means a
+# re-vendor dropped it, this tier's missing-file failure mode.
 grep -qE '^PASS +div_edges' "$PLAIN" || {
   echo "FAIL: the suite did not run and pass div_edges" >&2
   exit 1
@@ -220,7 +163,7 @@ grep -qE '^PASS +seg_limit_stall_d2' "$PLAIN" || {
   echo "FAIL: the suite did not run and pass seg_limit_stall_d2" >&2
   exit 1
 }
-# The bdca3b9 re-vendor's eight review-regression programs are fork-tracked under
+# The bdca3b9 re-vendor's eight regression programs are fork-tracked under
 # src/z486/tests/programs/ (git add -f): a 100% summary without one of them means
 # the re-vendor dropped it, which is this tier's missing-file failure mode again.
 grep -qE '^PASS +aaa_halfcarry' "$PLAIN" || {

@@ -1,28 +1,30 @@
-// The MiSTer SDRAM backend: the machine's three requesters onto the memory controller.
+// The MiSTer SDRAM backend: the machine's four requesters onto the memory controller.
 //
 // z486_mister.sv instantiates this as the guest's memory backend. The controller serves four
-// requesters ROUND-ROBIN; this machine wires three: mem0 the CPU demand/cache-line fill and the
-// ROM loader (muxed in pc9821_memory_subsystem), mem1 the font/glyph reader, mem2 the 86-PCM
-// sample buffer. (A fourth, the GVRAM scanout's line fetch, was removed when
-// the GVRAM moved to local M10K, so nothing drove it.)
-// The ROM loader has no port of its own:
-// it shares mem0 and owns it (loader_owns) from a download until rom_ready.
+// requesters ROUND-ROBIN: mem0 the guest memory port (the CPU, the DMA engine, the PEGC posted
+// store buffer's drains and the ROM loader, muxed in pc9821_memory_subsystem), mem1 the
+// font/glyph reader, mem2 the 86-PCM sample buffer, mem3 the PEGC 256-colour packed scanout's
+// line fetch (pc9821_pegc_scan, through pc9821_memory_subsystem's pmem_*; z486_mister.sv's
+// guest_mem3_*), the port sdram.v's scanout deadline protects. The ROM loader has no port
+// of its own: it shares mem0 and owns it (loader_owns) from a download until rom_ready. The name's
+// "split" is historical: the controller runs on clk_sys, one clock.
 `default_nettype none
 
 module split_sdram_backend #(
     parameter FREQ = 50_000_000,
-    parameter HAS_DQM = 1'b1,
     parameter ADQM = 1'b0,
     parameter FAST_GRADE = 1'b1,
     // G3 gather sessions: the most entries one request carries. The PEGC store
     // buffer's own GATHER_K must agree (z486_mister.sv passes both from one value).
     parameter integer GATHER_K = 4,
-    parameter PRE_ACT = 1'b1       // 0 drops the
-                                  // controller's speculative pre-ACT reservation
+    parameter DQ_IN_DDIO = 1'b0,   // sdram.v's DQ read-capture cell (its parameter note)
+    parameter OUT_DDIO = 1'b0,     // sdram.v's output-register cells (its parameter note)
+    parameter integer DBG_CL = 0,        // sdram.v's measurement overrides (its parameter note)
+    parameter integer DBG_TRCD_TRP = 0
 ) (
     // The requesters' clk_sys, which is ALSO the controller's and its PHY's clock: the SDRAM
-    // runs on clk_sys in every build (owner, 2026-10-09), so
-    // FREQ is clk_sys's rate and there is no clock-domain crossing.
+    // runs on clk_sys in every build, so FREQ is clk_sys's rate and there is no clock-domain
+    // crossing.
     input         clk,
     input         reset,
     input         refresh_allowed,
@@ -109,16 +111,16 @@ module split_sdram_backend #(
 
 /* verilator lint_off PINCONNECTEMPTY */   // burst_done is deliberately not exposed by the
                                           // bridge; this machine has no consumer for it
-// The controller on clk_sys plus port 0's hold (sdram_sync_bridge). The clock-domain bridge that
-// used to be the alternative (sdram_clock_bridge, a 100 MHz clk_sdram behind a toggle/FIFO
-// crossing) was removed with the split-clock configuration.
+// The controller on clk_sys plus port 0's hold (sdram_sync_bridge).
 sdram_sync_bridge #(
     .FREQ(FREQ),
-    .HAS_DQM(HAS_DQM),
     .ADQM(ADQM),
     .FAST_GRADE(FAST_GRADE),
     .GATHER_K(GATHER_K),
-    .PRE_ACT(PRE_ACT)
+    .DQ_IN_DDIO(DQ_IN_DDIO),
+    .OUT_DDIO(OUT_DDIO),
+    .DBG_CL(DBG_CL),
+    .DBG_TRCD_TRP(DBG_TRCD_TRP)
 ) memory (
     .clk(clk),
     .resetn(~reset),

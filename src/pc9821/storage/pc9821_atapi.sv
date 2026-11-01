@@ -1,8 +1,8 @@
 // PC-98 ATAPI CD-ROM on the built-in IDE: ALWAYS bank 1's MASTER (IDE unit 2), the hard disk
 // always bank 0's master (unit 0) - the stock CD-equipped Xe10's layout and NP2kai's default (HDD
-// at unit 0, CD at unit 2). Fixed by the owner on 2026-10-11, independent of the build and of the
-// media: the Xe10 capture's disk on bank 1 (docs/probes/IDE.TXT) is the owner's CF card in the
-// CD connector, a quirk of that one machine, not the layout to model.
+// at unit 0, CD at unit 2). Fixed, independent of the build and of the media: the Xe10
+// capture's disk on bank 1 (docs/probes/IDE.TXT) is a CF card in the CD connector, a quirk of
+// that one machine, not the layout to model.
 //
 // NP2kai is the primary reference for every register value and command answer here:
 // NP2kai cbus/ideio.c (the task file, the ATA-level commands, the data port) and
@@ -30,13 +30,18 @@
 //
 // CD-DA (AUDIO_EN). PLAY AUDIO MSF/(10), PAUSE/RESUME, READ SUB-CHANNEL and the player state
 // follow atapicmd.c's daflag/dacurpos/dalength model. The sectors stream from the same slot
-// straight into src/soc/cdda.v's ring (one {R,L} word per stereo sample) whenever its CDDA_REQ
-// says a sector fits; no buffer of this module holds audio.
+// straight into src/soc/cdda.v's ring (one {R,L} word per stereo sample): one sector per host
+// request when its CDDA_REQ says a sector fits, four in one request when CDDA_REQ4 says four
+// fit; no buffer of this module holds audio. The ring reads ahead of the speakers, so a PAUSE,
+// a STOP, a SEEK, a new PLAY, a mount and a core reset each flush it (CDDA_FLUSH). A PAUSE keeps
+// sector granularity: RESUME refetches the sector that was being heard and plays it from its
+// first sample, where NP2kai's mixer continues mid-sector from its one-sector dabuf (ideio.c
+// playdevaudio) - up to one sector (13 ms) of it is heard twice.
 
 `default_nettype none
 
-// The slot-side registers (medium, engine, player, the host request pins) carry power-up values
-// and no reset (see their declaration), which is this warning's shape.
+// The slot-side registers (medium, engine, player, the host request pins) carry power-up values,
+// and all but the player's have no reset (see their declaration), which is this warning's shape.
 /* verilator lint_off PROCASSINIT */
 module pc9821_atapi #(
     // The CD-DA player: the audio commands, the play state and the audio fetch. 0 builds the
@@ -72,9 +77,15 @@ module pc9821_atapi #(
     input  wire [12:0] sd_buff_addr,
     input  wire [15:0] sd_buff_dout,
 
-    // src/soc/cdda.v's write side: CDDA_REQ = there is room for a sector; one CDDA_WR edge per
-    // stereo sample, {R, L}.
+    // src/soc/cdda.v's write side: CDDA_REQ = there is room for a sector, CDDA_REQ4 = room for
+    // four; one CDDA_WR edge per stereo sample, {R, L}. CDDA_PLAYED pulses each time another
+    // sector's worth of samples has left the ring for the speakers (the played position), and
+    // cdda_flush empties the ring when the player stops, pauses or moves, at a mount, and for
+    // every cycle of the core reset.
     input  wire        cdda_req,
+    input  wire        cdda_req4,
+    input  wire        cdda_played,
+    output wire        cdda_flush,
     output reg         cdda_wr = 1'b0,
     output reg  [31:0] cdda_data = 32'd0,
 
@@ -135,7 +146,9 @@ module pc9821_atapi #(
     endcase
   endfunction
   // atapicmd.c's daflag values: the READ SUB-CHANNEL audio status byte.
-  localparam [2:0] DA_PLAY = 3'd1, DA_PAUSE = 3'd2, DA_DONE = 3'd3,
+  // DA_ERR is 0x14, the play stopped because the medium went away (ideio.c playdevaudio:
+  // `drv->daflag = 0x14;` when the sxsi device is not READY).
+  localparam [2:0] DA_PLAY = 3'd1, DA_PAUSE = 3'd2, DA_DONE = 3'd3, DA_ERR = 3'd4,
                    DA_NONE = 3'd5;   // 0x10 + value
 
   // ---- the window: which bank and which device are selected ----
@@ -189,10 +202,29 @@ module pc9821_atapi #(
   reg [7:0]  lo_mb = 8'd0, lo_sb = 8'd0, lo_fb = 8'd0;   // the same in BCD
 
   // ---- CD-DA player state (atapicmd.c drv->daflag/dacurpos/dalength) ----
-  // The player, like the medium, is not reset by the core (NP2kai devinit: daflag 0x15).
+  // The player IS reset by the core, unlike the medium and the engine: NP2kai runs ideio_reset
+  // on every machine reset (cbus/cbuscore.c resetfn[]: `ideio_reset,`), which zeroes `ideio`
+  // (daplaying, so the play stops) and re-runs devinit (`drv->daflag = 0x15;`, dacurpos and
+  // dalength 0). The reset stop is in the player block below; these are the power-up values.
   reg [2:0]  daflag = 3'd5;
+  // READ-AHEAD. dacurpos/dalength are the FETCH side: the next sector to fetch into src/soc/
+  // cdda.v's ring and how many remain. daplaypos is the sector the speakers are on: it follows
+  // the ring's CDDA_PLAYED pulses, and it is what a PAUSE holds. A play completes when its last
+  // sector has been played, not when it was fetched. dacurpos + dalength (the play's end) is
+  // invariant under fetching.
+  // THE REPORTED POSITION is NP2kai's dacurpos, which is the next sector its mixer will LOAD:
+  // playdevaudio loads a sector into dabuf and increments dacurpos before mixing it (ideio.c
+  // `drv->dacurpos++;` right after the sxsicd_readraw), so while a sector is being heard NP2kai
+  // reports one past it. READ SUB-CHANNEL here reports daplaypos + da_lead_now: 1 while the
+  // sector at daplaypos is in the ring (fetched: dacurpos > daplaypos) - the counterpart of
+  // NP2kai's loaded dabuf - and, for a stopped play (PAUSE, 0x14), the same fact latched in
+  // da_lead when it stopped (the flush empties the ring and rewinds the fetch side, but NP2kai's
+  // dacurpos stays where it was).
   reg [19:0] dacurpos = 20'd0;
   reg [19:0] dalength = 20'd0;
+  reg [19:0] daplaypos = 20'd0;
+  reg        da_lead = 1'b0;
+  reg [2:0]  e_nsec = 3'd1;     // audio sectors in the fetch in flight (1 or 4)
   // A position command (PLAY/STOP/SEEK) executed while an audio sector fetch is still in
   // flight SUPERSEDES that fetch: NP2kai's player is synchronous (atapicmd.c playaudio sets
   // dacurpos/dalength and streams from there), so nothing of the old play may follow it - its
@@ -255,20 +287,29 @@ module pc9821_atapi #(
   reg [1:0]  e_st = 2'd0, e_kind = 2'd0;
   reg [19:0] e_pos = 20'd0;
   reg [8:0]  e_w0 = 9'd0;      // first wanted word in the transfer
-  reg [10:0] e_n = 11'd0;      // wanted words
+  reg [12:0] e_n = 13'd0;      // wanted words (an audio fetch of 4 sectors is 4704)
   reg        hdr_pend = 1'b0, data_pend = 1'b0;
   reg        e_odd = 1'b0;     // audio: the next wanted word is a right sample
   wire e_done = (e_st == E_STREAM) && !sd_ack;
   wire audio_in_flight = (e_st != E_IDLE) && (e_kind == EK_AUDIO);
   wire [12:0] e_rel = sd_buff_addr - {4'd0, e_w0};
   wire e_word = (e_st == E_STREAM) && sd_ack && sd_buff_wr &&
-                (sd_buff_addr >= {4'd0, e_w0}) && (e_rel < {2'd0, e_n});
+                (sd_buff_addr >= {4'd0, e_w0}) && (e_rel < e_n);
 
   // ---- MSF converter (frames -> M:S:F), sequential ----
   reg        cv_busy = 1'b0, cv_ph = 1'b0, cv_owner_mount = 1'b0, iso_msf_pend = 1'b0;
   reg [19:0] cv_x = 20'd0;
   reg [6:0]  cv_m = 7'd0; reg [5:0] cv_s = 6'd0;
-  wire       cv_done = cv_busy && cv_ph && (cv_x < 20'd75);
+  // The step for the phase the converter is in: 4500 frames per minute while the M step runs,
+  // 75 per second after it (atapicmd.c's frames -> M:S:F walk). ONE 20-bit subtractor and ONE
+  // 20-bit compare serve both phases - the operand is selected by the same `cv_ph` that selected
+  // the arm, so the phases stay mutually exclusive and the merged form is value- and
+  // cycle-identical to the two-subtractor form (tools/check_seq_equiv.py --old proves it
+  // register for register against the pre-change module).
+  wire [19:0] cv_step = cv_ph ? 20'd75 : 20'd4500;
+  wire        cv_step_ge = (cv_x >= cv_step);
+  // The F step's last cycle, `cv_x < 75`, is the same compare at the phase-1 operand.
+  wire       cv_done = cv_busy && cv_ph && !cv_step_ge;
 
   function automatic [7:0] bcd(input [6:0] v);
     reg [3:0] t;
@@ -647,7 +688,7 @@ module pc9821_atapi #(
       default: rom_addr = {1'b1, ms_pidx, ms_chg, mq};   // K_MSENSE (the other kinds do not read the ROM)
     endcase
   end
-  // No reset and no power-up value on the read register, or the ROM is refused (AGENTS.md).
+  // No reset and no power-up value on the read register, or the ROM is refused (docs/fitting.md).
   reg [15:0] rom_q;
   always @(posedge clk) rom_q <= rom[rom_addr];
 
@@ -782,7 +823,11 @@ module pc9821_atapi #(
   // ---- who may start what this cycle (one decision per resource) ----
   // The command executes once the engine holds no fetch that could still write the buffer:
   // a stale data sector of an abandoned READ, or a header that the builder might read.
-  wire exec_go = (st == S_EXEC) && !abort_now &&
+  // It also waits out a mount edge's cycle (R7, deferred consumption): the mount owns the player
+  // and the medium in that cycle (mount_stop, below), so a command decoded beside it would be
+  // dropped or merged by luck; it executes one cycle later against the medium the mount left.
+  // And it never executes under the core reset, which forces the command FSM idle.
+  wire exec_go = (st == S_EXEC) && !abort_now && rst_n && !mount_edge &&
                  !((e_st != E_IDLE) && (e_kind != EK_AUDIO)) && !data_pend;
   // A READ(10) sector is in range of the medium (sxsi_read fails otherwise: ILLEGAL REQUEST,
   // ASC 0x21 - atapicmd.c atapi_dataread).
@@ -791,18 +836,42 @@ module pc9821_atapi #(
   endfunction
   // R3: the commands that rewrite the player POSITION (stop, seek, play, a reported medium
   // change) win over an audio completion's advance in the same cycle, and the ones that rewrite
-  // the player FLAG (those plus PAUSE/RESUME) win over the engine's end-of-play write.
+  // the player FLAG (those plus PAUSE/RESUME, a mount and the core reset) win over the engine's
+  // end-of-play write.
   wire tur_change = (cdb[0] == 8'h00) && loaded && changed;
-  wire player_pos_cmd  = AUDIO_EN && ((exec_go && cmd == 8'hA0 &&
+  wire player_pos_cmd  = AUDIO_EN && exec_go && cmd == 8'hA0 &&
                          (tur_change || cdb[0] == 8'h1B || cdb[0] == 8'h2B ||
-                          cdb[0] == 8'h45 || cdb[0] == 8'h47)) ||
-                         (mount_edge && img_size < 64'd2048));
-  wire player_flag_cmd = player_pos_cmd ||
+                          cdb[0] == 8'h45 || cdb[0] == 8'h47);
+  // A MOUNT EVENT - an eject (size 0) or another image mounted over this one - takes the medium
+  // away from a playing drive: NP2kai's mixer then finds the sxsi device not READY and stops
+  // the play with 0x14 (ideio.c playdevaudio `drv->daflag = 0x14;`), leaving dacurpos where it
+  // was. Nothing of the old disc may keep playing from the ring, and nothing of the new disc
+  // may be fetched at the old play's position. A drive not playing keeps its state (NP2kai's
+  // ideio_notify touches only the media flags); the TEST UNIT READY that reports the new medium
+  // stops it (tur_change). tb_pc9821_atapi C24.
+  wire mount_stop      = AUDIO_EN && mount_edge;
+  // THE CORE RESET stops the player (NP2kai ideio_reset, above): daflag 0x15, positions 0.
+  // Held for the whole reset, as the ring's flush is (cdda.v: every CDDA_FLUSH cycle empties
+  // the ring, so a held flush is the same as one). tb_pc9821_atapi C25.
+  wire reset_stop      = AUDIO_EN && !rst_n;
+  wire player_flag_cmd = player_pos_cmd || mount_stop || reset_stop ||
                          (AUDIO_EN && exec_go && cmd == 8'hA0 && cdb[0] == 8'h4B);
   // The superseded audio fetch (da_stale, above): from the position command's own cycle its
   // samples are dropped, and its completion advances nothing.
-  wire audio_stale_now = da_stale || (player_pos_cmd && audio_in_flight);
+  // A PAUSE of a playing drive is a flush too: the ring's read-ahead is dropped and the fetch
+  // side rewinds to the start of the sector the speakers were on, which RESUME refetches.
+  wire pause_now       = AUDIO_EN && exec_go && cmd == 8'hA0 && cdb[0] == 8'h4B &&
+                         !cdb[8][0] && daflag == DA_PLAY;
+  assign cdda_flush    = player_pos_cmd || pause_now || mount_stop || reset_stop;
+  // NP2kai's reported position's lead over the sector being heard (da_lead, above): the
+  // sector at daplaypos is loaded while it is in the ring.
+  wire da_lead_now     = (daflag == DA_PLAY) ? (dacurpos != daplaypos)
+                       : ((daflag == DA_PAUSE || daflag == DA_ERR) && da_lead);
+  wire audio_stale_now = da_stale || (cdda_flush && audio_in_flight);
   wire audio_adv       = e_done && (e_kind == EK_AUDIO) && !da_stale;
+  wire [19:0] play_next = daplaypos + {19'd0, cdda_played};
+  // four sectors in one host request when the ring has room for them and the play has them
+  wire        fetch4    = cdda_req4 && dalength >= 20'd4 && (dacurpos + 20'd4) <= totals;
   // The MSF converter's three starts (READ SUB-CHANNEL's two, the ISO mount's one) - at most one
   // per cycle, and only from an idle or just-finishing converter.
   wire cv_start_abs = (st == S_PREP) && (pp == 3'd4) && !cv_busy;
@@ -864,11 +933,6 @@ module pc9821_atapi #(
       bk <= kind; b_full <= full; b_alloc <= alloc;
       bi_a <= 9'd0; bv_b <= 1'b0;
       st <= S_BUILD;
-    end
-  endtask
-  task automatic t_stop_play;   // atapicmd.c stop_daplay
-    begin
-      daflag <= DA_DONE; dacurpos <= 20'd0; dalength <= 20'd0;
     end
   endtask
 
@@ -1094,8 +1158,8 @@ module pc9821_atapi #(
             else if (!AUDIO_EN || daflag == DA_NONE) t_build(K_SUBCH, 12'd16, cdb_len78);
             else begin
               pp <= 3'd0; sc_e <= 7'd0; sc_r <= 7'd0; sc_rel <= 20'd0; st <= S_PREP;
-              sc_pos <= dacurpos + ((daflag == DA_PAUSE || daflag == DA_DONE) ?
-                                    {17'd0, sc_rnd[2:0]} : 20'd0);
+              sc_pos <= daplaypos + {19'd0, da_lead_now} +
+                        ((daflag == DA_PAUSE || daflag == DA_DONE) ? {17'd0, sc_rnd[2:0]} : 20'd0);
               sc_rnd <= {sc_rnd[6:0], 1'b0} ^ (sc_rnd[7] ? 8'h1D : 8'h00);
             end
           end
@@ -1178,9 +1242,10 @@ module pc9821_atapi #(
   end
 
   // ================= the medium, the player, the engine and the converter =================
-  // Not reset (see the declarations). Events consumed here: `mount_edge`; `e_done` of an EK_HDR
-  // or EK_AUDIO fetch; `cv_done` of the mount's conversion; the command decode's player
-  // commands (exec_go), which own the player registers in their cycle (R3, above).
+  // Not reset (see the declarations), except the player, which the core reset stops
+  // (reset_stop). Events consumed here: `mount_edge`; `e_done` of an EK_HDR or EK_AUDIO fetch;
+  // `cv_done` of the mount's conversion; the command decode's player commands (exec_go), which
+  // own the player registers in their cycle (R3, above).
   always @(posedge clk) begin
     cdda_wr <= 1'b0;
     mounted_d <= img_mounted;
@@ -1193,11 +1258,11 @@ module pc9821_atapi #(
       if (cv_start_iso) iso_msf_pend <= 1'b0;
     end else if (cv_done) begin cv_busy <= 1'b0; cv_owner_mount <= 1'b0; end
     else if (cv_busy) begin
-      if (!cv_ph) begin
-        if (cv_x >= 20'd4500) begin cv_x <= cv_x - 20'd4500; cv_m <= cv_m + 7'd1; end
-        else cv_ph <= 1'b1;
-      end else begin
-        cv_x <= cv_x - 20'd75; cv_s <= cv_s + 6'd1;
+      if (!cv_ph && !cv_step_ge) cv_ph <= 1'b1;   // the M step is done; the F step starts next cycle
+      else begin
+        cv_x <= cv_x - cv_step;                   // 4500 in phase 0, 75 in phase 1
+        if (cv_ph) cv_s <= cv_s + 6'd1;
+        else       cv_m <= cv_m + 7'd1;
       end
     end
 
@@ -1224,38 +1289,72 @@ module pc9821_atapi #(
     end
 
     // ---- the player (atapicmd.c playaudio / stop_daplay / pauseresume / seek) ----
+    // One arm per cycle, in this stated priority (R1): the reset, a mount, a position command,
+    // PAUSE/RESUME, the play's own progress. exec_go is false in a reset or mount-edge cycle, so
+    // the first two never meet a command; a completion or played pulse beside a reset or a
+    // mount is discarded with the play (the flush in the same cycle empties the ring).
     if (AUDIO_EN) begin
-      if (player_pos_cmd) begin
-        if (mount_edge || tur_change || cdb[0] == 8'h1B) begin
-          daflag <= DA_DONE; dacurpos <= 20'd0; dalength <= 20'd0;
+      if (reset_stop) begin
+        // ideio_reset: `ZeroMemory(&ideio, ...)` stops the play, devinit sets daflag 0x15
+        daflag <= DA_NONE; dacurpos <= 20'd0; dalength <= 20'd0; daplaypos <= 20'd0;
+        da_lead <= 1'b0;
+      end else if (mount_stop) begin
+        if (daflag == DA_PLAY) begin
+          // stopped where the speakers were (the PAUSE's re-base, below), the flag 0x14
+          daflag    <= DA_ERR;
+          dacurpos  <= play_next;
+          daplaypos <= play_next;
+          dalength  <= dacurpos + dalength - play_next;
+          da_lead   <= (dacurpos != play_next);
+        end
+      end else if (player_pos_cmd) begin
+        da_lead <= 1'b0;
+        if (tur_change || cdb[0] == 8'h1B) begin
+          daflag <= DA_DONE; dacurpos <= 20'd0; dalength <= 20'd0; daplaypos <= 20'd0;
         end else if (cdb[0] == 8'h2B) begin
           daflag <= DA_DONE; dalength <= 20'd0;
-          dacurpos <= in_range(cdb_lba, totals) ? cdb_lba[19:0] : 20'd0;
+          dacurpos  <= in_range(cdb_lba, totals) ? cdb_lba[19:0] : 20'd0;
+          daplaypos <= in_range(cdb_lba, totals) ? cdb_lba[19:0] : 20'd0;
         end else if (cdb[0] == 8'h45) begin
           // NP2kai reads the length as (cdb[7] << 16) | cdb[8], a typo for MMC's (cdb[7] << 8)
-          // | cdb[8]; no driver on the owner's disk issues 0x45 (storage report sec.3.2), so
-          // MMC's field is used and the divergence is recorded in the report.
+          // | cdb[8]; no driver on the tested disk images issues 0x45, so
+          // MMC's field is used (a recorded divergence from NP2kai).
           daflag <= DA_PLAY; dacurpos <= cdb_lba[19:0]; dalength <= {4'd0, cdb_len78};
+          daplaypos <= cdb_lba[19:0];
         end else begin   // 0x47 PLAY AUDIO MSF
           daflag <= DA_PLAY;
-          dacurpos <= msf_pos_d[20] ? 20'd0 : msf_pos_d[19:0];
+          dacurpos  <= msf_pos_d[20] ? 20'd0 : msf_pos_d[19:0];
+          daplaypos <= msf_pos_d[20] ? 20'd0 : msf_pos_d[19:0];
           dalength <= msf_len_d[20] ? 20'd0 : msf_len_d[19:0];
         end
       end else if (player_flag_cmd) begin   // 0x4B
         if (cdb[8][0]) begin if (daflag == DA_PAUSE) daflag <= DA_PLAY; end
         else if (daflag == DA_PLAY) daflag <= DA_PAUSE;
-        // PAUSE/RESUME leaves the position alone, so a sector completing in this same cycle
-        // still advances it (R4: both events land; it used to be swallowed by this arm).
-        if (audio_adv) begin
-          dacurpos <= dacurpos + 20'd1; dalength <= dalength - 20'd1;
+        if (pause_now) begin
+          // the read-ahead is flushed (cdda_flush): the fetch side rewinds to the sector the
+          // speakers are on, a sector played in this same cycle included; the play's end is kept.
+          // da_lead keeps whether that sector had been fetched (NP2kai's dabuf held it).
+          dacurpos  <= play_next;
+          daplaypos <= play_next;
+          dalength  <= dacurpos + dalength - play_next;
+          da_lead   <= (dacurpos != play_next);
+        end else begin
+          // a RESUME (or a PAUSE of a drive not playing) leaves the positions alone, so a sector
+          // completing or played in this same cycle still lands (R4: both events land)
+          if (audio_adv) begin
+            dacurpos <= dacurpos + {17'd0, e_nsec}; dalength <= dalength - {17'd0, e_nsec};
+          end
+          daplaypos <= play_next;
         end
       end else begin
         if (audio_adv) begin
-          dacurpos <= dacurpos + 20'd1; dalength <= dalength - 20'd1;
+          dacurpos <= dacurpos + {17'd0, e_nsec}; dalength <= dalength - {17'd0, e_nsec};
         end
-        // the end of play: the length is spent, the lead-out is reached, or there is no PCD
+        daplaypos <= play_next;
+        // the end of play: the length is spent or the lead-out is reached AND the speakers have
+        // played every fetched sector; or there is no PCD
         if (e_st == E_IDLE && daflag == DA_PLAY &&
-            (dalength == 20'd0 || dacurpos >= totals || !is_pcd))
+            (((dalength == 20'd0 || dacurpos >= totals) && daplaypos >= dacurpos) || !is_pcd))
           daflag <= DA_DONE;
       end
     end
@@ -1263,7 +1362,7 @@ module pc9821_atapi #(
     // da_stale: set by a position command against an in-flight audio fetch (that fetch then
     // ends without effect), cleared when the fetch ends. One next-state (R4).
     if (AUDIO_EN)
-      da_stale <= (player_pos_cmd && audio_in_flight && !e_done) ||
+      da_stale <= (cdda_flush && audio_in_flight && !e_done) ||
                   (da_stale && !(e_done && e_kind == EK_AUDIO));
 
     // ---- the engine: header (mount) > data (READ) > audio ----
@@ -1277,6 +1376,7 @@ module pc9821_atapi #(
                      !player_flag_cmd && cdda_req && dalength != 20'd0 &&
                      dacurpos < totals && is_pcd) begin
           e_kind <= EK_AUDIO; e_pos <= dacurpos; e_st <= E_CALC;
+          e_nsec <= fetch4 ? 3'd4 : 3'd1;
         end
       end
       E_CALC: begin
@@ -1284,13 +1384,14 @@ module pc9821_atapi #(
         // (L+1)*2352 (after the header sector), its MODE1 user data 16 bytes in.
         e_st <= E_WAIT; sd_rd <= 1'b1; e_odd <= 1'b0;
         if (e_kind == EK_HDR) begin
-          sd_lba <= 32'd0; sd_blk_cnt <= 6'd3; e_w0 <= 9'd0; e_n <= 11'd1024;
+          sd_lba <= 32'd0; sd_blk_cnt <= 6'd3; e_w0 <= 9'd0; e_n <= 13'd1024;
         end else begin
           sd_lba <= {9'd0, e_off[31:9]};
-          sd_blk_cnt <= (e_kind == EK_AUDIO) ? 6'(({3'd0, e_off[8:0]} + 12'd2351) >> 9)
-                                             : 6'(({3'd0, e_off[8:0]} + 12'd2047) >> 9);
+          sd_blk_cnt <= (e_kind != EK_AUDIO) ? 6'(({5'd0, e_off[8:0]} + 14'd2047) >> 9)
+                      : (e_nsec == 3'd4)     ? 6'(({5'd0, e_off[8:0]} + 14'd9407) >> 9)
+                                             : 6'(({5'd0, e_off[8:0]} + 14'd2351) >> 9);
           e_w0 <= {1'b0, e_off[8:1]};
-          e_n <= (e_kind == EK_AUDIO) ? 11'd1176 : 11'd1024;
+          e_n <= (e_kind != EK_AUDIO) ? 13'd1024 : (e_nsec == 3'd4) ? 13'd4704 : 13'd1176;
         end
       end
       E_WAIT: if (sd_ack) begin sd_rd <= 1'b0; e_st <= E_STREAM; end
@@ -1341,6 +1442,19 @@ module pc9821_atapi #(
   wire [31:0] e_off = !is_pcd ? (e_l << 11)
                     : (e_l * 32'd2352 + ((e_kind == EK_DATA) ? 32'd2368 : 32'd2352));
 
+  // synthesis translate_off
+  // SIM-ONLY (R8): the ring's CDDA_PLAYED can only report a sector the player fetched. Outside a
+  // flush (which discards the ring and re-bases both positions), a played pulse while the
+  // played position already equals the fetched one plus the fetch in flight is a sector that
+  // was never fetched - a ring and player out of step. Collisions pinned by tb_pc9821_atapi C23
+  // (a played pulse in the PAUSE's cycle and in the STOP's cycle).
+  always @(posedge clk)
+    if (AUDIO_EN && cdda_played && !cdda_flush && is_pcd &&
+        daplaypos >= dacurpos + (audio_in_flight ? {17'd0, e_nsec} : 20'd0))
+      $error("pc9821_atapi: CDDA_PLAYED for a sector never fetched (played %0d, fetched %0d)",
+             daplaypos, dacurpos);
+  // synthesis translate_on
+
   // ================= LOG_EN: the CD's conversation on the debug UART =================
   // Records, each 0xA5, a type, a 16-bit millisecond time (big-endian), then the type's payload:
   //   0x01 CMD    a task-file command write at bank 1: command, DRHD, DEV, STATUS before it (4)
@@ -1352,7 +1466,7 @@ module pc9821_atapi #(
   //   0x05 MOUNT  a slot-4 mount: img_size[39:0], big-endian (5)
   //   0x06 READY  the medium became loaded: PCD flag, tracks, sector count[23:0] (5)
   //   0x07 DEVCTL a 0x074C write at bank 1 (1)    0x08 (retired: BANK)
-  //   0x0B PLAYER the CD-DA player: 0x10|flag (0x11 play, 0x12 pause, 0x13 done, 0x15 none), the
+  //   0x0B PLAYER the CD-DA player: 0x10|flag (0x11 play, 0x12 pause, 0x13 done, 0x14 medium gone, 0x15 none), the
   //               position and the remaining length (3 bytes each), {engine idle, cdda_req} (8);
   //               on every flag change and every 16th streamed audio sector
   //   0x09 LOST   records dropped since the last one that got out (1)
@@ -1391,7 +1505,8 @@ module pc9821_atapi #(
     reg  [2:0] lg_daflag_d = 3'd0;
     always @(posedge clk) lg_daflag_d <= daflag;
     wire ev_play = AUDIO_EN && ((daflag != lg_daflag_d) ||
-                   (e_done && e_kind == EK_AUDIO && dacurpos[3:0] == 4'hF));
+                   (e_done && e_kind == EK_AUDIO &&
+                    ({1'b0, dacurpos[3:0]} + {2'd0, e_nsec}) >= 5'd16));
     reg  p_cmd = 0, p_cdb = 0, p_end = 0, p_mnt = 0, p_rdy = 0, p_ctl = 0, p_play = 0;
     reg  p_alive = 1'b1;   // power-up
     reg  lg_rst_d = 1'b0;

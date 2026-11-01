@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_READAHEAD:
-// Sector read-ahead across a modelled HPS round trip: with a block adapter that takes a realistic fetch latency before its 256-word stream, a multi-sector READ SECTORS overlaps sector N+1's fetch with sector N's PIO drain, so the per-sector cost is the longer of the two terms rather than their sum -- 4856 cycles (5.3 MB/s) with r13/68's 4600-cycle fetch against the current class table's 1536-cycle drain, where the serialized FSM paid 6392 (4.0 MB/s) -- while raising exactly one IRQ per sector and presenting each sector's data with DRQ.
+// Sector read-ahead across a modelled HPS round trip: with a block adapter that takes a realistic fetch latency before its 256-word stream, a multi-sector READ SECTORS overlaps sector N+1's fetch with sector N's PIO drain, so the per-sector cost is the longer of the two terms rather than their sum -- 4856 cycles (5.3 MB/s) with the measured 4600-cycle fetch against the current class table's 1536-cycle drain, where the serialized FSM paid 6392 (4.0 MB/s) -- while raising exactly one IRQ per sector and presenting each sector's data with DRQ.
 
 
 module tb_pc9821_ata_readahead;
@@ -29,8 +29,8 @@ module tb_pc9821_ata_readahead;
   wire [7:0] dbg_state;
   wire [31:0] dbg_cmd;
 
-  // The word rate is the CURRENT class table's, not r13/13's 30: pc9821_iobus charges
-  // 0x0640/0x0641 IO_MIN_HOLD = 4 (r13/276), and a 16-bit data word is ONE access that
+  // The word rate is the CURRENT class table's, not the superseded 30: pc9821_iobus charges
+  // 0x0640/0x0641 IO_MIN_HOLD = 4, and a 16-bit data word is ONE access that
   // walks two lanes, so it is 6 clk_sys (tb_pc9821_ata_iowait measures 6 delivered / 5
   // stalled through the real bus). The bench drives io_rd directly, so it inserts that
   // cost itself: each of the two byte reads is 2 cycles (read_byte) and PIO_GAP completes
@@ -38,7 +38,7 @@ module tb_pc9821_ata_readahead;
   localparam PIO_GAP     = 2;
   localparam DRAIN_SECTOR = 256 * (4 + PIO_GAP);   // 1,536 cycles = 30.7 us = 16.7 MB/s
   // The HPS fetch the read-ahead must hide: sd_rd -> sd_ack -> req_done, up to
-  // ~4,600 cycles/sector (r13/68 s0.5), then the 256-word stream.
+  // ~4,600 cycles/sector, then the 256-word stream.
   localparam HPS_LAT   = 4600;
   localparam HPS_FETCH = HPS_LAT + 256;            // 4,856 cycles
   localparam SECTORS   = 16;

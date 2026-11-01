@@ -15,7 +15,7 @@
 // / `jc`) walks ES over the four plane windows 0xA800, 0xB000, 0xB800, 0xE000 - the classic
 // PC-98 layout, and exactly the four windows pc9821_memory_map decodes. SO A FAILURE IN ONE
 // ITERATION LEAVES EXACTLY ONE PLANE STALE, and the first plane is B - blue - which is the
-// owner's symptom ("the blue is missing from the bugged sprites/stuck graphics") read literally.
+// reported symptom ("the blue is missing from the bugged sprites/stuck graphics") read literally.
 //
 // THE EXPECTED VALUES ARE ARCHITECTURAL, never from this repo's RTL: both pages are pre-filled
 // with a pattern that is a pure function of (byte offset, plane, page), so the copy's outcome is
@@ -115,13 +115,12 @@ module tb_pc9821_gvram_pagecopy;
       .peg_window(1'b0), .peg_base(32'd0),
       .gvram_window(gvram_window), .gvram_win_plane(gvram_win_plane),
       .gvram_win_offset(gvram_win_offset),
-      .cpu_addr(bus_addr), .cpu_addr_raw(bus_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(32'd0), .cpu_dout(),
-      .cpu_line_dout(), .cpu_be(4'h0),
+      .cpu_addr(bus_addr), .cpu_addr_raw(bus_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(32'd0), .cpu_dout(), .cpu_be(4'h0),
       .cpu_burstcount(8'd1), .cpu_line_read(1'b0),
       // The map's own responder is unused here: the bench serves ordinary RAM
       // itself and only wants this block's plane-window decode.
       .cpu_valid(1'b0), .cpu_write(1'b0),
-      .cpu_ready(), .cpu_resp_valid(), .cpu_line_resp_valid(),
+      .cpu_ready(), .cpu_resp_valid(),
       .mem_addr(), .mem_din(), .mem_dout(32'd0), .mem_be(),
       .mem_burstcount(), .mem_valid(), .mem_write(),
       .mem_ready(1'b1), .mem_resp_valid(1'b0)
@@ -170,8 +169,8 @@ module tb_pc9821_gvram_pagecopy;
   wire        gv_line_read = bench_valid ? 1'b0 : (h_valid ? h_line : z_line_read);
 
   wire [31:0]  gv_cpu_dout;
-  wire [127:0] gv_cpu_line_dout;
-  wire         gv_cpu_ready, gv_cpu_resp_valid, gv_cpu_line_resp_valid;
+  wire [31:0] gv_cpu_line_word;
+  wire         gv_cpu_ready, gv_cpu_resp_valid, gv_cpu_line_word_valid;
 
   // The GRCG's register port, driven by the I/O responder below.
   reg  [7:0] port_addr = 8'd0, port_din = 8'd0;
@@ -184,9 +183,9 @@ module tb_pc9821_gvram_pagecopy;
       .cpu_din(gv_din), .cpu_be(gv_be), .cpu_line_read(gv_line_read),
       .cpu_valid(gv_sel),
       .cpu_write(gv_write),
-      .cpu_dout(gv_cpu_dout), .cpu_line_dout(gv_cpu_line_dout),
+      .cpu_dout(gv_cpu_dout), .cpu_line_word(gv_cpu_line_word),
       .cpu_ready(gv_cpu_ready), .cpu_resp_valid(gv_cpu_resp_valid),
-      .cpu_line_resp_valid(gv_cpu_line_resp_valid),
+      .cpu_line_word_valid(gv_cpu_line_word_valid),
       .grcg_we(port_we), .grcg_addr(port_addr), .grcg_din(port_din),
       .egc_gate(1'b0),
       .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
@@ -200,7 +199,7 @@ module tb_pc9821_gvram_pagecopy;
   // z486 presents an I/O access as a DWORD-ALIGNED address with the operand's byte
   // lane carried only in `be` (pc9821_system forms {z_addr, 2'b00}); pc9821_iobus
   // steps `lane` = be's first set bit and forms the byte port as base_addr + lane
-  // (pc9821_iobus.sv:676/2413). The responder MUST do the same: without it
+  // (pc9821_iobus.sv:764-766, `lane_addr = base_addr + {30'd0, lane}`). The responder MUST do the same: without it
   // `out 0x7E,al` (base 0x7C, lane 2) decodes as `out 0x7C,al` and every tile write
   // lands on the mode register, so the GRCG is never armed - which is exactly the
   // false failure this bench reported before the lane was modelled.
@@ -322,8 +321,11 @@ module tb_pc9821_gvram_pagecopy;
       z_ready           = gv_cpu_ready;
       z_din             = gv_cpu_dout;
       z_resp_valid      = gv_cpu_resp_valid;
-      z_line_resp_valid = gv_cpu_line_resp_valid;
-      z_line_din        = gv_cpu_line_dout;
+      // The CPU's line ports are TIED OFF in the system (pc9821_system.sv's
+      // line_din(128'd0)/line_resp_valid(1'b0)): a fill is four word beats on
+      // z_resp_valid, which z486's L1 gathers. Nothing drives the line arm.
+      z_line_resp_valid = 1'b0;
+      z_line_din        = 128'd0;
     end else if (z_io) begin
       z_ready           = io_ready;
       z_din             = io_dout;
@@ -2581,7 +2583,7 @@ mem[PROG_BASE+16'h0000] = 8'hB8;
       force cpu.ES  = 16'hA800;
       force cpu.SS  = 16'h0000;
       force cpu.EIP = 32'd0;
-      // pf_fetch_addr is the LINEAR prefetch address (prefetch.sv:80), so it is
+      // pf_fetch_addr is the LINEAR prefetch address (prefetch.sv:98, `Next LINEAR cache-line address`), so it is
       // CS.base + EIP, not the bare EIP (the z486 harness can pass EIP directly
       // only because its CS base is 0).
       force cpu.prefetch_inst.pf_fetch_addr = PROG_BASE;

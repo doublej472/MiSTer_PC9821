@@ -2,8 +2,8 @@
 # Capture the core's debug UART on the MiSTer, safely, and decode it.
 #
 # The debug-instrument framework (build_profile.py --dbg-*, --cdrom-log) writes its records to
-# the debug UART, which is /dev/ttyS1 on the HPS at 115200 8N1 (AGENTS.md "Testing on the
-# MiSTer"). Reading it is a plain `cat`, and every way of doing that carelessly has bitten:
+# the debug UART, which is /dev/ttyS1 on the HPS at 115200 8N1 (docs/mister-testing.md "The
+# debug UART"). Reading it is a plain `cat`, and every way of doing that carelessly has bitten:
 #
 #   * TWO READERS SPLIT THE STREAM - each gets alternate bytes and neither capture decodes. A reader
 #     left over from an earlier run (the SSH session that started it dropped) is the usual cause, so

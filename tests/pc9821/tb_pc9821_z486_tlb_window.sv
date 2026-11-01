@@ -28,10 +28,8 @@
 // WHAT IT IS BLIND TO, stated: (1) it is not a hardware-behaviour bench -- no NP2kai
 // value is asserted; (2) the paging FSM is out of scope: which real consumer can be in
 // the window cycle is what decides the cost of the refusal, and that reach is argued in
-// docs/z486-local-patch.md entry 27, not measured here; (3) the VIPT sidecar is left
+// the fork's own log for this change, not measured here; (3) the VIPT sidecar is left
 // unexercised (vipt_preread tied off), and the walker/paging_unit are not instantiated.
-// (The RD_STORE / LIVE_ALIGN / RD_ALIGN fuses this list used to name are gone from
-// paging_tlb.sv with the clocked array.)
 //
 // FAIL-FIRST, how it was taken: the same bench built against the pre-window-guard
 // paging_tlb.sv (git show <commit>^:src/z486/paging_tlb.sv) reports 9 mismatches and 4
@@ -421,7 +419,7 @@ module tb_pc9821_z486_tlb_window;
     end
   endtask
 
-  // seq 1: the review's case -- a CR3 switch re-walks the same VPN into the way
+  // seq 1: the stale-tag case -- a CR3 switch re-walks the same VPN into the way
   // that still carries its old tag (invalidate_all resets PLRU to 000).
   task automatic seq_cr3_rewalk();
     begin

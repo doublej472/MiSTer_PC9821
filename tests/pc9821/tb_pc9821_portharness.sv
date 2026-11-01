@@ -46,6 +46,7 @@ module tb_pc9821_portharness;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -85,6 +86,7 @@ module tb_pc9821_portharness;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -125,7 +127,7 @@ module tb_pc9821_portharness;
   wire [1:0] ems_state;
   wire top_shadow_en;
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
-  // port (r13/57) and the `.*` DUT instantiation matches by name, so it must
+  // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
@@ -151,8 +153,14 @@ module tb_pc9821_portharness;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -168,6 +176,11 @@ module tb_pc9821_portharness;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -180,7 +193,7 @@ module tb_pc9821_portharness;
 
   // device_rd_wait models the DEVICE side of the read handshake: only the GDC's arrays
   // are in block RAM, so only its reads are answered a cycle after the strobe
-  // (pc9821_system.sv:478-484). Copied from the core's decode; +RD_WAIT_NONE disables it.
+  // (pc9821_system.sv:1173, `device_rd_wait = gdc_cs || opna_rd_wait`). Copied from the core's decode; +RD_WAIT_NONE disables it.
   reg rd_wait_gdc = 1'b1;
   function automatic bit is_gdc_port(input [15:0] p);
     begin

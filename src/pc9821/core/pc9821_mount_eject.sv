@@ -7,7 +7,7 @@
 // them - pc9821_block_io's own rule (`eject = img_mounted && (img_size < 512)`) - so an eject is a
 // mount event with img_size 0. Whether Main_MiSTer itself ever sends one (an unmount from its file
 // browser) is the ARM program's behaviour, which is not in this repo; this module does not depend
-// on it. The OSD's `T` entries (z486_mister.sv's CONF_STR, one per slot) give the owner an eject
+// on it. The OSD's `T` entries (z486_mister.sv's CONF_STR, one per slot) give the user an eject
 // that always exists, and this module synthesises that one-cycle event.
 //
 // THE EVENTS ARE MERGED, NEVER RACED (docs/single-cycle-event-discipline.md):

@@ -1,5 +1,6 @@
-// data_unit.sv: read_gpr_load_forwarded (size indexes the 8:1 view) against
-// read_gpr_load_forwarded_late (both views indexed by reg_sel, size last).
+// data_unit.sv: read_gpr_load_forwarded's former body (size indexes the 8:1 view) against
+// read_gpr_load_forwarded_late (both views indexed by reg_sel, size last), which
+// is now the body of every read_gpr_load_forwarded call.
 // MUTANT=1 indexes the byte view by the full reg_sel and must be refuted.
 module shift_src_late #(parameter MUTANT = 0)
   (input [255:0] view, input [2:0] reg_sel, input [1:0] size, output mismatch);

@@ -24,17 +24,17 @@
 //      per half any entry's be touches with some but not all of its bytes, one DQ
 //      turnaround, one merged half write per touched half, and one precharge. A
 //      full entry writes its halves directly (no read), so mixed groups ride one
-//      session. GATHER_K stores that fell in one 2 KiB SDRAM row used to cost
-//      GATHER_K full read-modify-write transactions (~16 clk each); they now cost
-//      one session of ~2*K+10 (the rate model's G_K shape, K=3-4 = 1.3-1.65x the
+//      session. GATHER_K stores that fall in one 2 KiB SDRAM row cost one session
+//      of ~2*K+10 instead of GATHER_K full read-modify-write transactions (~16 clk
+//      each) (the rate model's G_K shape, K=3-4 = 1.3-1.65x the
 //      14.44 MB/s frame need on the stride-640 column shape).
 //   4. DRAIN-BEFORE-READ: a request on the same PEGC route that is not itself
 //      postable (a read) is held until the buffer is EMPTY, so it cannot read
 //      behind buffered bytes. THE SCANOUT IS SUCH A READER: the packed scanout
 //      fetches the SAME peg_base region on the SDRAM fourth requester, but it is NOT
-//      a request of this buffer and its burst cannot be gated on an empty queue: an
-//      earlier form did that and starved the scanout under a store stream (measured
-//      in tb_pc9821_pegc_store_rate), and its residency is short enough to be below
+//      a request of this buffer and its burst cannot be gated on an empty queue: that
+//      starves the scanout under a store stream (measured in
+//      tb_pc9821_pegc_store_rate), and its residency is short enough to be below
 //      the fetch's own first-beat latency anyway (the same bench's
 //      store-to-scanout legs measure 0 stale bytes). Non-PEGC requests (the RAM side
 //      of a blit) pass freely: only the peg_window/pegc_packed arms translate into
@@ -44,10 +44,9 @@
 //      dword. Ordering is by the backend itself: a request accepted after a drain
 //      write executes after it (the controller serves accepts in order, one in flight
 //      per port), so accept order is visibility order.
-//   5. BOUNDED RESIDENCY (P2-6, the horizontal-stripe class: the old SDRAM
-//      write-combining buffer was invisible to the scanout and produced the
-//      owner's stripe). EVERY entry's age runs from its OWN allocation and never
-//      stops or restarts on a merge (the hold_age fix of 1aacf864, generalised):
+//   5. BOUNDED RESIDENCY (the horizontal-stripe class: a write-combining buffer
+//      invisible to the scanout shows as horizontal stripes). EVERY entry's age runs
+//      from its OWN allocation and never stops or restarts on a merge:
 //      a drain session fires at the latest when its oldest entry is HOLD_CYCLES
 //      old, so no dirty dword lives past one hold window (the subsystem derives
 //      HOLD_CYCLES from SYS_CLOCK_HZ, 1 us) plus one drain session, however hard
@@ -137,7 +136,17 @@ module pc9821_pegc_storebuf #(
   localparam integer AGE_W = $clog2(HOLD_CYCLES + 1);   // the age saturates at HOLD_CYCLES
   localparam integer GENT_W = 27 + 32 + 4;   // {addr, din, be} per extra gather entry
 
-  reg  [24:0] ent_addr [0:DEPTH-1];  // dword address [26:0 of the byte address]: peg addresses lie below 128 MiB
+  // THE ENTRIES KEEP ONLY THE LOW 17 BITS OF THE DWORD ADDRESS (byte address [18:2]); bits [26:19]
+  // are ONE register, `hi_r`, shared by every held entry. A postable store is a store on the PEGC
+  // route (peg_window || pegc_packed), and pc9821_memory_map maps both arms to
+  // {peg_hi, peg_base[19], offset[18:0]} with peg_base a constant of the build (0x80000-aligned:
+  // pack_base + PACK_BYTES + 0x80000), so every postable address lies in the same 512 KiB window
+  // and bits [26:19] cannot differ between stores. Holding them once drops 8 bits per entry, the
+  // narrower match compares and the narrower pair/row facts (module-alone, tools/res_exp_map.py:
+  // 723 -> 659 ALMs, 602 -> 538 registers). The invariant is asserted below (VERILATOR) and
+  // proven against the full-width buffer by tools/check_storebuf_head_inv.py at a fixed window.
+  reg  [16:0] ent_addr [0:DEPTH-1];  // dword address [18:2] of the byte address (the window offset)
+  reg   [7:0] hi_r;                  // byte address [26:19]: the window, the same for every entry
   reg  [31:0] ent_data [0:DEPTH-1];
   reg   [3:0] ent_be   [0:DEPTH-1];
   reg [AGE_W-1:0] ent_age [0:DEPTH-1];  // clk_sys cycles since THIS entry was allocated
@@ -148,6 +157,19 @@ module pc9821_pegc_storebuf #(
   reg         pres_pair;             // ... and it is a two-dword drain
   reg   [3:0] pres_n;                // ... and it carries this many entries
   reg         hold_force_r;          // a blocked request forces the drain out
+  // THE HEAD FACTS, REGISTERED AT THE ALLOCATION (docs/timing.md C5-head). The drain decision read
+  // the queue's head through the bank/rotate window and THEN compared it: pair_ok's 25-bit
+  // `win_addr[1] == win_addr[0] + 1` and grp_run's per-slot rowkey compares sat behind
+  // rp -> bank read -> rotate, in series with grp_complete -> drain_pres -> the merge window ->
+  // the entry writes (the rp-headed C5 paths). An entry's address never changes while it is held
+  // (a merge writes data and enables only), so each fact about the pair (e, e+1) is decided when
+  // e+1 is allocated, against the newest held dword (`last_addr` = ent_addr[wp-1]), and read
+  // through rp as one bit. Equal to the window compares whenever both entries are held
+  // (tools/check_storebuf_head_inv.py proves it by induction over this module).
+  reg  [16:0] last_addr;             // the newest allocation's dword: ent_addr[wp-1] while count > 0
+  reg  [DEPTH-1:0] nx_adj;           // entry e+1 holds the dword after entry e's
+  reg  [DEPTH-1:0] nx_row_lg;        // ... and the same SDRAM row, 512-column geometry (da[24:9])
+  reg  [DEPTH-1:0] nx_row_sm;        // ... and the same SDRAM row, 256-column geometry (da[22:8])
 
 
   // ---- the head window: entries rp .. rp+NB-1, read through a banked structure ----
@@ -166,7 +188,7 @@ module pc9821_pegc_storebuf #(
     end
   endgenerate
   wire [NBL-1:0] rpb = rp[NBL-1:0];
-  reg  [24:0] bk_addr [0:NB-1];
+  reg  [16:0] bk_addr [0:NB-1];
   reg  [31:0] bk_data [0:NB-1];
   reg   [3:0] bk_be   [0:NB-1];
   always @* begin : bank_read
@@ -180,7 +202,7 @@ module pc9821_pegc_storebuf #(
       bk_be[b]   = bpos ? ent_be[(b + NB)]   : ent_be[b];
     end
   end
-  reg  [24:0] win_addr [0:NB-1];
+  reg  [16:0] win_addr [0:NB-1];
   reg  [31:0] win_data [0:NB-1];
   reg   [3:0] win_be   [0:NB-1];
   always @* begin : win_rot
@@ -205,29 +227,32 @@ module pc9821_pegc_storebuf #(
   // term at the 512-column geometries where addr[26:11] already carries it (and
   // is a REFINEMENT at 64 MB, where addr[26] aliases: splitting there is safe).
   /* verilator lint_off UNUSEDSIGNAL */   // da's column/upper bits are not part of the row
-  function [15:0] rowkey(input [24:0] da);
+  function [15:0] rowkey(input [16:0] da);
     begin
-      rowkey = sdram_size[1] ? da[24:9] : {1'b0, da[22:8]};
+      rowkey = sdram_size[1] ? {8'd0, da[16:9]} : {7'd0, da[16:8]};
     end
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
 
   // ---- the drain group: the FIFO prefix of up to GATHER_K same-row entries ----
+  // Same-row-as-entry-0 along a prefix is same-row-as-the-previous-entry at each step (row
+  // equality is transitive), so the run steps on the registered pair facts: slot gi joins when
+  // entries rp+gi-1 and rp+gi share the row (nx_row), exactly `rowkey(win_addr[gi]) == rk` for
+  // every slot the prefix reaches.
+  wire [DEPTH-1:0] nx_row = sdram_size[1] ? nx_row_lg : nx_row_sm;
   reg  [3:0] grp_run;
   always @* begin : grp_sel
     integer gi;
-    reg [15:0] rk;
     grp_run = 4'd0;
-    rk      = rowkey(win_addr[0]);
     for (gi = 0; gi < GATHER_K; gi = gi + 1)
-      if ((gi < count) && (grp_run == 4'(gi)) && (rowkey(win_addr[gi]) == rk))
+      if ((gi < count) && (grp_run == 4'(gi)) && ((gi == 0) || nx_row[3'(rp + 3'(gi - 1))]))
         grp_run = 4'(gi + 1);
   end
 
   // The pair drain: two adjacent FULL entries, exactly the shape port 0's
-  // two-word write carries (its be applies to both dwords).
-  wire pair_ok = (count >= 4'd2) && (win_be[0] == 4'hF) && (win_be[1] == 4'hF) &&
-                 (win_addr[1] == (win_addr[0] + 25'd1));
+  // two-word write carries (its be applies to both dwords). Adjacency is the registered fact
+  // (`win_addr[1] == win_addr[0] + 1` while both are held).
+  wire pair_ok = (count >= 4'd2) && (win_be[0] == 4'hF) && (win_be[1] == 4'hF) && nx_adj[rp];
 
   // ---- the batch window (rule 7): when the group is complete ----
   wire age_out = (ent_age[rp] >= AGE_W'(HOLD_CYCLES));
@@ -265,6 +290,13 @@ module pc9821_pegc_storebuf #(
   // window is refused - that store allocates instead (see the rule). The match is kept
   // ONE-HOT: each entry writes its own bytes (below), so no binary index and no read-back
   // mux of the matched entry is needed.
+  // The match is read ONLY under a post (post_accept, and the commit check), and a post is
+  // `postable`, which makes pass_req 0: so its commit window is pres_cnt with pass_req = 0
+  // (`post_cnt`), which keeps the CPU request's own valid/route decode (pass_req's inputs) out of
+  // the window test. Equal to pres_cnt in every cycle the match is read.
+  wire       post_drain = pres_locked ? !pres_pass : drain_ready;
+  wire [3:0] post_n     = pres_locked ? pres_n : (pair_ok ? 4'd2 : grp_run);
+  wire [3:0] post_cnt   = post_drain ? post_n : 4'd0;
   reg  [DEPTH-1:0] match_hit;
   reg              match_ok;
   always @* begin : post_match
@@ -273,7 +305,7 @@ module pc9821_pegc_storebuf #(
     match_hit = {DEPTH{1'b0}};
     for (mi = 0; mi < DEPTH; mi = mi + 1) begin
       off = 3'(mi) - rp;                       // position in the circular queue
-      match_hit[mi] = (ent_addr[mi] == in_addr[26:2]) && ({1'b0, off} >= pres_cnt) &&
+      match_hit[mi] = (ent_addr[mi] == in_addr[18:2]) && ({1'b0, off} >= post_cnt) &&
                       ({1'b0, off} < count);
     end
     match_ok = |match_hit;
@@ -294,6 +326,16 @@ module pc9821_pegc_storebuf #(
   wire drain_accept = mem_accept && !use_pass;
   wire post_accept  = in_valid && postable && can_alloc;
 
+  // C5-A (docs/timing.md): the DEEP combine
+  // decision (`can_combine = |match_hit`, the 25-bit equality OR) drives ONLY the final select of
+  // count, wp and the pair facts, never an adder or a wide compare. Form the shallow candidates
+  // first - the drained count, the un-incremented wp, the new pair facts - and let alloc_now pick
+  // at the register D. Value- and cycle-identical to an `if (post_accept && !can_combine)` form
+  // (tools/check_seq_equiv.py proves every register and output equal).
+  wire alloc_now = post_accept && !can_combine;
+  wire [3:0] cnt_dec  = drain_accept ? n_now : 4'd0;
+  wire [3:0] cnt_base = count - cnt_dec;
+
   // in_ready IS the CPU's memory ready (it reaches z486 through z_ready, which fans out
   // into the prefetcher, the microcode entry ROM and both L1s), so it is built from the
   // SHORTEST form of each arm - never from the drain-group decision (grp_run's rowkey
@@ -302,13 +344,13 @@ module pc9821_pegc_storebuf #(
   // * postable: accepted iff a slot is free. A store that could only COMBINE (buffer
   //   full) waits one drain instead; match_ok still chooses combine-vs-allocate below,
   //   so the data written is identical - only that rare stall differs.
-  // * passthrough: mem_ready && use_pass && !pass_withdrawn, bit-equal to the old
+  // * passthrough: mem_ready && use_pass && !pass_withdrawn, bit-equal to
   //   mem_accept && use_pass (use_pass implies pres_locked || pass_req, which makes
   //   mem_valid exactly !pass_withdrawn), without drain_ready in the cone.
   assign in_ready = postable ? can_alloc
                              : (mem_ready && use_pass && !pass_withdrawn);
 
-  assign mem_addr      = use_pass ? in_addr : {5'd0, win_addr[0], 2'b00};
+  assign mem_addr      = use_pass ? in_addr : {5'd0, hi_r, win_addr[0], 2'b00};
   assign mem_din       = use_pass ? in_din  : win_data[0];
   assign mem_din_hi    = win_data[1];
   assign mem_be        = use_pass ? in_be   : win_be[0];
@@ -327,7 +369,7 @@ module pc9821_pegc_storebuf #(
     integer ej;
     gextra = 441'd0;
     for (ej = 1; ej < NB; ej = ej + 1)
-      gextra[(ej-1)*GENT_W +: GENT_W] = {{win_addr[ej], 2'b00}, win_data[ej], win_be[ej]};
+      gextra[(ej-1)*GENT_W +: GENT_W] = {{hi_r, win_addr[ej], 2'b00}, win_data[ej], win_be[ej]};
   end
   assign mem_gath_extra = gextra;
 
@@ -366,12 +408,29 @@ module pc9821_pegc_storebuf #(
       // The post: a combine writes the store's enabled bytes into the matched entry (later lanes
       // win; an unenabled lane keeps its byte), an allocation writes the whole dword and its
       // enables into the slot at wp. Per entry and per lane, so the data path has no read-back.
-      if (post_accept && !can_combine) begin
-        ent_addr[wp] <= in_addr[26:2];
-        wp           <= wp + 3'd1;
+      // THE SLOT AT wp IS WRITTEN ON EVERY POST (docs/timing.md C5-free), not only on an
+      // allocation: a post needs can_alloc, so wp is a FREE slot, and a free slot's contents are
+      // read by nothing that matters (the merge window, the run and the pair test stop at count,
+      // the age at rp is read only while count != 0, and the payload's entries beyond the drain's
+      // own are ignored by the controller), while the allocation writes all of it. So the slot's
+      // write enables do not wait for the merge decision (can_combine, the 25-bit match OR);
+      // only wp, count and the pair facts do, and they read it only as the final
+      // select (alloc_now) with their adders/compares computed shallow. tools/check_storebuf_head_inv.py
+      // proves the held entries, the control state and every output the controller reads unchanged.
+      if (post_accept) begin
+        ent_addr[wp] <= in_addr[18:2];
+        hi_r         <= in_addr[26:19];   // equal to the held entries' (see the entries' note)
       end
+      // C5-A: alloc_now only SELECTS; the increment/compares are shallow candidates off the match cone.
+      wp           <= alloc_now ? (wp + 3'd1) : wp;
+      // the pair (wp-1, wp)'s facts, against the newest held dword (meaningless, and never
+      // read, when the buffer was empty: entry wp-1 is then not held)
+      nx_adj[3'(wp - 3'd1)]    <= alloc_now ? ({1'b0, in_addr[18:2]} == ({1'b0, last_addr} + 18'd1)) : nx_adj[3'(wp - 3'd1)];   // 18 bits: the window's last dword and its first are NOT adjacent
+      nx_row_lg[3'(wp - 3'd1)] <= alloc_now ? (in_addr[18:11] == last_addr[16:9]) : nx_row_lg[3'(wp - 3'd1)];
+      nx_row_sm[3'(wp - 3'd1)] <= alloc_now ? (in_addr[18:10] == last_addr[16:8]) : nx_row_sm[3'(wp - 3'd1)];
+      last_addr    <= alloc_now ? in_addr[18:2] : last_addr;
       for (i = 0; i < DEPTH; i = i + 1) begin
-        if (post_accept && !can_combine && (3'(i) == wp)) begin
+        if (post_accept && (3'(i) == wp)) begin
           ent_data[i] <= in_din;
           ent_be[i]   <= in_be;
         end else if (post_accept && match_hit[i]) begin
@@ -384,28 +443,31 @@ module pc9821_pegc_storebuf #(
       end
 
       // Every entry's age runs from its OWN allocation and only that resets it
-      // (rule 5; the 1aacf864 fix generalised from the tail to every entry):
+      // (rule 5, for every entry, not only the tail):
       // merging into an entry does not restart its window, so a stream that keeps
       // hitting one dword cannot hold it for as long as the stream lasts.
       for (i = 0; i < DEPTH; i = i + 1) begin
-        if (post_accept && !can_combine && (3'(i) == wp))
+        if (post_accept && (3'(i) == wp))
           ent_age[i] <= {AGE_W{1'b0}};
         else if (ent_age[i] != AGE_W'(HOLD_CYCLES))
           ent_age[i] <= ent_age[i] + 1'b1;
       end
 
-      count <= count + (post_accept && !can_combine ? 4'd1 : 4'd0)
-                     - (drain_accept ? n_now : 4'd0);
+      count <= alloc_now ? (cnt_base + 4'd1) : cnt_base;
     end
   end
 
   // The response-queue withdrawal comment lives with pass_withdrawn above.
 
 `ifdef VERILATOR
-  // The entries keep byte address [26:0]: a postable store must lie below 128 MiB (the SDRAM's ceiling).
-  always @(posedge clk)
+  // The entries keep byte address [18:2] and share [26:19]: a postable store must lie below 128 MiB
+  // (the SDRAM's ceiling) and in the same 512 KiB window as every store still buffered (see hi_r).
+  always @(posedge clk) begin
     if (!reset && in_valid && postable && (in_addr[31:27] != 5'd0))
       $fatal(1, "pc9821_pegc_storebuf: a postable store at %08h is beyond the 128 MiB the entries hold", in_addr);
+    if (!reset && in_valid && postable && (count != 4'd0) && (in_addr[26:19] != hi_r))
+      $fatal(1, "pc9821_pegc_storebuf: a postable store at %08h is outside the 512 KiB window of the buffered stores (%02h)", in_addr, hi_r);
+  end
   // A burstcount-2 write is the PAIR DRAIN's shape (its second word is this
   // buffer's mem_din_hi); a passthrough write asking for one would take the
   // controller's two-word path with 32'd0 as its second dword.
@@ -413,7 +475,7 @@ module pc9821_pegc_storebuf #(
     if (!reset && mem_accept && mem_write && pres_pass && (mem_burstcount == 8'd2))
       $fatal(1, "pc9821_pegc_storebuf: a passthrough write presented burstcount 2 -- only the pair drain may ask for the two-word write");
     if (!reset && drain_accept && pair_now &&
-        (win_addr[1] != (win_addr[0] + 25'd1)))
+        ({1'b0, win_addr[1]} != ({1'b0, win_addr[0]} + 18'd1)))
       $fatal(1, "pc9821_pegc_storebuf: a pair drain left non-adjacent dwords");
     if (!reset && drain_accept && mem_gath && (n_now > 4'(GATHER_K)))
       $fatal(1, "pc9821_pegc_storebuf: a gather drain carried %0d entries over GATHER_K=%0d", n_now, GATHER_K);

@@ -9,8 +9,8 @@
 // had, and not this module's to change. Slot 1 is the FDC0 floppy
 // (z486_mister.sv's CONF_STR "S1,D88FDDHDM,Mount FDD1;").
 //
-// The floppy must NOT reset the machine (owner directive, 2026-09-25: "changing a floppy disk
-// should not reset the whole machine"). On real hardware -- and in NP2kai, the primary
+// The floppy must NOT reset the machine: changing a floppy disk does not reset the whole
+// machine. On real hardware -- and in NP2kai, the primary
 // software reference -- a floppy swap resets nothing: the guest simply sees the new medium on
 // its next access to the drive. NP2kai's own media test is a live one
 // (`fdd_diskready`, diskimage/fddfile.c:92-98: the drive's image name is non-empty) and its
@@ -25,8 +25,8 @@
 // ready drive: fdc.int_stat[i] = FDCRLT_AI | i ... } } }` (io/fdc.c:1020-1032). That is the
 // signal DOS's disk-change detection reads, and it needs the DOR write path (FDC reset, DMA
 // readiness, the AI status class) that this model does not have yet; the DOR is read-only here
-// (pc9821_fdc.sv's A_DOR answers NP2kai's fdc_i94 byte). It is Phase 2/3's drive mechanics,
-// which is where the FDC lane's own note put the floppy's ready-change path.
+// (pc9821_fdc.sv's A_DOR answers NP2kai's fdc_i94 byte). It belongs with the FDC's drive
+// mechanics, the floppy's ready-change path.
 `default_nettype none
 
 module pc9821_disk_change_reset (
@@ -34,7 +34,7 @@ module pc9821_disk_change_reset (
     input  wire       reset_async,   // z486_mister.sv's platform reset, asynchronous here
     // The two hps_io mount pulses, one bit per slot: 0 = the ATA/HDD image, 1 = FDC0.
     /* verilator lint_off UNUSEDSIGNAL */   // bit 1 (the floppy slot) is deliberately NOT a
-    // term here: ignoring it is the whole change, and the port stays the two-bit vector the
+    // term here: ignoring it is this module's purpose, and the port stays the two-bit vector the
     // top level already has (hps_io's img_mounted[VDNUM-1:0]) rather than a single bit, so the
     // slot a future floppy-change path would need is visible rather than silently dropped.
     input  wire [1:0] img_mounted,

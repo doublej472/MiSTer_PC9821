@@ -1,4 +1,4 @@
-// tb_pc9821_kbd_reset — the 8251 command register's bit-3 keyboard reset.
+// tb_pc9821_kbd_reset - the 8251 command register's bit-3 keyboard reset.
 
 `timescale 1ns / 1ps
 
@@ -163,9 +163,9 @@ module tb_pc9821_kbd_reset;
     send_key(1'b1, 1'b0, 8'h1C);   // A -> queued
     if (!dut.status_reg[1]) fail("RXRDY is not set after a delivered byte");
     if (!irq)              fail("IRQ is not asserted after a delivered byte");
-    // The translation ROM's read is registered (r13/299), so the last queued key's event lands
+    // The translation ROM's read is registered, so the last queued key's event lands
     // one clk_sys after its send_key. One settle cycle lets the pipeline drain before the count.
-    // RE-PINNED 1 -> 2 cycles by T6 (owner-approved 2026-09-25):
+    // RE-PINNED 1 -> 2 cycles by T6:
     // the dedup table's read is registered too now, so the DECISION is one clk deeper; the
     // bytes and their order are unchanged, only the clk the event lands on.
     @(posedge clk); @(posedge clk); #1;

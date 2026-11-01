@@ -29,13 +29,13 @@
 // month's DECIMAL value (1..12, so Oct..Dec are 0xA/0xB/0xC), read back by
 // NP2kai as `bcd[1] >> 4` and packed as `(month << 4) + week`.
 //
-// This is the path no bench drove at all before: r13/50 found the module read the
+// This is the path no bench drove at all before: an earlier check found the module read the
 // month range off [43:40] - the YEAR's low BCD digit - and stored the whole
 // month|weekday byte into c_month, so a time whose year ended in 0 was silently
 // dropped and a stored month re-emitted the weekday twice.
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_CALENDAR_TIMESET: The uPD4990A TIMESET command (opcode 2) loads the counters from the 48-bit input stream the machine's own writer sends - bios/xe10/BANK7.BIN@0x5D62 (and docs/probes/TRS.TXT running it), opcode 1 SHIFT, 48 data bits, opcode 2 - and the time reads back through the ITF's own 48-clock reader unchanged. The payload bits are presented the way that writer presents them: the 3-bit field is held at 7, the serial command channel, with only bit 5 (DATA) changing (0x07/0x27), so an input accumulator gated on the field drops every payload bit and the time never loads. It pins the two field decodes the old code got wrong: the month lives in the HIGH nibble of the month|weekday byte at [39:36] (tested against its own 1..12 range, not the year's low BCD digit at [43:40]), so a write is no longer dropped when the year ends in 0; and the month is stored and re-emitted as its DECIMAL value (NP2kai's `(month << 4) | week`), so October, November and December round-trip as 0xA/0xB/0xC where the old low-nibble slice gave 0/1/2.
+// TB_PC9821_CALENDAR_TIMESET: The uPD4990A TIMESET command (opcode 2) loads the counters from the 48-bit input stream the machine's own writer sends - bios/xe10/BANK7.BIN@0x5D62 (and docs/probes/TRS.TXT running it), opcode 1 SHIFT, 48 data bits, opcode 2 - and the time reads back through the ITF's own 48-clock reader unchanged. The payload bits are presented the way that writer presents them: the 3-bit field is held at 7, the serial command channel, with only bit 5 (DATA) changing (0x07/0x27), so an input accumulator gated on the field drops every payload bit and the time never loads. It pins the two field decodes the old code got wrong: the month lives in the HIGH nibble of the month|weekday byte at [39:36] (tested against its own 1..12 range, not the year's low BCD digit at [43:40]), so a write is no longer dropped when the year ends in 0; and the month is stored and re-emitted as its DECIMAL value (NP2kai's `(month << 4) | week`), so October, November and December round-trip as 0xA/0xB/0xC where the old low-nibble slice gave 0/1/2. A time set in October, November or December then CARRIES like a framework-loaded date (2026-10-31 23:59:59 rolls to November 1, 2026-11-30 to December 1, 2026-12-31 to January 1 of 2027): the stored month is internal packed BCD (0x10/0x12), which the round-trip reads cannot see, so a month stored as its binary value 0xA/0xC re-emits correctly yet breaks the day and year carry.
 
 module tb_pc9821_calendar_timeset;
 
@@ -64,6 +64,17 @@ module tb_pc9821_calendar_timeset;
       .tick_rd(tick_rd),
       .cdat(cdat), .irq(irq));
   // ==== STIMULUS ====
+
+  // One second, forced across the 1 Hz boundary: the divider's own length is not what
+  // this bench checks (tb_pc9821_calendar_rollover admits the same shortcut).
+  task tick_once;
+    begin
+      @(negedge clk);
+      dut.hz_div = 27'd49_999_999;
+      @(posedge clk);
+      @(negedge clk);
+    end
+  endtask
 
   task fail(input [8*96-1:0] message);
     begin
@@ -259,6 +270,33 @@ module tb_pc9821_calendar_timeset;
     if (mw !== 8'hC6 || d !== 8'h31 || y !== 8'h26)
       fail("a TIMESET with fewer than 48 data bits was applied");
 
+    // ---------------------------------------------------------------
+    // A TIMESET date must CARRY like a framework-loaded one. The stored month is
+    // internal packed BCD (0x10 for October, 0x12 for December), which the
+    // round-trip reads above cannot see: a month stored as its binary value (0x0A,
+    // 0x0C) still re-emits as 0xA/0xC. It shows only when the counters carry, as
+    // the month length and the December-to-January rule read the stored month.
+    // Expected values are the calendar's own rule (as tb_pc9821_calendar_rollover:
+    // October has 31 days, December rolls into January of the next year).
+    // ---------------------------------------------------------------
+    timeset(8'h59, 8'h59, 8'h23, 8'h31, 8'hA5, 8'h26);   // 2026-10-31 23:59:59
+    tick_once;
+    read_clock(s, m, h, d, mw, y);
+    if (d !== 8'h01 || mw[7:4] !== 4'hB || y !== 8'h26 || h !== 8'h00)
+      fail("a TIMESET 2026-10-31 23:59:59 did not roll to November 1");
+
+    timeset(8'h59, 8'h59, 8'h23, 8'h31, 8'hC5, 8'h26);   // 2026-12-31 23:59:59
+    tick_once;
+    read_clock(s, m, h, d, mw, y);
+    if (d !== 8'h01 || mw[7:4] !== 4'h1 || y !== 8'h27)
+      fail("a TIMESET 2026-12-31 23:59:59 did not roll to January 1 of 2027");
+
+    timeset(8'h59, 8'h59, 8'h23, 8'h30, 8'hB5, 8'h26);   // 2026-11-30 23:59:59
+    tick_once;
+    read_clock(s, m, h, d, mw, y);
+    if (d !== 8'h01 || mw[7:4] !== 4'hC || y !== 8'h26)
+      fail("a TIMESET 2026-11-30 (30-day month) did not roll to December 1");
+
   // ==== VERDICT ====
     if (errors == 0) begin
       $display("TB_PC9821_CALENDAR_TIMESET: PASS");
@@ -268,7 +306,7 @@ module tb_pc9821_calendar_timeset;
   end
 
   initial begin
-    #2_000_000;
+    #6_000_000;
     $fatal(1, "TB_PC9821_CALENDAR_TIMESET: timeout");
   end
 

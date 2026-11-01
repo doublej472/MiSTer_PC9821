@@ -6,7 +6,7 @@
 // 0xA466's full/empty bits and the 0xA468 interrupt; its only control is 0xA468's bit-3 buffer
 // reset. 0xA460 is the card's extend/ID register and belongs to pc9821_iobus, not here.
 
-// Three rules, all from the references and NONE measured - never probed (probe 0, r12/35 s8):
+// Three rules, all from the references and NONE measured - never probed (probe 0):
 //   * 16-bit samples are SIGNED and stored HIGH BYTE FIRST, not little-endian; 8-bit samples
 //     are SIGNED and left-justified. A first implementation gets both wrong.
 //   * 0xA468 bits 2:0 index a table that is EIGHT TIMES the sample rate. Index 0 is 44100 Hz
@@ -62,11 +62,11 @@ module pc9821_pcm86 #(
     // latched flag OR the live buffer-low level). It is LOW while the guest
     // masks it and rises AGAIN on a re-enable with the flag still latched,
     // which is the fresh edge the edge-latched PIC consumes
-    // (pc9821_pic.sv:121 ir_set = ir_in & ~ir_prev). The guest clears the
+    // (pc9821_pic.sv:168 `ir_set = ir_in & ~ir_prev`). The guest clears the
     // latched flag by writing 0xA468 with bit 4 clear. On the card one strap
     // feeds the OPNA's timers and this block, so pc9821_system ORs this into
     // the OPNA's IRQ line rather than giving the two devices different
-    // interrupt numbers (r12/35 section 4).
+    // interrupt numbers.
     output wire        irq,
 
     // The logical byte count, for the bench. The card has no port that exposes
@@ -74,10 +74,8 @@ module pc9821_pcm86 #(
     // this instead of inferring the level from a timing.
     output wire [15:0] dbg_count,
 
-    // The sample buffer's SDRAM backing (src/pcm86/pc9821_pcm86_buf.sv). The buffer used
-    // to be 32 M10K blocks inferred inside this module; it now lives in SDRAM on the
-    // memory controller's third port, which this design used to leave tied off. The
-    // interface above is unchanged -- only where the bytes are stored moved.
+    // The sample buffer's SDRAM backing (src/pcm86/pc9821_pcm86_buf.sv): the buffer lives in
+    // SDRAM on the memory controller's third port, not in M10K inside this module.
     input  wire [31:0] buf_base,
     output wire        sdram_valid,
     input  wire        sdram_ready,
@@ -186,8 +184,14 @@ module pc9821_pcm86 #(
   reg        irq_arm;      // set by each data write, cleared when the IRQ fires
 
   reg [31:0] phase;
-  reg [14:0] wrptr, rdptr;
+  reg [14:0] wrptr;
   reg [15:0] count;        // 0x8000 = the 32 KiB logical buffer is full
+  // The read pointer is not a register: every update of wrptr/count keeps
+  // count == (wrptr - rdptr) mod 0x8000 (the reset and buffer reset zero all three; a write
+  // adds 1 to wrptr and count, or on overflow 1 to wrptr, 4 to rdptr and -3 to count; a frame
+  // adds n to rdptr and -n to count), and count[14:0] is 0 exactly when the buffer is full
+  // (rdptr == wrptr), so the pointer is that difference.
+  wire [14:0] rdptr = wrptr - count[14:0];
   reg signed [15:0] hold_l, hold_r;
 
   wire [2:0]  rate_sel = fifo[2:0];
@@ -214,7 +218,7 @@ module pc9821_pcm86 #(
   // ------------------------------------------------------------------
   // Sample format. frame_bytes = 1 << pcm86bits[fmt] with
   // pcm86bits[] = {1,1,1,2,0,0,0,1}, i.e. 2,2,2,4,1,1,1,2 bytes per frame
-  // (r12/35 section 3; qemu's opna_pcm_frame_bytes is the same table).
+  // (qemu's opna_pcm_frame_bytes is the same table).
   // ------------------------------------------------------------------
   function automatic [2:0] frame_bytes(input [2:0] fmt);
     begin
@@ -329,7 +333,7 @@ module pc9821_pcm86 #(
   // level at 0xA468 bit 4 and is cleared by a 0xA468 write with bit 4 clear,
   // which is the only way software clears it.
   //
-  // NP2kai's undocumented heuristics (none is hardware evidence, r12/35
+  // NP2kai's undocumented heuristics (none is hardware evidence,
   // section 7): the write-to-interrupt delay ("no basis for the value",
   // sound/pcm86c.c:469-472) and the irq-clear-with-empty-buffer long wait
   // (cbus/pcm86io.c:117-120) are NOT modelled here. The forced interrupt for
@@ -360,7 +364,7 @@ module pc9821_pcm86 #(
   // A wire driven by irq_pending alone is NOT that query: it stays HIGH through
   // an 0xA468 write of 0x90 (bit 5 clear, bit 4 set, so the latch survives -
   // cbus/pcm86io.c:114-121) and eats the re-enable's rising edge at the PIC
-  // (pc9821_pic.sv:121; wired in at pc9821_system.sv:1012). tb_pc9821_pcm86_irqmask.
+  // (pc9821_pic.sv:168; wired in at pc9821_system.sv:1457, `opna_irq | pcm86_irq`). tb_pc9821_pcm86_irqmask.
   wire irq_query = (irq_pending || (count <= fifosize)) && fifo[5];
 
   // EVERY ARMED THRESHOLD EVENT IS A FRESH REQUEST. NP2kai delivers each one with its own
@@ -425,7 +429,6 @@ module pc9821_pcm86 #(
       irq_arm     <= 1'b0;
       phase       <= 32'd0;
       wrptr       <= 15'd0;
-      rdptr       <= 15'd0;
       count       <= 16'd0;
       hold_l      <= 16'sd0;
       hold_r      <= 16'sd0;
@@ -455,7 +458,6 @@ module pc9821_pcm86 #(
         // data write from undoing it (see buf_rst's declaration).
         if (buf_rst) begin
           wrptr   <= 15'd0;
-          rdptr   <= 15'd0;
           count   <= 16'd0;
           phase   <= 32'd0;
           hold_l  <= 16'sd0;
@@ -481,8 +483,8 @@ module pc9821_pcm86 #(
           // "WORKAROUND: WinNT 3.5向け 異常設定値を弾く".
           // IT IS A WORKAROUND, NOT HARDWARE EVIDENCE: NP2kai labels it as one
           // itself, no datasheet or capture says the card rejects 0x?F, and this
-          // core keeps it only because it is harmless and the reference has it
-          // (review2/opna-audit F10). Do not cite this line as reference-backed
+          // core keeps it only because it is harmless and the reference has it.
+          // Do not cite this line as reference-backed
           // hardware behaviour. NP2kai's OTHER 86-PCM heuristics are still NOT
           // modelled here and must not be smuggled in through this comment: the
           // write-to-interrupt delay ("値に根拠なし" / "no basis for the value",
@@ -500,7 +502,7 @@ module pc9821_pcm86 #(
       if (wr_data && !buf_rst) begin
         wrptr <= wrptr + 15'd1;
         // A byte is accepted even when the 32 KiB buffer is full; the oldest
-        // bytes are dropped, so the newest data survives (r12/35 section 3).
+        // bytes are dropped, so the newest data survives.
         // NP2kai appends past full into a rescue margin (PCM86_REALBUFSIZE =
         // 0x8000 + rescue, an artifact of its 64 KiB host ring) that this ring
         // does not have; the slip granularity below is its.
@@ -511,8 +513,7 @@ module pc9821_pcm86 #(
         // session (tb_pc9821_pcm86_overflow_align). The newest byte joins and the four
         // oldest leave: 0x8000 + 1 - 4.
         if (count == 16'h8000) begin
-          rdptr <= rdptr + 15'd4;
-          count <= 16'h7FFD;
+          count <= 16'h7FFD;   // rdptr steps 4 (the slip)
         end else
           count <= count + 16'd1;
         irq_arm <= 1'b1;
@@ -570,7 +571,6 @@ module pc9821_pcm86 #(
           // buffer is no longer full when the byte arrives and no slip is owed. The byte
           // lands in the slot the frame just vacated and count is old - nbyte + 1, which
           // never exceeds 0x8000. count == (wrptr - rdptr) mod 0x8000 holds either way.
-          rdptr  <= rdptr + {12'd0, nbyte_rg};
           count  <= count - {13'd0, nbyte_rg}
                   + ((wr_data && !buf_rst) ? 16'd1 : 16'd0);
           hold_l <= frame_l;

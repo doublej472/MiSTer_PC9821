@@ -21,6 +21,21 @@
 // request the falling edge is exactly what the game's IRR poll waits on
 // (STEELGUN). The unmasked path is unchanged - INTA already cleared the latch.
 //
+// WD_UNMASKED / THE KEYBOARD'S ACKING READ. One line needs the withdraw on the
+// falling edge even while UNMASKED: IRQ1. Its line falls only when the guest has
+// just read the data register (pc9821_kbd's `irq = status[1] && !st_read ...`),
+// i.e. when the pending request has been SERVICED BY POLLING and is no longer
+// owed an interrupt. Holding the edge latch there makes the PIC dispatch the
+// already-consumed byte, and the guest's INT 09h reads the stale data register
+// and queues a duplicate key - measured as an `85:xx` (RXRDY clear) INT 09h in
+// the KBIRQ probe on the Xe10 image after a make/break bounce. The masked case
+// is the IRQWD capture (docs/probes/IRQWD.TXT: `IRQ1 ... postack_irr=01`).
+// The master also names IRQ0 here (pc9821_interrupts): OUT0 falls only when the
+// guest reprograms channel 0 (mode 0 control word or mode-0 count) or a square
+// wave's half period ends, and NP2kai clears IRR0 on every channel-0 write
+// (io/pit.c pit_o71 / pit_o77) while the Xe10's IRR follows OUT0 (IRQWD). A
+// request that falls before its acknowledge is lost on the real 8259A too.
+//
 `default_nettype none
 
 module pc9821_pic #(
@@ -30,7 +45,11 @@ module pc9821_pic #(
     parameter integer CASCADE_IRQ = -1,
     // Lines whose latched request is withdrawn by the device line's falling edge
     // while masked (see the header). 0 = the pure edge latch.
-    parameter [7:0] WD_MASK = 8'h00
+    parameter [7:0] WD_MASK = 8'h00,
+    // Lines whose latched request is withdrawn by the device line's falling edge
+    // whether masked or not: the acking-register-read lines (IRQ1), whose falling
+    // edge MEANS the request was consumed. See the header.
+    parameter [7:0] WD_UNMASKED = 8'h00
 ) (
     input wire clk,
     input wire rst_n,
@@ -61,7 +80,7 @@ module pc9821_pic #(
     output reg  [2:0] int_acked_irq,
     // Whether that acknowledge found a request at all. 0 = spurious (inta with
     // nothing to serve): int_acked_irq then holds the PREVIOUS ack's value and must
-    // not be trusted to pick the vector source (review interrupts.md F1).
+    // not be trusted to pick the vector source.
     output reg        int_acked_valid,
     input  wire       inta,
 
@@ -112,7 +131,7 @@ module pc9821_pic #(
   wire    [7:0] isr_eff = smm ? (isr & ~imr) : isr;
   // Under SFNM the cascade input never blocks: an in-service IRQ7 does not suppress a
   // forwarded request, so it is dropped from the block's SOURCE. That is exactly what
-  // the old `|isr_eff[6:0]` did for bit 7 at pry=0, and it stays true at any pry.
+  // `|isr_eff[6:0]` gives for bit 7 at pry=0, and it stays true at any pry.
   wire    [7:0] isr_blk_src = sfnm_cascade ? (isr_eff & 8'h7F) : isr_eff;
   // PRIORITY IS COUNTED FROM THE OCW2 POINTER, NOT FROM IRQ0. Rotate the
   // in-service levels so rotated index 0 IS the level `pry` makes highest - the order
@@ -122,17 +141,28 @@ module pc9821_pic #(
   // the one derived from the ISR relative to s->priority_add (hw/intc/i8259.c:80-105).
   // On natural IRQ order alone a pry != 0 BLOCKS the level the pointer promotes and
   // lets the level it demotes preempt.
-  wire    [3:0] pry_ext = {1'b0, pry};
-  wire    [7:0] isr_rot = (isr_blk_src >> pry_ext) |
-                          (isr_blk_src << (4'd8 - pry_ext));
-  wire    [7:0] isr_block_rot = { |isr_rot[7:0], |isr_rot[6:0], |isr_rot[5:0], |isr_rot[4:0],
-                                  |isr_rot[3:0], |isr_rot[2:0], |isr_rot[1:0], isr_rot[0] };
-  wire    [7:0] isr_block = (isr_block_rot << pry_ext) |
-                            (isr_block_rot >> (4'd8 - pry_ext));
+  // The rotate / cumulative-OR / rotate-back of the in-service levels, written without the two
+  // barrel rotators: level p is blocked when an in-service level lies in priority order from
+  // `pry` up to and including p. For p >= pry that is a prefix OR of the levels at or above
+  // `pry`; for p < pry the order wraps, so it is any in-service level at or above `pry`, or one
+  // at or below p. Equal to the rotated form for every (isr_blk_src, pry) (checked exhaustively
+  // over all 256 x 8 inputs when it was written).
+  wire    [7:0] isr_ge    = isr_blk_src & (8'hFF << pry);
+  wire          isr_any_ge = |isr_ge;
+  reg     [7:0] isr_block;
+  always @(*) begin : blk
+    integer p;
+    reg pre_ge, pre_all;
+    pre_ge = 1'b0; pre_all = 1'b0;
+    for (p = 0; p < 8; p = p + 1) begin
+      pre_ge  = pre_ge  | isr_ge[p];
+      pre_all = pre_all | isr_blk_src[p];
+      isr_block[p] = (p[2:0] >= pry) ? pre_ge : (isr_any_ge | pre_all);
+    end
+  end
   wire    [7:0] pending = ir_latch & ~imr & ~isr_block;
   reg     [2:0] highest;
   reg           highest_valid;
-  integer       k;
 
   // request latch next-state pieces (single NBA per cycle, see the update site)
   wire    [7:0] ir_set = ir_in & ~ir_prev;
@@ -141,7 +171,7 @@ module pc9821_pic #(
   // see the WD_MASK header note). ir_fall and ir_set can never name the same bit,
   // so there is no set-vs-withdraw collision to resolve.
   wire    [7:0] ir_fall   = ~ir_in & ir_prev;
-  wire    [7:0] ir_wd_eff = ir_fall & WD_MASK & imr;
+  wire    [7:0] ir_wd_eff = ir_fall & ((WD_MASK & imr) | WD_UNMASKED);
   wire    [7:0] ir_clr_all = ir_clr | ir_wd_eff;
   assign int_irq = highest;
 
@@ -149,35 +179,40 @@ module pc9821_pic #(
   // (NP2kai io/pic.c:156-166 and :295-305: `num = pry; while(!(mir & (1<<num)))
   // num = (num+1) & 7;`). k = 7..0 with idx = (pry+k)&7 makes pry win last, i.e.
   // highest priority.
-  always @(*) begin
-    highest = 3'd0;
-    highest_valid = 1'b0;
-    for (k = 7; k >= 0; k = k - 1) begin
-      if (pending[(pry + k[2:0]) & 3'd7]) begin
-        highest = (pry + k[2:0]) & 3'd7;
-        highest_valid = 1'b1;
-      end
+  // The first set level counting up from `pry` and wrapping: the lowest set bit at or above
+  // `pry`, else the lowest set bit overall (two fixed priority encoders and a select, where the
+  // 8-step scan indexed by pry + k built eight 8:1 muxes).
+  function automatic [3:0] low_enc(input [7:0] x);   // {valid, index of the lowest set bit}
+    begin
+      low_enc = x[0] ? 4'b1000 : x[1] ? 4'b1001 : x[2] ? 4'b1010 : x[3] ? 4'b1011 :
+                x[4] ? 4'b1100 : x[5] ? 4'b1101 : x[6] ? 4'b1110 : x[7] ? 4'b1111 : 4'b0000;
     end
+  endfunction
+  function automatic [3:0] first_from(input [7:0] x, input [2:0] from);
+    reg [3:0] e_ge;
+    begin
+      e_ge = low_enc(x & (8'hFF << from));
+      first_from = e_ge[3] ? e_ge : low_enc(x);
+    end
+  endfunction
+  wire [3:0] pend_first = first_from(pending, pry);
+  always @(*) begin
+    highest       = pend_first[2:0];
+    highest_valid = pend_first[3];
   end
 
   // OCW2's level: the SL field when set, else the first in-service level scanning from
   // the priority pointer (NP2kai io/pic.c:295-300). `ocw2_has` is false only for the
   // SL=0 / no-ISR case, where NP2kai changes nothing at all.
-  integer m;
+  wire [3:0] isr_first = first_from(isr, pry);
   reg [2:0] ocw2_lvl;
   reg       ocw2_has;
   always @(*) begin
     ocw2_has = 1'b1;
     ocw2_lvl = din[2:0];
     if (!din[6]) begin
-      ocw2_has = 1'b0;
-      ocw2_lvl = pry;
-      for (m = 0; m < 8; m = m + 1) begin
-        if (!ocw2_has && isr[(pry + m[2:0]) & 3'd7]) begin
-          ocw2_lvl = (pry + m[2:0]) & 3'd7;
-          ocw2_has = 1'b1;
-        end
-      end
+      ocw2_has = isr_first[3];
+      ocw2_lvl = isr_first[3] ? isr_first[2:0] : pry;
     end
   end
 
@@ -237,7 +272,7 @@ module pc9821_pic #(
             // deliberately NOT the ISR: NP2kai's pic_o00 clears imr/irr/ocw3/pry
             // and leaves the isr clear disabled inside `#if 0`
             // (io/pic.c:326-337) - a guest that re-inits while an interrupt is
-            // in service keeps the in-service bit (review-interrupts F1). QEMU
+            // in service keeps the in-service bit. QEMU
             // clears it (pic_reset_common) but the 8259A datasheet's ICW1 reset
             // list does not name the ISR, and NP2kai is the primary reference.
             // Showing a stale mask to a guest that reads it and writes it back is
@@ -355,7 +390,7 @@ module pc9821_pic #(
         int_out   <= 1'b0;
         int_hold  <= 3'd4;
         // The ack event records what it found, so the vector mux upstream cannot key
-        // on a stale previous ack (review interrupts.md F1).
+        // on a stale previous ack.
         int_acked_valid <= highest_valid;
         // A spurious acknowledge - inta with nothing to serve (the request was
         // withdrawn between intr and the INTA pair) - publishes THIS chip's own

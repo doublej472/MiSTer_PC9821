@@ -6,7 +6,7 @@
 //
 // The scenarios, each with a bounded wait and its own failure name. A - K are the
 // handshakes that must complete; the mux-moved counter records any launch whose payload the
-// request mux moved under (the one latent hazard this lane found, reported in the doc).
+// request mux moved under (the one latent hazard found).
 //   A  control: mapped RAM write/read and a 4-word line read across the bridge.
 //   B  a 64-read valid-held stream on port 0 (the route queue holds two accepts, drains).
 //   C  CPU + scanout + font all pending at once (ports 0, 1 and 3 together).
@@ -69,6 +69,8 @@ module tb_pc9821_subsystem_stalls;
   reg [7:0]  grcg_addr = 0;
   reg [7:0]  grcg_din = 0;
   wire       grcg_expand;
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
 
   reg        egc_enable = 0;
   reg [15:0] egc_access = 16'hFFF0;
@@ -104,12 +106,11 @@ module tb_pc9821_subsystem_stalls;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire       cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire       cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0]  tram_din;
@@ -162,14 +163,14 @@ module tb_pc9821_subsystem_stalls;
   wire        nWE, nRAS, nCAS, nCS, CKE;
   wire        busy;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -180,6 +181,7 @@ module tb_pc9821_subsystem_stalls;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -235,7 +237,7 @@ module tb_pc9821_subsystem_stalls;
   pc9821_memory_subsystem dut (.*);
 
   sdram_sync_bridge #(
-      .FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .FAST_GRADE(1'b0)
+      .FREQ(`TB_SDRAM_FREQ), .FAST_GRADE(1'b0)
   ) bridge (
       .clk(clk), .resetn(~reset),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
@@ -278,7 +280,7 @@ module tb_pc9821_subsystem_stalls;
   // with the payload at the ACK. If they differ, the request mux moved between the launch and
   // the registration of the accept -- the subsystem would then credit the accept to a route that
   // never launched, and the launched route would be owed a response forever.
-  // STRENGTHENED (r13/201 section 3.4): the move is safe only because the launch's route RETRIES
+  // STRENGTHENED: the move is safe only because the launch's route RETRIES
   // -- its ready is mux-gated low, so it never consumes an accept for a payload it did not
   // present. Assert that here, so the invariant is checked rather than incidental.
   // The launch: the first cycle a request is presented, which is when the controller can first
@@ -600,7 +602,7 @@ module tb_pc9821_subsystem_stalls;
     begin : scen_e3
       reg [31:0] src, got;
       integer pg;
-      // The r13/160 posted-write shape: the EGC's 0x3100 put advances on the D1 ACCEPT, so the
+      // The posted-write shape: the EGC's 0x3100 put advances on the D1 ACCEPT, so the
       // SAME-WORD read that follows it is what must see the written data across the bridge.
       // Source on access page 1, destination on page 0, distinct values, asserted by data.
       egc_setup;
@@ -681,7 +683,7 @@ module tb_pc9821_subsystem_stalls;
     end
 
     // ---- H. THE FLUSH vs A CONCURRENT MAPPED READ ----
-    // The GVRAM is block RAM now (r13/283), so it owns NOTHING on port 0: the shared request mux
+    // The GVRAM is block RAM now, so it owns NOTHING on port 0: the shared request mux
     // is only the loader and the mapper. The interleaving that used to matter here (a GVRAM
     // write-back flush moving the mux under a bridge launch) cannot arise, so what is left to
     // prove is the stronger statement - a GVRAM store burst and a scanout line tick leave the

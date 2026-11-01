@@ -47,6 +47,7 @@ module pc9821_kbd #(
     output wire irq,
     input wire [10:0] ps2_key,
     input wire        bios_setup,   // OSD: hold HELP from reset, so POST enters SETUP
+    input wire        layout_jis,   // OSD "Keyboard": 1 = JIS host layout, 0 = US (translate())
     output wire [2:0] led_status,   // MiSTer hps_io order {scrolllock, numlock, capslock}
 
     // Bring-up telemetry: enough to tell "the MiSTer never gave us a key" from
@@ -71,8 +72,40 @@ module pc9821_kbd #(
   localparam [3:0] LOCK_CAPS = 4'h4;
   localparam [3:0] LOCK_KANA = 4'h8;
 
-  // Direct PS/2 Set-2 -> NEC PC-98 physical-key translation.
-  function automatic [7:0] translate(input extended, input [7:0] set2);
+  // Direct PS/2 Set-2 -> NEC PC-98 physical-key translation, for the two host layouts.
+  //
+  // THE SOURCE. Main_MiSTer's input.cpp ev2ps2[] turns each Linux key code into the PS/2 set-2
+  // code that reaches ps2_key here; this table turns that code into the PC-98 key number (NP2kai
+  // keystat.tbl names each one). Every key is mapped BY POSITION, as NP2kai sdl/kbtrans.c
+  // sdlcnv106 maps a JIS 106-key host and qemu-pc98 hw/input/pc98-kbd.c at_set1_to_pc98 maps a
+  // set-1 one, so a key gives the PC-98 key at the same place on the PC-98 keyboard and Shift
+  // gives what the PC-98 prints on that key's upper half (the BIOS table, BANK7@0x632B).
+  //
+  // THE LAYOUT (OSD "Keyboard", `jis`). The two layouts differ in exactly the four set-2 codes
+  // REMAP_SLOT() below names, each a JIS key whose US cap carries a different symbol:
+  //   set-2  JIS cap       JIS layout gives   US cap   US layout gives
+  //   0x0E   hankaku/zen   nothing            ` ~      @ ~   (0x1A)
+  //   0x54   @ `           @ ~   (0x1A)       [ {      [ {   (0x1B)
+  //   0x5B   [ {           [ {   (0x1B)       ] }      ] }   (0x28)
+  //   0x5D   ] }           ] }   (0x28)       \ |      \ |   (0x0D, the BIOS's 0x5C)
+  // JIS is NP2kai sdlcnv106 (SDL_SCANCODE_BACKSLASH -> 0x28, LEFTBRACKET -> 0x1a, RIGHTBRACKET
+  // -> 0x1b; it has no GRAVE row). US gives the US caps' symbols for the three bracket/backslash
+  // keys, unshifted and shifted, which is NP2 windows/winkbd.cpp key106[] on a US host (indexed
+  // by the US virtual key: 0xDB `[` -> 0x1b, 0xDD `]` -> 0x28, 0xDC `\` -> 0x0d, 0xC0 `` ` `` ->
+  // 0x1a) and NP2kai wx/kbtrans.cpp ascii_to_pc98_106 (`[` 0x1b, `\` 0x0d, `]` 0x28). The PC-98
+  // has no ` key, so the US ` key gives @ (Shift: ~), the US caps' only other missing symbol.
+  // A DISAGREEMENT IN THE PRIMARY REFERENCE: NP2kai's SDL table for a 101-key host,
+  // sdl/kbtrans.c sdlcnv101, maps these keys BY POSITION (GRAVE -> 0x0d, LEFTBRACKET -> 0x1a,
+  // RIGHTBRACKET -> 0x1b, BACKSLASH -> 0x28: this table's JIS row plus ` -> yen), while the same
+  // file's libretro table lrcnv101 (RETROK_LEFTBRACKET -> 0x1b, RIGHTBRACKET -> 0x28,
+  // BACKSLASH -> 0x0d) and winkbd key106[] give the US caps' symbols. The US layout follows the
+  // symbol tables, because a user who selects US asks for the symbols the caps show; the
+  // positional mapping is what the JIS layout already gives.
+  // Every other key is positional in both layouts: the US caps whose symbol differs keep the
+  // PC-98 key at their position (= gives ^, ' gives :, and the shifted digits are the PC-98's),
+  // because giving the US symbol would need a Shift the user is not holding, or a held Shift
+  // removed, and a game reading the key matrix would see that.
+  function automatic [7:0] translate(input jis, input extended, input [7:0] set2);
     begin
       if (extended) begin
         case (set2)
@@ -80,24 +113,24 @@ module pc9821_kbd #(
           8'h14:   translate = 8'h73;  // right Ctrl -> GRPH (NP2kai kbtrans.c)
           8'h1F:   translate = 8'h77;  // left Win
           8'h27:   translate = 8'h78;  // right Win
-          // Menu -> KANA 0x72, deliberately NOT NP2kai's APP 0x79: after the Round-3
-          // remap no Set-2 code reached 0x72, so event_lock/the LOCK_KANA toggle/led_status[3]
-          // were dead from the host. Menu is the least-used free Windows-cluster key.
+          // Menu -> KANA 0x72, deliberately NOT NP2kai's APP 0x79: a US keyboard has no
+          // katakana/hiragana key, and Menu is the least-used free Windows-cluster key. The
+          // JIS katakana/hiragana key (set-2 0x13 below) gives KANA too.
           8'h2F:   translate = 8'h72;  // Menu -> KANA
           8'h4A:   translate = 8'h41;  // keypad /
           8'h5A:   translate = 8'h1C;  // keypad Enter
-          8'h69:   translate = 8'h3F;  // End
+          8'h69:   translate = 8'h3F;  // End -> HELP
           8'h6B:   translate = 8'h3B;  // Left
-          8'h6C:   translate = 8'h3E;  // Home
+          8'h6C:   translate = 8'h3E;  // Home -> HOME/CLR
           8'h70:   translate = 8'h38;  // Insert
           8'h71:   translate = 8'h39;  // Delete
           8'h72:   translate = 8'h3D;  // Down
           8'h74:   translate = 8'h3C;  // Right
           8'h75:   translate = 8'h3A;  // Up
-          8'h77:   translate = 8'h60;  // Pause (hps_io normalized)
-          8'h7A:   translate = 8'h37;  // Page Down
-          8'h7C:   translate = 8'h61;  // Print Screen / SysRq
-          8'h7D:   translate = 8'h36;  // Page Up
+          8'h77:   translate = 8'h60;  // Pause -> STOP (hps_io normalized)
+          8'h7A:   translate = 8'h37;  // Page Down -> ROLL DOWN
+          8'h7C:   translate = 8'h61;  // Print Screen -> COPY (hps_io normalized)
+          8'h7D:   translate = 8'h36;  // Page Up -> ROLL UP
           default: translate = 8'hFF;
         endcase
       end else begin
@@ -114,7 +147,8 @@ module pc9821_kbd #(
           8'h46: translate = 8'h09;  // 9
           8'h45: translate = 8'h0A;  // 0
           8'h4E: translate = 8'h0B;  // minus
-          8'h55: translate = 8'h0C;  // caret/equal
+          8'h55: translate = 8'h0C;  // caret (US =)
+          8'h6A: translate = 8'h0D;  // JIS yen key (Main KEY_YEN) -> YEN
           8'h66: translate = 8'h0E;  // Backspace
           8'h0D: translate = 8'h0F;  // Tab
           8'h15: translate = 8'h10;  // Q
@@ -127,8 +161,11 @@ module pc9821_kbd #(
           8'h43: translate = 8'h17;  // I
           8'h44: translate = 8'h18;  // O
           8'h4D: translate = 8'h19;  // P
-          8'h54: translate = 8'h1A;  // @ / left bracket
-          8'h5B: translate = 8'h1B;  // left bracket / right bracket
+          // The four layout keys (see THE LAYOUT above).
+          8'h0E: translate = jis ? 8'hFF : 8'h1A;  // JIS hankaku/zenkaku: nothing; US `: @
+          8'h54: translate = jis ? 8'h1A : 8'h1B;  // JIS @: @; US [: [
+          8'h5B: translate = jis ? 8'h1B : 8'h28;  // JIS [: [; US ]: ]
+          8'h5D: translate = jis ? 8'h28 : 8'h0D;  // JIS ]: ]; US \: YEN (BIOS 0x5C '\')
           8'h5A: translate = 8'h1C;  // Enter
           8'h1C: translate = 8'h1D;  // A
           8'h1B: translate = 8'h1E;  // S
@@ -140,15 +177,7 @@ module pc9821_kbd #(
           8'h42: translate = 8'h24;  // K
           8'h4B: translate = 8'h25;  // L
           8'h4C: translate = 8'h26;  // semicolon
-          8'h52: translate = 8'h27;  // colon/quote
-          8'h5D: translate = 8'h0D;  // yen: number-row key right of '='; its
-          8'h6A: translate = 8'h0D;  // physical Yen (JIS) also maps to 0x0D
-          8'h51: translate = 8'h33;  // RO (underscore/yen), left of right shift; NEC 0x33
-          8'h61: translate = 8'h33;  // RO key (underscore/yen), left of right shift; NEC 0x33
-          8'h7F: translate = 8'h61;  // raw PrintScreen (hps_io normalises it to E0 0x7C)
-                                      // is the slot between slash and space, BIOS table 0xFF = special
-                                     // BIOS translation (BANK7@0x632B[0x0D]) is
-                                     // 0x5C '\', the DOS path separator
+          8'h52: translate = 8'h27;  // colon (US ')
           8'h1A: translate = 8'h29;  // Z
           8'h22: translate = 8'h2A;  // X
           8'h21: translate = 8'h2B;  // C
@@ -159,6 +188,11 @@ module pc9821_kbd #(
           8'h41: translate = 8'h30;  // comma
           8'h49: translate = 8'h31;  // period
           8'h4A: translate = 8'h32;  // slash
+          // RO (PC-98 0x33, Shift gives '_'): the JIS ro key (Main KEY_RO -> 0x51; NP2kai
+          // sdlcnv106 INTERNATIONAL1 -> 0x33) and the ISO key left of Z (Main KEY_102ND -> 0x61;
+          // NP2 winkbd.cpp key106[0xE2] VK_OEM_102 -> 0x33), the same place on both keyboards.
+          8'h51: translate = 8'h33;  // JIS ro
+          8'h61: translate = 8'h33;  // ISO 102nd key
           8'h29: translate = 8'h34;  // Space
           8'h14: translate = 8'h74;  // left Ctrl
           8'h11: translate = 8'h51;  // left Alt -> NFER (NP2kai kbtrans.c)
@@ -166,9 +200,17 @@ module pc9821_kbd #(
           // default kbdtype folds RSHIFT 0x7D onto 0x70 (keystat.c keystat_down), and the
           // BIOS shift byte (0x53A bit 0) is written only for keys 0x70-0x74.
           8'h58: translate = 8'h71;  // Caps Lock
+          // The JIS conversion keys (Main ev2ps2: KEY_MUHENKAN -> 0x67, KEY_HENKAN -> 0x64,
+          // KEY_KATAKANA/HIRAGANA/KATAKANAHIRAGANA -> 0x13), as qemu-pc98 at_set1_to_pc98 maps
+          // their set-1 0x7B/0x79 (0x51/0x35) and NP2kai x/gtk2/gtk_keyboard.c xkeyconv_misc
+          // maps MUHE/HENK/HIRA/KATA (0x51/0x35/0x72). Left/right Alt keep NFER/XFER too, so a
+          // US keyboard reaches them.
+          8'h67: translate = 8'h51;  // muhenkan -> NFER
+          8'h64: translate = 8'h35;  // henkan -> XFER
+          8'h13: translate = 8'h72;  // katakana/hiragana -> KANA
           8'h05: translate = 8'h62;  // F1 -> NEC F1 (NP2kai lrcnv106 F1->0x62); HELP is End
                                      // (0x69 -> 0x3F above) and the OSD bios_setup injector, so
-                                     // the old F1->HELP remap made NEC F1 unreachable (M1)
+                                     // an F1->HELP remap would make NEC F1 unreachable (M1)
           8'h06: translate = 8'h63;  // F2
           8'h04: translate = 8'h64;  // F3
           8'h0C: translate = 8'h65;  // F4
@@ -178,16 +220,23 @@ module pc9821_kbd #(
           8'h0A: translate = 8'h69;  // F8
           8'h01: translate = 8'h6A;  // F9
           8'h09: translate = 8'h6B;  // F10
-          // F11 (Set-2 0x78) maps to NOTHING. It used to answer 0x60 (STOP), so an
-          // ordinary F11 press read as the STOP key - a phantom STOP make from a code
-          // sitting one off the normalized Pause token's 0x77. NP2kai's host tables map
-          // F11 to no PC-98 key at all (sdl/kbtrans.c lrcnv101/lrcnv106 carry
-          // RETROK_F1..F10 and no RETROK_F11 row; wx/kbtrans.cpp:36 labels it "VF1" but
-          // with that table's own inconsistent 0x73); qemu-pc98 hw/input/pc98-kbd.c:97
-          // maps set-1 0x57 (F11) to 0x60 as physical correspondence - secondary, and
-          // the evidence hierarchy puts NP2kai first. tb_pc9821_kbd_stop pins it silent.
-          8'h07: translate = 8'h61;  // F12 -> SysRq/COPY (qemu set-1 0x58; the MiSTer
-                                     // OSD key, which never reaches the core)
+          // F11/F12 -> VF1/VF2, the PC-98's own keys right of f.10 (NP2kai keystat.tbl
+          // 0x52 "VF1", 0x53 "VF2"; NP2kai wx/kbtrans.cpp labels WXK_F11 "VF1" and WXK_F12
+          // "VF2"). Never STOP: F11 answering 0x60 made an ordinary F11 press read as the STOP
+          // key (tb_pc9821_kbd_stop pins it). F12 is the MiSTer menu key (Main_MiSTer
+          // user_io.cpp is_menu_event), so it reaches the core only when the framework's menu
+          // is moved off it. VF3-VF5 (0x54-0x56) have no host key: Main_MiSTer sends nothing
+          // for F13-F15 (ev2ps2 rows 183-185 are NONE).
+          8'h78: translate = 8'h52;  // F11 -> VF1
+          8'h07: translate = 8'h53;  // F12 -> VF2
+          // NumLock/ScrollLock -> keypad = / keypad , - the two PC-98 keypad keys a PC keypad
+          // lacks (NP2kai keystat.tbl 0x4d "[=]", 0x4f "[,]"); Main_MiSTer sends nothing for
+          // KEY_KPEQUAL/KEY_KPCOMMA (ev2ps2 rows 117 and 121 are NONE), and NP2kai itself offers
+          // both only on a spare host key (x/kbdmng.c kbdmng_f12keys). They reach the core
+          // because hps_io's PS2WE makes Main_MiSTer pass them through (user_io.cpp
+          // `ps2ctl_modifier`); Win+NumLock/ScrollLock still switch the framework's emulation.
+          8'h77: translate = 8'h4D;  // NumLock -> keypad =
+          8'h7E: translate = 8'h4F;  // ScrollLock -> keypad ,
           8'h7B: translate = 8'h40;  // keypad minus
           8'h7C: translate = 8'h45;  // keypad multiply
           8'h79: translate = 8'h49;  // keypad plus
@@ -208,29 +257,55 @@ module pc9821_kbd #(
     end
   endfunction
 
+  // The set-2 codes whose translation depends on the layout, as {is one, slot}: the four rows
+  // marked in translate() above. A key held across a layout change must break as the key it
+  // made (see THE LAYOUT A HELD KEY MADE below), so each needs a slot of its own.
+  // tools/gen_keymap_table.py --check holds this list equal to the rows that differ.
+  function automatic [2:0] remap_slot(input extended, input [7:0] set2);
+    begin
+      if (extended) remap_slot = 3'b000;
+      else case (set2)
+        8'h0E:   remap_slot = 3'b100;
+        8'h54:   remap_slot = 3'b101;
+        8'h5B:   remap_slot = 3'b110;
+        8'h5D:   remap_slot = 3'b111;
+        default: remap_slot = 3'b000;
+      endcase
+    end
+  endfunction
+
   // NP2kai keystat.tbl kbexflag KBEX_NONREP (keystat.tbl:146-230) marks 0x52-0x56
   // (vf.1-vf.5), 0x62-0x6B (F1-F10), 0x70-0x74 (SHIFT/CAPS/KANA/GRPH/CTRL), 0x78
-  // (RWIN), 0x79 (APP) and 0x7D (right Shift). Only the ones translate() can produce
-  // are listed: 0x52-0x56 and 0x7D have no PS/2 source here (right Shift folds to
-  // 0x70). 0x77 (left Win) is REPEATABLE in that table - the row above it ends at
-  // 0x74 and the 0x78 row is RWIN/APP - so the old 0x77..0x79 range made LWIN stop
-  // repeating where the reference repeats it.
+  // (RWIN), 0x79 (APP) and 0x7D (right Shift). 0x7D has no PS/2 source here (right
+  // Shift folds to 0x70); VF1/VF2 (F11/F12) are the reachable VF keys and the range keeps
+  // the table's VF row whole. 0x77 (left Win) is REPEATABLE in that table - the row above
+  // it ends at 0x74 and the 0x78 row is RWIN/APP - so a 0x77..0x79 range would make LWIN
+  // stop repeating where the reference repeats it.
   function automatic nonrep(input [7:0] code);
     begin
-      nonrep = ((code >= 8'h62) && (code <= 8'h6B)) ||   // F1-F10
+      nonrep = ((code >= 8'h52) && (code <= 8'h56)) ||   // VF1-VF5
+               ((code >= 8'h62) && (code <= 8'h6B)) ||   // F1-F10
                ((code >= 8'h70) && (code <= 8'h74)) ||   // SHIFT/CAPS/KANA/GRPH/CTRL
                (code == 8'h78) || (code == 8'h79);       // RWIN/APP
     end
   endfunction
 
-  // Direct PS/2 Set-2 -> NEC PC-98 physical-key translation table.
-  // 512 entries stored in an MLAB ROM initialized from the translation function,
-  // replacing the 150-arm case on the active event path.
-  (* ramstyle = "MLAB" *) reg [7:0] kbd_lut [0:511];
+  // Direct PS/2 Set-2 -> NEC PC-98 physical-key translation table, both layouts: address
+  // {jis, extended, set2}, 1,024 entries in a ROM initialized from the translation function,
+  // replacing the case on the active event path. The layout is an ADDRESS BIT, not a mux after
+  // the read, so the event path's depth and timing are those of the one-layout table.
+  // MEMORY TYPE: M10K. At 1024 x 8 = 8,192 bits the table fits one M10K exactly (1K x 8 mode),
+  // and an MLAB cannot take it at all: the base fit's Fitter RAM Summary placed the earlier
+  // `ramstyle = "MLAB"` request as AUTO in one M10K block, 0 MLABs, "MLAB: No - Address Too
+  // Wide" (10 address bits; an MLAB is 32 or 64 deep). So the attribute names what the fitter
+  // builds, and no LAB is spent on the table. tools/res_exp_map.py, this module alone, MLAB ->
+  // M10K: ALMs needed 349 -> 348, combinational ALUTs 530 -> 530, registers 320 -> 320, block
+  // memory bits 9,472 -> 9,472, MLAB memory bits 0 -> 0 (the read is registered either way).
+  (* ramstyle = "M10K" *) reg [7:0] kbd_lut [0:1023];
   integer lut_i;
   initial begin
-    for (lut_i = 0; lut_i < 512; lut_i = lut_i + 1) begin
-      kbd_lut[lut_i] = translate(lut_i[8], lut_i[7:0]);
+    for (lut_i = 0; lut_i < 1024; lut_i = lut_i + 1) begin
+      kbd_lut[lut_i] = translate(lut_i[9], lut_i[8], lut_i[7:0]);
     end
   end
   // OR 0x85 (TXRDY, TXEMPTY, DSR).
@@ -247,6 +322,32 @@ module pc9821_kbd #(
   reg       rx_is_resp;
   reg       cmd_bit3;   // bit 3 of the previous command write, for the reset edge
 
+  // THE PRESENTATION PACE. On the real keyboard the next byte cannot be presented
+  // until the NEXT keyboard transfer slot: NP2kai io/serial.c keyboard_callback moves
+  // one byte per keybrd.xferclock tick, and keyboard_changeclock sets that tick from
+  // pccore.realclock / 1920 (2,457,600 / 1920 = 1,280 byte-times/s, one byte per
+  // 0.78 ms). Without it the model delivers the next FIFO byte one clk after the
+  // guest's 0x41 read, so a guest that peeks 0x41 before chaining (a disk image's
+  // HSB.EXE INT 09h hook, 0x2CE5/0x2C3D) sees the NEXT key instead of the stale data
+  // register the machine returns, steals a make or break, and leaves a modifier
+  // stuck. This is a TIMING-OF-PRESENTATION delay only: the FIFO keeps every byte, in
+  // order, and the value/status semantics are untouched.
+  //   pace_div = 0 means "the receive side has been idle for at least a tick", so the
+  //   FIRST byte after idle is still presented immediately. A delivery loads it with
+  //   XFER_TICK_CYCLES - 1, so the next delivery is exactly XFER_TICK_CYCLES later.
+  //   It is a separate divider from xfer_div (the IRQ re-poke): the re-poke restarts
+  //   on every delivery already, and a delivered-and-read byte leaves nothing for the
+  //   re-poke to stroke; the two counters never share a terminal count.
+  // Both transfer-tick dividers (pace_div here, xfer_div below) range over 0..XFER_TICK_CYCLES-1
+  // (pace_div: reset 0, loaded with XFER-1, counts down to 0; xfer_div: reset 0, a delivery loads
+  // 1, wraps at XFER-1), so each needs only the bits that range takes, not the parameter's 26.
+  localparam integer XFER_W = (XFER_TICK_CYCLES > 26'd1) ? $clog2(XFER_TICK_CYCLES) : 1;
+  localparam [XFER_W-1:0] XFER_ONE  = 1;
+  localparam [25:0]       XFER_LAST26 = XFER_TICK_CYCLES - 26'd1;
+  localparam [XFER_W-1:0] XFER_LAST = XFER_LAST26[XFER_W-1:0];
+  reg [XFER_W-1:0] pace_div;
+  wire       pace_ready = (pace_div == '0);
+
   // Key events and command responses are separate, matching NP2kai's control
   // response priority over normal keyboard traffic.
   reg [7:0] fifo[0:15];
@@ -258,6 +359,16 @@ module pc9821_kbd #(
   reg cmd_pending;
   reg [7:0] cmd_opcode;
   reg [3:0] lock_flags;
+  // Keyboard command 0x9C's parameter: 0x70 is the protocol's "inhibit key
+  // repeating" (docs: tmk_keyboard wiki PC-9801-Keyboard, "Inhibiting key
+  // repeating 0x9C 0x70"; the Xe10's PC-9801-119 keyboard answers FA to both
+  // bytes and supports it). Any other parameter re-enables repeating.
+  // NP2kai keystat.c keystat_ctrlsend case 0x9c stores the parameter as
+  // keyctrl.keyrep and keystat_down suppresses repeated makes when it is 0x70;
+  // its own keyrepeat_proc ignores the value, which is the divergence fixed
+  // here. The parameter's repeat TIMING is not modelled (NP2kai does not
+  // model it either).
+  reg repeat_inhibit;
   // MEMORY TYPE: M10K, NOT MLAB - measured, not a preference. An MLAB is built from a
   // LAB's own ALMs and LABs are this device's BINDING resource (the fit has 88 of 553 M10K
   // blocks free and 4,163 of 4,191 LABs used), so the MLAB form spends the scarce one.
@@ -280,7 +391,8 @@ module pc9821_kbd #(
   // The RE-POKE divider (see the irq assign below): free-running, so the re-strokes
   // are phase-deterministic and the first one after a delivery is at most one
   // transfer tick away.
-  reg [25:0] xfer_div;
+  // xfer_div is XFER_W bits (see pace_div's note).
+  reg [XFER_W-1:0] xfer_div;
   integer k;
   // key_state's power-up state: stamp 0 under `key_epoch` 0 reads "not down" for every
   // entry. The RESET state is the epoch bump in the reset arms below.
@@ -306,9 +418,9 @@ module pc9821_kbd #(
   reg        help_pending;   // an injected byte is waiting for FIFO room
   reg        help_release;   // the pending byte is the final break (0xBF)
   wire [7:0] help_data = help_release ? 8'hBF : 8'h3F;
-  // THE OPTION IS SAMPLED AT MACHINE RESET ONLY (owner requirement, lane dip-settings):
-  // a mid-run OSD change must do NOTHING to the running machine - flipping it on used to
-  // start a fresh hold immediately, injecting a held HELP into a running guest. The hold is
+  // THE OPTION IS SAMPLED AT MACHINE RESET ONLY: a mid-run OSD change must do NOTHING to
+  // the running machine - flipping it on must not start a fresh hold, injecting a held HELP
+  // into a running guest. The hold is
   // armed from the reset-time latch instead (the msw-cells pattern), so the new value
   // applies at the next machine reset / reload and nowhere else.
   /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
@@ -322,13 +434,13 @@ module pc9821_kbd #(
   // THE TRANSLATION ROM'S READ IS REGISTERED, AND ITS READ REGISTER CARRIES NO POWER-UP VALUE.
   // Both halves are load-bearing and only together. The synchronous read is what lets the ROM
   // be block RAM at all; a POWER-UP VALUE ON THE REGISTER THAT CAPTURES IT puts the whole
-  // 4,096-bit table back into combinational LUTs (225 combinational ALUTs, ~40 % of the
-  // module) - Quartus 17.0.2 reports that as
+  // table back into combinational LUTs (measured on the earlier one-layout 512 x 8 = 4,096-bit
+  // table: 225 combinational ALUTs, ~40 % of the module) - Quartus 17.0.2 reports that as
   //   Info (276007): RAM logic "kbd_lut" is uninferred due to asynchronous read logic,
   // which names the symptom and not the cause. Measured with tools/res_exp_map.py (one
   // `quartus_map` of this module, ~1 min): taking this one value off the read register is
-  // what makes the 512x8 ROM row appear; the `ramstyle` attribute (MLAB or M10K), the
-  // initialised contents and the address cone change nothing. Review r2-resets F5 (9dc1214c)
+  // what made the ROM row appear (512x8 then; 1024x8 with the layout bit); the `ramstyle` attribute (MLAB or M10K), the
+  // initialised contents and the address cone change nothing. A reset cleanup (9dc1214c)
   // added `event_code = 8'hFF;` here for 4-state determinism and silently cost the ROM, and
   // nothing in this tree can see it - Verilator is 2-state and no bench reads an inference -
   // so DO NOT give `rom_q` a power-up value. The "no event can fire before the first read
@@ -344,16 +456,57 @@ module pc9821_kbd #(
   /* verilator lint_off PROCASSINIT */   // the initialisers are the registers' power-up values
   reg [1:0]  ps2_key_q = 2'b00;
   reg        rom_valid = 1'b0;     // 0 until the first ROM read has landed
+  reg [3:0]  held     = 4'b0000;   // per remap slot: the host key is down
+  reg [3:0]  held_jis = 4'b0000;   // per remap slot: the layout its make was translated in
   /* verilator lint_on PROCASSINIT */
+  // ---- THE LAYOUT A HELD KEY MADE --------------------------------------------------------
+  // A layout change while a layout key is down must not strand its make: the US `]` held
+  // across a flip to JIS would make 0x28 and break 0x9B, a key the guest never saw go down
+  // (the dedup swallows it) - and 0x28 would stay down in the guest. So each of the four
+  // layout keys (remap_slot) records the layout its make was read in, and while it is held
+  // its reads (the typematic re-makes and the break) use THAT layout, not the OSD's. Every
+  // other key reads the same byte in both halves of the ROM, so the layout bit is moot there.
+  // The record is the address bit itself (`lut_jis_q`, registered with the read), so it is
+  // exactly the layout the delivered make came from, whatever the OSD did around it.
+  // ONE WRITER: `held`/`held_jis` change only on a host event of a layout key (ps_event, one
+  // per hps_io ps2_key toggle) and on the module reset, folded into one next-state below.
+  // The record as it stands after this clk's event: an event of the same slot taken this clk
+  // (ps_event below, one clk after its read) has not reached `held` yet, so its press/release
+  // and layout are bypassed in - the read issued now sees the record that event leaves,
+  // however close the two host events are.
+  reg  [2:0] slot_q;               // remap_slot of the code the ROM read register holds
+  reg        lut_jis_q;            // the layout bit that read used
+  wire ps_event = (ps2_key_q[1] != ps2_key_prev);
+  wire [2:0] key_slot  = remap_slot(ps2_key[8], ps2_key[7:0]);
+  // A module reset clears the record on this edge, so it bypasses in as "not held".
+  wire       rec_byp   = ps_event && (slot_q == key_slot);
+  wire       rec_held  = rst_n && (rec_byp ? ps2_key_q[0] : held[key_slot[1:0]]);
+  wire       rec_jis   = rec_byp ? lut_jis_q    : held_jis[key_slot[1:0]];
+  wire       lut_jis   = (key_slot[2] && rec_held) ? rec_jis : layout_jis;
   always @(posedge clk) begin
-    rom_q     <= kbd_lut[{ps2_key[8], ps2_key[7:0]}];
+    rom_q     <= kbd_lut[{lut_jis, ps2_key[8], ps2_key[7:0]}];
     rom_valid <= 1'b1;
     ps2_key_q <= ps2_key[10:9];
+    slot_q    <= key_slot;
+    lut_jis_q <= lut_jis;
   end
   // Unmapped until the first read lands. This is the register power-up value the read
   // register must not carry, expressed as a one-clk guard instead.
   wire [7:0] event_code = rom_valid ? rom_q : 8'hFF;
-  wire ps_event = (ps2_key_q[1] != ps2_key_prev);
+  // The held-layout record's one next-state: the module reset clears it (the dedup's epoch
+  // bump forgets every held key at the same reset); a layout key's host event records press
+  // or release, and a press records the layout its read used. The event is taken whether or
+  // not the code is mapped in that layout (the JIS half/full-width key maps to nothing), so
+  // its release is read in the layout it was pressed in either way.
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      held     <= 4'b0000;
+      held_jis <= 4'b0000;
+    end else if (ps_event && slot_q[2]) begin
+      held[slot_q[1:0]] <= ps2_key_q[0];                     // ps2_key bit 9: pressed
+      if (ps2_key_q[0]) held_jis[slot_q[1:0]] <= lut_jis_q;
+    end
+  end
   wire event_mapped = (event_code != 8'hFF);
   wire event_lock = (event_code == 8'h71) || (event_code == 8'h72);
   wire event_pressed = ps2_key_q[0];
@@ -364,10 +517,10 @@ module pc9821_kbd #(
   // down", and every signal derived from it, cannot happen in the clk the event code
   // arrives in. The event is carried one stage: `event_code`/`event_lock`/`event_pressed`
   // /`ps_event && event_mapped` are registered here as `ev2_*`, and the decision below is
-  // taken from those plus the table's registered read. `ev2_valid` is what
-  // `ps_event && event_mapped` used to be, one clk later.
+  // taken from those plus the table's registered read. `ev2_valid` is
+  // `ps_event && event_mapped` one clk later.
   //
-  // THAT ONE clk IS THE WHOLE T6 TRADE, approved by the owner on 2026-09-25: the keyboard
+  // THAT ONE clk IS THE WHOLE T6 TRADE (docs/trade-candidates.md, accepted): the keyboard
   // is not on any hot path, keys are milliseconds apart (hps_io holds ps2_key until the
   // next event, and the host's USB HID poll dominates by milliseconds), and the VALUES
   // and the ORDER of the guest-visible bytes are unchanged - only the cycle the decision
@@ -411,15 +564,14 @@ module pc9821_kbd #(
 
   // NP2kai's keyboard_callback (io/serial.c) gates delivery on exactly one
   // condition -- the previously delivered byte has been read (its `status & 2`
-  // check); it does not gate on the 8251 command bits at all. We additionally
-  // required rx_enabled and !rts, and the PC-98 BIOS asserts RTS in its command
-  // byte, so every keystroke was swallowed and the guest saw no keyboard.
+  // check); it does not gate on the 8251 command bits at all. Also requiring
+  // rx_enabled and !rts would swallow every keystroke, since the PC-98 BIOS asserts
+  // RTS in its command byte.
   wire can_deliver = !status_reg[1];
   wire deliver_resp = can_deliver && (resp_count != 2'd0);
-  wire deliver_key = can_deliver && (resp_count == 2'd0) && (fifo_cnt != 5'd0);
-  // THE RECEIVE STATUS'S FOUR EFFECTS, as strobes for the ONE next-state fold below
-  // (review r2-pulses H6 / review-keyboard F8): the data-read clear, the command's
-  // error clear (bit 4 - both 0x3A and 0x32 carry it), the overflow flag (an event
+  wire deliver_key = can_deliver && (resp_count == 2'd0) && (fifo_cnt != 5'd0) && pace_ready;
+  // THE RECEIVE STATUS'S FOUR EFFECTS, as strobes for the ONE next-state fold below:
+  // the data-read clear, the command's error clear (bit 4 - both 0x3A and 0x32 carry it), the overflow flag (an event
   // that cannot enqueue because the FIFO is full) and the delivery set.
   wire st_read    = cs && rd && !a0;
   wire st_errclr  = cs && wr && a0 && !din[6] && din[4];
@@ -430,8 +582,10 @@ module pc9821_kbd #(
   wire inject_enqueue = help_pending && fifo_can_enqueue && !event_valid;
   // THE hps_io-NORMALIZED PAUSE EVENT IS A TAP, NOT A HELD KEY. Its host stream carries
   // exactly ONE event: Main_MiSTer sends the raw PS/2 Pause make sequence
-  // E1 14 77 E1 F0 14 F0 77 at key RELEASE (user_io.cpp send_keycode, `press != 1` -
-  // "pause does not have a break code"), and sys/hps_io.sv:309 normalizes it to one
+  // E1 14 77 E1 F0 14 F0 77 at key RELEASE and on every host autorepeat (user_io.cpp
+  // send_keycode, `press != 1` - "pause does not have a break code"; press 2 is a repeat, and
+  // this branch runs ahead of the other keys' `press > 1 && !use_ps2ctl` repeat filter, so a held
+  // Pause is a train of taps), and sys/hps_io.sv:309 normalizes it to one
   // {pressed, extended, 0x77} token with NO Pause-release case. The make that token
   // translates to (0x60, STOP) could therefore never be broken: the key stayed down
   // and - STOP being typematic-repeatable (NP2kai keystat.tbl kbexflag row 0x60 is 0) -
@@ -455,16 +609,25 @@ module pc9821_kbd #(
 
   // THE KEYBOARD RESET'S OWN CYCLE (the 8251 bit-3 1-to-0 transition). As a
   // wire it can give explicit priority in the folds below: the reset is one
-  // event like any other (review r2-pulses H6, the Single-Cycle Event
-  // Discipline), and every register it owns has ONE next-state per cycle,
+  // event like any other (the Single-Cycle Event Discipline), and every register it owns has ONE next-state per cycle,
   // `kbd_reset_now ? clear : normal_update`. The coincident deliver/enqueue is
   // discarded WITH the rest of what the receive side is holding - exactly what
   // NP2kai's keyboard_resetsignal() clears (keybrd.status, keybrd.ctrls,
   // keybrd.buffers).
   wire kbd_reset_now = cs && wr && a0 && !din[3] && cmd_bit3;
-  // Every 8251 data write with TxEN loads a command response (every arm of the
-  // write case below does), so this strobe marks the load for the delivery fold.
-  wire resp_load = cs && wr && !a0 && tx_enabled;
+  // EVERY 8251 DATA WRITE WITH TxEN LOADS A COMMAND RESPONSE except one: an
+  // unrecognized 0x9D parameter. NP2kai keystat.c keystat_ctrlsend case 0x9d
+  // answers 0x60 (LED query) and 0x7x (LED set) and otherwise does NOTHING -
+  // no second ACK and no NACK; QEMU hw/input/pc98-kbd.c likewise sends no
+  // rejection byte. The old unconditional 0xFC here was a divergence from both
+  // and could be consumed by the next 0x41/status read as a key or a response.
+  // This strobe marks a load for the delivery fold, so it must stay low for the
+  // ignored parameter too (an unread opcode ACK must not be discarded, and an
+  // in-flight response's shift must not be deferred).
+  wire cmd_9d_no_reply = cs && wr && !a0 && tx_enabled && cmd_pending &&
+                         (cmd_opcode == 8'h9D) &&
+                         (din != 8'h60) && (din[7:4] != 4'h7);
+  wire resp_load = cs && wr && !a0 && tx_enabled && !cmd_9d_no_reply;
   // THE COMMAND RESPONSE'S OWN CLEAR (NP2kai keyboard_ctrl(), io/serial.c): queuing a
   // leading FA/FC -- every command arm below does -- clears keybrd.ctrls, so a command
   // response REPLACES a pending, unread command response. That unread remainder is not
@@ -481,25 +644,39 @@ module pc9821_kbd #(
   // for, so the reset does not clear the array - it BUMPS `key_epoch`, and every word
   // carries the tag it was written under. A word written before a reset then reads as
   // not-down WITHOUT the memory being touched, which is the same guest-visible state the
-  // flop array had (every key up) in one clk. Both resets take it: the module reset (whose
-  // level is edge-detected in the main block below) and the 8251 bit-3 keyboard reset. A key
-  // that survives a reset is re-announced by its next make exactly as it was, because that
-  // make reads a stale tag and delivers.
+  // flop array had (every key up) in one clk.
+  //
+  // ONLY THE MODULE RESET BUMPS IT. The 8251 bit-3 keyboard reset must NOT: it is a reset
+  // of the KEYBOARD/USART record, not of the physical keys, and NP2kai keyboard_resetsignal
+  // (io/serial.c) keeps keystat.ref - it only drops the parameter and the repeat buffer and
+  // then keystat_resendstat re-announces what is still held. Clearing the dedup here
+  // would make the model forget a held key, so the key's BREAK would not match
+  // (normal_break needs key_down_now) and be swallowed - a held direction would stay down in
+  // the guest until it was pressed again, and a re-delivered make (USB resync) would be taken
+  // as a second press. Keeping the tag makes the held key survive exactly as the reference
+  // expects; the module reset still clears everything, because keys held across a card
+  // reload/reconfiguration are stale physical state the framework does not re-send.
+  // The resend itself (keystat_resendstat) is deliberately NOT modelled: the 8251 reset
+  // does not touch the guest's own key table, so the retained state already keeps the
+  // guest consistent, while a resend walk would re-announce a key pressed during it (the
+  // 128-clk race) and duplicate a press. The one cost - a make still sitting in the
+  // receive buffer when the reset arrives is discarded with it - is recorded as a WAIVED
+  // divergence in tb_pc9821_8251.
   //
   // ---- THE RESET CLEAR, HALF 2 OF 2: THE SWEEP THAT MAKES THE TAG EXACT -----------------
   // A tag WRAPS, and on the wrap a word stamped 2^7 bumps ago would read as live again -
   // i.e. a reset could revive the PRE-reset belief that a key is down, which is exactly the
-  // belief review r2-resets F5.2 exists to clear. So the tag alone is not the scheme: the
+  // belief the module reset exists to clear - and the 8251 reset does not bump, so
+  // only the module reset's bumps can wrap it. So the tag alone is not the scheme: the
   // SWEEP is the clear, and the tag only makes it immediate.
   // The sweep walks key_state[0..127] and writes {current tag, 0} to every word whose tag is
   // STALE. That write is IDEMPOTENT and observationally a NO-OP - a stale word already reads
   // as not-down, so the sweep only makes the clear PHYSICAL - which is why it can run in the
   // background without touching a guest-visible value. Everything is stale after a bump, so
   // a word is physically cleared within 128 of its key's idle cycles of the bump, while the
-  // tag needs 2^7 = 128 bumps to return to any stamp - and >= 256 clk_sys even for a
-  // back-to-back guest reset loop, since each reset is a 1-to-0 transition on 8251 bit 3,
-  // which a port write can produce no faster than every other clk. No input the interface
-  // can present can revive a pre-reset belief.
+  // tag needs 2^7 = 128 bumps to return to any stamp - and a module reset cannot be issued
+  // back-to-back faster than the framework's own reset handshake, far more than 128 clk_sys.
+  // No input the interface can present can revive a pre-reset belief.
   // The sweep is READ-GATED: it issues its read only while the event path does not need the
   // port (ps_event low), so an event's stage-1 read is never disturbed; and it clears a word
   // only when nothing wrote it on either edge since that read (the wq_* bypass and the
@@ -553,8 +730,8 @@ module pc9821_kbd #(
   end
 
   always @(posedge clk) begin
-    // The PS/2 event edge detector tracks THROUGH reset (review r2-resets F5.1,
-    // the L2 replay): `ps_event` is an EDGE of the hps_io toggle bit, and an
+    // The PS/2 event edge detector tracks THROUGH reset (the
+    // L2 replay): `ps_event` is an EDGE of the hps_io toggle bit, and an
     // edge detector that stops tracking across reset sees a phantom edge on the
     // first cycle after release and replays the last (or X) key. Tracking is
     // unconditional, so a completed event held on ps2_key is consumed DURING the
@@ -565,10 +742,12 @@ module pc9821_kbd #(
     // The generation-tag bump: ONE increment per reset ASSERTION, which is why the module
     // reset (a level) is edge-detected here rather than folded into the `!rst_n` arm -
     // bumping every clk it is held would walk the epoch by the pulse's LENGTH, and it is
-    // the count of bumps, not of clks, that the tag has to absorb. The 8251 bit-3 reset is
-    // already a one-clk strobe, so it bumps directly. Both resets used to clear the dedup
-    // array word by word; this is that clear, in one clk.
-    if (rst_n && (!rst_n_prev || kbd_reset_now)) key_epoch <= key_epoch + 7'd1;
+    // the count of bumps, not of clks, that the tag has to absorb. The 8251 bit-3 keyboard
+    // reset deliberately does NOT bump it (see the HALF 1 note above): the physical keys
+    // did not move, and NP2kai keyboard_resetsignal keeps keystat.ref so their breaks still
+    // match. This is the word-by-word clear of the dedup array, in one clk, for the
+    // module reset.
+    if (rst_n && !rst_n_prev) key_epoch <= key_epoch + 7'd1;
     if (!rst_n) begin
       status_reg   <= 8'd0;
       rts          <= 1'b1;
@@ -585,15 +764,16 @@ module pc9821_kbd #(
       cmd_pending  <= 1'b0;
       cmd_opcode   <= 8'd0;
       lock_flags   <= 4'd0;
-      xfer_div     <= 26'd0;
+      repeat_inhibit <= 1'b0;
+      xfer_div     <= '0;
+      pace_div     <= '0;
       rep_key      <= 8'hFF;
       rep_pend     <= 2'd0;
       rep_timer    <= 26'd0;
       tap_brk      <= 2'd0;
-      // The key state and the 8251 sequence telemetry are reset state too
-      // (review r2-resets F5.2/F5.3/F5.4): the dedup state kept across a reset swallowed
-      // the first make of every key that was down before it (the epoch bump above is what
-      // clears it now), and `ctrl_writes` X-locked the dbg_ctrl0/1 latches in 4-state sim.
+      // The key state and the 8251 sequence telemetry are reset state too:
+      // dedup state kept across a reset would swallow the first make of every key that was
+      // down before it (the epoch bump above clears it), and an unreset `ctrl_writes` X-locks the dbg_ctrl0/1 latches in 4-state sim.
       ctrl_writes  <= 8'd0;
       dbg_events   <= 8'd0;
       dbg_delivered<= 8'd0;
@@ -650,7 +830,7 @@ module pc9821_kbd #(
         // its single next-state (status_reg's and the IRQ line's is the fold's
         // reset arm near the queue below) in this arm or in that fold, with the
         // reset winning over the same-cycle deliver/enqueue arms by their
-        // `!kbd_reset_now` guards, review r2-pulses H6. It does NOT touch
+        // `!kbd_reset_now` guards. It does NOT touch
         // rts/rx_enabled/tx_enabled: NP2kai assigns keybrd.cmd = dat AFTER the reset, so
         // the new command byte's enables survive and only the receive-side record goes.
         if (kbd_reset_now) begin
@@ -671,16 +851,17 @@ module pc9821_kbd #(
           // can be stale on real firmware and not only in a bench.
           cmd_pending <= 1'b0;
           cmd_opcode  <= 8'd0;
-          // ...and the key state (review r2-resets F5.2): a key held across the
-          // reset must not swallow its next make as a "re-send of a held key".
-          // NP2kai resets the whole record (keyboard_resetsignal ->
-          // keystat_ctrlreset) and re-announces what is still held
-          // (keystat_resendstat); this model clears the state instead, so the
-          // next make of a physically-held key simply delivers. The typematic
-          // state goes with it (keystat_resendstat drops its keyrepeat buffer):
-          // a cleared key_down must not leave a repeat of a key that is no
-          // longer down. THE CLEAR IS THE EPOCH BUMP at the top of this block:
-          // the 8251 bit-3 reset is one of the two reset events that bump it.
+          // THE KEY STATE IS DELIBERATELY NOT CLEARED HERE. The bit-3 reset is a
+          // reset of the keyboard/USART record, not of the physical keys, and
+          // NP2kai keyboard_resetsignal (io/serial.c) keeps keystat.ref - only
+          // keystat_ctrlreset drops the half-written parameter and keystat_resendstat
+          // drops the repeat buffer. Clearing the dedup (an epoch bump here)
+          // would make the held key's BREAK fail normal_break's key_down_now test and be
+          // swallowed, so a held direction would stay down in the guest until it was
+          // pressed again; it would also let a re-delivered make through as a second
+          // press. The typematic state DOES go (keystat_resendstat resets its
+          // keyrepeat buffer), so a held key does not resume repeating from a
+          // stale timer.
           rep_key   <= 8'hFF;
           rep_pend  <= 2'd0;
           rep_timer <= 26'd0;
@@ -689,8 +870,11 @@ module pc9821_kbd #(
       end
 
       // Keyboard-side command protocol. NP2kai recognizes 9C/9D/9F; 95/96
-      // are enabled for newer keyboards. QEMU's 99 response is harmless and
-      // useful to firmware that probes it.
+      // are enabled for newer keyboards. 0x99 answers FA FB here (QEMU
+      // hw/input/pc98-kbd.c); NP2kai keystat.c has no 0x99 case and would
+      // reject it with 0xFC. No capture arbitrates, so the QEMU response is
+      // kept (it is the "Not Ready?" FB a PC-9801-119 reports) and the
+      // divergence is recorded in tb_pc9821_8251 as a WAIVED line.
       if (cs && wr && !a0 && tx_enabled) begin
         if (cmd_pending) begin
           cmd_pending <= 1'b0;
@@ -700,6 +884,14 @@ module pc9821_kbd #(
               resp_count <= 2'd1;
             end
             8'h9C: begin
+              // The parameter is the repeat setting (NP2kai keystat.c keeps it
+              // in keyctrl.keyrep). 0x70 is "inhibit key repeating" and must
+              // stop the typematic engine; any other value re-enables it, and
+              // its TIMING is not modelled (NP2kai's keyrepeat_proc does not
+              // model it either). ACK both bytes, as the Xe10's PC-9801-119
+              // keyboard does (s9C -> FA, s70 -> FA).
+              repeat_inhibit <= (din == 8'h70);
+              if (din == 8'h70) rep_pend <= 2'd0;
               resp_shift <= {16'd0, 8'hFA};
               resp_count <= 2'd1;
             end
@@ -712,8 +904,11 @@ module pc9821_kbd #(
                 resp_shift <= {16'd0, 8'hFA};
                 resp_count <= 2'd1;
               end else begin
-                resp_shift <= {16'd0, 8'hFC};
-                resp_count <= 2'd1;
+                // Unrecognized LED parameter: NP2kai keystat.c keystat_ctrlsend
+                // case 0x9d does NOTHING (no second ACK, no NACK) and QEMU
+                // pc98-kbd.c likewise sends no rejection byte. Load nothing;
+                // cmd_9d_no_reply keeps resp_load low so an unread opcode ACK is
+                // not discarded and an in-flight response still shifts.
               end
             end
             default: begin
@@ -756,8 +951,11 @@ module pc9821_kbd #(
       // break arrives. break-then-make is what NP2kai's two keyboard_send() calls produce.
       // Placed before the key-state block so a break in the same cycle wins the race.
       // Folded under the keyboard reset: its arm clears rep_* (below), and a
-      // same-cycle push must not resurrect any of it (review r2-pulses H6).
-      if (!kbd_reset_now && rep_key != 8'hFF) begin
+      // same-cycle push must not resurrect any of it.
+      // The 0x9C 0x70 "inhibit key repeating" command stops the engine while held
+      // (repeat_inhibit); the timer freezes rather than resetting, so lifting the
+      // inhibit resumes the countdown where it stopped.
+      if (!kbd_reset_now && rep_key != 8'hFF && !repeat_inhibit) begin
         if (rep_pend == 2'd0) begin
           if (rep_timer != 26'd0) rep_timer <= rep_timer - 26'd1;
           else begin
@@ -773,7 +971,7 @@ module pc9821_kbd #(
         // pipeline stage behind the event that caused them: `key_down_now` and the words
         // of `key_state` are written by the table's own always block above, and this arm
         // keeps the records that hang off the decision (the lock toggle and the repeat
-        // timer). Folded under the keyboard reset (review r2-resets F5/H6): the reset
+        // timer). Folded under the keyboard reset: the reset
         // bumps the epoch, and a decision landing in its cycle is discarded WITH the
         // enqueue next to it, so the two can never disagree. M2 mechanical-lock dedup
         // (NP2kai keystat.c one alternating byte per PHYSICAL press): the table gates the
@@ -805,7 +1003,7 @@ module pc9821_kbd #(
         end
       end
 
-      // The queue's single next-state per cycle (review r2-pulses H6): under the
+      // The queue's single next-state per cycle: under the
       // keyboard reset NOTHING on the receive side moves - the reset arm owns
       // the indices and the count, and the pre-reset enqueue/deliver are dropped
       // with the rest of the record instead of resurrecting head+1/tail+1 and a
@@ -828,7 +1026,7 @@ module pc9821_kbd #(
         endcase
       end
 
-      // The Pause tap's queued break: ONE next-state per cycle (review r2-pulses H6).
+      // The Pause tap's queued break: ONE next-state per cycle.
       // A keyboard reset drops it WITH the make it belongs to - both were in the queue
       // the reset just flushed, so the orphan break must not outlive it.
       // The tap break count: reset drops every owed break with the makes it belongs
@@ -848,7 +1046,7 @@ module pc9821_kbd #(
       if (cs && wr && a0)                          dbg_wr_ctrl   <= dbg_wr_ctrl + 8'd1;
 
       // Control responses have priority over normal key traffic, as in NP2kai.
-      // DEFER-NOT-LOSE (review r2-pulses H9): a command response loaded in this
+      // DEFER-NOT-LOSE: a command response loaded in this
       // exact clk must keep the NEW response. The in-flight byte still reaches
       // the guest (deliver-first, the order NP2kai's serial callback gives: the
       // byte already in keybrd.data when the write lands), and the deliver's
@@ -879,7 +1077,7 @@ module pc9821_kbd #(
         rx_is_resp <= 1'b0;
       end
 
-      // THE RECEIVE STATUS'S ONE NEXT-STATE (review r2-pulses H6 / review-keyboard F8).
+      // THE RECEIVE STATUS'S ONE NEXT-STATE.
       // The data-read clear, the error clear, the overflow flag and the delivery set
       // are folded into ONE expression, so no same-clk pair can resurrect or drop
       // another's bit. The old last-wins chain had three broken collisions: a same-clk
@@ -907,10 +1105,19 @@ module pc9821_kbd #(
       // 0x41 read, re-arm the edge-latched PIC, and survive the read - after EOI
       // IRQ1 fired again and the handler (which reads 0x41 WITHOUT checking
       // RXRDY) re-processed the stale byte as a second keypress
-      // (the owner's double-typing). The dip's own recovery does not restart the
+      // (double typing). The dip's own recovery does not restart the
       // divider: the wrap is already one tick away from it.
-      xfer_div <= st_deliver ? 26'd1 :
-                  (xfer_div == XFER_TICK_CYCLES - 26'd1) ? 26'd0 : xfer_div + 26'd1;
+      xfer_div <= st_deliver ? XFER_ONE :
+                  (xfer_div == XFER_LAST) ? '0 : xfer_div + XFER_ONE;
+
+      // THE PRESENTATION PACE's ONE NEXT-STATE (Single-Cycle Event Discipline): the
+      // keyboard reset has priority (it flushes the receive side, so the first byte
+      // after it is immediate again, exactly like the first after reset); a key
+      // delivery reloads the tick; otherwise it drains. The reset arm above owns the
+      // module-reset value, and this is the ONLY other writer of pace_div.
+      pace_div <= kbd_reset_now ? '0 :
+                  deliver_key    ? XFER_LAST :
+                  (pace_div != '0) ? pace_div - XFER_ONE : '0;
     end
   end
 
@@ -966,7 +1173,7 @@ module pc9821_kbd #(
   // cleared) and arm the PIC for a byte being consumed right there. Forcing the line
   // low while the strobe is up cancels that recovery edge with the clear itself - no
   // dip may land after (or across) a read that clears RXRDY.
-  assign irq = status_reg[1] && !st_read && (xfer_div != 26'd0);
+  assign irq = status_reg[1] && !st_read && (xfer_div != '0);
   assign dout     = a0 ? (status_reg | 8'h85) : rx_latch;
   assign dbg_rts  = rts;
   assign dbg_rx_en = rx_enabled;

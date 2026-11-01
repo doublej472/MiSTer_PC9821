@@ -1,8 +1,8 @@
 // Streams the user-supplied YM2608 ADPCM-A rhythm image out of the ROM pack into RHYTHM_ROM's
 // write port as the pack is downloaded.
 // The image is Yamaha's data, so this repository never commits it; it is a runtime file the user
-// drops in, like the BIOS, the font and SOUND.ROM (README.md, "No copyrighted data is
-// committed"). tools/build_pack.py places it at offset 0x49000, 8192 bytes, zero-filling it when
+// drops in, like the BIOS, the font and SOUND.ROM (README.md, "Licensing": "No NEC, Yamaha or
+// other copyrighted firmware is included"). tools/build_pack.py places it at offset 0x49000, 8192 bytes, zero-filling it when
 // no image is supplied; its docstring owns the pack layout and the priority rule.
 // The download delivers one 16-bit word per ioctl_wr at an even byte address, which is why
 // RHYTHM_ROM is word-addressed: one in-region ioctl_wr is one ROM-word write at byte

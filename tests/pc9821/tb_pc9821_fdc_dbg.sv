@@ -5,7 +5,7 @@
 //
 // WHY IT EXISTS. The FDC had NO telemetry at all: pc9821_fdc exported no diagnostic
 // output, so a floppy transfer that failed left nothing in a serial capture but the
-// generic IO/DR/IV port latch. The owner's ask is that when a floppy access misbehaves
+// generic IO/DR/IV port latch. The requirement is that when a floppy access misbehaves
 // the bitstream says WHY, so this bench pins the whole hop: the controller's real state
 // -> the new dbg taps -> pc9821_watchdog_msg's new FST/FCM/FRS/FCH record fields. The
 // state encodings asserted here are the module's own localparams (ST_IDLE..ST_RESULT,
@@ -57,7 +57,7 @@ module tb_pc9821_fdc_dbg;
       .media_chg(4'd0), .frame_tick(1'b0),
       .media_req(media_req), .media_req_hdr(media_req_hdr),
       .media_unit(media_unit),
-      .media_c(media_c), .media_h(media_h), .media_r(media_r), .media_n(media_n),
+      .media_c(media_c), .media_h(media_h), .media_tc(), .media_hd(), .media_mf(), .media_2hd(), .media_rpm(), .media_r(media_r), .media_n(media_n),
       .media_idx(media_idx),
       .media_ready(media_ready), .media_rdy(media_rdy), .media_hdrv(media_hdrv),
       .media_err(media_err), .media_dout(8'h5A),
@@ -109,7 +109,7 @@ module tb_pc9821_fdc_dbg;
 
   // The bound: a stuck DUT cannot outlast this.
   initial begin
-    #2_000_000;
+    #500_000_000;
     $fatal(1, "TB_PC9821_FDC_DBG: TIMEOUT (no verdict reached)");
   end
 
@@ -262,9 +262,15 @@ module tb_pc9821_fdc_dbg;
     // :417-427 / fdcsend_error7 :98-119) and raises the interrupt with the result
     // phase. FRS reads 40040000 and FST reads 0x98 = {IRQ=1, DRQ=0, ST_RESULT=3,
     // X_IDLE=0}.
+    // The answer comes at the controller's second index pulse (pc9821_fdc X_NDW): up to two
+    // revolutions of the 300 rpm spindle, 2/5 s of the module-default 50 MHz SYS_CLOCK_HZ.
     wr8(3'd1, 8'h06);
     read_data_params;
     media_err = 1;
+    begin : nd_wait
+      integer w;
+      for (w = 0; w < 2 * (50_000_000 / 5) + 100_000 && !irq; w = w + 1) @(negedge clk);
+    end
     repeat (4) @(negedge clk);
     snap;
     expect_field(FST_DIG0, 2, 32'h98, "error result: IRQ raised, st=ST_RESULT");

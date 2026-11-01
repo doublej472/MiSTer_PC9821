@@ -4,13 +4,13 @@
 #   make bench            every unit bench        BENCH=<name> runs one
 #   make pack             build the firmware pack PC98_DUMPS=/path/to/dumps
 #   make deploy           provision the MiSTer    (stages mister_deploy/)
-#   make base|trace|lightoc|mediumoc|heavyoc   switch the build profile (base = lightoc = 80 MHz)
+#   make base|trace|iofaithful|mediumoc|heavyoc   switch the build profile (base = 90 MHz)
 #   make help
 
 PY := python3
 
 .DEFAULT_GOAL := help
-.PHONY: help build bench pack deploy base trace lightoc mediumoc heavyoc
+.PHONY: help build bench pack deploy base trace iofaithful mediumoc heavyoc
 
 help:
 	@echo 'PC-9821 z486.'
@@ -18,7 +18,7 @@ help:
 	@echo '  make bench                          run the Verilator benches (BENCH=<name> runs one)'
 	@echo '  make pack                           build the firmware pack (PC98_DUMPS=/path/to/dumps)'
 	@echo '  make deploy                         stage the MiSTer load set into mister_deploy/'
-	@echo '  make base|trace|lightoc|mediumoc|heavyoc   switch the clk_sys build profile'
+	@echo '  make base|trace|iofaithful|mediumoc|heavyoc   switch the clk_sys build profile'
 	@echo 'Run the deploy/load/run scripts under tools/ directly for the on-card workflow.'
 
 # --- build -------------------------------------------------------------------
@@ -38,5 +38,5 @@ deploy:
 	@tools/deploy_mister.sh
 
 # --- build profile ------------------------------------------------------------
-base trace lightoc mediumoc heavyoc:
+base trace iofaithful mediumoc heavyoc:
 	@$(PY) build_profile.py $@

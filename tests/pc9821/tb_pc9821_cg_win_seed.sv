@@ -1,11 +1,10 @@
-// tb_pc9821_cg_win_seed — the CG window read path's one-cycle mux/seed flops.
+// tb_pc9821_cg_win_seed - the CG window read path's one-cycle mux/seed flops.
 //
 // ==== WHAT THIS PROVES ====
-// The CG window read path's one-cycle mux/seed flops (review r2-resets F9) come up at 0: win_rd_d, cfg_seed_hit_q and cfg_seed_read_q are seeded, so cg_rd_win and the shared cg_ram/ANK port-A address are real addresses from the first cycle and a window read issued as the very first transaction after reset answers the same byte as the settled path instead of X (run under iverilog for the fail-first X-lock).
+// The CG window read path's one-cycle mux/seed flops come up at 0: win_rd_d, cfg_seed_hit_q and cfg_seed_read_q are seeded, so cg_rd_win and the shared cg_ram/ANK port-A address are real addresses from the first cycle and a window read issued as the very first transaction after reset answers the same byte as the settled path instead of X (run under iverilog for the fail-first X-lock).
 //
 // The CG window's read mux register `win_rd_d` and the configuration-seed
-// compare registers `cfg_seed_hit_q` / `cfg_seed_read_q` come up at 0 (review
-// r2-resets F9), so:
+// compare registers `cfg_seed_hit_q` / `cfg_seed_read_q` come up at 0, so:
 //   - `cg_rd_win = cg_win_rd | win_rd_d` is NEVER X, so the shared cg_ram/ANK
 //     port-A address `cg_rd_addr` is a real address from the first cycle - with
 //     win_rd_d unseeded the OR is X before the first window access and the
@@ -74,8 +73,7 @@ module tb_pc9821_cg_win_seed;
       .v_pitch(8'd40),
       .v_col40(1'b0),
       .v_sad(16'd0),
-      .v_row0_stale(1'b0),
-      .vline(10'd0),
+      .wk_go(1'b0), .wk_k(10'd0), .wk_bank_in(2'd0),
       .hdot(10'd0)
   );
 
@@ -107,7 +105,7 @@ module tb_pc9821_cg_win_seed;
   integer i;
 
   initial begin
-    // ==== THE SEED REGISTERS' OWN WINDOW (review r2-resets F9) ====
+    // ==== THE SEED REGISTERS' OWN WINDOW ====
     // The three seeded flops have no reset: their declaration initialisers ARE
     // their power-up values. Everything else in the module is reset only by the
     // FIRST clk_sys posedge (t = 10), so before that edge the seeds are the one

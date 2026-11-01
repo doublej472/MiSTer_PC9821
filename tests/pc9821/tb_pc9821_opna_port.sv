@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PC-9801-86 board's DATA SHADOW through the real I/O bus: after a write to the low select port 0x188 alone, a read of the data port 0x18A answers the byte that write carried, and the extended data port 0x18E answers that shadow for every extended register except 0x08 and 0x0F, which are the only two NP2kai reads from the chip - and 0x0F IS answered from the chip (NP2kai s.reg[0x10F], 0x00 after reset), not the shadow; the 0x08 side (adpcm_readsample) is not asserted. Both expectations come from the board model itself (NP2kai cbus/board86.c opna_o188 assigns s.addrl AND s.data; opna_i18a returns s.data above 0x0F and below 0xFF; opna_o18e reads the chip only for addrh 0x08 and 0x0F), not from this RTL. It does NOT assert the 3ch/6ch stereo switch, which needs a vendored file, and it does not assert the chip's own register contents. It also pins the review's S1 same-cycle case: a queued write's drain fire meeting a host status read's S_BYTE must never corrupt the read - the fire holds the chip port to the host and retries - across a swept-phase stream of 0x188 reads whose bytes must all show the flags 0x00, never the data-port case.
+// The PC-9801-86 board's DATA SHADOW through the real I/O bus: after a write to the low select port 0x188 alone, a read of the data port 0x18A answers the byte that write carried, and the extended data port 0x18E answers that shadow for every extended register except 0x08 and 0x0F, which are the only two NP2kai reads from the chip - and 0x0F IS answered from the chip (NP2kai s.reg[0x10F], 0x00 after reset), not the shadow; the 0x08 side (adpcm_readsample) is not asserted. Both expectations come from the board model itself (NP2kai cbus/board86.c opna_o188 assigns s.addrl AND s.data; opna_i18a returns s.data above 0x0F and below 0xFF; opna_o18e reads the chip only for addrh 0x08 and 0x0F), not from this RTL. It does NOT assert the 3ch/6ch stereo switch, which needs a vendored file, and it does not assert the chip's own register contents. It also pins the S1 same-cycle case: a queued write's drain fire meeting a host status read's S_BYTE must never corrupt the read - the fire holds the chip port to the host and retries - across a swept-phase stream of 0x188 reads whose bytes must all show the flags 0x00, never the data-port case.
 //
 // The PC-9801-86 board's DATA SHADOW through the real I/O bus: after a write to the low select port 0x188 alone, a read of the data port 0x18A answers the byte that write carried, and the extended data port 0x18E answers that shadow for every extended register except 0x08 and 0x0F, which are the only two NP2kai reads from the chip. Both expectations come from the board model itself (NP2kai cbus/board86.c opna_o188 assigns s.addrl AND s.data; opna_i18a returns s.data above 0x0F and below 0xFF; opna_o18e reads the chip only for addrh 0x08 and 0x0F), not from this RTL. It does NOT assert the 3ch/6ch stereo switch, which needs a vendored file, and it does not assert the chip's own register contents.
 //
@@ -17,7 +17,7 @@
 // The DUTs are pc9821_iobus plus pc9821_opna wired exactly as pc9821_system
 // wires them, so the sequence runs down the real device path and the 0xA460
 // extension latch is exercised the way a guest sets it. Section 8 pins the
-// review's S1 same-cycle case: a queued write's drain fire meeting a host
+// S1 same-cycle case: a queued write's drain fire meeting a host
 // status read's S_BYTE must never corrupt the read (the fire holds the chip
 // port to the host and retries), swept across the read stream's start phase so
 // the window is provably exercised.
@@ -55,6 +55,7 @@ module tb_pc9821_opna_port;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -87,7 +88,7 @@ module tb_pc9821_opna_port;
   wire [1:0] ems_state;
   wire top_shadow_en;
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
-  // port (r13/57) and the `.*` DUT instantiation matches by name, so it must
+  // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
@@ -98,6 +99,7 @@ module tb_pc9821_opna_port;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -118,8 +120,14 @@ module tb_pc9821_opna_port;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -135,13 +143,13 @@ module tb_pc9821_opna_port;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the chip select is pc9821_iobus's own decode now (the ONE pc9821_device_select
+  // instance lives inside it), so `.*` above binds it instead of a local copy.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
-  wire opna_cs = (device_io_addr == 16'h0188) ||
-                 (device_io_addr == 16'h018A) ||
-                 (device_io_addr == 16'h018C) ||
-                 (device_io_addr == 16'h018E);
   wire [7:0] opna_io_dout;
   wire       beep_mute = 1'b0;   // the system beeper's mute; not exercised here
   wire [1:0] beep_vol = 2'd0;   // the beeper volume register; not exercised here
@@ -332,7 +340,7 @@ module tb_pc9821_opna_port;
     // moved the shadow to 0x0F (opna_o18c: s.data = dat), so a board that answered
     // 0x0F from the shadow reads 0x0F here instead of the reference's 0x00. Without
     // this the bench asserted only the shadow side of the split and a 0x0F (or
-    // 0x08) routed to the shadow passed (bench-audit mutation, 2026-10-12).
+    // 0x08) routed to the shadow passed.
     write_byte(16'h018C, 8'h0F);
     read_raw (16'h018E, got);
     if (got !== 8'h00)

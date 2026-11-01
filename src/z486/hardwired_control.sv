@@ -29,6 +29,7 @@ module hardwired_control
     input  recipe_pending_write_t mem_commit,   // Deferred load GPR write
     input  recipe_pending_write_t shift_commit, // Deferred shift GPR write
     input  logic        q_flush,
+    input  logic        q_flush_nb,        // q_flush with the branch uStep's redirect taken as 0
     input  logic        interrupt_entry,
     input  logic        interrupt_pending,
     input  logic        trap_active,
@@ -54,6 +55,7 @@ module hardwired_control
     output logic        x87_direct_candidate,
     input  logic        disabled,           // fast paths off (Dev menu)
     output logic        pb_issue,         // Issue the skeleton into a dead RNI slot (B1)
+    output logic        pb_issue_nb,      // pb_issue with branch_redirect taken as 0 (see z486 seq_advance)
     output logic        pb_slot,          // ROM port B supplies the next executing word
     output logic        recipe_rni,       // Current recipe uStep contains RNI
     output recipe_state_t recipe_state,  // Latched execution recipe
@@ -61,6 +63,7 @@ module hardwired_control
     output logic        fold_active,      // Jcc folded into predecessor delay slot
     output logic        branch_ustep_rni,  // Hardwired branch supplies synthetic RNI
     output logic        branch_ustep_exec, // Execute hardwired branch uStep
+    output logic        branch_ustep_take, // the uStep's branch is taken (unqualified by exec)
     output logic        branch_redirect   // Hardwired branch redirects frontend
 );
 
@@ -73,7 +76,25 @@ logic jcc_issue_valid_r;
 // Recipe classification and active execution state
 //=============================================================================
 
-assign issue_recipe = recipe_metadata(issue_instr);
+// issue_instr is the decoder's push_entry: the registered D1 skeleton skel.entry
+// with only immediate/displacement/recipe_gpr_read_mask overwritten, fields
+// recipe_metadata never reads (ucode_recipes.svh:152).  The class is therefore
+// a pure function of skel.entry, which is written only at d1_handoff
+// (= pb_load, decoder.sv:569).  d1_slot_ready = !skel_v || i_issue
+// (decoder.sv:216) keeps the incoming skeleton resident for at least one full
+// cycle before any pb_*/head_issue_safe/fold_now consumer reads it, so
+// registering the class on that same pb_load edge (the op_size_is0 /
+// load_wb_wmask pattern) carries the identical value in every cycle a consumer
+// can see, while putting it ahead of the skeleton decode instead of behind it
+// (tests/equiv/recipe_reg.v proves the register equals the live decode
+// whenever the skeleton is resident).
+recipe_meta_t issue_recipe_r;
+always_ff @(posedge clk) begin
+    if (!reset_n)     issue_recipe_r <= '0;
+    else if (q_flush) issue_recipe_r <= '0;
+    else if (pb_load) issue_recipe_r <= recipe_metadata(pb_next_instr);
+end
+assign issue_recipe = issue_recipe_r;
 assign issue_hardwired = issue_recipe.hardwired && !disabled;
 assign x87_direct_candidate =
     issue_recipe.commit_sel == RECIPE_ACTION_X87_DIRECT && !disabled;
@@ -384,6 +405,8 @@ assign pb_slot = pb_valid &&
 
 assign pb_issue = pb_dead_slot && pb_b1_ready && (pb_load_slot_r || load_wb_retire ? uc_slot_live : uc_exec) && pb_valid &&
                   !branch_redirect && !any_fault_issue && !q_flush && !stall;
+assign pb_issue_nb = pb_dead_slot && pb_b1_ready && (pb_load_slot_r || load_wb_retire ? uc_slot_live : uc_exec) && pb_valid &&
+                     !any_fault_issue && !q_flush_nb && !stall;
 
 
 //=============================================================================
@@ -396,8 +419,8 @@ assign pb_issue = pb_dead_slot && pb_b1_ready && (pb_load_slot_r || load_wb_reti
 // redirect itself remains execution-qualified below.
 assign branch_ustep_rni = i_first && branch_ustep_r;
 assign branch_ustep_exec = branch_ustep_rni && uc_exec;
-assign branch_redirect = branch_ustep_exec &&
-                         (!branch_ustep_jcc_r || jcc_exec_taken);
+assign branch_ustep_take = !branch_ustep_jcc_r || jcc_exec_taken;
+assign branch_redirect = branch_ustep_exec && branch_ustep_take;
 
 always_ff @(posedge clk) begin
     if (!reset_n) begin
@@ -472,6 +495,12 @@ end
 //=============================================================================
 
 // synthesis translate_off
+// issue_recipe_r must equal the live class of the resident skeleton in every
+// cycle a consumer can read it (the register is loaded on the same edge skel
+// is; q_flush clears skel_v in the decoder).
+always @(posedge clk)
+    if (reset_n && !decq_empty && (issue_recipe_r !== recipe_metadata(issue_instr)))
+        $fatal(1, "issue_recipe_r disagrees with the live recipe metadata");
 recipe_meta_t pbn_recipe;
 assign pbn_recipe = recipe_metadata(pb_next_instr);
 wire pbn_type_exact = pb_b1_type(pb_next_instr, pbn_recipe);

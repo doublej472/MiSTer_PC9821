@@ -119,11 +119,10 @@ module tb_pc9821_sdram_tdm;
   wire [1:0]  SDRAM_DQM;
   wire        nWE, nRAS, nCAS, nCS, CKE;
 
-  // HAS_DQM = 0 is the DE10 configuration (z486_mister.sv), because MiSTer SDRAM modules have
-  // no DQM pins -- the same configuration the existing sdram bench exercises.
+  // ADQM = 0 (the default): a partial store is a read-modify-write, the same configuration the
+  // sdram bench exercises.
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .FAST_GRADE(1'b1)
   ) dut (
       .clk(clk), .resetn(resetn), .nce(1'b0), .refresh_allowed(1'b1),
@@ -146,7 +145,9 @@ module tb_pc9821_sdram_tdm;
       .SDRAM_CKE(CKE)
   );
 
-  sdram_chip_model #(.CAS(CAS)) chip (
+  // The AUTO REFRESH gap is held to tREFI = 64 ms / 8192 rows (the AS4C32M16SB datasheet's 8192
+  // refreshes per 64 ms) on the pins, under this bench's saturating four-port load.
+  sdram_chip_model #(.CAS(CAS), .FREQ_HZ(FREQ), .GRADE(6), .REFRESH_INTERVAL(FREQ / 128_000)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );

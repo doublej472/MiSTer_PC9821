@@ -9,7 +9,7 @@
 // and the Xe10 vectors" (tb_pc9821_egc_conformance, tb_pc9821_egc_compare). This bench is the
 // randomized half of that statement; those benches stay green beside it.
 //
-// The owner's four non-observability requirements (2026-10-11) and where each is asserted here:
+// The four non-observability requirements and where each is asserted here:
 //  (1) cross-plane results (the compare read's AND, the four-plane pattern latch) - phase B
 //      forces COMPAREREAD reads with RL_MEMREAD and random FG/ACCESS, every datum compared;
 //  (2) four steps whatever 0x4A0 enables - tb_pc9821_egc_xe10_pace asserts the per-access time
@@ -63,15 +63,16 @@ module egc_eq_stack #(
   wire  [1:0] gvr_plane;
   wire [14:0] gvr_offset;
   wire [31:0] gvr_din;
+  wire  [3:0] gvr_din_z, gvr_din_f;
   wire  [3:0] gvr_be;
   wire        gvr_gate_egc, gvr_gate_grcg, gvr_gate_tcr;
-  wire        gvr_ready, gvr_resp_valid, gvr_line_resp_valid;
+  wire        gvr_ready, gvr_resp_valid, gvr_line_word_valid;
   wire [31:0] gvr_dout;
-  wire [127:0] gvr_line_dout;
+  wire [31:0] gvr_line_word;
   /* verilator lint_off UNUSEDSIGNAL */
   wire        grcg_cl_ready, grcg_cl_done, gdc_ready, gdc_resp, line_resp;
   wire [31:0] gdc_rdata;
-  wire [127:0] line_dout, dbg_gfx_stats;
+  wire [31:0] line_dout, dbg_gfx_stats;
   wire        dbg_walk_start, dbg_walk_cycle, dbg_gr_owned, dbg_eg_owned, dbg_access_page;
   wire        dbg_egc_txn, dbg_egc_unit;
   /* verilator lint_on UNUSEDSIGNAL */
@@ -89,33 +90,37 @@ module egc_eq_stack #(
       .cpu_din(cpu_din), .cpu_be(cpu_be),
       .gate_egc(1'b1), .gate_grcg(1'b0), .gate_tcr(1'b0),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid), .cpu_dout(cpu_dout),
-      .cpu_line_resp_valid(line_resp), .cpu_line_dout(line_dout),
+      .cpu_line_word_valid(line_resp), .cpu_line_word(line_dout),
       .gdc_valid(1'b0), .gdc_write(1'b0), .gdc_route_egc(1'b0), .gdc_route_grcg(1'b0),
       .gdc_page(1'b0), .gdc_plane(2'd0), .gdc_offset(15'd0), .gdc_din(32'd0), .gdc_be(4'd0),
       .gdc_ready(gdc_ready), .gdc_resp_valid(gdc_resp), .gdc_rdata(gdc_rdata),
       .gvr_valid(gvr_valid), .gvr_write(gvr_write), .gvr_line_read(gvr_line_read),
       .gvr_page(gvr_page), .gvr_plane(gvr_plane), .gvr_offset(gvr_offset),
-      .gvr_din(gvr_din), .gvr_be(gvr_be),
+      .gvr_din(gvr_din), .gvr_din_z(gvr_din_z), .gvr_din_f(gvr_din_f), .gvr_be(gvr_be),
       .gvr_gate_egc(gvr_gate_egc), .gvr_gate_grcg(gvr_gate_grcg), .gvr_gate_tcr(gvr_gate_tcr),
       .gvr_ready(gvr_ready), .gvr_resp_valid(gvr_resp_valid), .gvr_dout(gvr_dout),
-      .gvr_line_resp_valid(gvr_line_resp_valid), .gvr_line_dout(gvr_line_dout));
+      .gvr_line_word_valid(gvr_line_word_valid), .gvr_line_word(gvr_line_word));
 
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_arb (
       .clk(clk), .reset(reset),
       .access_page(gvr_page),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
-      .cpu_din(gvr_din), .cpu_be(gvr_be), .cpu_line_read(gvr_line_read),
+      .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),
+      .cpu_be(gvr_be), .cpu_line_read(gvr_line_read),
       .cpu_valid(gvr_valid), .cpu_write(gvr_write),
-      .cpu_dout(gvr_dout), .cpu_line_dout(gvr_line_dout),
+      .cpu_dout(gvr_dout), .cpu_line_word(gvr_line_word),
       .cpu_ready(gvr_ready), .cpu_resp_valid(gvr_resp_valid),
-      .cpu_line_resp_valid(gvr_line_resp_valid),
+      .cpu_line_word_valid(gvr_line_word_valid),
       .grcg_expand_gate(gvr_gate_grcg), .grcg_tcr_gate(gvr_gate_tcr),
       .egc_gate(gvr_gate_egc),
-      .grcg_cl_valid(1'b0), .grcg_cl_write(1'b0), .grcg_cl_addr(16'd0), .grcg_cl_be(4'd0),
-      .grcg_cl_wdata(32'd0), .grcg_cl_wbe(4'd0), .grcg_cl_cap(1'b0), .grcg_cl_cap_rmw(1'b0),
+      .grcg_cl_cap(1'b0), .grcg_cl_cap_rmw(1'b0), .grcg_cl_cap_burst(1'b0), .grcg_cl_cap_pair_high(1'b0),
+      .grcg_cl_cap_addr(16'd0), .grcg_cl_cap_wbe(4'd0), .grcg_cl_cap_wdata(32'd0),
+      .grcg_cl_cap_wdata2(64'd0), .grcg_cl_cap_be(4'd0),
+      .grcg_cl_hold_valid(1'b0), .grcg_cl_hold_write(1'b0), .grcg_cl_hold_burst(1'b0),
+      .grcg_cl_hold_addr(16'd0), .grcg_cl_hold_wbe(4'd0), .grcg_cl_hold_wdata(32'd0),
+      .grcg_cl_hold_wdata2(64'd0),
       .grcg_cl_hold_be(4'd0), .grcg_cl_hold_rmw(1'b0), .grcg_cl_hold_datum0(4'd0),
-      .grcg_cl_hold_mergeable(4'd0), .grcg_cl_tile(32'd0), .grcg_cl_rmw(1'b0),
-      .grcg_cl_burst(1'b0), .grcg_cl_wdata2(64'd0), .grcg_cl_ready(grcg_cl_ready),
+      .grcg_cl_hold_mergeable(4'd0), .grcg_cl_tile(32'd0), .grcg_cl_ready(grcg_cl_ready),
       .grcg_cpu_dout(32'd0), .grcg_cpu_ready(1'b0), .grcg_cpu_resp_valid(1'b0),
       .grcg_dbg_busy(1'b0), .grcg_dbg_rmw(1'b0), .grcg_dbg_write(1'b0),
       .egc_cl_valid(egc_cl_valid), .egc_cl_write(egc_cl_write),

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_FDD_MOUNT_RESET: a MOUNT SURVIVES THE CORE RESET - the owner's flow (mount an image in the OSD while the machine runs, then select Reset in the OSD) leaves the image mounted: present is still asserted and the medium's sector bytes still come out through the real shared block adapter after the reset releases, because the parsed container/geometry and the slots' metadata live in a power-on-only domain while only the transfer/FSM state resets; a reset that lands IN the header walk re-arms and re-runs that walk instead of losing the mount (its img_mounted pulse already fired and the framework never re-pulses it), and the HDD slot's latched metadata (mounted/readonly/capacity) survives the same reset. FAIL-FIRST: the pre-change tree reset present and st with the walk's mount already consumed, so the post-reset request never answered and the guest boots to BASIC.
+// TB_PC9821_FDD_MOUNT_RESET: a MOUNT SURVIVES THE CORE RESET - the flow (mount an image in the OSD while the machine runs, then select Reset in the OSD) leaves the image mounted: present is still asserted and the medium's sector bytes still come out through the real shared block adapter after the reset releases, because the parsed container/geometry and the slots' metadata live in a power-on-only domain while only the transfer/FSM state resets; a reset that lands IN the header walk re-arms and re-runs that walk instead of losing the mount (its img_mounted pulse already fired and the framework never re-pulses it), and the HDD slot's latched metadata (mounted/readonly/capacity) survives the same reset. FAIL-FIRST: the pre-change tree reset present and st with the walk's mount already consumed, so the post-reset request never answered and the guest boots to BASIC.
 //
 // WHY THE MOUNT MUST SURVIVE WITHOUT A SECOND PULSE. hps_io pulses `img_mounted` from one
 // place only - the HPS's "notify image selection" transaction (sys/hps_io.sv:461 in the
@@ -13,7 +13,7 @@
 // WHY THE ARMS MOUNT WHILE RUNNING. The companion bench (tb_pc9821_fdd_mount_hold) covers
 // the OTHER order - the pulse arriving while the module is held, which the `mnt_req` latch
 // already fixes - and its harness note records the trap: a bench that mounts at the wrong
-// moment hides the class. The owner's flow is mount-THEN-reset, so every arm here takes the
+// moment hides the class. The user's flow is mount-THEN-reset, so every arm here takes the
 // mount at a running point and the variable is only when (or whether) the reset lands.
 //
 // REFERENCES (external). The reset is the OSD's own: z486_mister's `reset_req = buttons[1] |
@@ -77,7 +77,7 @@ module tb_pc9821_fdd_mount_reset;
     begin
       img[off+0] = c; img[off+1] = h; img[off+2] = r; img[off+3] = nn;
       img[off+4] = nsec[7:0]; img[off+5] = nsec[15:8];
-      img[off+6] = 8'h40;                     // mfm_flg
+      img[off+6] = 8'h00;                     // mfm_flg: 0x00 = MFM, the mode these reads use (0x40 = FM, NP2kai searchsector_d88)
       img[off+14] = size[7:0]; img[off+15] = size[15:8];
     end
   endtask
@@ -193,7 +193,7 @@ module tb_pc9821_fdd_mount_reset;
       .blk_fill_data(blk_fill_data),
       .present(present), .writeprotect(writeprotect),
       .req(req), .req_hdr(req_hdr), .unit(unit),
-      .req_c(req_c), .req_h(req_h), .req_r(req_r), .req_n(req_n), .req_idx(req_idx),
+      .req_c(req_c), .req_h(req_h), .req_tc(req_c), .req_hd(req_h[0]), .req_mf(1'b1), .req_2hd(1'b1), .req_rpm(1'b0), .req_r(req_r), .req_n(req_n), .req_idx(req_idx),
       .ready(ready), .rdy(rdy), .hdrv(hdrv), .err(err), .dout(dout), .adv(adv),
       .hdr_r(hdr_r), .hdr_n(hdr_n), .hdr_sects(hdr_sects)
   );

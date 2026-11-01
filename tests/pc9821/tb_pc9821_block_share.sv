@@ -130,6 +130,7 @@ module tb_pc9821_block_share;
       .a_img_mounted(a_img_mounted), .a_img_readonly(img_readonly), .a_img_size(a_img_size),
       .a_mounted(a_mounted), .a_readonly(a_readonly), .a_capacity(a_capacity),
       .a_req_read(a_req_read), .a_req_write(a_req_write), .a_req_lba(a_req_lba),
+      .a_req_window(1'b1),
       .a_req_done(a_req_done), .a_req_error(a_req_error), .a_busy(a_busy),
       .a_buf_we(a_buf_we), .a_buf_addr(a_buf_addr), .a_buf_data(a_buf_data),
       .a_buf_rd_addr(a_buf_rd_addr), .a_buf_rd_data(a_buf_rd_data),

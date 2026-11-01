@@ -1,7 +1,7 @@
 // tb_pc9821_audio_volume_table — the 32-entry gain table, read from its ROM, is bit-exact.
 //
 // ==== WHAT THIS PROVES ====
-// The 32-entry volume gain table, read from its 32x17 M10K ROM (review-audio-volume F1's true-zero table moved from a LUT-selected packed vector into a synchronous ROM), produces the exact documented 17-bit gain for every one of the 32 volume codes 0..31 - code 0 = 17'h00000 (true mute), code 31 = 17'h10000 (unity), the -60 dB..-2 dB ladder bit-identical to the packed vector it replaced - and the guarded wire drives the DSP multiply: at unity a 0x4000 sample passes through unchanged and at code 0 it contributes exactly zero.
+// The 32-entry volume gain table, read from its 32x17 M10K ROM (the true-zero table moved from a LUT-selected packed vector into a synchronous ROM), produces the exact documented 17-bit gain for every one of the 32 volume codes 0..31 - code 0 = 17'h00000 (true mute), code 31 = 17'h10000 (unity), the -60 dB..-2 dB ladder bit-identical to the packed vector it replaced - and the guarded wire drives the DSP multiply: at unity a 0x4000 sample passes through unchanged and at code 0 it contributes exactly zero.
 //
 // The table is read through the real pc9821_audio_volume with every channel driven
 // to the SAME code, so volumes_in's active 5-bit slice IS the volume code: each code

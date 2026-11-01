@@ -51,12 +51,11 @@ module tb_pc9821_win0_out_of_range;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
@@ -135,7 +134,7 @@ module tb_pc9821_win0_out_of_range;
       .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
       .gvram_access_page(gvram_access_page),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
-      .grcg_expand(grcg_expand), .grcg_mode_r(grcg_mode_r),
+      .grcg_expand(grcg_expand),
       .egc_enable(egc_enable), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask), .egc_bg(egc_bg),
       .egc_sft(egc_sft), .egc_leng(egc_leng), .egc_shift_we(egc_shift_we),

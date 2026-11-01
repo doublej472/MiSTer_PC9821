@@ -2,7 +2,7 @@
 // and the CLK_AUDIO final mix must be the single-clamp sum the references have.
 //
 // ==== WHAT THIS PROVES ====
-// The PC-9801-86's sample reaches AUDIO_L, and the volume stage obeys the law at its three broken points (review-audio-volume F1/F4/F6): with the mixer wired exactly as z486_mister.sv wires it - the same ten-channel sb_volume concat and the same volumes pc9821_system.sv hard-wires, INCLUDING both vol_cd hard-wires - 5'd31 in the CD-DA build every preset ships and 5'd0 without CD audio (pc9821_system.sv CDROM_AUDIO_EN; F6 asked for the muted arm) - a sample on the -86 slot comes out bit-identical at unity through the real pc9821_audio_volume, volume code 0 is TRUE MUTE (a full-scale CD-DA sample at vol_cd 0 contributes EXACTLY zero through the module and at mix_dry, both polarities - NP2kai volume-0 is exact 0, sound/beepg.c:161-163), and MASTER SCALING LANDS BEFORE THE FINAL SATURATION (NP2kai scales every source by vol_master pre-sum, sound/fmboard.c:103-133): at master code 28 (-6 dB) the over-rail sum +40000 comes out +20047 = floor(40000*32846/2^16) UNSATURATED and -40000 comes out -20048, where the old post-clamp master emitted +16422/-16423 of clipped audio turned down. It also pins the final DAC's arithmetic (datapaths.md F1/F2): spk + the -86 stream + CD sum WIDE (20-bit, no wrap) and saturate ONCE at mix_dry on the master-scaled sum - a positive overflow clamps to 0x7FFF (the pre-fix 17-bit mix_tmp wrapped and the saturator emitted 0x8000: wrong rail AND polarity), the sum swept through 65530..65545 stays on the +rail across the wrap boundary, a large negative clamps to 0x8000, and a wide (-86-scale) sample_86 crosses pc9821_audio_volume unclipped at unity to be clipped exactly once at the DAC.
+// The PC-9801-86's sample reaches AUDIO_L, and the volume stage obeys the law at its three broken points: with the mixer wired exactly as z486_mister.sv wires it - the same ten-channel sb_volume concat and the same volumes pc9821_system.sv drives, INCLUDING both vol_cd ends - 5'd31 (the OSD CD audio volume field's 0 dB step) and 5'd0 (its Off step, and the constant without CD audio, pc9821_system.sv CDROM_AUDIO_EN; F6 asked for the muted arm) - a sample on the -86 slot comes out bit-identical at unity through the real pc9821_audio_volume, volume code 0 is TRUE MUTE (a full-scale CD-DA sample at vol_cd 0 contributes EXACTLY zero through the module and at mix_dry, both polarities - NP2kai volume-0 is exact 0, sound/beepg.c:161-163), and MASTER SCALING LANDS BEFORE THE FINAL SATURATION (NP2kai scales every source by vol_master pre-sum, sound/fmboard.c:103-133): at master code 28 (-6 dB) the over-rail sum +40000 comes out +20047 = floor(40000*32846/2^16) UNSATURATED and -40000 comes out -20048, where the old post-clamp master emitted +16422/-16423 of clipped audio turned down. It also pins the final DAC's arithmetic (datapaths.md F1/F2): spk + the -86 stream + CD sum WIDE (20-bit, no wrap) and saturate ONCE at mix_dry on the master-scaled sum - a positive overflow clamps to 0x7FFF (the pre-fix 17-bit mix_tmp wrapped and the saturator emitted 0x8000: wrong rail AND polarity), the sum swept through 65530..65545 stays on the +rail across the wrap boundary, a large negative clamps to 0x8000, and a wide (-86-scale) sample_86 crosses pc9821_audio_volume unclipped at unity to be clipped exactly once at the DAC.
 //
 // The PC-9801-86's sample reaches AUDIO_L at the WARRANTED VALUE, not merely nonzero:
 // the ten-channel sb_volume chain runs with the volumes pc9821_system.sv hard-wires
@@ -12,7 +12,7 @@
 // and at the mixer's master channel, and every OTHER channel output must be EXACTLY
 // zero. A wrong gain, a 10x gain, a wrong volume pairing or a swapped channel/concat
 // moves the value or lands the sample on a checked-zero channel and fails by name.
-// And the FINAL DAC's arithmetic is the authentic one (review2/datapaths.md F1+F2):
+// And the FINAL DAC's arithmetic is the authentic one:
 // the sum of speaker + the -86 stream + CD is computed WIDE and saturated ONCE,
 // symmetrically, at mix_dry - ymfm's clamp16 / NP2kai's _saturation_s16 junction -
 // so a POSITIVE overflow clamps to +32767 (never inverts to 0x8000 through a wrap)
@@ -20,7 +20,7 @@
 // the jt08_acc junction and the SSG is added after it, so the join itself can still
 // pass 16 bits) is clipped by the DAC and nowhere else.
 //
-// ==== WARRANT (review benches N7; the wiring copy is re-sourced, not self-referenced) ====
+// ==== WARRANT (the wiring copy is re-sourced, not self-referenced) ====
 // The slot/channel assignment and the ten-channel concat order follow the MiSTer
 // framework's sound.v channel order (the sb_volume contract z486_mister.sv implements)
 // and NP2kai's -86 -> soundout routing (the OPNA/86 mix is the `soundout` sum at the
@@ -43,9 +43,10 @@
 // and the widened one passes.
 //
 // ==== CHECKS ====
-// CHK-0 the SHIPPED volume constants, and volume code 0 is TRUE MUTE (review F1):
-//       vol_cd is 5'd0 exactly as pc9821_system.sv hard-wires it (this bench used
-//       to claim "EXACTLY as hard-wired" while wiring 5'd31 - review F6), and a
+// CHK-0 the SHIPPED volume constants, and volume code 0 is TRUE MUTE:
+//       vol_cd is 5'd0 exactly as pc9821_system.sv drives it without CD audio and at the
+//       OSD CD audio volume's Off step (this bench used
+//       to claim "EXACTLY as hard-wired" while wiring 5'd31), and a
 //       FULL-SCALE CD-DA sample must contribute EXACTLY zero through the real
 //       pc9821_audio_volume and at mix_dry, both polarities. NP2kai's volume-0
 //       paths are exact zeros (sound/beepg.c:161-163 gates on vol,
@@ -67,7 +68,7 @@
 // CHK-6 F2 negative rail: a large negative sum saturates to 0x8000.
 // CHK-7 F1 at the DAC: a wide (-86-scale, past-16-bit) sample_86 crosses the real
 //       pc9821_audio_volume unclipped at unity and is clipped ONCE, at mix_dry.
-// CHK-8 review F4: MASTER VOLUME SCALES THE SUM BEFORE THE SATURATION, the shape
+// CHK-8 MASTER VOLUME SCALES THE SUM BEFORE THE SATURATION, the shape
 //       NP2kai has (sound/fmboard.c:103-133 scales every source by vol_master
 //       pre-sum, so master can pull the mix back from its output clamp). At
 //       master code 28 (-6 dB) an OVER-RAIL source sum of +40,000 must come out
@@ -84,10 +85,11 @@
 // and the final DAC's golden model holds; FAIL naming where it was lost or distorted,
 // with the measured values.
 //
-// The volumes below start at pc9821_system.sv's hard-wires (vol_master/vol_voice = 31,
-// vol_cd = 5'd0 - the hard-wire WITHOUT CD audio; every preset builds CDROM_AUDIO_EN,
-// where pc9821_system.sv:2343 `assign vol_cd_l = CDROM_AUDIO_EN ? 5'd31 : 5'd0;`
-// ships 5'd31, which is the unity arm CHK-4..6 drive) and the sample is inside the range tb_pc9821_opna measures
+// The volumes below start at pc9821_system.sv's values (vol_master/vol_voice = 31,
+// vol_cd = 5'd0 - the constant WITHOUT CD audio and the OSD CD audio volume's Off step; every
+// preset builds CDROM_AUDIO_EN, where vol_cd is that OSD field's gain code (pc9821_osd's
+// cd_volume_code, -12..0 dB or Off; tb_pc9821_osd_cd_volume pins the mapping), and its 0 dB
+// step 5'd31 is the unity arm CHK-4..6 drive) and the sample is inside the range tb_pc9821_opna measures
 // from the real OPNA (0..4092). CHK-4..6 switch vol_cd to a deliberate UNITY arm
 // (5'd31) so the CD term can drive the rail sweep; the 5'd0 (no CD audio) state is CHK-0.
 
@@ -97,12 +99,11 @@ module tb_pc9821_audio_mix;
 
   integer errors = 0;
 
-  // ---- the volumes, EXACTLY as pc9821_system.sv hard-wires them -------------
-  // vol_cd starts at 5'd0, pc9821_system.sv's hard-wire for a build WITHOUT CD audio
-  // (review F6 asked for that muted arm to be exercised). The CD-DA build every preset
-  // ships hard-wires 5'd31 (pc9821_system.sv:2343-2344), which is the unity arm CHK-4..6
-  // switch to below - so both hard-wires are driven (bench-audit: the "as shipped"
-  // wording here predated CDROM_AUDIO_EN). vol_master drops to 5'd28 for CHK-8.
+  // ---- the volumes, EXACTLY as pc9821_system.sv drives them ------------------
+  // vol_cd starts at 5'd0, pc9821_system.sv's constant for a build WITHOUT CD audio and the
+  // OSD CD audio volume's Off step (so that muted arm is exercised). In the CD-DA build every
+  // preset ships vol_cd is the OSD field's code; its 0 dB step 5'd31 is the unity arm CHK-4..6
+  // switch to below - so both ends are driven. vol_master drops to 5'd28 for CHK-8.
   reg  [4:0] vol_master_l = 5'd31;
   reg  [4:0] vol_master_r = 5'd31;
   wire [4:0] vol_voice_l  = 5'd31;
@@ -146,7 +147,7 @@ module tb_pc9821_audio_mix;
                  vol_cd_l,     vol_cd_r,
                  vol_mt32_l,   vol_mt32_r}),
     // The master slot carries mix_tmp, the wide pre-clamp sum, so master scaling
-    // happens before the final saturation (review-audio-volume F4). The remaining
+    // happens before the final saturation. The remaining
     // 16-bit sources sign-extend to the 20-bit fields (the flat concat form:
     // nested per-element braces are a parse trap).
     .samples_in({mix_tmp_l,          mix_tmp_r,
@@ -166,7 +167,7 @@ module tb_pc9821_audio_mix;
   // kept byte-identical to the shipped block. This is the F1/F2 fix site: the sum
   // is 20-bit signed (max 16384 + 255996 + 32767 = 305147, no wrap) and the ONE
   // saturation is mix_dry's, symmetric at the 16-bit rails - and it lands on the
-  // MASTER-SCALED sum (master sits before the clamp, review-audio-volume F4).
+  // MASTER-SCALED sum (master sits before the clamp).
   wire signed [19:0] snd86_l_swap = sb_l;      // status[56] is undeclared -> 0
   wire signed [19:0] snd86_r_swap = sb_r;
 
@@ -253,7 +254,7 @@ module tb_pc9821_audio_mix;
     $display("  sb_l=%0d master_l=%0d mix_pre_l=%0d (at the valid strobe)",
              iv_sb, iv_master, $signed(mix_pre_l));
 
-    // ---- CHK-0 (review F1): volume code 0 is TRUE MUTE at the no-CD-audio hard-wire --
+    // ---- CHK-0: volume code 0 is TRUE MUTE at the no-CD-audio hard-wire --
     // vol_cd is 5'd0 AS SHIPPED and the CD-DA stream is FULL SCALE: the cd slot
     // and mix_dry must both be EXACTLY zero. NP2kai's volume-0 paths are exact
     // zeros (sound/beepg.c:161-163 gates on vol; sound/beepg.c:57/113 and
@@ -288,7 +289,7 @@ module tb_pc9821_audio_mix;
     // CHK-1: the card's sample reaches the sb slot output AT THE WARRANTED VALUE.
     // Volume 31 is the gain table's 0 dB unity (gain 0x10000), so the slot output is
     // the sample bit-identically: 4000 in, 4000 out. A wrong gain law, a wrong volume
-    // pairing or a swapped concat moves this off 4000 (review benches N7).
+    // pairing or a swapped concat moves this off 4000.
     if ((sb_l !== 20'sd4000) || (sb_r !== 20'sd4000)) begin
       $display("FAIL CHK-1 the -86 sample did not survive the sb slot at unity: sb_l=%0d sb_r=%0d (want 4000 bit-identical)",
                $signed(sb_l), $signed(sb_r));
@@ -351,7 +352,7 @@ module tb_pc9821_audio_mix;
     // A past-16-bit card sum (here 49147 = the clamped FM junction 32767 + the SSG
     // term 16380) must cross pc9821_audio_volume unclipped at unity (sb_l == 49147)
     // and be saturated exactly once, at the final DAC (mix_dry == 0x7FFF). The
-    // pre-r13/265 chain flat-topped the drum bus at 32767 long before this point.
+    // earlier chain flat-topped the drum bus at 32767 long before this point.
     sample_86_l = 20'sd49147;  sample_86_r = 20'sd49147;
     cdda_l      = 16'sd0;      cdda_r      = 16'sd0;
     spk_out     = 17'd0;
@@ -370,7 +371,7 @@ module tb_pc9821_audio_mix;
     mix_settle;
     chk("CHK-7 cancelling sum passes unclipped", mix_dry_l, 16'sd16379);
 
-    // ---- CHK-8 (review F4): MASTER SCALES THE SUM BEFORE THE SATURATION ------
+    // ---- CHK-8: MASTER SCALES THE SUM BEFORE THE SATURATION ------
     // NP2kai scales every source by vol_master BEFORE the sum and the output
     // clamp (sound/fmboard.c:103-133), so lowering master pulls an over-rail mix
     // back from the clamp instead of attenuating already-clipped audio. Master

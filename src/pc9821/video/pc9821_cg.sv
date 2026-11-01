@@ -1,8 +1,8 @@
 // PC-9821 character generator (CG): the glyph fetch, the JIS row cache, the window and
 // the configuration record.
 //
-// Split out of pc9821_gdc_text so the SDRAM glyph burst can be measured and reviewed
-// apart from the raster. It owns:
+// Kept apart from pc9821_gdc_text so the SDRAM glyph burst can be measured apart from the
+// raster. It owns:
 //   - the CG code/line registers and the 0xA1/0xA3/0xA5/0xA9 port decode;
 //   - the writable user-CG (gaiji) store and the 0xA4000 window's byte decode;
 //   - the 4 KiB ANK table (its only M10K glyph store) and the pack's FONT.ROM glyph
@@ -33,8 +33,6 @@ module pc9821_cg (
     // memory subsystem; glyph selection and every store live here, so the window and port
     // 0xA9 cannot disagree about a byte. The window presents the byte position inside its
     // 32-byte repeating view ({page, row}) it answers; a store needs writable user-CG.
-    output wire [15:0] cg_code_win,
-    output wire        cg_lr_win,
     input  wire  [4:0] cg_win_byte_sel,
     input  wire        cg_win_rd,
     output wire  [7:0] cg_win_dout,
@@ -61,7 +59,7 @@ module pc9821_cg (
 
     // Font loader port (rom_loader; the pack's FONT.ROM copy). 18 bits covers ANK + the
     // whole FONT.ROM; the ANK store is ANK_AW wide and this is sliced into it below.
-    /* verilator lint_off UNUSEDSIGNAL */  // only the ANK (words 0..2047) reaches M10K now
+    /* verilator lint_off UNUSEDSIGNAL */  // only the ANK (words 0..2047) reaches M10K
     input wire [17:0] font_ld_addr,
     /* verilator lint_on UNUSEDSIGNAL */
     input wire [15:0] font_ld_data,
@@ -70,9 +68,7 @@ module pc9821_cg (
     // The record restore: the MACHINE-RESET seed's one-cycle pulse (pc9821_iobus's
     // `sdip_seed_pulse`), which restarts the 38-byte walk at store 0x810. It may be asserted
     // while `rst_n_sys` is low (the seed is), which is why the walk below is not clamped by
-    // it. THE OSD ACTIONS ARE GONE (owner requirement, lane dip-settings): `Reset DIPs` and
-    // `Zero DIPs` no longer exist, so the reset seed is this walk's only source and the
-    // walk has no zero mode.
+    // it. The reset seed is this walk's only source and the walk has no zero mode.
     input  wire        cg_record_restore,
 
     // The OSD Machine field's LIST POSITION (z486_mister P1O[31:28], 0 = Xe10): the
@@ -106,14 +102,15 @@ module pc9821_cg (
     // Raster and configuration the walker needs (the walk is raster-locked).
     input  wire [7:0]  v_pitch,
     input  wire        v_col40,
+    // The start word of the partition the requested row is in.
     input  wire [15:0] v_sad,
-    input  wire        v_row0_stale,
-    // The raster line the walk is locked to. TEN bits: the frame length is the guest's SYNC
-    // block's (pc9821_crtc's VTOTAL, up to the 24 kHz clamp's 575). Only [8:4] (the char row)
-    // and [3:0] (the font raster row) are read - the walker's rows are the 25-row text grid.
-    /* verilator lint_off UNUSEDSIGNAL */
-    input  wire [9:0]  vline,
-    /* verilator lint_on UNUSEDSIGNAL */
+    // The walk request, from pc9821_crtc's text line sequencer: wk_go on the first line of a
+    // character row (or the row-0 re-walk slot), the requested row's index in its partition
+    // (wk_k) and the cache bank to fill (wk_bank). Rows are whatever the GDC's LR, the CRTC
+    // registers and the display partitions make them, not a fixed 16-line grid.
+    input  wire        wk_go,
+    input  wire [9:0]  wk_k,
+    input  wire [1:0]  wk_bank_in,
     input  wire [9:0]  hdot,
 
     // The bytes the scanout's render reads.
@@ -133,9 +130,9 @@ module pc9821_cg (
   // ---------------------------------------------------------------
   // Software reads glyph bitmaps out of here to draw text into graphics VRAM, which is
   // how the games put kanji on screen. Register semantics follow NP2kai cgrom.c.
-  // Power-up = reset values (review r2-resets F9's chain): the code/lr/line
-  // registers feed cg_rd_addr, and their pre-first-edge X made the seed compare
-  // (and with it cfg_seed_hit_q's first load) X even with the mux flops seeded.
+  // Power-up = reset values: the code/lr/line registers feed cg_rd_addr, and a
+  // pre-first-edge X there would make the seed compare (and with it cfg_seed_hit_q's
+  // first load) X even with the mux flops seeded.
   /* verilator lint_off PROCASSINIT */   // the initialisers are the registers' power-up values
   reg [15:0] cg_code = 16'h0000;
   reg  [4:0] cg_line = 5'd0;
@@ -159,14 +156,14 @@ module pc9821_cg (
   wire [6:0]  cg_hi7      = cg_code[14:8];
   wire [6:0]  cg_lo7      = cg_code[6:0];
   wire        cg_gaiji    = cg_two_byte && ((cg_lo7 == 7'h56) || (cg_lo7 == 7'h57));
-  // TWO ver0.78 tests, split exactly where NP2kai splits them (review-cg F3): the port's
+  // TWO ver0.78 tests, split exactly where NP2kai splits them: the port's
   // is the UNMASKED low byte (cgrom.c:197 `type = cr->code & 0x00ff`), the window's the
   // masked low7 inside its two-byte branch (cgrom.c:27 `code = cr->code & 0x007f`) - and
   // the window's one-byte branch (cgrom.c:21-25) is the ANK page for EVERY low byte,
   // so 0x89-0x8B are ver0.78 on neither side and 0x09-0x0B only on the port's.
   wire        cg_v078_p   = (cg_code[7:0] >= 8'h09) && (cg_code[7:0] < 8'h0C);
   wire        cg_ver078   = (cg_lo7 >= 7'h09) && (cg_lo7 < 7'h0c);   // the window's test
-  // Port 0xA9's blank arms (review-cg F4): one-byte 0x09-0x0B names fontrom[0x90 + row],
+  // Port 0xA9's blank arms: one-byte 0x09-0x0B names fontrom[0x90 + row],
   // which font_load's ZeroMemory passes and no loader writes (font/font.c:145-151), so
   // NP2kai returns 0 there; two-byte ver0.78 with the half bit set falls out of the
   // branch with no return (cgrom.c:198-207) and returns 0 too. Neither takes a font
@@ -246,13 +243,12 @@ module pc9821_cg (
   // row cache, and a walker fills the bank for the NEXT text row from SDRAM while the scanout
   // reads the bank for the row on screen. Each bank entry holds one cell's 16-byte half-glyph,
   // so the scanout's read is the same one-cycle registered read u_font port B had.
-  // TWO banks are NOT enough, and that is a proof, not a tuning choice
-  // the screen is 25 text rows (VACTIVE 400 / 16) and the walker fills row+1, so the row ring
-  // 0->1->...->24->0 is ODD and cannot be 2-coloured. bank = row[0] aliases the 24 -> 0 wrap,
-  // so during row 24 the walker overwrites the bank the scanout reads for row 24, and row 24
-  // draws row 0's kanji. The fix is a THIRD bank for row 0 only: row 0's own slot, written once
-  // per frame during row 24 and read once during row 0, so it is not a ping-pong pair at all.
-  //     bank = (row == 0) ? 2 : (row & 1)
+  // The bank is not a function of the row number: pc9821_crtc's text line sequencer counts the
+  // GDC's row reloads mod 3 (its ord_inc) and carries the count across the frame boundary, so a
+  // row draws from the bank its fill was made in, and the walker is sent to the bank after the
+  // one on screen (wk_bank_in). A row-number parity cannot do this: a frame's row count is
+  // whatever the LR, the CRTC registers and the partitions make it (25 rows at 400 lines is an
+  // odd ring, so row[0] would alias the last row onto row 0's bank).
   // The banks are PACKED (bank*320 + cell*4 + word = 960 dwords = 3 M10K, vs 7 M10K for an
   // 11-bit {bank[1:0], cell, word} address).
   localparam integer JC_CELLS = 80;
@@ -267,7 +263,11 @@ module pc9821_cg (
   reg  [2:0]   wk_beat;       // dword 0..7 of the in-flight 8-dword burst
   reg          wk_req;        // the walker asks for a grant (held until served)
   reg  [6:0]   wk_cell;       // the TRAM cell being walked
-  reg  [4:0]   wk_row;        // the text row being walked
+  reg  [9:0]   wk_row;        // the text row being walked: its index in its partition
+  // The start word of the walked row's partition, latched with the row: the walk spans about
+  // 1.5 lines, and pc9821_crtc's v_sad follows its next-row partition (and the row-0 re-walk
+  // slot) line by line, so a live read would take a later partition's start mid-row.
+  reg  [15:0]  wk_sad;
   reg  [2:0]   wk_state;      // walker FSM
   reg          wk_wr_en;      // write the row cache this edge
   reg  [JC_AW-1:0] wk_wr_addr;
@@ -278,11 +278,10 @@ module pc9821_cg (
   reg          wk_jis2nd;    // the previous cell was a JIS left half
   reg  [7:0]   wk_pair_row, wk_pair_ten;
   reg  [15:0]  wk_skip_cnt;  // saturating count of walk slots skipped because a walk was in flight
-  // The walker's bank for the row it fills. This MUST be the same expression as the scanout's
-  // read bank pc9821_crtc sends (row 0 -> bank 2, every other row -> its parity), so the two can
-  // never disagree about which row lives where. It is combinational because wk_row is latched for
-  // the whole walk; the walker and the scanout share clk_sys.
-  wire [1:0]   wk_bank = (wk_row == 5'd0) ? 2'd2 : {1'b0, wk_row[0]};
+  // The walker's bank for the row it fills, latched with the row: pc9821_crtc numbers rows'
+  // banks by a mod-3 count of the GDC's row reloads, and asks for the bank after the one being
+  // drawn, so the walker never fills the bank the scanout is reading (assertion below).
+  reg  [1:0]   wk_bank;
   // The packed write address of the dword about to be stored (the same form as the read).
   /* verilator lint_off WIDTHEXPAND */  // the packed address is value-bounded (bank<=2, cell<=79, word<=3 -> <= 959 < 1024),
   /* verilator lint_off WIDTHTRUNC */    // so the 32-bit product widths and the truncation to JC_AW are both intentional
@@ -357,7 +356,7 @@ module pc9821_cg (
   // S_READ_CAPTURE) so one held read address covers issue, wait and capture, and win_rd_d
   // keeps the mux on the window for the wait cycle; the 0xA9 view is addressed
   // combinationally from the CG registers.
-  // The power-up seed (review r2-resets F9): unseeded, win_rd_d's X makes
+  // The power-up seed: unseeded, win_rd_d's X makes
   // cg_rd_win = cg_win_rd | X = X before the first window access and the shared
   // cg_ram/ANK port-A address is X for a cycle - a config-seed read landing
   // there returns X instead of the seeded byte.
@@ -407,7 +406,7 @@ module pc9821_cg (
   // OSD setting ever owns keeps the ITF's check valid. Rows 0xB/0xC are the ITF code's own
   // stores (Xe10 BANK4@0x489C/0x48A2 = 0x86/0x8A, Xe writes 0x82 at row 0xC), row 0xD is
   // BANK4@0xFD49F's 0xFF, and row 0 (0x04) is the Xa7C9W runtime capture's (qemu-pc98
-  // roms/pc98bios/memsw.inc row code 0x20 line 0x00) - no ITF site reads it (r10/12 [OPEN]).
+  // roms/pc98bios/memsw.inc row code 0x20 line 0x00) - no ITF site reads it (an open question).
   function automatic [7:0] cg_record_row(input [3:0] idx, input model_xe);
     begin
       case (idx)
@@ -430,14 +429,15 @@ module pc9821_cg (
   endfunction
 
   // Row A (store 0x81A): the value that completes the ITF's ten-byte sum to 0 mod 256.
+  // The sum reduces to a per-model constant. Rows 1..9 are all fixed except row 3
+  // (`model_xe ? 8'h80 : 8'h81`); the fixed rows {C1,8C,CD,FF,00,00,AA,55} sum to
+  // 0x18 mod 256, so rows 1..9 sum to 0x99 when model_xe = 0 (row 3 = 0x81, the Xe10
+  // table's own 0x67 completing byte) and to 0x98 when model_xe = 1 (row 3 = 0x80, the
+  // Xe table's 0x68). The two-arm generic loop computed this every clk_sys through
+  // `cfg_seed_byte`; the direct select is value-identical for every model_xe, and any
+  // change to the row table above must re-derive these two constants.
   function automatic [7:0] cg_record_cksum(input model_xe);
-    reg [8:0] s;
-    integer i;
-    begin
-      s = 9'd0;
-      for (i = 1; i <= 9; i = i + 1) s = s + {1'b0, cg_record_row(i[3:0], model_xe)};
-      cg_record_cksum = 8'd0 - s[7:0];
-    end
+    cg_record_cksum = model_xe ? 8'h68 : 8'h67;
   endfunction
 
   function automatic [7:0] cg_record_byte(input [3:0] idx, input model_xe);
@@ -453,8 +453,8 @@ module pc9821_cg (
   // literal and the table cannot drift apart.
   localparam [111:0] CG_RECORD_INIT = 112'hff8a_8667_55aa_0000_ffcd_818c_c104;
 
-  // THE OSD SETTINGS ARE SAMPLED AT MACHINE RESET ONLY (owner requirement, lane
-  // dip-settings; the msw-cell pattern pc9821_crtc's cfg_fdd_mode latch follows). The
+  // THE OSD SETTINGS ARE SAMPLED AT MACHINE RESET ONLY (the msw-cell pattern pc9821_crtc's
+  // cfg_fdd_mode latch follows). The
   // static view below is defined from these latches, never from the live
   // pins, so a mid-run OSD change cannot move a configuration cell under the running
   // firmware - the new value is picked up at the next machine reset / reload.
@@ -530,8 +530,7 @@ module pc9821_cg (
   // 0xA9 access and the 0xA4000 window, so a step needs a cycle none of them uses. A
   // second write port on the scanout side cost 117,521 nodes and 65,552 registers.
   // ONE SOURCE, ONE WALK: the MACHINE-RESET seed (`sdip_seed_pulse`, one cycle at the reset
-  // ASSERTION) - the OSD `Reset DIPs`/`Zero DIPs` actions are gone (owner requirement). The
-  // seed is why the walk state is NOT under `!rst_n_sys` below: this module's reset is clamped
+  // ASSERTION). The seed is why the walk state is NOT under `!rst_n_sys` below: this module's reset is clamped
   // for the whole machine-reset window (`rst_n_sys = !(reset || !cpu_run)` in pc9821_system),
   // so a reset-held walk could not run AT ALL in the window it exists for - it would have to
   // wait for the release, which is the very instant the CPU starts issuing. Held only by its
@@ -580,8 +579,8 @@ module pc9821_cg (
   // wipe, so without the fallback record byte 0x815 reads 0x00 and [0:59A] becomes 600
   // instead of 0.
   //
-  // A STATIC READ-ONLY VIEW over the array for the CPU's READ, not a store into it (owner
-  // requirement, lane dip-settings): what the guest reads from a covered cell is the
+  // A STATIC READ-ONLY VIEW over the array for the CPU's READ, not a store into it: what
+  // the guest reads from a covered cell is the
   // configuration, whatever it wrote there, because the machine's own battery-backed record
   // cells behave so - the Xa7C9W runtime capture holds the record intact at code 0x2056 rows
   // 0..0xD after its boot's stage-1A wipe (qemu-pc98 roms/pc98bios/memsw.inc). The
@@ -595,19 +594,17 @@ module pc9821_cg (
   // that defines those characters must see them drawn. Flame Zapper Kotsujin does exactly
   // that: GJLOAD loads 128 glyphs at DX = 0x7620..0x769F through INT 18h AH=1Ah (whose
   // Xe10 BIOS body, F000:EBD7, writes the 0xA4000 window with no code-range check) and the
-  // game draws every SPACE as 0x7620, so a gate that dropped those writes drew the record
-  // bytes as the right half of every space (Flame Zapper Kotsujin;
-  // tb_pc9821_cg_gaiji_record). The machine-reset walk below rewrites the record cells, so
+  // game draws every SPACE as 0x7620, so a gate that dropped those writes would draw the
+  // record bytes as the right half of every space (tb_pc9821_cg_gaiji_record). The machine-reset walk below rewrites the record cells, so
   // the RAM copy is the record again at every boot.
   //
-  // THE ONE EXCEPTION IS THE READ ECHO (lane kanji-test-writethrough): the stage-1A KANJI
+  // THE ONE EXCEPTION IS THE READ ECHO: the stage-1A KANJI
   // CG-RAM test (@0xF8061-0xF80F4) sweeps the store with `stos`/`scasb` and compares every
   // byte it wrote back, so a cell that ALWAYS answered its configured byte would fail the
   // comparison and print KANJI CG RAM ERROR (message BANK4@0x2AD5). A "written this pass"
   // mark per cell makes the read answer the RAM - the guest's own last write - while it is
   // set. The mark clears at machine reset and at the ITF's own `out 0xF0` re-POST
-  // (cfg_seed_reload = pc9821_iobus's cpu_reset_req, the same event the removed written mask
-  // was cleared on), so after the re-POST the record check and drive probe read the static
+  // (cfg_seed_reload = pc9821_iobus's cpu_reset_req), so after the re-POST the record check and drive probe read the static
   // OSD config again. The configuration the CPU reads stays the seed; only the echo is
   // transient.
   // ---------------------------------------------------------------
@@ -761,8 +758,6 @@ module pc9821_cg (
       .data_b(8'h00), .wren_b(1'b0), .q_b(cg_ram_vid_q)
   );
 
-  assign cg_code_win = cg_code;
-  assign cg_lr_win   = cg_lr;
 
   // The CPU-side JIS byte comes from the fetched glyph block, never from a store: the SDRAM
   // block is the only copy of the JIS grid. The block is usable only once its
@@ -876,9 +871,9 @@ module pc9821_cg (
   // ---------------------------------------------------------------
   // THE ANK TABLE STAYS IN M10K. The 4 KiB 8x16 table (pack 0x30000 = FONT.ROM[0x800:0x1800],
   // 2048 words) is read on every ANK dot and on the CPU's ANK reads (port 0xA9 and the
-  // window), and it is small (4 M10K blocks). The JIS grid is NOT here any more: it lives in
-  // the pack's SDRAM copy and is served by the row cache below, which frees the ~276 M10K
-  // blocks the full FONT.ROM store held. DEPTH is explicit so the
+  // window), and it is small (4 M10K blocks). The JIS grid is NOT here: it lives in the
+  // pack's SDRAM copy and is served by the row cache below, which saves the ~276 M10K blocks
+  // a full FONT.ROM store would need. DEPTH is explicit so the
   // array is exactly 2048 words.
   // ---------------------------------------------------------------
   localparam integer JIS_ROWS  = 92;
@@ -886,7 +881,7 @@ module pc9821_cg (
   localparam integer ANK_AW    = $clog2(ANK_WORDS);   // 11
 
   // The CPU ANK reads: port 0xA9's register row and the window's own row. The JIS CPU reads
-  // do NOT touch this store any more (the block serves them), so the store's port A carries
+  // do NOT touch this store (the block serves them), so the store's port A carries
   // only the ANK address and the loader.
   wire [ANK_AW-1:0] font_word_addr = cg_rd_win ? cg_ank_win_addr[11:1]
                                                : cg_ank_port_addr[11:1];
@@ -979,9 +974,9 @@ module pc9821_cg (
   // The walker's TRAM address, COMBINATIONAL from its state so it is on pc9821_crtc's port
   // DURING dot 0 - a registered one would arrive a dot late and read the scanout's default.
   /* verilator lint_off UNUSEDSIGNAL */  // only bits [11:0] are the TRAM word; the sum's top bits are the wrap the slice drops
-  wire [15:0] wk_wordidx = {11'd0, wk_row} * {8'd0, v_pitch}
+  wire [15:0] wk_wordidx = {6'd0, wk_row} * {8'd0, v_pitch}
                          + (v_col40 ? {8'd0, wk_cell, 1'b0} : {9'd0, wk_cell})
-                         + v_sad;
+                         + wk_sad;
   /* verilator lint_on UNUSEDSIGNAL */
   wire [13:0] wk_lo_addr = {1'b0, wk_wordidx[11:0], 1'b0};
   wire [13:0] wk_hi_addr = {1'b0, wk_wordidx[11:0], 1'b1};
@@ -990,7 +985,7 @@ module pc9821_cg (
 
   always @(posedge clk_sys) begin
     if (!rst_n_sys) begin
-      wk_state <= W_IDLE; wk_cell <= 7'd0; wk_row <= 5'd0;
+      wk_state <= W_IDLE; wk_cell <= 7'd0; wk_row <= 10'd0; wk_sad <= 16'd0; wk_bank <= 2'd0;
       wk_req <= 1'b0; wk_act <= 1'b0; wk_beat <= 3'd0;
       wk_wr_en <= 1'b0; wk_wr_addr <= {JC_AW{1'b0}}; wk_wr_data <= 32'd0;
       wk_glyph_r <= 19'd0; wk_half_r <= 1'b0;
@@ -1004,11 +999,12 @@ module pc9821_cg (
       // the NEXT row. A walk already in flight is not restarted - and that silently SKIPS the
       // slot's row, so the skip is counted (saturating) rather than dropped.
       // Row 0's fill is re-aimed at the vline-432 slot when a configuration change has left its
-      // row-24 fill with the previous frame's display start (v_row0_stale, issue I2).
-      if (pixel_ce && (vline[3:0] == 4'd0) && (hdot == 10'd0)) begin
+      // last-row fill with the previous frame's display start (pc9821_crtc's stale_slot, I2).
+      if (pixel_ce && wk_go && (hdot == 10'd0)) begin
         if (wk_state == W_IDLE) begin
-          wk_row   <= v_row0_stale ? 5'd0
-                    : ((vline[8:4] == 5'd24) ? 5'd0 : (vline[8:4] + 5'd1));
+          wk_row   <= wk_k;
+          wk_sad   <= v_sad;
+          wk_bank  <= wk_bank_in;
           wk_cell  <= 7'd0;
           wk_jis2nd <= 1'b0;
           wk_state <= W_LO;
@@ -1070,13 +1066,12 @@ module pc9821_cg (
   // ---------------------------------------------------------------
   // CPU-side port reads. This module answers only its own addresses (0xA1/0xA3/0xA5/0xA9);
   // pc9821_system muxes it with pc9821_crtc's and pc9821_gdc2's, and the arm that reaches
-  // these three ports is the cg_io_dout one -- pc9821_system.sv:1509 "(device_io_addr[7:0] == 8'hA5) || (device_io_addr[7:0] == 8'" -- so the
+  // these three ports is the cg_io_dout one -- pc9821_system.sv:2001 "(device_io_addr[7:0] == 8'hA5) || (device_io_addr[7:0] == 8'" -- so the
   // bytes below are the bytes a CPU read of 0xA1/0xA3/0xA5 receives.
   //
-  // The three register ports DO read back their latches. This was removed once on NP2kai's
-  // word alone - that reference attaches a read handler only at index 4 (0xA9,
-  // io/cgrom.c:240-243), so open 0xFF looked like a faithful model - but the machine outranks
-  // NP2kai, and it drives a byte there in every read-only scan of the real Xe10:
+  // The three register ports DO read back their latches. NP2kai attaches a read handler only
+  // at index 4 (0xA9, io/cgrom.c:240-243), so open 0xFF would look like a faithful model -
+  // but the machine outranks NP2kai, and it drives a byte there in every read-only scan of the real Xe10:
   // `docs/probes/PORTS.TXT` (probe2's tab_latches scan, one byte per port, no writes made)
   // reads `00A1=2F 00A3=57 00A5=0F 00A9=00` with the genuinely open 0xA7/0xAB/0xAD/0xAF beside
   // them all reading FF, and VRAM.TXT / MEMSW.TXT / PIT-fixed.TXT / PITPH.TXT / RDBACK.TXT /

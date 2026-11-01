@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// One uPD765 sits behind TWO port windows: the 0x00BE strap (bit 0) selects whether 0x90/0x92/0x94 or 0xC8/0xCA/0xCC answers, and the same bit routes the controller's completion to IRQ11 (slave_irq[3]) or IRQ10 (slave_irq[2]) and its DMA handshake to channel 2 or channel 3; the unselected window answers the open bus 0xFF and drops writes (NP2kai's gate), the register index is the same in both banks, the 2DD window's control port answers NP2kai's 0x74 where the 2HD one answers the machine's 0x44, and a floppy READ issued on the 2DD window moves the sector over DMA channel 3 while the same command on the 2HD window still uses channel 2.
+// One uPD765 sits behind TWO port windows: the 0x00BE strap (bit 0) selects whether 0x90/0x92/0x94 or 0xC8/0xCA/0xCC answers, and the same bit routes the controller's completion to IRQ11 (slave_irq[3]) or IRQ10 (slave_irq[2]) and its DMA handshake to channel 2 or channel 3; the unselected window answers the open bus 0xFF and drops writes (NP2kai's gate), the register index is the same in both banks, the 2DD window's control port answers NP2kai's 0x74 where the 2HD one answers the machine's 0x44, and a floppy READ issued on the 2DD window moves the sector over DMA channel 3 while the same command on the 2HD window still uses channel 2. The FDD-mode switch reads back as 0x00BE/0x00BF bit 2 - Fixed FF, Auto FB (FA after writing 0x02) - and the read follows the switch only across a reset (POST samples it).
 //
 // THE 2DD BANK, DRIVEN AT THE PORT LEVEL because the port decode IS the feature: the same
 // pc9821_iobus the machine boots through is poked at 0x90/0x92/0x94, 0xC8/0xCA/0xCC,
@@ -81,6 +81,7 @@ module tb_pc9821_fdc_2dd_bank;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   reg         triple_fault_reset = 1'b0;
   reg         cal_cdat = 0;
   reg  [6:0]  cfg_ram_mib = 7'd0;
@@ -126,6 +127,7 @@ module tb_pc9821_fdc_2dd_bank;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
 
@@ -144,11 +146,17 @@ module tb_pc9821_fdc_2dd_bank;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire  [7:0] fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready, fdd_rdy, fdd_hdrv, fdd_err;
   wire  [7:0] fdd_dout, fdd_hr, fdd_hn, fdd_hs;
 
   // ==== the uPD71071's bus-master memory port, modelled below ====
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire  [3:0] dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   reg         dma_mem_ready = 1'b0;
@@ -157,6 +165,11 @@ module tb_pc9821_fdc_2dd_bank;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -409,8 +422,10 @@ module tb_pc9821_fdc_2dd_bank;
     // and the 2DD one is dead - which is why the ITF's own 0xC8 probes (BANK4 0x66A6/0x66CA/
     // 0x66F5) take the 0x90 branch and CYCLES used=930542 cannot move.
     port_rd(P_STRAP);
-    if (rd_val !== 8'hFB)
-      $fatal(1, "boot_golden_precondition: 0x00BE reads %02x at reset, expected FB = 0xF8|3 (NP2kai fdc_ibe :1112-1114, fdc_reset :1159)",
+    // The read: docs/probes/FDMODE-XE10.TXT `PORT 00BE=FF` - bits 7:2 read 1 (bit 2 is the
+    // fixed-mode DIP; NP2kai's fdc_ibe answers 0xF8|chgreg, bit 2 clear - outranked).
+    if (rd_val !== 8'hFF)
+      $fatal(1, "boot_golden_precondition: 0x00BE reads %02x at reset, expected FF = 0xFC|3 (docs/probes/FDMODE-XE10.TXT PORT 00BE=FF; chgreg 3 per NP2kai fdc_reset :1159)",
              rd_val);
     port_rd(P_MSR_2HD);
     if (rd_val !== 8'h80)
@@ -422,12 +437,12 @@ module tb_pc9821_fdc_2dd_bank;
              rd_val);
 
     // ------------------------------------------------------------------ 1: strap_readback
-    // NP2kai fdc_ibe: the read answers (chgreg & 3) | 0xF8, so clearing bit 0 (the 2DD
-    // interface) must read back as 0xFA.
+    // The read answers chgreg[1:0] with every bit above them one (the capture's FF at
+    // chgreg 3), so clearing bit 0 (the 2DD interface) must read back as 0xFE.
     port_wr(P_STRAP, 8'h02);
     port_rd(P_STRAP);
-    if (rd_val !== 8'hFA)
-      $fatal(1, "strap_readback: after `out 0x00BE,0x02` the read gives %02x, expected FA = 0xF8|2 (NP2kai fdc_ibe, io/fdc.c:1112-1114)",
+    if (rd_val !== 8'hFE)
+      $fatal(1, "strap_readback: after `out 0x00BE,0x02` the read gives %02x, expected FE = 0xFC|2 (bits 1:0 as written, NP2kai fdc_ibe; bits 7:2 one, docs/probes/FDMODE-XE10.TXT)",
              rd_val);
     if (dut.fdc_strap_2hd !== 1'b0)
       $fatal(1, "strap_readback: the exported strap is %b after 0x00BE <- 0x02, expected 0", dut.fdc_strap_2hd);
@@ -636,11 +651,44 @@ module tb_pc9821_fdc_2dd_bank;
     reset = 0;
     repeat (4) @(negedge clk);
     port_rd(P_STRAP);
-    if (rd_val !== 8'hFB)
-      $fatal(1, "boot_golden_precondition: 0x00BE reads %02x after a reset, expected FB", rd_val);
+    if (rd_val !== 8'hFF)
+      $fatal(1, "boot_golden_precondition: 0x00BE reads %02x after a reset, expected FF (docs/probes/FDMODE-XE10.TXT)", rd_val);
     port_rd(P_MSR_2DD);
     if (rd_val !== 8'hFF)
       $fatal(1, "boot_golden_precondition: 0xC8 reads %02x after a reset, expected FF", rd_val);
+
+    // ------------------------------------------------------------------ 12: the FDD-mode switch
+    // 0x00BE bit 2 is the FDD-mode switch, both positions real (MAME pc9801.cpp fdc_mode_r
+    // `(m_dsw3->read() & 3) << 2`, DSW3:1 Fixed / Auto-Detection). Fixed reads the measured
+    // unit's FF (docs/probes/FDMODE-XE10.TXT), Auto FB (NP2kai fdc_ibe `(fdc.chgreg & 3) | 8 |
+    // 0xf0`). POST samples a switch, so the read follows the input only across a reset.
+    fdd_dip_fixed = 1'b0;
+    repeat (4) @(negedge clk);
+    port_rd(P_STRAP);
+    if (rd_val !== 8'hFF)
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x after the switch moved to Auto WITHOUT a reset, expected FF (sampled at reset only)", rd_val);
+    reset = 1;
+    repeat (8) @(negedge clk);
+    reset = 0;
+    repeat (4) @(negedge clk);
+    port_rd(P_STRAP);
+    if (rd_val !== 8'hFB)
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x at Auto after a reset, expected FB (bit 2 clear, NP2kai fdc_ibe)", rd_val);
+    port_rd(16'h00BF);
+    if (rd_val !== 8'hFB)
+      $fatal(1, "fdd_mode_switch: 0x00BF reads %02x at Auto, expected FB (the pair reads alike)", rd_val);
+    port_wr(P_STRAP, 8'h02);
+    port_rd(P_STRAP);
+    if (rd_val !== 8'hFA)
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x at Auto after `out 0x00BE,0x02`, expected FA", rd_val);
+    fdd_dip_fixed = 1'b1;
+    reset = 1;
+    repeat (8) @(negedge clk);
+    reset = 0;
+    repeat (4) @(negedge clk);
+    port_rd(P_STRAP);
+    if (rd_val !== 8'hFF)
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x back at Fixed after a reset, expected FF", rd_val);
 
 // ==== VERDICT ====
     $display("TB_PC9821_FDC_2DD_BANK: PASS");

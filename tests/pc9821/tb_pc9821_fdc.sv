@@ -7,7 +7,7 @@
 // "invalid" arm -- which raises NO interrupt -- and the wait never returned.
 module tb_pc9821_fdc;
   // ==== WHAT THIS PROVES ====
-// The FDC model dispatches its command on the LOW FIVE BITS of the opcode byte, as the uPD765 and NP2kai both do (FDC_Ope[fdc.cmd & 0x1f]), so READ DATA with MF=1 (0x46) completes exactly like READ DATA with MF=0 (0x06) -- eight parameters, the running state, and an interrupt at the end -- and READ ID with MF=1 (0x4A) completes like 0x0A. An opcode the model does not implement still answers its one-byte 'invalid' result WITH NO INTERRUPT. Decoding the WHOLE opcode byte instead sent 0x46 to that invalid arm, raised no interrupt, and left the BIOS's FDC interrupt wait (BANK7 0x7D0A, polling DS:0x55E for a bit only the FDC ISR writes) spinning forever -- which is the reported Rusty freeze. This bench pins both halves, so a whole-byte decode fails it. It also pins the 0x04BE 1.44M/RPM register against NP2kai io/fdc.c:1117-1134 (review iobus-tram F4): the write stores reg144 and, with bit 4 set, one RPM bit of the drive reg144[6:5] names, and the read answers rpm[reg144[6:5]] | 0xFE.
+// The FDC model dispatches its command on the LOW FIVE BITS of the opcode byte, as the uPD765 and NP2kai both do (FDC_Ope[fdc.cmd & 0x1f]), so READ DATA with MF=1 (0x46) completes exactly like READ DATA with MF=0 (0x06) -- eight parameters, the running state, and an interrupt at the end -- and READ ID with MF=1 (0x4A) completes like 0x0A. An opcode the model does not implement still answers its one-byte 'invalid' result WITH NO INTERRUPT. Decoding the WHOLE opcode byte instead sent 0x46 to that invalid arm, raised no interrupt, and left the BIOS's FDC interrupt wait (BANK7 0x7D0A, polling DS:0x55E for a bit only the FDC ISR writes) spinning forever -- which is the reported Rusty freeze. This bench pins both halves, so a whole-byte decode fails it. It also pins the 0x04BE 1.44M/RPM register against NP2kai io/fdc.c:1117-1134: the write stores reg144 and, with bit 4 set, one RPM bit of the drive reg144[6:5] names, and the read answers rpm[reg144[6:5]] | 0xFE.
 //
   // The FDC model dispatches its command on the LOW FIVE BITS of the opcode byte, as the uPD765 and NP2kai both do (FDC_Ope[fdc.cmd & 0x1f]), so READ DATA with MF=1 (0x46) completes exactly like READ DATA with MF=0 (0x06) -- eight parameters, the running state, and an interrupt at the end -- and READ ID with MF=1 (0x4A) completes like 0x0A. An opcode the model does not implement still answers its one-byte 'invalid' result WITH NO INTERRUPT. Decoding the WHOLE opcode byte instead sent 0x46 to that invalid arm, raised no interrupt, and left the BIOS's FDC interrupt wait (BANK7 0x7D0A, polling DS:0x55E for a bit only the FDC ISR writes) spinning forever -- which is the reported Rusty freeze. This bench pins both halves, so a whole-byte decode fails it. It also pins the 0x04BE 1.44M/RPM register against NP2kai io/fdc.c:1117-1134 (review iobus-tram F4): the write stores reg144 and, with bit 4 set, one RPM bit, and the read answers rpm[reg144[6:5]] | 0xFE.
 
@@ -32,7 +32,7 @@ module tb_pc9821_fdc;
       // No media-change tag: this bench's mounts are not ready changes (pc9821_fdc's media_chg).
       .media_chg(4'd0), .frame_tick(1'b0),
       .media_req(), .media_req_hdr(), .media_unit(),
-      .media_c(), .media_h(), .media_r(), .media_n(), .media_idx(),
+      .media_c(), .media_h(), .media_tc(), .media_hd(), .media_mf(), .media_2hd(), .media_rpm(), .media_r(), .media_n(), .media_idx(),
       .media_ready(1'b1), .media_rdy(1'b0), .media_hdrv(1'b0), .media_err(1'b0),
       .media_dout(8'h00), .media_hr(8'h00), .media_hn(8'h00), .media_hs(8'h00),
       .media_adv(), .dma_drq(), .dma_dack(1'b0), .dma_stb(1'b0), .dma_tc(1'b0),
@@ -127,7 +127,7 @@ module tb_pc9821_fdc;
     // ---- 0x04BE: the 1.44M/RPM register (NP2kai io/fdc.c:1117-1134) ----------
     // The write stores the whole byte in reg144 and - only when its bit 4 is set -
     // bit 0 to the RPM of the drive reg144[6:5] names; the read answers
-    // rpm[reg144[6:5]] | 0xFE (review iobus-tram F4).
+    // rpm[reg144[6:5]] | 0xFE.
     reset_dut();
     rd8(2'd3);
     expect8(8'hFE, "0x04BE power-up: rpm[0] | 0xFE");

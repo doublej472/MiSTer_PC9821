@@ -20,9 +20,9 @@ start:
     # z486 asserts its triple_fault_reset when a fault arrives while #DF is
     # being delivered -- the CPU's reset pin. On the machine that is the same
     # CPU-reset class as `out 0xF0` below, and it must never depend on the
-    # framework: r11/14 §3.2 measured the request leaving the FPGA as
+    # framework: a measurement found the request leaving the FPGA as
     # BUTTONS[1] (the I/O board's USER BUTTON), and user_io.cpp masks that echo
-    # while the OSD is visible, which is the OSD-open stall the owner reported.
+    # while the OSD is visible, which is the OSD-open stall observed on hardware.
     #
     # The fault is the one the z486 suite's sreg_absent_gdt_load proves, in the
     # form a real-mode pack can reach: enter protected mode with an all-zero GDT

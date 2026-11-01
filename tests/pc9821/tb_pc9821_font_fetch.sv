@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The text GDC's JIS glyph fetch is ONE 8-dword SDRAM burst, not eight serialized single-word reads: driving the real pc9821_gdc_text and pc9821_memory_subsystem font path over a backend whose accept-to-first-dword latency is the machine's own (~9 clk_sys, r13/107), a whole 32-byte glyph block is assembled from ONE request in a fraction of the eight round trips the old one-word-at-a-time fetch spent, and the assembled block's 32 bytes are still exactly the FONT.ROM glyph - read back through the CPU's own port 0xA9 (the block is a block RAM since area-video, so it has no byte array to peek and 0xA5's half+row walk is the honest view). The serialized cost is measured through the SAME backend with a reference one-word requester, so the two cycle counts differ only in the request shape. The block RAM's READ side is held to the contract a burst write creates: on a fresh burst the port-0xA9 hold (cg_rd_hold, what the I/O bus waits on) must stay asserted on the cycle the last beat is written - its registered read still holds the pre-write word there - and drop exactly one cycle later, presenting the glyph's own byte, for all 32 positions on their own bursts.
+// The text GDC's JIS glyph fetch is ONE 8-dword SDRAM burst, not eight serialized single-word reads: driving the real pc9821_gdc_text and pc9821_memory_subsystem font path over a backend whose accept-to-first-dword latency is the machine's own (~9 clk_sys), a whole 32-byte glyph block is assembled from ONE request in a fraction of the eight round trips the old one-word-at-a-time fetch spent, and the assembled block's 32 bytes are still exactly the FONT.ROM glyph - read back through the CPU's own port 0xA9 (the block is a block RAM since area-video, so it has no byte array to peek and 0xA5's half+row walk is the honest view). The serialized cost is measured through the SAME backend with a reference one-word requester, so the two cycle counts differ only in the request shape. The block RAM's READ side is held to the contract a burst write creates: on a fresh burst the port-0xA9 hold (cg_rd_hold, what the I/O bus waits on) must stay asserted on the cycle the last beat is written - its registered read still holds the pre-write word there - and drop exactly one cycle later, presenting the glyph's own byte, for all 32 positions on their own bursts.
 //
 // The 8-dword glyph block is 32-byte aligned, so the burst never crosses an SDRAM row
 // boundary (the controller's 256-dword row at 32 MB is a multiple of 8 dwords); a 32-byte
@@ -24,7 +24,7 @@ module tb_pc9821_font_fetch;
   localparam [18:0] GLYPH_BASE_B     = 19'hD820;
   localparam [7:0]  HZ_CODE_LO_A     = 8'h10;        // 0xA3: ku = 0x30 -> FONT.ROM[0xCC20]
   localparam [7:0]  HZ_CODE_LO_B     = 8'h11;        // 0xA3: ku = 0x31 -> FONT.ROM[0xD820]
-  // The backend's accept-to-first-dword latency. r13/107 section 1.1 measured a dependent
+  // The backend's accept-to-first-dword latency. A measurement found a dependent
   // read at accept+7 clk_sys through the real bridge; 8 keeps the round trip honest.
   localparam integer RESP_LAT = 8;
 
@@ -57,19 +57,17 @@ module tb_pc9821_font_fetch;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire       cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire       cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire  [7:0] tram_din, tram_dout;
   wire        tram_we;
 
   // CG byte channel between the subsystem's window responder and the GDC.
-  wire [15:0] cg_code_win;
-  wire        cg_lr_win;
   wire  [4:0] cg_win_byte_sel;
   wire        cg_win_rd;
   wire  [7:0] cg_win_dout, cg_win_din;
@@ -177,7 +175,7 @@ module tb_pc9821_font_fetch;
   wire        pix_h_active, pix_v_active;
   wire        gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's RAM, r13/227).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's RAM).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -197,7 +195,6 @@ module tb_pc9821_font_fetch;
       .tram_cpu_addr(tram_addr), .tram_cpu_din(tram_din),
       .tram_cpu_we(tram_we), .tram_cpu_dout(tram_dout),
       .font_ld_addr(font_addr), .font_ld_data(font_data), .font_ld_we(font_we),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .cg_rd_hold(cg_rd_hold),

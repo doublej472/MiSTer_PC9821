@@ -22,13 +22,13 @@ module pc9821_cpu_reset_gate #(
 );
 
 // The SDRAM term, and the defect it closes. A platform reset re-runs the controller's JEDEC
-// initialisation (src/memory/sdram.v:606-608 forces INIT and busy_buf high) and it then spends
+// initialisation (src/memory/sdram.v:1903-1905 `state_n = INIT;` with busy_buf_n high) and it then spends
 // ~200 us calibrating before it answers anything. A core reload hides that because the pack
 // download holds cpu_run low for seconds; an OSD reset does not, because pc9821_rom_loader keeps
 // rom_ready deliberately so the pack is not re-downloaded - so the CPU was released 15 cycles
 // after reset and fetched the reset vector out of an uninitialised SDRAM. That is the
 // intermittent "ROM SUM ERROR", and why only a full reload was reliable.
-// mem_busy is that controller's own busy. src/memory/sdram.v:123-126 states its reset contract
+// mem_busy is that controller's own busy. src/memory/sdram.v:287-291 states its reset contract
 // (the power-up value "must be BUSY until the init sequence finishes") and nce is tied low, so it
 // IS busy_buf: high from reset, and low for the first time only once init completes. Nothing else
 // can be that edge, which is what makes the first low safe to use as the ready signal.
@@ -46,10 +46,10 @@ always @(posedge clk) begin
     else if (hold != 4'd0) hold <= hold - 4'd1;
 end
 
-// Assert asynchronously, deassert synchronously. The old combinational release rose in the very
-// cycle the hold reached zero - inside z486's recovery window - so different flops could leave
-// reset on different cycles and the CPU would be internally inconsistent for a cycle or more. A
-// machine that boots only sometimes is what that looks like. This release comes off a clk flop,
+// Assert asynchronously, deassert synchronously. A combinational release would rise in the very
+// cycle the hold reaches zero - inside z486's recovery window - so different flops could leave
+// reset on different cycles and the CPU would be internally inconsistent for a cycle or more (a
+// machine that boots only sometimes). This release comes off a clk flop,
 // two cycles later, with full setup margin.
 wire release_ok = !reset && cpu_run && !hps_apply_reset && (hold == 4'd0) && sdram_ready;
 /* verilator lint_off SYNCASYNCNET */   // intentional: this IS the reset synchroniser

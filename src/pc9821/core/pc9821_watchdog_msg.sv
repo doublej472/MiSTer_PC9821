@@ -24,8 +24,7 @@
 // THE FIELDS ARE A SNAPSHOT, taken at the report's accept (the `snap` input, shared with
 // pc9821_perf_msg/pc9821_gfx_msg): each field's digits are separate byte transfers on the same
 // paced FIFO the PRF/GFX records use, so read live they would sample different times and a carry
-// crossing between two digits of one field splices two values into a torn composite (the
-// telemetry tear the data-race review found). `snap` latches every field once and the nib
+// crossing between two digits of one field splices two values into a torn composite. `snap` latches every field once and the nib
 // selector reads the held copies, so the whole record is one instant however long the emission
 // waits.
 `default_nettype none
@@ -81,7 +80,7 @@ module pc9821_watchdog_msg (
     input  [7:0] irq_dbg_irr,
     input  [7:0] irq_dbg_isr,
     input  [7:0] inta_din,
-    input  [7:0] cpu_irq_state,
+    input  [7:0] cpu_irq_state,  // CPU: {IF, 5'b0, INTR, 1'b0}; the CPU exports no other interrupt state
     input  [7:0] inta_count,
     input  [15:0] artic_hi,        // U: the ARTIC counter's upper half, the value the firmware polls
     input  [7:0] io_itf_stage,
@@ -253,9 +252,9 @@ module pc9821_watchdog_msg (
         msg[348] = 8'h00;  msg[349] = "?";  msg[350] = 8'h0A;
     end
 
-    // An indexed read of the ROM, and the old default arm (8'h00) for an
-    // index outside the message (the watchdog never produces one, but the
-    // case this replaced answered NUL there and the bench checks it).
+    // An indexed read of the ROM, and a default arm (8'h00) for an index
+    // outside the message (the watchdog never produces one; the bench checks
+    // that it answers NUL).
     reg [7:0] lit;
     always @* begin
         if (idx > 16'd350) lit = 8'h00;

@@ -76,7 +76,7 @@ module pc9821_text_mem (
   //
   // THE BYTES. Each seed byte is the INIT_BYTES byte with ONLY the switch field replaced, so
   // entry 0 rewrites the literal's own value (0x01 -> 0x01, 0x0C -> 0x0C) and a card with no
-  // config file is bit-identical to the tree before this existed. The masks are the firmware's
+  // config file gets exactly the INIT_BYTES image. The masks are the firmware's
   // own: 0x0F for 0xA3FF2 (the low nibble is a second field BANK0@0x1208 preserves) and 0xF8
   // for 0xA3FEA (bit 3 is the ITF's marker, bits 7:4 the cell's other bits).
   //
@@ -130,8 +130,8 @@ module pc9821_text_mem (
   // count at BANK4@0x5C3C is the same field in 64 KB units, `and al,7 / inc al / shl al,1`),
   // so code 4 = 640 KB = the measured byte 0x0C. The real Xe10 has NO SETUP/DIP option that
   // changes the conventional memory size - its SETUP menu carries no such item, and NP2kai takes the value from
-  // the memory-switch cell rather than from a guest setting - so the OSD `Base memory` list
-  // was removed and the code is the MSW_BASEM_CODE localparam. The 0xA3FEA seed keeps bit 3
+  // the memory-switch cell rather than from a guest setting - so there is no OSD field for it
+  // and the code is the MSW_BASEM_CODE localparam. The 0xA3FEA seed keeps bit 3
   // (the ITF's own marker) and bits 7:4 via the mask in msw_base_byte below.
   reg [3:0] msw_fdd_nib;
   always @* begin

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PIC_CMD:
-// The 8259A's COMMAND and REQUEST-LATCH semantics, which the init-sequence bench does not reach: an ICW1 clears the mask and the latched requests but deliberately keeps the in-service register (NP2kai io/pic.c:326-337 leaves the isr clear disabled inside #if 0; review-interrupts F1, FAIL-FIRST against the old clear); OCW3 selects whether a command-port read returns the IRR or the ISR and only when RR is set; a masked request is latched but not forwarded; a non-specific EOI clears the highest-priority in-service level and only that one; a specific EOI clears exactly the level it names; an unacknowledged request answers the ICW2|7 spurious vector; and after an acknowledge a still-held line does not re-request while a fresh rising edge does, which is the edge-triggered behaviour the authentic ITF selects.
+// The 8259A's COMMAND and REQUEST-LATCH semantics, which the init-sequence bench does not reach: an ICW1 clears the mask and the latched requests but deliberately keeps the in-service register (NP2kai io/pic.c:326-337 leaves the isr clear disabled inside #if 0; FAIL-FIRST against the old clear); OCW3 selects whether a command-port read returns the IRR or the ISR and only when RR is set; a masked request is latched but not forwarded; a non-specific EOI clears the highest-priority in-service level and only that one; a specific EOI clears exactly the level it names; an unacknowledged request answers the ICW2|7 spurious vector; and after an acknowledge a still-held line does not re-request while a fresh rising edge does, which is the edge-triggered behaviour the authentic ITF selects.
 
 // ==== where the expectation comes from ====
 //
@@ -10,7 +10,7 @@
 //     NP2kai io/pic.c:326-337  pic_o00's ICW1 arm clears imr/irr/ocw3/pry and
 //           leaves `picp->isr = 0` disabled inside `#if 0` (io/pic.c:331-334):
 //           a guest that re-inits while an interrupt is in service keeps the
-//           in-service bit (review-interrupts F1).
+//           in-service bit.
 //     QEMU  hw/intc/i8259.c  pic_reset_common also clears the isr - QEMU
 //           disagrees here, but NP2kai is the primary software reference and
 //           the 8259A datasheet's ICW1 reset list does not name the ISR.

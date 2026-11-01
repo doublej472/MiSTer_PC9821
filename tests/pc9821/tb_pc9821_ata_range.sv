@@ -198,7 +198,7 @@ module tb_pc9821_ata_range;
     for (ch = 5; ch <= 8; ch = ch + 1)
       // heads 0, 7 and 8: 8 is the first head past the 8-head geometry. (This loop once
       // stepped `hd + 7`, which visits 0 and 7 only, so the head-8 refusal the claim names
-      // was never driven - a 3-bit head compare survived it; bench-audit 2026-10-12.)
+      // was never driven - a 3-bit head compare survived it.)
       for (hd = 0; hd <= 8; hd = (hd == 0) ? 7 : hd + 1)
         for (sc = 0; sc <= 18; sc = sc + 1) begin
           if (sc == 0 || sc == 1 || sc == 2 || sc == 17 || sc == 18) begin

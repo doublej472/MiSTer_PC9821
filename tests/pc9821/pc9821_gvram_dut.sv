@@ -1,5 +1,5 @@
 // Test harness: the GVRAM's five pieces composed with the port list the unit benches
-// already drive (r13/334 A4 split pc9821_gvram into pc9821_gvram_mem + pc9821_gvram_arb
+// already drive (an area pass split pc9821_gvram into pc9821_gvram_mem + pc9821_gvram_arb
 // + pc9821_gvram_scan + pc9821_grcg + pc9821_egc). The core instantiates the five in
 // pc9821_memory_subsystem; this file exists only so a bench keeps one DUT. TEST-ONLY.
 //
@@ -28,10 +28,10 @@ module pc9821_gvram_dut #(
     input  wire         cpu_valid,
     input  wire         cpu_write,
     output wire [31:0]  cpu_dout,
-    output wire [127:0] cpu_line_dout,
+    output wire [31:0] cpu_line_word,
     output wire         cpu_ready,
     output wire         cpu_resp_valid,
-    output wire         cpu_line_resp_valid,
+    output wire         cpu_line_word_valid,
 
     input wire        grcg_we,
     input wire [7:0]  grcg_addr,
@@ -110,6 +110,12 @@ module pc9821_gvram_dut #(
   wire [31:0] grcg_cl_tile;
   wire        grcg_cl_rmw, grcg_cl_burst;
   wire [63:0] grcg_cl_wdata2;
+  wire        grcg_cl_cap_pair_high;
+  wire        grcg_cl_cap_burst, grcg_cl_hold_valid, grcg_cl_hold_write, grcg_cl_hold_burst;
+  wire [15:0] grcg_cl_cap_addr, grcg_cl_hold_addr;
+  wire  [3:0] grcg_cl_cap_wbe, grcg_cl_hold_wbe, grcg_cl_cap_be;
+  wire [31:0] grcg_cl_cap_wdata, grcg_cl_hold_wdata;
+  wire [63:0] grcg_cl_cap_wdata2, grcg_cl_hold_wdata2;
   wire        grcg_cl_ready, grcg_cl_done;
   wire [31:0] grcg_cpu_dout;
   wire        grcg_cpu_ready, grcg_cpu_resp_valid;
@@ -134,11 +140,12 @@ module pc9821_gvram_dut #(
   wire  [1:0] gvr_plane;
   wire [14:0] gvr_offset;
   wire [31:0] gvr_din;
+  wire  [3:0] gvr_din_z, gvr_din_f;
   wire  [3:0] gvr_be;
   wire        gvr_gate_egc, gvr_gate_grcg, gvr_gate_tcr;
-  wire        gvr_ready, gvr_resp_valid, gvr_line_resp_valid;
+  wire        gvr_ready, gvr_resp_valid, gvr_line_word_valid;
   wire [31:0] gvr_dout;
-  wire [127:0] gvr_line_dout;
+  wire [31:0] gvr_line_word;
 
   pc9821_gvram_mem u_gmem (
       .clk(clk),
@@ -163,8 +170,8 @@ module pc9821_gvram_dut #(
       .cpu_ready(cpu_ready),
       .cpu_resp_valid(cpu_resp_valid),
       .cpu_dout(cpu_dout),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
-      .cpu_line_dout(cpu_line_dout),
+      .cpu_line_word_valid(cpu_line_word_valid),
+      .cpu_line_word(cpu_line_word),
       .gdc_valid(gdc_mem_valid),
       .gdc_write(gdc_mem_write),
       .gdc_route_egc(gdc_mem_route_egc),
@@ -183,7 +190,7 @@ module pc9821_gvram_dut #(
       .gvr_page(gvr_page),
       .gvr_plane(gvr_plane),
       .gvr_offset(gvr_offset),
-      .gvr_din(gvr_din),
+      .gvr_din(gvr_din), .gvr_din_z(gvr_din_z), .gvr_din_f(gvr_din_f),
       .gvr_be(gvr_be),
       .gvr_gate_egc(gvr_gate_egc),
       .gvr_gate_grcg(gvr_gate_grcg),
@@ -191,30 +198,34 @@ module pc9821_gvram_dut #(
       .gvr_ready(gvr_ready),
       .gvr_resp_valid(gvr_resp_valid),
       .gvr_dout(gvr_dout),
-      .gvr_line_resp_valid(gvr_line_resp_valid),
-      .gvr_line_dout(gvr_line_dout)
+      .gvr_line_word_valid(gvr_line_word_valid),
+      .gvr_line_word(gvr_line_word)
   );
 
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_arb (
       .clk(clk), .reset(reset),
       .access_page(gvr_page),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
-      .cpu_din(gvr_din), .cpu_be(gvr_be), .cpu_line_read(gvr_line_read),
+      .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),
+      .cpu_be(gvr_be), .cpu_line_read(gvr_line_read),
       .cpu_valid(gvr_valid), .cpu_write(gvr_write),
-      .cpu_dout(gvr_dout), .cpu_line_dout(gvr_line_dout),
+      .cpu_dout(gvr_dout), .cpu_line_word(gvr_line_word),
       .cpu_ready(gvr_ready), .cpu_resp_valid(gvr_resp_valid),
-      .cpu_line_resp_valid(gvr_line_resp_valid),
+      .cpu_line_word_valid(gvr_line_word_valid),
       .grcg_expand_gate(gvr_gate_grcg), .grcg_tcr_gate(gvr_gate_tcr),
       .egc_gate(gvr_gate_egc),
-      .grcg_cl_valid(grcg_cl_valid), .grcg_cl_write(grcg_cl_write),
-      .grcg_cl_addr(grcg_cl_addr), .grcg_cl_be(grcg_cl_be),
-      .grcg_cl_wdata(grcg_cl_wdata), .grcg_cl_wbe(grcg_cl_wbe),
       .grcg_cl_cap(grcg_cl_cap), .grcg_cl_cap_rmw(grcg_cl_cap_rmw),
+      .grcg_cl_cap_burst(grcg_cl_cap_burst), .grcg_cl_cap_pair_high(grcg_cl_cap_pair_high), .grcg_cl_cap_addr(grcg_cl_cap_addr),
+      .grcg_cl_cap_wbe(grcg_cl_cap_wbe), .grcg_cl_cap_wdata(grcg_cl_cap_wdata),
+      .grcg_cl_cap_wdata2(grcg_cl_cap_wdata2), .grcg_cl_cap_be(grcg_cl_cap_be),
+      .grcg_cl_hold_valid(grcg_cl_hold_valid), .grcg_cl_hold_write(grcg_cl_hold_write),
+      .grcg_cl_hold_burst(grcg_cl_hold_burst), .grcg_cl_hold_addr(grcg_cl_hold_addr),
+      .grcg_cl_hold_wbe(grcg_cl_hold_wbe), .grcg_cl_hold_wdata(grcg_cl_hold_wdata),
+      .grcg_cl_hold_wdata2(grcg_cl_hold_wdata2),
       .grcg_cl_hold_be(grcg_cl_hold_be), .grcg_cl_hold_rmw(grcg_cl_hold_rmw),
       .grcg_cl_hold_datum0(grcg_cl_hold_datum0),
       .grcg_cl_hold_mergeable(grcg_cl_hold_mergeable),
-      .grcg_cl_tile(grcg_cl_tile), .grcg_cl_rmw(grcg_cl_rmw),
-      .grcg_cl_burst(grcg_cl_burst), .grcg_cl_wdata2(grcg_cl_wdata2),
+      .grcg_cl_tile(grcg_cl_tile),
       .grcg_cl_ready(grcg_cl_ready),
       .grcg_cpu_dout(grcg_cpu_dout), .grcg_cpu_ready(grcg_cpu_ready),
       .grcg_cpu_resp_valid(grcg_cpu_resp_valid),
@@ -255,7 +266,7 @@ module pc9821_gvram_dut #(
       .expand_gate(grcg_expand_gate), .tcr_gate(grcg_tcr_gate),
       .cpu_valid(gvr_valid && own_grcg),
       .cpu_write(gvr_write), .cpu_addr({gvr_page, gvr_offset}),
-      .cpu_din(gvr_din), .cpu_be(gvr_be),
+      .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f), .cpu_be(gvr_be),
       .cpu_dout(grcg_cpu_dout), .cpu_ready(grcg_cpu_ready),
       .cpu_resp_valid(grcg_cpu_resp_valid),
       .cl_valid(grcg_cl_valid), .cl_ready(grcg_cl_ready),
@@ -266,6 +277,13 @@ module pc9821_gvram_dut #(
       .cl_hold_rmw(grcg_cl_hold_rmw), .cl_hold_datum0(grcg_cl_hold_datum0),
       .cl_hold_mergeable(grcg_cl_hold_mergeable),
       .cl_burst(grcg_cl_burst), .cl_wdata2(grcg_cl_wdata2),
+      .cl_cap_burst(grcg_cl_cap_burst), .cl_cap_pair_high(grcg_cl_cap_pair_high), .cl_cap_addr(grcg_cl_cap_addr),
+      .cl_cap_wbe(grcg_cl_cap_wbe), .cl_cap_wdata(grcg_cl_cap_wdata),
+      .cl_cap_wdata2(grcg_cl_cap_wdata2), .cl_cap_be(grcg_cl_cap_be),
+      .cl_hold_valid(grcg_cl_hold_valid), .cl_hold_write(grcg_cl_hold_write),
+      .cl_hold_burst(grcg_cl_hold_burst), .cl_hold_addr(grcg_cl_hold_addr),
+      .cl_hold_wbe(grcg_cl_hold_wbe), .cl_hold_wdata(grcg_cl_hold_wdata),
+      .cl_hold_wdata2(grcg_cl_hold_wdata2),
       .cl_rdata(cl_rdata), .cl_done(grcg_cl_done),
       .dbg_busy(grcg_dbg_busy), .dbg_rmw(grcg_dbg_rmw), .dbg_write(grcg_dbg_write),
       .dbg_grcg_store(dbg_grcg_store)

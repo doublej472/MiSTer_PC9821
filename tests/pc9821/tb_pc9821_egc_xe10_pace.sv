@@ -49,8 +49,8 @@ module egc_pace_rig #(
   reg         cpu_valid = 1'b0, cpu_write = 1'b0;
   /* verilator lint_off UNUSEDSIGNAL */
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_line_resp_valid, gdc_mem_ready, gdc_mem_resp, grcg_expand;
+  wire [31:0] cpu_line_word;
+  wire         cpu_line_word_valid, gdc_mem_ready, gdc_mem_resp, grcg_expand;
   wire [31:0]  gdc_mem_rdata, line_data;
   wire         line_sel, line_ready;
   wire [127:0] dbg_gfx_stats;
@@ -69,9 +69,9 @@ module egc_pace_rig #(
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(1'b0),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(1'b0), .grcg_addr(8'd0), .grcg_din(8'd0), .grcg_expand(grcg_expand),
       .egc_gate(1'b1), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),

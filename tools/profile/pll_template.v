@@ -232,7 +232,7 @@ endmodule
 // Retrieval info: 	<generic name="gui_pll_auto_reset" value="Off" />
 // Retrieval info: 	<generic name="gui_pll_bandwidth_preset" value="Auto" />
 // Retrieval info: 	<generic name="gui_en_reconf" value="false" />
-// Retrieval info: 	<generic name="gui_en_dps_ports" value="false" />
+// Retrieval info: 	<generic name="gui_en_dps_ports" value="@EN_DPS@" />
 // Retrieval info: 	<generic name="gui_en_phout_ports" value="false" />
 // Retrieval info: 	<generic name="gui_phout_division" value="1" />
 // Retrieval info: 	<generic name="gui_mif_generate" value="false" />

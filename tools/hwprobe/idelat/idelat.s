@@ -9,7 +9,7 @@
  *   - word-transfer throughput (per-word cost of the data-port read),
  *   - the status-poll cost shape (one bare status read vs one full poll-loop
  *     iteration, so the poll overhead can be netted out of every DRQ window).
- * It also carries the instrument fixes the record (r13/215) demands: PIT
+ * It also carries the instrument fixes the record demands: PIT
  * deltas are used RAW (the machine's channel 0 counts once per oscillator
  * clock; the old mode-3 /2 halving was 2x wrong), the absolute latch word is
  * never used for timing (it tears - the divisor scan is diagnostic only, with
@@ -20,11 +20,11 @@
  * TIME BASES (device clocks, no run-local scale - this is what makes the run
  * comparable with every other run):
  *   PIT channel-0 count rate  2 457 600 counts/s (1 count = 406.9 ns):
- *       the documented 2.4576 MHz oscillator (r13/219, probe2 tm_div_check),
- *       machine-confirmed by r13/215 section 1.4 - 8 raw counts per ARTIC
+ *       the documented 2.4576 MHz oscillator (probe2 tm_div_check),
+ *       machine-confirmed by a raster check on the machine - 8 raw counts per ARTIC
  *       tick, 0.5% over three windows on two programs.
  *   ARTIC counter  307 200 Hz (1 tick = 3255.2 ns): the documented rate
- *       (ideprobe.s), machine-confirmed by r13/215 section 1.4 (the VSYNC/
+ *       (ideprobe.s), machine-confirmed by a raster check on the machine (the VSYNC/
  *       raster edge counts give 56.5 Hz / 24.83 kHz = the PC-98 raster only
  *       at 307 200 Hz).
  * A row's two columns must agree at 8 raw PIT counts per ARTIC tick; a window
@@ -151,7 +151,7 @@ sec_setup:
     sti
 
     /* PIT byte-order calibration and raw pair telemetry: the absolute latch
-     * word is known to tear (r13/215 section 1.1); the raw pairs are printed
+     * word is known to tear; the raw pairs are printed
      * so the tear itself is evidence next time. */
     call    pit_cal
     mov     dx, offset msg_pitcal
@@ -443,7 +443,7 @@ cal_row:
 /* tm_run: one bracketed window of TM_N iterations.  DX = port, BL = kind
  * (0 base / 1 in al / 2 out al,al=0 / 3 in ax), SI = label.  Leaves the raw
  * PIT counts moved in [tm_pd] (16-bit mod 65536) and the ARTIC delta in
- * [tm_ad].  NO halving and NO divisor correction: r13/215 section 1.4 found
+ * [tm_ad].  NO halving and NO divisor correction: a raster check on the machine found
  * the machine's channel 0 counts once per oscillator clock, and the ARTIC
  * column is the wrap/tear referee. */
 tm_run:
@@ -453,8 +453,8 @@ tm_run:
     push    dx
     push    si
     mov     [tm_port], dx
-    /* tm_mode stores the printable mode char, not the raw kind byte (the
-     * fixture/review found kind 0-3 printing as control characters): 0 base
+    /* tm_mode stores the printable mode char, not the raw kind byte (kind
+     * 0-3 would print as control characters): 0 base
      * -> 'B', 1 in al -> 'R', 2 out al -> 'W', 3 in ax -> 'Q'. */
     mov     al, 'B'
     cmp     bl, 0
@@ -608,7 +608,7 @@ tm_finish:
 
 /* chk_pair: the row self-check.  EAX = a window's ARTIC ticks, DX = the same
  * window's raw PIT counts.  One window has ONE duration, so the two columns
- * MUST agree at 8 raw PIT counts per ARTIC tick (r13/215 section 1.4: 0.5%
+ * MUST agree at 8 raw PIT counts per ARTIC tick (0.5%
  * over three windows on two programs), and a sign or operand-order slip in
  * either subtraction - the defect that printed the first capture's READ rows
  * with a negative ARTIC column - shows up here as an impossible ratio rather
@@ -1400,7 +1400,7 @@ pit_bytes:
     ret
 
 /* pit_cal: set pit_swap by watching which of the two bytes 0071 returns
- * moves.  The machine counts once per oscillator clock (r13/215 section 1.4),
+ * moves.  The machine counts once per oscillator clock,
  * so over 32 paired reads the LSB falls on almost every sample and the MSB on
  * almost none; the byte that falls more often is the LSB.  The latch command
  * does not restore the read pointer on this machine, so the order is measured,
@@ -1445,7 +1445,7 @@ pc_done:
     ret
 
 /* tm_div_probe: DIAGNOSTIC ONLY - this probe's timing never uses the divisor.
- * The absolute latch word is known to tear (r13/215 section 1.1: scans have
+ * The absolute latch word is known to tear (scans have
  * returned 0xFFFA/0xD12E-class words that cannot be a count of the BIOS's
  * 0x6000 divisor), so each candidate is now sampled TWICE back to back and
  * only a coherent pair (words within COHERENT counts) is accepted; the scan

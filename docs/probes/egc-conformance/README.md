@@ -1,7 +1,7 @@
 # EGC conformance / fingerprint suite v1.3 - real-hardware captures
 
 These are **real PC-9821 hardware** captures, so they sit at the TOP of this
-repo's evidence hierarchy (AGENTS.md, "Evidence hierarchy": real hardware beats
+repo's evidence hierarchy (AGENTS.md, "Evidence": real hardware beats
 NP2kai, qemu-pc98, MAME and our own RTL). They are the oracle for the EGC
 compare / colour-key work and for `tb_pc9821_egc_compare`.
 
@@ -77,8 +77,8 @@ capture alone. `RD22_PATSEL`'s own two columns do not fix its pattern either; wh
 it does fix is that bit 13 compares with the pattern source set to PAT, which is
 the stimulus every replayed compare row is driven with.
 
-Two findings from reading these columns, both recorded in the RTL and the lane
-report rather than here: the compare is active in the PAT mode (bit 13 is the
+Two findings from reading these columns, both recorded in the RTL
+rather than here: the compare is active in the PAT mode (bit 13 is the
 whole gate - `RD22_PATSEL` expects the retained-FG mask there), and the
 `CK00/CK01 *_DST` rows are a SOFTWARE masked write, not a hardware overlay: the
 suite reads the compare mask, stores it in `0x04A8` and writes a fixed data

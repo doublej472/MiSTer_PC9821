@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OPNA_WRQ:
-// The PC-9801-86 command buffer (the WRQ in pc9821_opna) delivers its queued select/data writes to the vendored JT12 chip in guest order with every data write seeing its select latched first, captures a single worst-phase 1-clk fire into every operator register class (the pending latches persist and the sample-rate scan commits them, so no bus hold is needed), still lets jt12_kon sample a 0x28 key-on with the next write queued right behind it, holds 0x188 bit 7 across the whole queue-plus-drain and clears it in bounded time, gates 0x18C/0x18E writes away from the chip while the 0xA460 extension bit is clear, loses zero of 48 back-to-back no-poll writes across all 24 operator slots in both banks, answers a 0x18E read after a 0x18C select write with the select byte just written (NP2kai's opna_o18c s.data shadow) rather than the previous data byte, and pins the drop boundary at the lane's reduced write cadence (r13/276): a 160-write no-poll burst at 5 clk_sys per access overflows the 64-deep queue and loses writes, while the same burst behind the guest's WAITREADY poll loses none.
+// The PC-9801-86 command buffer (the WRQ in pc9821_opna) delivers its queued select/data writes to the vendored JT12 chip in guest order with every data write seeing its select latched first, captures a single worst-phase 1-clk fire into every operator register class (the pending latches persist and the sample-rate scan commits them, so no bus hold is needed), still lets jt12_kon sample a 0x28 key-on with the next write queued right behind it, holds 0x188 bit 7 across the whole queue-plus-drain and clears it in bounded time, gates 0x18C/0x18E writes away from the chip while the 0xA460 extension bit is clear, loses zero of 48 back-to-back no-poll writes across all 24 operator slots in both banks, answers a 0x18E read after a 0x18C select write with the select byte just written (NP2kai's opna_o18c s.data shadow) rather than the previous data byte, and pins the drop boundary at the reduced write cadence: a 160-write no-poll burst at 5 clk_sys per access overflows the 64-deep queue and loses writes, while the same burst behind the guest's WAITREADY poll loses none.
 //
 // The WRQ is probed against the vendored JT12 chip; the test sequence T0-T8:
 //  T1  in-order delivery: queued select/data pairs reach the chip's own pins in the
@@ -16,7 +16,7 @@
 //      commit anyway, capture is self-latching (jt12_mmr's up_opreg/op_din/up_op/up_ch
 //      persist and the CSR commits at the next visit) and the "hold" story is wrong;
 //      if they do not commit, the buffer silently loses writes depending on phase.
-//  T3  the key-on race r13/52 closed: 0x28 (key-on) paced by DRAIN_GAP, with the
+//  T3  the key-on race the queue closed: 0x28 (key-on) paced by DRAIN_GAP, with the
 //      next data write queued right behind — jt12_kon must still sample it.
 //  T4  overflow: a guest burst faster than the drain (no WAITREADY poll) fills the
 //      64-deep queue; measure how many writes the chip never sees, and whether the
@@ -30,8 +30,8 @@
 //      a 0x18C select answers the select byte; check what the board answers.
 //  T7  extension gate: 0x18C/0x18E writes must not reach the chip while 0xA460 bit 0
 //      is clear, and reads answer 0xFF.
-//  T9  the DW lane's reduced iobus write cadence (class 4 = 5 clk_sys per access,
-//      r13/276): a 160-write no-poll burst overflows the 64-deep queue and loses
+//  T9  the reduced iobus write cadence (class 4 = 5 clk_sys per access,
+//      the FSM floor): a 160-write no-poll burst overflows the 64-deep queue and loses
 //      writes, while the same burst behind a WAITREADY poll loses none -- so the
 //      drop is a function of the guest's handshake, not of the shortened wait.
 
@@ -164,9 +164,9 @@ module tb_pc9821_opna_wrq;
     end
   endtask
 
-  // A host write at the cadence this lane's DW reduction produced: 5 clk_sys
-  // strobe-to-strobe (pc9821_iobus IO_MIN_HOLD, r13/276), in place of the 186 the
-  // r13/244 table charged. Same one-cycle strobe and same push-gate probe as
+  // A host write at the cadence the DW reduction produced: 5 clk_sys
+  // strobe-to-strobe (pc9821_iobus IO_MIN_HOLD), in place of the 186 the
+  // earlier class table charged. Same one-cycle strobe and same push-gate probe as
   // bus_write above, so T9 asks the drop question at the guest's new speed.
   task automatic bus_write_fast(input [15:0] port, input [7:0] data, output reg drop_flag);
     begin
@@ -470,7 +470,7 @@ module tb_pc9821_opna_wrq;
     log_n = 0;
 
     // ----------------------------------------------------------------
-    // T3: the key-on race r13/52 closed: 0x28 paced, next data write right behind.
+    // T3: the key-on race the queue closed: 0x28 paced, next data write right behind.
     // ----------------------------------------------------------------
     keyon_pulse = 0;
     bus_write(16'h0188, 8'h28, drop);
@@ -693,7 +693,7 @@ module tb_pc9821_opna_wrq;
     end
 
     // ----------------------------------------------------------------
-    // T9: the DW lane's write cadence (r13/276) and the drop question.
+    // T9: the reduced write cadence and the drop question.
     // The reduced iobus class lets the guest strobe a host write every 5 clk_sys
     // instead of 186; a stretched FM write drains over DRAIN_GAP=216 cen, so the
     // 64-deep queue can fill. Does the faster guest lose FM register writes, and

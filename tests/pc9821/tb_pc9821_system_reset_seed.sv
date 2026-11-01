@@ -1,19 +1,19 @@
-// tb_pc9821_system_reset_seed — pc9821_system's unreset telemetry / line flops.
+// tb_pc9821_system_reset_seed - pc9821_system's unreset telemetry / line flops.
 //
 // ==== WHAT THIS PROVES ====
-// pc9821_system's unreset telemetry (review r2-resets F6): the INTA pulse counter inta_count/z_inta_d counts exactly the CPU's INTA pulses PER RESET EPOCH (it X-locked and never armed in 4-state sim and ran across warm resets). The CPU is tests/pc9821/z486_stub.sv - the real z486 tree cannot elaborate in the 4-state simulator these checks are FOR - issuing exactly two INTA pulses per epoch, so count == 2 is the whole F6 contract.
+// pc9821_system's unreset telemetry: the INTA pulse counter inta_count/z_inta_d counts exactly the CPU's INTA pulses PER RESET EPOCH (it X-locked and never armed in 4-state sim and ran across warm resets). The CPU is tests/pc9821/z486_stub.sv - the real z486 tree cannot elaborate in the 4-state simulator these checks are FOR - issuing exactly two INTA pulses per epoch, so count == 2 is the whole F6 contract.
 //
 // (F6) The INTA telemetry counter (`inta_count`, `z_inta_d`) counts the INTA
 //      pulses the CPU actually issued, and counts them PER RESET EPOCH: after a
 //      reset, exactly the pulses of THIS run are visible. Before the fix the
 //      counter had no reset and no initialiser: in 4-state simulation
 //      `if (z_inta && !z_inta_d && inta_count != 8'hFF)` X-locks (the != is X,
-//      the arm never fires, the counter never resolves - review r2-resets F6's
+//      the arm never fires, the counter never resolves - the
 //      "X-no-arm"), and in any simulation the count ran across warm resets so
 //      the diagnostic that separates "not delivered" from "delivered but
 //      mishandled" could not count a run.
 // (F7) The registered line response into the L1 icache (`z_line_din`,
-//      `z_line_resp_valid`) is 0 at reset (review r2-resets F7): data and valid
+//      `z_line_resp_valid`) is 0 at reset: data and valid
 //      are registered TOGETHER into the cache's fill completion input, and an X
 //      there at power-up (4-state) or a stale pre-reset valid at a warm reset is
 //      exactly the garbage the pair exists to exclude.
@@ -26,10 +26,8 @@
 //
 // ==== THE 4-STATE RUN: NONE, AND WHAT THAT LEAVES PROVEN ====
 // tools/check_4state_xlock.py covers five of the six X-lock benches and lists this one
-// as NOT RUN, because pc9821_system does not elaborate in iverilog:
-// src/pc9821/core/pc9821_dmac.sv:479 (dout_comb = 8'hFF;) is not a valid l-value, and
-// src/pc9821/core/pc9821_iobus.sv:336 (assign dbg_itf_stage = itf_stage;) uses a wire
-// before its declaration. The real z486 tree stops iverilog earlier still
+// as NOT RUN, because pc9821_system does not elaborate in iverilog (its UNCOVERED entry
+// names the first error iverilog reports). The real z486 tree stops iverilog earlier still
 // (src/z486/address_unit.sv:5 (import z486_pkg::*)), which is what the stub above is for.
 // So there is NO 4-state run for F6's X-no-arm form anywhere in this tree, and this bench
 // proves only:
@@ -84,7 +82,7 @@ module tb_pc9821_system_reset_seed;
       .img_ack(1'b0), .img_buff_addr(13'd0), .img_buff_din(16'd0),
       .img_buff_wr(1'b0),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
-      .dbg_uart_accept(1'b1),
+      .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0),
       .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7),
       .bios_setup(1'b0), .bios_set(4'd0)

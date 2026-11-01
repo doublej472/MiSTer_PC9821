@@ -17,7 +17,7 @@ read_sdc
 update_timing_netlist
 file mkdir output_files/census
 set out output_files/census
-set sys [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0]*|divclk}]
+set sys [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0]*|divclk emu|pll|pll_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter*|divclk}]
 set sdp [get_clocks {PC9821_SDRAM_CLK}]
 set fh [open $out/corners.txt w]
 set worst_s 1e9; set worst_s_c ""

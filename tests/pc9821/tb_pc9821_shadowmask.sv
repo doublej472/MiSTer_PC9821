@@ -1,10 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// The oracle module below is an earlier revision of Template_MiSTer sys/shadowmask.sv,
+// Copyright (c) 2021 Sorgelig (https://github.com/MiSTer-devel/Template_MiSTer).
+// See NOTICE, part 2.
+
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
 // The shadowmask's 256x11 mask_lut is one mixed-clock M10K, not 2,816 flip-flops: a word written with a 3'b011 command on clk_sys is read back through the module's registered clk read (lut <= mask_lut[mask_idx]) at every one of the 256 indices the counters sweep, with the clk read latency and the mask_enable gating unchanged. The oracle is the pre-M10K register-array module run on the same stimulus, and the bench requires the two to agree on dout and the sync outputs at every clk edge while the oracle's own registered read equals the pattern written to each index.
 //
 // ---- the oracle is the OLD module, written out again ----
-// r13/110 moved mask_lut from 2,816 flip-flops with 256 per-word write enables
+// An area pass moved mask_lut from 2,816 flip-flops with 256 per-word write enables
 // into one M10K simple dual port: written word-by-word on clk_sys, read with a
 // registered output on clk. The read was already one clk deep, so the RAM's
 // output register keeps the latency identical and the change is a drop-in. That
@@ -54,7 +59,7 @@ module tb_pc9821_shadowmask;
   );
 
   // ==== the OLD module as the oracle ====
-  // The pre-r13/110 shadowmask: mask_lut as a register array. Its registered read
+  // The earlier shadowmask: mask_lut as a register array. Its registered read
   // is exposed (dbg_lut) along with mask_idx and mask_enable so the bench can
   // check value identity and coverage on the reference directly.
   wire [10:0] ref_lut;
@@ -196,7 +201,7 @@ module tb_pc9821_shadowmask;
 
 endmodule
 
-// The pre-r13/110 shadowmask, verbatim but for the three debug outputs. mask_lut is
+// The earlier shadowmask, verbatim but for the three debug outputs. mask_lut is
 // the register array the M10K replaced; its registered read is dbg_lut.
 module shadowmask_ref
 (

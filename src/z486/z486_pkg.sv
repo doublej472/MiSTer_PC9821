@@ -681,6 +681,7 @@ localparam ALUJMP_DIV7 = 7'h1f;      // Division main loop (non-restoring algori
 localparam ALUJMP_JDESCA = 7'h20;    // Optimized ustep: jump if descriptor A bit is set
 localparam ALUJMP_JTSSLIM = 7'h4A;   // Optimized ustep: jump if the new TSS limit is below 67h (2Bh for a 286 TSS)
 localparam ALUJMP_USTEP_AAD_SHIFT = 7'h21; // AAD shift step: barrel result plus CF clear
+localparam ALUJMP_USTEP_IMUL_FLAGS = 7'h1E; // IMUL r,r/m(,imm) retire: CF/OF from the DSP product
 localparam ALUJMP_USTEP_FAULT_DONE = 7'h22; // Fault/interrupt delivery completion marker
 localparam ALUJMP_DIV5 = 7'h1d;      // Division final correction
 localparam ALUJMP_LDCNTR = 7'h3E;    // Load COUNTR with iteration count
@@ -900,7 +901,7 @@ localparam ALUSRC_EFLAGS_PUSH = 6'h11; // 0xFFFCFFFF: PUSHFD's EFLAGS image with
 localparam ALUSRC_TMPG = 6'h12;
 localparam ALUSRC_TMPH = 6'h13;
 localparam ALUSRC_PROTUN = 6'h15;
-localparam ALUSRC_FLAGS_MASK = 6'h16;  // 0x37fd7 FLAGS mask for INT stack push
+localparam ALUSRC_FLAGS_MASK = 6'h16;  // 0x77fd7: the 386's 0x37fd7 FLAGS mask plus the 486 AC bit
 localparam ALUSRC_CONST_4000 = 6'h17;  // 0x4000
 localparam ALUSRC_CONST_N200 = 6'h18;  // ~0x200 = 0xFFFFFDFF
 localparam ALUSRC_CONST_8 = 6'h19;     // 8

@@ -67,7 +67,7 @@ module tb_pc9821_fdd_mount_hold;
     begin
       img[off+0] = c; img[off+1] = h; img[off+2] = r; img[off+3] = nn;
       img[off+4] = nsec[7:0]; img[off+5] = nsec[15:8];
-      img[off+6] = 8'h40;                     // mfm_flg
+      img[off+6] = 8'h00;                     // mfm_flg: 0x00 = MFM, the mode these reads use (0x40 = FM, NP2kai searchsector_d88)
       img[off+14] = size[7:0]; img[off+15] = size[15:8];
     end
   endtask
@@ -189,7 +189,7 @@ module tb_pc9821_fdd_mount_hold;
       .blk_fill_data(blk_fill_data),
       .present(present), .writeprotect(writeprotect),
       .req(req), .req_hdr(req_hdr), .unit(unit),
-      .req_c(req_c), .req_h(req_h), .req_r(req_r), .req_n(req_n), .req_idx(req_idx),
+      .req_c(req_c), .req_h(req_h), .req_tc(req_c), .req_hd(req_h[0]), .req_mf(1'b1), .req_2hd(1'b1), .req_rpm(1'b0), .req_r(req_r), .req_n(req_n), .req_idx(req_idx),
       .ready(ready), .rdy(rdy), .hdrv(hdrv), .err(err), .dout(dout), .adv(adv),
       .hdr_r(hdr_r), .hdr_n(hdr_n), .hdr_sects(hdr_sects)
   );

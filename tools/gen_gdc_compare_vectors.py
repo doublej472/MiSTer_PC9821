@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Re-derive the GDC conformance gap and the oracle tables from the REAL Xe10 capture.
 
-The oracle is `docs/probes/gdc-conformance/{xe10-2.5MHz,mister}/*.CSV` - the
-owner's real PC-9821 Xe10 and this core on the `pc98-gdc-tests-v1.0-rc6`
+The oracle is `docs/probes/gdc-conformance/{xe10-2.5MHz,mister}/*.CSV` - a
+real PC-9821 Xe10 and this core on the `pc98-gdc-tests-v1.0-rc6`
 `RUNFULL` profile at GDC clock 2.5 MHz (the suite's own `RUNINFO.TXT`). The Xe10
 side is REAL HARDWARE, the top of this repo's evidence hierarchy, so every
 expectation below is a number the machine produced, never one derived from our

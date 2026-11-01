@@ -1,4 +1,4 @@
-// TEST REFERENCE: pc9821_gvram_arb as of 3b134fe4 (before the area-video pass), renamed. Never edited; tb_pc9821_gvram_arb_equiv proves the shipped module against it.
+// TEST REFERENCE: pc9821_gvram_arb as of 3b134fe4 (before an area-reduction pass), renamed. Never edited; tb_pc9821_gvram_arb_equiv proves the shipped module against it.
 // PC-9821 GVRAM arbiter: one owner latch, one client mux, and the CPU's array datapath.
 //
 // This is the thin arbiter: its job is to pick which client owns the
@@ -16,7 +16,7 @@
 // 3 = intensity), so nothing permutes.
 //
 // THIS MODULE ALSO OWNS THE GVRAM'S PER-OPERATION COST (the acceptance period below): by
-// owner direction the machine's drawing pace is the specification for this device, and the
+// design decision the machine's drawing pace is the specification for this device, and the
 // constants are the Xe10 capture's own - see the GVRAM_PERIODS block.
 `default_nettype none
 
@@ -298,8 +298,8 @@ module pc9821_gvram_arb_ref #(
   // ---------------------------------------------------------------------------
   // GVRAM_PERIODS - the machine's per-operation drawing cost, as a TIME
   // ---------------------------------------------------------------------------
-  // OWNER-AUTHORIZED (lane gvram-latency-fix, 2026-09-25): for the GVRAM the standing
-  // r13/322 rule - "this hold is not a target to match; the machine's slow-VRAM figures are
+  // A DESIGN DECISION: for the GVRAM the standing
+  // rule - "this hold is not a target to match; the machine's slow-VRAM figures are
   // slow-VRAM artifacts, not a specification" - is REVERSED. The machine's drawing pace IS
   // the specification for this device, so the GVRAM's per-access cost is modelled from the
   // Xe10's own capture. The constants are the CAPTURE's, never our RTL's, and the address
@@ -344,18 +344,18 @@ module pc9821_gvram_arb_ref #(
   // and the walk (1 clk per write lane, 2 per read lane) is far inside every period, so a
   // stream measures the captured cost itself.
   //
-  // AN ISOLATED STORE'S READY IS STILL ITS OWN ACCEPT (r13/322's decouple): what this
+  // AN ISOLATED STORE'S READY IS STILL ITS OWN ACCEPT (the store decouple): what this
   // period bounds is the RATE the device takes accesses at, which is exactly what a
   // machine's posted write stalls on - the first store of a burst is not held, the burst's
   // sustained rate is the captured one.
   //
   // NOT MODELLED HERE (and why): the 0xA6 access-page switch (+1374 clk_sys/sprite in the
   // same capture) is an I/O-BUS cost, not a GVRAM plane access, and belongs to
-  // pc9821_iobus's class floors (a separate owner decision). The EGC's own backend requests are the
+  // pc9821_iobus's class floors (a separate decision). The EGC's own backend requests are the
   // ENGINE's produce steps: the
   // capture's EGC rows are gross-only with no matched control (the decoder's own note), so
   // no EGC-specific constant exists to charge them with and this seam does not invent one -
-  // that engine's pace is r13/269's pipeline, a separate seam.
+  // that engine's pace is its produce pipeline, a separate seam.
   localparam [15:0] GVRAM_RD_HOLD = 16'((SYS_CLOCK_HZ * 64'd478 + 64'd500_000_000) / 64'd1_000_000_000);
   localparam [15:0] GVRAM_WR_HOLD = 16'((SYS_CLOCK_HZ * 64'd142 + 64'd500_000_000) / 64'd1_000_000_000);
   localparam [15:0] GVRAM_GR_HOLD = 16'((SYS_CLOCK_HZ * 64'd104 + 64'd500_000_000) / 64'd1_000_000_000);
@@ -373,7 +373,7 @@ module pc9821_gvram_arb_ref #(
   //   * the EGC's requests are the ENGINE's own produce steps, not CPU accesses: the capture has
   //     no matched control for the EGC rows (the decoder's own note: they are gross-only), so no
   //     EGC-specific constant exists to charge them with, and this seam does not invent one. The
-  //     EGC's pace is its own pipeline (r13/269, a separate seam) and its requests neither arm nor
+  //     EGC's pace is its own pipeline (a separate seam) and its requests neither arm nor
   //     wait on this period.
   // The transaction's class, read in its ACCEPT cycle. The plain client's direction is its own
   // latch there (c_write_q is the access it presents), the GRCG's is its registered cl_write (a
@@ -502,7 +502,7 @@ module pc9821_gvram_arb_ref #(
           // takes it under the STROBE `cpu_line_resp_valid` - pc9821_memory_subsystem's line mux
           // selects it on `gvram_cpu_line_resp_valid`, pc9821_system registers data and strobe
           // together, and z486's caches consume it only in the `mem_line_resp_valid` arm
-          // (src/z486/l1_cache.sv:1021, src/z486/l1_icache.sv:760). AT THE STROBE EVERY LANE HOLDS
+          // (src/z486/l1_cache.sv:1131, src/z486/l1_icache.sv:731, `end else if (mem_line_resp_valid) begin`). AT THE STROBE EVERY LANE HOLDS
           // THIS ACCESS'S DATA: a line read walks C_VAL/C_WAIT writing lane
           // `{c_line_n[3:0], 3'b000}` for c_line_n = 0..15 - c_line_n is reset to 0 below, and
           // the only exit from C_WAIT is the 16th fill - so all 16 bytes have landed before
@@ -801,8 +801,8 @@ module pc9821_gvram_arb_ref #(
   wire burst_fits = cc_burst && cc_write && !m_mode;
 `ifdef VERILATOR
   // ---------------------------------------------------------------------------
-  // CROSS-MODULE INVARIANTS AS ASSERTIONS (gvram-arb review F5/F6 + data-race review
-  // F2/F3). Each check pins a contract that used to live in a comment only - the reviews
+  // CROSS-MODULE INVARIANTS AS ASSERTIONS. Each check pins a contract that
+  // used to live in a comment only - an audit
   // found the dispatch/done routing holds together through these invariants and nothing
   // asserted them. They cost nothing in synthesis (`ifdef VERILATOR`) and run in every
   // bench that builds this module. R8 of docs/single-cycle-event-discipline.md: a
@@ -814,10 +814,10 @@ module pc9821_gvram_arb_ref #(
     if (cc_burst && cc_write && !m_mode && (ef_wbe != 4'hF))
       $error("pc9821_gvram_arb: partial write burst (ef_wbe=%b) - the two-word path writes full words",
              ef_wbe);
-    // (1) A DONE IS BORN OF A TRANSACTION (gvram-arb F6.1, exact form): every `b_done_r`
+    // (1) A DONE IS BORN OF A TRANSACTION (exact form): every `b_done_r`
     //     cycle follows a cycle in which a transaction was in flight OR being accepted
     //     (`cc_ready` covers the one-lane walk and the no-op, whose done issues in their own
-    //     accept cycle). NB the F6.1 text states the stronger `b_done_r |-> any_inflight` at
+    //     accept cycle). NB the stronger form states `b_done_r |-> any_inflight` at
     //     the done CYCLE - that form is false for the EGC's posted write: its S_HOLD tail
     //     exits one cycle before the burst's done lands (the done is deliberately UNOBSERVED,
     //     req_acc cleared at the presentation and S_WR_B_ACC advancing on the accept), so the
@@ -825,33 +825,33 @@ module pc9821_gvram_arb_ref #(
     //     waits for. The wedge class that remains is a MASKED done with a waiter, pinned by
     //     (2) below.
     if (!reset && b_done_r && !txn_live_q)
-      $error("pc9821_gvram_arb: a done pulse with no transaction accepted or in flight the cycle before (F6.1)");
-    // (2) NO MASKED DONE WITH A WAITER (data-race F3's no-re-present rule): `cc_done =
+      $error("pc9821_gvram_arb: a done pulse with no transaction accepted or in flight the cycle before (check 1)");
+    // (2) NO MASKED DONE WITH A WAITER (the no-re-present rule): `cc_done =
     //     b_done_r && !cc_ready` deletes a completion when a request is accepted in the done
     //     cycle, so while any client is in flight awaiting that completion the two must not
     //     coincide or the waiting FSM (G_STW/G_TDW/S_WR_ACC/S_RD_RESP/C_MWAIT/C_WAIT) hangs
     //     forever. The unobserved posted-write done (nobody in flight) is the one masked pulse
     //     the design allows.
     if (!reset && b_done_r && cc_ready && any_inflight)
-      $error("pc9821_gvram_arb: a done masked by a same-cycle accept while a client is in flight - the waiting client wedges (data-race F3)");
-    // (3) NO ACCEPT MID-WALK (data-race F2's ordering premise): the posted EGC write
+      $error("pc9821_gvram_arb: a done masked by a same-cycle accept while a client is in flight - the waiting client wedges (check 2)");
+    // (3) NO ACCEPT MID-WALK (the ordering premise): the posted EGC write
     //     advances on its ACCEPT and has no write buffer to forward from, so read-after-
     //     write ordering rests on the array accepting no client until the walk drains.
     //     Structural in cc_ready's expression today; pinned so it stays so.
     if (!reset && cc_ready && ((gstate != G_IDLE) || m_mode))
-      $error("pc9821_gvram_arb: a client accepted mid-drain - the posted write's read-after-write ordering has no WCB to fall back on (data-race F2)");
-    // (4) THE BURST'S MERGE-REDUCTION PRECONDITION (gvram-arb F5): the two-word path
+      $error("pc9821_gvram_arb: a client accepted mid-drain - the posted write's read-after-write ordering has no WCB to fall back on (check 3)");
+    // (4) THE BURST'S MERGE-REDUCTION PRECONDITION: the two-word path
     //     writes cc_wdata2 raw and never consults gr_mask/gr_merge, so a GRCG RMW burst is
     //     legal only when the merge reduces to the tile - a 0xFF datum per presented word.
     //     The GRCG's pair test enforces exactly this today; if its burst classification
     //     ever loosens, this fires instead of planes being silently corrupted.
     if (!reset && cc_ready && cc_burst && cc_write && cc_owns_grcg && grcg_cl_rmw &&
         (grcg_cl_wdata != 32'hFFFF_FFFF))
-      $error("pc9821_gvram_arb: GRCG RMW burst with datum %08x - the burst path drops the merge, so a burst needs a 0xFF datum (F5)",
+      $error("pc9821_gvram_arb: GRCG RMW burst with datum %08x - the burst path drops the merge, so a burst needs a 0xFF datum (check 4)",
              grcg_cl_wdata);
   end
 
-  // (5) THE DECOUPLED-STORE OWNER-LATCH CONTRACT, first half (data-race F2/F3): the
+  // (5) THE DECOUPLED-STORE OWNER-LATCH CONTRACT, first half (checks 2 and 3): the
   //     in-flight owner latch must not follow the live cpu_write/gate drop mid-walk - a
   //     decoupled store's ready is seen by z486 the cycle the walk starts, so the CPU's
   //     request signals are already moving for the next access while this walk drains.
@@ -874,7 +874,7 @@ module pc9821_gvram_arb_ref #(
     end
   end
 
-  // (6) ... second half (gvram-arb F6.3): the arb latches the tile word and the lane
+  // (6) ... second half: the arb latches the tile word and the lane
   //     enables at the accept but reads the GRCG's `cl_rmw`/`cl_wbe`/`cl_wdata` LIVE into
   //     gr_mask/gr_emask/gr_d deep into the walk, so the GRCG must hold those from its
   //     capture until its own cl_done. It does (rmw_q/cl_wbe_r/cl_wdata_r held until the
@@ -893,7 +893,7 @@ module pc9821_gvram_arb_ref #(
       if (walk_gr && gr_walk_d &&
           ((grcg_cl_rmw != grcg_cl_rmw_d) || (grcg_cl_wbe != grcg_cl_wbe_d) ||
            (grcg_cl_wdata != grcg_cl_wdata_d)))
-        $error("pc9821_gvram_arb: the GRCG's cl_rmw/cl_wbe/cl_wdata moved mid-walk - it must hold them until its own cl_done (F6.3)");
+        $error("pc9821_gvram_arb: the GRCG's cl_rmw/cl_wbe/cl_wdata moved mid-walk - it must hold them until its own cl_done (check 6)");
       gr_walk_d       <= walk_gr;
       grcg_cl_rmw_d   <= grcg_cl_rmw;
       grcg_cl_wbe_d   <= grcg_cl_wbe;

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_EGC_REGS:
-// The EGC's register file and its GRCG back-compat gate, checked against NP2kai: the eight registers 0x04A0-0x04AE (access, fgbg, ope, fg, mask, bg, sft, leng) are write-only with 0xFF read-back, hold egc_reset()'s power-up values, drop every write while the EGC enable is clear, hold the mask register while 0x04A2's bits 13-14 are set, and re-arm the shifter on 0x04AC/0x04AE; then the GRCG-compat dispatch, where with the EGC gate clear the 0x7C/0x7E tile registers still own a plane-window store and with it set the EGC engine owns it instead, and where NP2kai's real gate (the EGC mode AND the GRCG CG-mode bit 7) keeps a store whose GRCG bit 7 is clear on the plain back-compat path - ASSERTED through the bench's own model of that AND (egc_disp_gate = egc_gate && grcg_cg, the same post-AND gate pc9821_system's gdc_egc_mem_gate forms). Section C is FAIL-FIRST for r13/324: a configuration write (0x4A6 fg) issued while an EGC op is still in flight must NOT change that op - the op uses the register image it was ACCEPTED with, exactly as NP2kai's atomic op does - and must still take effect on the NEXT op (latched at the accept, not dropped); it fails on the pre-change pc9821_egc, where the produce read the registers live and the in-flight op took the new fg.
+// The EGC's register file and its GRCG back-compat gate, checked against NP2kai: the eight registers 0x04A0-0x04AE (access, fgbg, ope, fg, mask, bg, sft, leng) are write-only with 0xFF read-back, hold egc_reset()'s power-up values, drop every write while the EGC enable is clear, hold the mask register while 0x04A2's bits 13-14 are set, and re-arm the shifter on 0x04AC/0x04AE; then the GRCG-compat dispatch, where with the EGC gate clear the 0x7C/0x7E tile registers still own a plane-window store and with it set the EGC engine owns it instead, and where NP2kai's real gate (the EGC mode AND the GRCG CG-mode bit 7) keeps a store whose GRCG bit 7 is clear on the plain back-compat path - ASSERTED through the bench's own model of that AND (egc_disp_gate = egc_gate && grcg_cg, the same post-AND gate pc9821_system's gdc_egc_mem_gate forms). Section C is FAIL-FIRST: a configuration write (0x4A6 fg) issued while an EGC op is still in flight must NOT change that op - the op uses the register image it was ACCEPTED with, exactly as NP2kai's atomic op does - and must still take effect on the NEXT op (latched at the accept, not dropped); it fails on the pre-change pc9821_egc, where the produce read the registers live and the in-flight op took the new fg.
 
 module tb_pc9821_egc_regs;
   reg clk = 0;
@@ -17,6 +17,7 @@ module tb_pc9821_egc_regs;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   // The declaration block matches pc9821_iobus's port list so `(.*)` binds every
   // port; the unused ones are parked exactly as tb_pc9821_iobus parks them.
   reg [31:0] cpu_addr = 0, cpu_din = 0;
@@ -52,6 +53,7 @@ module tb_pc9821_egc_regs;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -106,8 +108,14 @@ module tb_pc9821_egc_regs;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -123,6 +131,11 @@ module tb_pc9821_egc_regs;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) io (
       .ide_unit0_present(1'b0),.*);
 
@@ -147,9 +160,9 @@ module tb_pc9821_egc_regs;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(gv_din), .cpu_be(gv_be), .cpu_line_read(1'b0),
       .cpu_valid(gv_valid), .cpu_write(gv_write),
-      .cpu_dout(gv_dout), .cpu_line_dout(gv_line_dout),
+      .cpu_dout(gv_dout), .cpu_line_word(gv_line_dout),
       .cpu_ready(gv_ready), .cpu_resp_valid(gv_resp_valid),
-      .cpu_line_resp_valid(gv_line_resp_valid),
+      .cpu_line_word_valid(gv_line_resp_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_disp_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask), .egc_bg(egc_bg),
@@ -250,7 +263,7 @@ module tb_pc9821_egc_regs;
   task automatic gv_load(input [1:0] plane, input [14:0] off, output [31:0] d);
     begin
       // 0x7C = 0 before every plane read-back: with the GRCG armed at 0x80 the SAME
-      // plane-window read is NP2kai's memtcr tile-compare (r13/179), not the plane byte.
+      // plane-window read is NP2kai's memtcr tile-compare, not the plane byte.
       grcg_port(8'h7C, 8'h00);
       @(negedge clk);
       win_plane = plane; win_offset = off; gv_be = 4'hF;
@@ -556,8 +569,8 @@ module tb_pc9821_egc_regs;
     end
 
     // ---------------------------------------------------------------
-    // C. A configuration write during an in-flight op does NOT change that op (r13/324).
-    //    r13/322 releases the CPU at the accept (a WRITE's cpu_ready pulses in S_FEED), so the
+    // C. A configuration write during an in-flight op does NOT change that op.
+    //    The core releases the CPU at the accept (a WRITE's cpu_ready pulses in S_FEED), so the
     //    guest can execute `out 0x4A0..0x4AE` while the produce is still running. NP2kai's EGC
     //    op is one atomic memory access (memegc_wr* completes inside the CPU's access handler),
     //    so the op must use the register image it was ACCEPTED with and a later write belongs to

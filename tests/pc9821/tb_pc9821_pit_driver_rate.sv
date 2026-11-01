@@ -35,7 +35,7 @@ module tb_pc9821_pit_driver_rate;
 
   // ==== DUT ====
 
-  // The shipped profile's clock - pc9821_system.sv:247 (parameter SYS_FREQ = 50_000_000;) -
+  // The shipped profile's clock - pc9821_system.sv:310 (parameter SYS_FREQ = 50_000_000;) -
   // so the divider this bench measures is the one the machine builds.
   localparam integer SYS_HZ = 50_000_000;
   // The PIT's own input clock, as the references give it - never read out of the

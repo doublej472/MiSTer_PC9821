@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_WIDTH: the EGC's access-width handling (pc9821_egc.sv's word_unit/unit_lane/acc_be) against NP2kai's memegc_rd8/wr8, memegc_rd16/wr16 and memegc_rd32/wr32 (mem/memegc.c:1367-1423): an 8-bit access at each of the four byte lanes, a 16-bit unit at an even and at an odd lane start, the 32-bit access split into its low and high 16-bit units, and every non-zero byte-enable combination -- each driven as z486 presents it (a dword-aligned address with the operand's lanes ONLY in cpu_be: z486_pkg.sv:1121 calc_be / :1178 calc_be_first / :1194 calc_be_second) and compared byte for byte against a port of NP2kai's own decomposition of the same guest access, including its odd-address fallbacks (memegc_wr16/rd16 doing two byte operations; i386c/cpumem.c:1475 memp_write32 turning an odd dword into byte, word, byte). It covers the shifter only as an UNMOVED copy (sft = 0), where NP2kai's output is the source bytes, and it does not cover a moved shift, the ROP or the mask registers.
+// TB_PC9821_EGC_WIDTH: the EGC's access-width handling (pc9821_egc.sv's word_unit/unit_lane/acc_be) against NP2kai's memegc_rd8/wr8, memegc_rd16/wr16 and memegc_rd32/wr32 (mem/memegc.c:1367-1423): an 8-bit access at each of the four byte lanes, a 16-bit unit at an even and at an odd lane start, the 32-bit access split into its low and high 16-bit units, and every non-zero byte-enable combination -- each driven as z486 presents it (a dword-aligned address with the operand's lanes ONLY in cpu_be: z486_pkg.sv:1169 calc_be / :1226 calc_be_first / :1242 calc_be_second) and compared byte for byte against a port of NP2kai's own decomposition of the same guest access, including its odd-address fallbacks (memegc_wr16/rd16 doing two byte operations; i386c/cpumem.c:1475 memp_write32 turning an odd dword into byte, word, byte). It covers the shifter only as an UNMOVED copy (sft = 0), where NP2kai's output is the source bytes, and it does not cover a moved shift, the ROP or the mask registers.
 //
 // The mode is WS_CPU|SHIFT_CPU (ope = 0x0400) for the width cases and WS_CPU (0x0000) for the
 // read-back-through-the-shifter cases: a write stores the CPU's own bytes and a read returns the
@@ -15,7 +15,7 @@
 // set -- z486's calc_be* emits only the ten sets the section-4 loop classifies as reachable, and
 // the two apertures that carry the EGC window (0xA0000-0xBFFFF as VGA memory, 0xC0000-0xFFFFF as
 // the device aperture) are served DIRECTLY from those enables, with no store-queue or cache
-// coalescing behind them (z486/memory.sv:200-235).
+// coalescing behind them (z486's bus_unit direct path, `ext_direct_launch`).
 
 `default_nettype none
 
@@ -173,7 +173,7 @@ module tb_pc9821_egc_width;
   endtask
 
   // ==== STIMULUS: one bus cycle, in the shape z486 presents it ====
-  // The address is DWORD-ALIGNED (z486.sv:48 `addr` is [31:2], pc9821_system forms the guest
+  // The address is DWORD-ALIGNED (z486.sv:78 `output [31:2] addr`, pc9821_system forms the guest
   // address as {z_addr, 2'b00}), so the operand's lanes travel ONLY in cpu_be.
   task automatic cyc(input integer addr, input [1:0] plane, input [3:0] be,
                      input [31:0] din, input wr, output [31:0] dout);
@@ -187,7 +187,7 @@ module tb_pc9821_egc_width;
       cpu_write  = wr;
       cpu_valid  = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // The negedge below is the old release's own wait, kept so the +1 stays in the cadence.
@@ -205,7 +205,7 @@ module tb_pc9821_egc_width;
   endtask
 
   // A guest access as z486 emits it: one cycle, except the shapes whose operand crosses the dword
-  // (calc_be_first/calc_be_second, z486_pkg.sv:1178/:1194) which leave as two.
+  // (calc_be_first/calc_be_second, z486_pkg.sv:1226/:1242) which leave as two.
   task automatic g_byte(input integer o, input [7:0] v, input wr, output [31:0] dout);
     begin
       cyc(o, 2'd0, 4'b0001 << o[1:0], {24'd0, v} << {o[1:0], 3'b000}, wr, dout);
@@ -373,7 +373,7 @@ module tb_pc9821_egc_width;
     cmp_read("r16 @+0", BASE, 4'b0011, dout, 2'd0, 1'b1);
     case_verdict("w16/r16 lanes 0:1", m0, 1);
 
-    // (b) lanes 2:3 -- the same call at addr+2, the lane r13/32 fixed.
+    // (b) lanes 2:3 -- the same call at addr+2, the lane an earlier fix covered.
     m0 = mism;
     clear_win(BASE - 4, BASE + 12);
     ref_wr16(BASE + 2, 16'hD4C3);

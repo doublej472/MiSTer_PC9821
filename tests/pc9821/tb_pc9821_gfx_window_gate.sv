@@ -1,13 +1,13 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GFX_WINDOW_GATE: the GRCG/EGC engines' cpu_valid is gated by PLANE-WINDOW MEMBERSHIP, not only by the mode/direction owner decode (review grcg.md F1). With GRCG mode bit 7 armed (0x7C = 0x80), an ordinary CPU access OUTSIDE the plane windows (a 0x0000_1000 RAM store and a 0x0000_1000 RAM read) must NOT be captured as a GRCG op: no dbg_grcg_store pulse, no grcg_cl_valid, no GVRAM array write (the phantom TDW/RMW walk into (addr & 0x7FFF)), and the read must return the RAM backend's own data (a pattern from a behavioural backend answering 20 clk_sys after the accept) with NO early cpu_resp_valid carrying TCR garbage and exactly ONE response strobe (the pre-fix steal also left a spurious second strobe when the map's real response landed). The same pair runs with the EGC gate on (egc_enable), whose owner decode is a pure direction term: no dbg_egc_txn / egc_cl_valid / busy cycles for a RAM access. The plane-window case is the positive control and must be unchanged: an armed store to 0xA8000 still captures exactly once and lands the tile bytes in the array, and a TCR read of 0xA8000 still answers 0x0000_00FF (the tile-compare match byte) on the engine's own strobe with no backend traffic. FAIL-FIRST: on the pre-fix pc9821_memory_subsystem (the engines' cpu_valid gated by gvram_own_{grcg,egc} alone) sections 1/2/5/6 fail by name; the fix ANDs gvram_select into those two gates and every section passes.
+// TB_PC9821_GFX_WINDOW_GATE: the GRCG/EGC engines' cpu_valid is gated by PLANE-WINDOW MEMBERSHIP, not only by the mode/direction owner decode. With GRCG mode bit 7 armed (0x7C = 0x80), an ordinary CPU access OUTSIDE the plane windows (a 0x0000_1000 RAM store and a 0x0000_1000 RAM read) must NOT be captured as a GRCG op: no dbg_grcg_store pulse, no grcg_cl_valid, no GVRAM array write (the phantom TDW/RMW walk into (addr & 0x7FFF)), and the read must return the RAM backend's own data (a pattern from a behavioural backend answering 20 clk_sys after the accept) with NO early cpu_resp_valid carrying TCR garbage and exactly ONE response strobe (the pre-fix steal also left a spurious second strobe when the map's real response landed). The same pair runs with the EGC gate on (egc_enable), whose owner decode is a pure direction term: no dbg_egc_txn / egc_cl_valid / busy cycles for a RAM access. The plane-window case is the positive control and must be unchanged: an armed store to 0xA8000 still captures exactly once and lands the tile bytes in the array, and a TCR read of 0xA8000 still answers 0x0000_00FF (the tile-compare match byte) on the engine's own strobe with no backend traffic. FAIL-FIRST: on the pre-fix pc9821_memory_subsystem (the engines' cpu_valid gated by gvram_own_{grcg,egc} alone) sections 1/2/5/6 fail by name; the fix ANDs gvram_select into those two gates and every section passes.
 //
 // TB_PC9821_GFX_WINDOW_GATE: the GRCG/EGC engines' cpu_valid is gated by PLANE-WINDOW
 // MEMBERSHIP, not only by the mode/direction owner decode. With GRCG mode bit 7 armed
 // (0x7C = 0x80), an ordinary CPU access OUTSIDE the plane windows (0x0000_1000 RAM) must
 // NOT be captured as a GRCG op: the store must produce no dbg_grcg_store pulse and no
-// GVRAM array write (the phantom TDW/RMW walk into (addr & 0x7FFF) of review grcg.md F1),
+// GVRAM array write (the phantom TDW/RMW walk into (addr & 0x7FFF)),
 // and the read must come back from the RAM backend and NOT as an early cpu_resp_valid
 // carrying TCR garbage (which also left a spurious second strobe when the map's real
 // response landed). The same pair is asserted with the EGC gate on (egc_enable): the EGC's
@@ -58,12 +58,11 @@ module tb_pc9821_gfx_window_gate;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
@@ -97,6 +96,8 @@ module tb_pc9821_gfx_window_gate;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   wire       grcg_expand;
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
   reg        scan_enable = 0;
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
@@ -152,6 +153,7 @@ module tb_pc9821_gfx_window_gate;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -229,7 +231,7 @@ module tb_pc9821_gfx_window_gate;
     if (dbg_grcg_store) grcg_store_pulses = grcg_store_pulses + 1;
     if (dbg_egc_txn)    egc_txn_pulses    = egc_txn_pulses    + 1;
     if (dut.u_gmem.a_en && dut.u_gmem.a_we) gmem_writes = gmem_writes + 1;
-    if (dut.grcg_cl_valid) grcg_cl_cycles = grcg_cl_cycles + 1;
+    if (dut.u_gvram_arb.grcg_cl_valid) grcg_cl_cycles = grcg_cl_cycles + 1;   // the arbiter's rebuilt cl_valid
     if (dut.egc_cl_valid)  egc_cl_cycles  = egc_cl_cycles  + 1;
     if (dut.grcg_dbg_busy) grcg_busy_cycles = grcg_busy_cycles + 1;
     if (dut.egc_dbg_busy)  egc_busy_cycles  = egc_busy_cycles  + 1;

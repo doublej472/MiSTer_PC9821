@@ -170,7 +170,7 @@ module tb_pc9821_win0_device_class;
       // The real paging unit drives this from the demand itself (paging_unit.sv:513:
       // `early_idx_drive || pretrans_present || req_mem_present || ...`), so a demand always owns
       // the preread over a VIPT probe. Tying it to 1'b0 makes the core's own invariant fire
-      // (l1_cache.sv:589, "L1 pipelined store accepted without preread priority") on ANY cacheable
+      // (l1_cache.sv:797, "L1 pipelined store accepted without preread priority") on ANY cacheable
       // store, so this bench aborted there instead of running its checks. Same repair as
       // tb_pc9821_cpu_vram_coherency and tb_pc9821_dma_flush_coherency.
       .dcache_req_preread_priority(cpu_valid),
@@ -191,7 +191,7 @@ module tb_pc9821_win0_device_class;
       .dcache_vipt_probe_valid(1'b0), .dcache_vipt_probe_offset(12'h0),
       .dcache_vipt_probe_ready(), .dcache_vipt_probe_accepted(),
       .dcache_vipt_probe_direct_accepted(),
-      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0),
+      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
       .dcache_vipt_resolve_hit(), .dcache_vipt_resolve_data(),
       .x87_req_selected(), .x87_req_accepted(1'b0), .x87_req_complete(1'b0),
       .x87_read_complete(1'b0), .x87_rdata(32'h0),

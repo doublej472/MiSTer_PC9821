@@ -1,8 +1,8 @@
-// tb_pc9821_ata_bankwindow — the 0x0432 bank window covers the task file's SIDE
+// tb_pc9821_ata_bankwindow - the 0x0432 bank window covers the task file's SIDE
 // EFFECTS and the data port, not only the values they answer with.
 //
 // The machine's window is measured in the write direction (the machine's probe results,
-// "ATA and the task file": on the owner's Xe10, whose disk is a CF card in the CD connector,
+// "ATA and the task file": on the probed Xe10, whose disk is a CF card in the CD connector,
 // 0x0432 = 0x00 floats the whole block and 0x0432 = 0x01 answers; the core's layout is fixed
 // with the hard disk on bank 0, so here 0x00 answers and 0x01 floats) and asserted for the read values and the task-file writes by
 // tb_pc9821_ata_blockmap. This bench covers what was left running at ANY bank:

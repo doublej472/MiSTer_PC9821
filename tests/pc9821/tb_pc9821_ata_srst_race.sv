@@ -1,10 +1,10 @@
-// tb_pc9821_ata_srst_race — an SRST write colliding with the one-shot block_done
-// completion pulse must not wedge the drive in X_DRAIN (review ata-ide.md F1).
+// tb_pc9821_ata_srst_race - an SRST write colliding with the one-shot block_done
+// completion pulse must not wedge the drive in X_DRAIN.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// An SRST write to 0x074C landing in the same clk_sys cycle as the one-shot block_done completion pulse must not wedge the drive: the drain/prefetch/X_WAIT_BLOCK/X_WAIT_WRITE handlers run before the task-file write handler and retire the pulse, so the SRST arm's block_in_flight test sees the pre-consumption state and parks in X_DRAIN to wait for a completion that never recurs (review ata-ide.md F1). The collision is driven in every consuming state - X_DRAIN, X_WAIT_WRITE, X_PIO_READ with a prefetch in flight, X_WAIT_BLOCK with sectors_left 1 and > 1, and against the SRST deassert write - and after the pair's deassert the drive must reach X_IDLE with BSY clear and the post-diagnostic signature within a bounded number of cycles, then still accept the next command.
+// An SRST write to 0x074C landing in the same clk_sys cycle as the one-shot block_done completion pulse must not wedge the drive: the drain/prefetch/X_WAIT_BLOCK/X_WAIT_WRITE handlers run before the task-file write handler and retire the pulse, so the SRST arm's block_in_flight test sees the pre-consumption state and parks in X_DRAIN to wait for a completion that never recurs. The collision is driven in every consuming state - X_DRAIN, X_WAIT_WRITE, X_PIO_READ with a prefetch in flight, X_WAIT_BLOCK with sectors_left 1 and > 1, and against the SRST deassert write - and after the pair's deassert the drive must reach X_IDLE with BSY clear and the post-diagnostic signature within a bounded number of cycles, then still accept the next command.
 //
 // A guest write to 0x074C (SRST) landing in the SAME clk_sys cycle as the one-shot
 // `block_done` pulse retires that completion in the SAME cycle the SRST arm parks the
@@ -203,7 +203,7 @@ module tb_pc9821_ata_srst_race;
   // X_IDLE with BSY clear and the post-diagnostic signature (READY|DSC, error 0x01)
   // within a bounded number of cycles - and then accept and issue the next command.
   //
-  // THE SIGNATURE'S WARRANT (review benches N2): error 0x01 is the ATA-1 DIAGNOSTIC
+  // THE SIGNATURE'S WARRANT: error 0x01 is the ATA-1 DIAGNOSTIC
   // SIGNATURE - after a reset (including the post-SRST reset) device 0 reports 0x01 in
   // the error register = "device 0 passed its self-test" (ATA-1 X3T10/2008D, EXECUTE
   // DEVICE DIAGNOSTIC / the reset device-0 signature; the same value tb_pc9821_ata_regs

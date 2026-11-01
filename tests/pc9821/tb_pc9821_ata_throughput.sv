@@ -3,7 +3,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The steady-state DOS file-read pipeline priced per cycle through the real pc9821_ata and pc9821_block_io with a parameterised HPS host model, for 32-sector reads at an insw cadence (one 16-bit word per 6 clk_sys + loop/INT overhead) under three cadences (one READ SECTORS, one READ MULTIPLE, a per-sector-command loop) x latency {0, 50, 200, 4600} x stream cost {1, 8} clk/word: every cycle is sorted into the per-word PIO handshake, the guest's inter-sector gap, the command's block-fetch stall or the mid-stream read-ahead stall, and the run reports clk/sector and KB/s at 50 MHz. It pins that a streaming read is DRAIN-bound even at r13/68's 4600-clk HPS latency (under 3000 clk/sector where a handshake-per-512-byte adapter is fetch-bound at 4856 (4600 + the sector's 256-word handshake, the bench's own arithmetic)), and that the interrupt cadence stays NP2kai's (one per sector for READ SECTORS, one per block for READ MULTIPLE) with every word byte-exact.
+// The steady-state DOS file-read pipeline priced per cycle through the real pc9821_ata and pc9821_block_io with a parameterised HPS host model, for 32-sector reads at an insw cadence (one 16-bit word per 6 clk_sys + loop/INT overhead) under three cadences (one READ SECTORS, one READ MULTIPLE, a per-sector-command loop) x latency {0, 50, 200, 4600} x stream cost {1, 8} clk/word: every cycle is sorted into the per-word PIO handshake, the guest's inter-sector gap, the command's block-fetch stall or the mid-stream read-ahead stall, and the run reports clk/sector and KB/s at 50 MHz. It pins that a streaming read is DRAIN-bound even at the measured 4600-clk HPS latency (under 3000 clk/sector where a handshake-per-512-byte adapter is fetch-bound at 4856 (4600 + the sector's 256-word handshake, the bench's own arithmetic)), and that the interrupt cadence stays NP2kai's (one per sector for READ SECTORS, one per block for READ MULTIPLE) with every word byte-exact.
 //
 // The steady-state DOS file-read pipeline measured end to end -- the real pc9821_ata task
 // file and PIO serializer, the real pc9821_block_io adapter, and a parameterised HPS host
@@ -17,7 +17,7 @@
 // where the guest outruns the read-ahead. Three cadences (one multi-sector READ SECTORS,
 // one READ MULTIPLE with a negotiated block, and the per-sector-command loop whose gap
 // carries the next command's task-file setup) cross a latency sweep (0/50/200 clk, the
-// realistic band, and 4600, r13/68's measured HPS round-trip bound) and two stream costs
+// realistic band, and 4600, the measured HPS round-trip bound) and two stream costs
 // (1 clk/word ideal, 8 clk/word "two uncached ARM stores per word"). The verdict is
 // effective KB/s at 50 MHz; the bounds pin that a streaming read is DRAIN-bound (the
 // backend's per-handshake latency amortised over the read-ahead window) rather than
@@ -451,7 +451,7 @@ module tb_pc9821_ata_throughput;
     scenario(0, 200, 1, 8'd1);
     scenario(1, 200, 1, 8'd8);
     scenario(2, 200, 1, 8'd1);
-    // the measured HPS bound (r13/68: up to ~4600 clk per block round trip) and its
+    // the measured HPS bound (up to ~4600 clk per block round trip) and its
     // pessimistic twin where the ARM spends 8 clk_sys per word on uncached stores
     scenario(0, 4600, 1, 8'd1);
     scenario(1, 4600, 1, 8'd8);
@@ -460,7 +460,7 @@ module tb_pc9821_ata_throughput;
     scenario(1, 4600, 8, 8'd8);
     scenario(2, 4600, 8, 8'd1);
 
-    // ==== bounds: what this lane is about ====
+    // ==== bounds: what this bench is about ====
     // At the measured HPS latency a streaming read must be DRAIN-bound (the per-word PIO
     // handshake is the bottleneck), not fetch-bound: one handshake per 512 bytes caps the
     // stream at (4600 + 256*w)/sector = 4856 clk at w=1. The read-ahead window amortises

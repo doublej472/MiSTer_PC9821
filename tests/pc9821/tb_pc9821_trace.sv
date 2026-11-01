@@ -35,7 +35,7 @@ module tb_pc9821_trace;
   // The font port, the other requester into the same SDRAM controller. Driven to 1 in one scenario
   // so the field is proved to carry its own value and not just mirror the flags beside it.
   reg         ctx_fmem_valid = 1'b0;
-  // The freeze request (pc9821_system trace_trig, the INT21 arena-error pulse). Scenario 5.
+  // The freeze request (pc9821_system trace_trig: a drawing burst's end or a page flip). Scenario 5.
   reg         trig = 1'b0;
 
   wire [7:0]  out_byte;

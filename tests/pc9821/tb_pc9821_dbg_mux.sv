@@ -6,8 +6,7 @@
 // The bench carries its own record-length table, written from the record definitions (the CD log's
 // 4-byte header plus payload; pc9821_gdc_log; pc9821_dbg_cpu), not read from the DUT, and the
 // sources are synthetic, so a wrong length in the DUT's table splits a record and fails on a
-// POSITION. The mutant check in the lane's report: a mux whose table is one byte short for any
-// of the types fails here.
+// POSITION: a mux whose table is one byte short for any of the types fails here.
 
 `default_nettype none
 

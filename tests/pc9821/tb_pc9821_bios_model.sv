@@ -24,7 +24,7 @@
 // this bench pins WHICH byte each set answers and tb_pc9821_bios_select pins WHEN the
 // set may change (mid-run flips move nothing until the next reset).
 //
-// WHY THE SET FIELD IS NOT status[5]. It was, until r13/318: status[5] and status[6]
+// WHY THE SET FIELD IS NOT status[5]. It was, once: status[5] and status[6]
 // already drive the DDR framebuffer's BGR/RGB and 1555/565 format (z486_mister.sv
 // fb_fmt[4:3]), so selecting the Xe set silently flipped BGR->RGB in every framebuffer
 // video mode. The field moved to O[31:28]. That collision is a TOP-LEVEL SOURCE-TEXT fact
@@ -32,13 +32,13 @@
 // lives in tools/check_osd_contract.py; this bench pins the strap LUT the wiring feeds.
 //
 // WHAT IT ALSO PINS: the switch is NARROW. 0xF1 (open bus 0xFF) and 0xF2 (the A20 read,
-// 0xFF in the masked power-on state - it tracks the latch per NP2kai cpuio_if2, review
-// iobus-tram F6, and that dependence is tb_pc9821_iobus's case) are read beside 0xF0 and
+// 0xFF in the masked power-on state - it tracks the latch per NP2kai cpuio_if2, and
+// that dependence is tb_pc9821_iobus's case) are read beside 0xF0 and
 // must be identical for every set, so a change that moved another port's answer with the
 // set would fail here.
 //
 // THE MANIFEST'S CLAIM, word for word (one line, so the checker's whitespace-normalised match sees it):
-// The Machine field reaches port 0xF0's four-bit machine-ID strap LUT and nowhere else: set 0 (the config-less default) reads the MEASURED PC-9821Xe10 strap 0xA9, set 1 (PC-9821Xe) reads 0x89 (the same byte with bit 5 clear, the branch the Xe ITF needs to shadow the option ROM), and the reserved sets 2..15 read the measured Xe10 0xA9, while the neighbouring 0xF1 and 0xF2 straps stay put for every set (0xF1 open bus 0xFF; 0xF2 is the A20 read and answers 0xFF, its masked power-on state, tracking the latch per NP2kai cpuio_if2 as tb_pc9821_iobus pins). The set field is O[31:28], NOT the status[5]/status[6] pair the DDR framebuffer's fb_fmt assignment read until that descriptor was deleted (r13/334 A1) - the r13/318 reason the field moved; the OSD contract gate's field-disjointness check lives in tools/check_osd_contract.py. Without a non-Xe10 answer the authentic Xe set never runs its IDE option ROM (ATA cmds=0) and the guest runs away.
+// The Machine field reaches port 0xF0's four-bit machine-ID strap LUT and nowhere else: set 0 (the config-less default) reads the MEASURED PC-9821Xe10 strap 0xA9, set 1 (PC-9821Xe) reads 0x89 (the same byte with bit 5 clear, the branch the Xe ITF needs to shadow the option ROM), and the reserved sets 2..15 read the measured Xe10 0xA9, while the neighbouring 0xF1 and 0xF2 straps stay put for every set (0xF1 open bus 0xFF; 0xF2 is the A20 read and answers 0xFF, its masked power-on state, tracking the latch per NP2kai cpuio_if2 as tb_pc9821_iobus pins). The set field is O[31:28], NOT the status[5]/status[6] pair the DDR framebuffer's fb_fmt assignment read until that descriptor was deleted - the reason the field moved; the OSD contract gate's field-disjointness check lives in tools/check_osd_contract.py. Without a non-Xe10 answer the authentic Xe set never runs its IDE option ROM (ATA cmds=0) and the guest runs away.
 
 `timescale 1ns/1ps
 

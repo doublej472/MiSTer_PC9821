@@ -7,7 +7,7 @@
 // (!reset && cpu_run && !hps_apply_reset && cpu_reset_count == 0) with two defects.
 //
 // It released the CPU without asking whether the SDRAM could answer it. A platform reset re-runs
-// the controller's JEDEC initialisation (src/memory/sdram.v:606-608 forces INIT and busy_buf
+// the controller's JEDEC initialisation (src/memory/sdram.v:1903-1905 `state_n = INIT;` with busy_buf_n
 // high) and it then spends ~200 us calibrating. A core reload hides that because the pack
 // download holds cpu_run low for seconds; an OSD reset does not, because pc9821_rom_loader keeps
 // rom_ready deliberately so the pack is not re-downloaded - so the CPU came out of reset 15
@@ -81,7 +81,7 @@ module tb_pc9821_cpu_reset_gate;
   initial begin
     power_on();
 
-    // CHECK 1 - THE SDRAM TERM, and the reason this lane exists. The pack is present and the
+    // CHECK 1 - THE SDRAM TERM, and the reason this bench exists. The pack is present and the
     // CPU would otherwise be released after HOLD cycles, but the SDRAM is still initialising.
     // The CPU must stay in reset for the whole of it. The old expression released it here, so
     // this is the check that fails against the defect.

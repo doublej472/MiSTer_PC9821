@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Kevin Coleman. From https://github.com/birdybro/SDRAMsim_MiSTer.
+// MIT licence text: NOTICE, part 6.
+
 `timescale 1ns/1ps
 
 // =============================================================================
@@ -54,6 +58,19 @@
 //   3. A burst that runs out no longer forces dq_oe low in the time step of the capture edge of
 //      its previous beat (a race that lost words of any BL>=2 read); the idle branch releases
 //      the bus tHZ later, as for a single read.
+// LOCAL FIXES 4-7 (PC-9821 core). They add CHECKS the upstream model lacks, against the
+// AS4C32M16SB datasheet (Alliance, Rev 1.4, Table 16; the PDF is not vendored):
+//   4. GRADE: the wrapper selects the Table 16 column, -6 (the upstream default, the parts the
+//      XSDS board carries) or -7 (the slowest part of the supported set, docs/sdram.md), for
+//      both chips: tRC/tRFC 60/63, tRCD/tRP 18/21, tRRD/tMRD 12/14, tWR 12/14, tRAS 42, tCK at
+//      CL3 6/7, tCH/tCL 2/2.5 ns.
+//   5. tMRD from a MODE REGISTER SET to ANY following command (upstream checked MRS-to-MRS).
+//   6. tRAS for both auto-precharge forms. The datasheet promises no tRAS lockout, so the
+//      implied precharge begins where its command descriptions put it - one clock (the burst
+//      length) after a READ with auto-precharge, tWR after a WRITE with auto-precharge's data -
+//      and that point must be tRAS after the ACT (upstream deferred the precharge instead).
+//   7. tRP before AUTO REFRESH and MODE REGISTER SET: every bank's precharge must have completed
+//      (upstream checked only that no bank was open).
 // -----------------------------------------------------------------------------
 
 // Simulation-only. Not synthesizable.
@@ -63,7 +80,8 @@ module xsds_128mbyte_sdram_model #(
     parameter bit DEBUG               = 1'b0,
     parameter bit STRICT_TIMING       = 1'b1,
     parameter bit WARN_TREFI          = 1'b1,
-    parameter bit INIT_UNWRITTEN_TO_X = 1'b1
+    parameter bit INIT_UNWRITTEN_TO_X = 1'b1,
+    parameter int GRADE               = 6        // LOCAL FIX 4: the Table 16 column, 6 or 7
 ) (
     input  wire        Clk,
 
@@ -84,6 +102,15 @@ module xsds_128mbyte_sdram_model #(
     inout  wire [15:0] Dq
 );
 
+    // LOCAL FIX 4: the speed grade (AS4C32M16SB datasheet Rev 1.4, Table 16, ns).
+    localparam realtime G_TRC  = (GRADE == 7) ? 63.0 : 60.0;   // tRC = tRFC
+    localparam realtime G_TRCD = (GRADE == 7) ? 21.0 : 18.0;   // tRCD = tRP
+    localparam realtime G_TRRD = (GRADE == 7) ? 14.0 : 12.0;   // tRRD = tMRD = tWR
+    localparam realtime G_TCK3 = (GRADE == 7) ?  7.0 :  6.0;   // tCK at CL3
+    localparam realtime G_TCHL = (GRADE == 7) ?  2.5 :  2.0;   // tCH = tCL
+    initial if ((GRADE != 6) && (GRADE != 7))
+        $fatal(1, "xsds_128mbyte_sdram_model: GRADE %0d: Table 16 has -6 and -7 only", GRADE);
+
     // CKE is tied to VCC on the XSDS board.
     wire chip_cke = 1'b1;
 
@@ -101,7 +128,18 @@ module xsds_128mbyte_sdram_model #(
         .DEBUG               (DEBUG),
         .STRICT_TIMING       (STRICT_TIMING),
         .WARN_TREFI          (WARN_TREFI),
-        .INIT_UNWRITTEN_TO_X (INIT_UNWRITTEN_TO_X)
+        .INIT_UNWRITTEN_TO_X (INIT_UNWRITTEN_TO_X),
+        // LOCAL FIX 4: the speed grade's Table 16 column
+        .tRC_MIN             (G_TRC),
+        .tRFC_MIN            (G_TRC),
+        .tRCD_MIN            (G_TRCD),
+        .tRP_MIN             (G_TRCD),
+        .tRRD_MIN            (G_TRRD),
+        .tMRD_MIN            (G_TRRD),
+        .tWR_MIN             (G_TRRD),
+        .tCK_CL3_MIN         (G_TCK3),
+        .tCH_MIN             (G_TCHL),
+        .tCL_MIN             (G_TCHL)
     ) u_chip0 (
         .Clk   (Clk),
         .Cke   (chip_cke),
@@ -121,7 +159,18 @@ module xsds_128mbyte_sdram_model #(
         .DEBUG               (DEBUG),
         .STRICT_TIMING       (STRICT_TIMING),
         .WARN_TREFI          (WARN_TREFI),
-        .INIT_UNWRITTEN_TO_X (INIT_UNWRITTEN_TO_X)
+        .INIT_UNWRITTEN_TO_X (INIT_UNWRITTEN_TO_X),
+        // LOCAL FIX 4: the speed grade's Table 16 column
+        .tRC_MIN             (G_TRC),
+        .tRFC_MIN            (G_TRC),
+        .tRCD_MIN            (G_TRCD),
+        .tRP_MIN             (G_TRCD),
+        .tRRD_MIN            (G_TRRD),
+        .tMRD_MIN            (G_TRRD),
+        .tWR_MIN             (G_TRRD),
+        .tCK_CL3_MIN         (G_TCK3),
+        .tCH_MIN             (G_TCHL),
+        .tCL_MIN             (G_TCHL)
     ) u_chip1 (
         .Clk   (Clk),
         .Cke   (chip_cke),
@@ -492,6 +541,8 @@ module as4c32m16sb_6tin_chip_model #(
     realtime last_read      [BANKS];
 
     realtime last_any_activate;
+    realtime fix6_last_edge = -1.0e30;   // LOCAL FIX 6: the previous Clk posedge
+    realtime fix6_tck       = 0.0;       // LOCAL FIX 6: the measured clock period
     realtime last_refresh;
     realtime last_mrs;
     realtime last_self_refresh_exit;
@@ -1193,6 +1244,13 @@ module as4c32m16sb_6tin_chip_model #(
 
                 bank_open[bank] = 1'b0;
 
+                // LOCAL FIX 6: WRITE with auto-precharge - the precharge begins tWR after this
+                // data, with no tRAS lockout (the deferral below stays for the tRP stamp).
+                if (auto_from_write && (($realtime + tWR_MIN) - last_activate[bank] < tRAS_MIN)) begin
+                    issue_error($sformatf("tRAS bank %0d ACT-to-auto-precharge (WRITE) violation: delta=%0.3f ns, required=%0.3f ns",
+                                          bank, ($realtime + tWR_MIN) - last_activate[bank], tRAS_MIN));
+                end
+
                 if (is_auto) begin
                     // Real silicon defers the implied PRECHARGE so that
                     // both tRAS (from ACT) and tWR (from last write) are
@@ -1233,6 +1291,14 @@ module as4c32m16sb_6tin_chip_model #(
 
             if (!bank_open[bank]) begin
                 issue_error($sformatf("READ to inactive bank %0d", bank));
+            end
+
+            // LOCAL FIX 6: READ with auto-precharge - the precharge begins one clock (the
+            // burst length) after this command, with no tRAS lockout.
+            if (auto_precharge && (fix6_tck > 0.0) &&
+                (($realtime + fix6_tck * burst_length) - last_activate[bank] < tRAS_MIN)) begin
+                issue_error($sformatf("tRAS bank %0d ACT-to-auto-precharge (READ) violation: delta=%0.3f ns, required=%0.3f ns",
+                                      bank, ($realtime + fix6_tck * burst_length) - last_activate[bank], tRAS_MIN));
             end
 
             check_time_min("tCCD READ/WRITE-to-READ",
@@ -1367,6 +1433,13 @@ module as4c32m16sb_6tin_chip_model #(
                            last_refresh,
                            tRFC_MIN);
 
+            // LOCAL FIX 7: every bank's precharge has completed (tRP) before the refresh.
+            for (int i = 0; i < BANKS; i++) begin
+                check_time_min($sformatf("tRP bank %0d PRE-to-AUTO_REFRESH", i),
+                               last_precharge[i],
+                               tRP_MIN);
+            end
+
             record_refresh();
 
             // JEDEC init order is PRE-ALL -> 2 AREF -> MRS. Only count
@@ -1452,6 +1525,10 @@ module as4c32m16sb_6tin_chip_model #(
         int unsigned col;
         bit auto_precharge;
         bit precharge_all;
+
+        // LOCAL FIX 6: this clock's period (the READ-with-auto-precharge check's one clock).
+        if (fix6_last_edge > -1.0e20) fix6_tck = $realtime - fix6_last_edge;
+        fix6_last_edge = $realtime;
 
         // Setup checks: every command / address pin must have been stable
         // for at least tIS_MIN before this edge. Gated on init_seen_cke_high
@@ -1623,6 +1700,11 @@ module as4c32m16sb_6tin_chip_model #(
 
         check_init_before_normal_cmd(cmd);
 
+        // LOCAL FIX 5: tMRD from a MODE REGISTER SET to ANY following command.
+        if ((cmd != CMD_NOP) && (cmd != CMD_DESL) && (cmd != CMD_MRS)) begin
+            check_time_min("tMRD MRS-to-command", last_mrs, tMRD_MIN);
+        end
+
         unique case (cmd)
             CMD_DESL,
             CMD_NOP: begin
@@ -1677,6 +1759,13 @@ module as4c32m16sb_6tin_chip_model #(
                 check_time_min("tMRD MRS-to-MRS/command",
                                last_mrs,
                                tMRD_MIN);
+
+                // LOCAL FIX 7: every bank's precharge has completed (tRP) before the MRS.
+                for (int i = 0; i < BANKS; i++) begin
+                    check_time_min($sformatf("tRP bank %0d PRE-to-MRS", i),
+                                   last_precharge[i],
+                                   tRP_MIN);
+                end
 
                 load_mode_register(Addr);
                 last_mrs      = $realtime;

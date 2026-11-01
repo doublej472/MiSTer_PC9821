@@ -1,0 +1,24 @@
+{
+  "fast_paths_only": true,
+  "unthrottled_only": true,
+  "asm": "tb_load_use_bypass.asm",
+  "start_mode": "protected",
+  "cr0": "0x80000001",
+  "cr3": 0,
+  "eip": 0,
+  "cycles": 100000,
+  "sim_plusargs": ["expect_vipt_ea_interlock"],
+  "seg_cache": {
+    "CS": { "base": "0x10000", "limit": "0xfffff", "flags": "0xa9e0" },
+    "DS": { "base": "0x20000000", "limit": "0xfffff", "flags": "0x29e0" },
+    "SS": { "base": "0x30000000", "limit": "0xfffff", "flags": "0x29e0" },
+    "ES": { "base": "0x20000000", "limit": "0xfffff", "flags": "0x29e0" },
+    "FS": { "base": 0, "limit": "0xfffff", "flags": "0x29e0" },
+    "GS": { "base": 0, "limit": "0xfffff", "flags": "0x29e0" }
+  },
+  "page_tables": [
+    ["0x00010000", "0x00010000", 16, "RW"],
+    ["0x20000000", "0x00020000", 8, "RW"],
+    ["0x30000000", "0x00060000", 16, "RW"]
+  ]
+}

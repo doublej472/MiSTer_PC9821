@@ -65,18 +65,33 @@ module gpr_write_merge
     input  logic [2:0]   dst_shift,
     input  logic [1:0]   size_shift,
     input  logic [31:0]  data_shift,
+    // Producer 0's hit per GPR byte [r*4 + b], registered by the caller:
+    // v_shift && byte b of register dst_norm(0) in be_of_size(size_shift, dst_shift[2]).
+    input  logic [31:0]  hit_shift,
+    // Producer 0's AH lane select, registered by the caller on the edges
+    // size_shift/dst_shift change: (size_shift == 0) && dst_shift[2] whenever
+    // the token is visible, else 0 (tests/equiv/producer_ah_reg.v).  It feeds
+    // pv0's lane-1 choice so the size/dst decode is not in front of the merge.
+    input  logic         ah_shift,
 
     // Producer 1: deferred memory (hardwired load) token.
     input  logic         v_mem,
     input  logic [2:0]   dst_mem,
     input  logic [1:0]   mode_mem,      // EA_FWD_BLO / _BHI / _W / _D
     input  logic [31:0]  data_mem,      // OPR_R
+    // Producer 1's hit per GPR byte [r*4 + b], registered by the caller:
+    // v_mem && byte b of register dst_norm(1) in be_of_mode(mode_mem).
+    input  logic [31:0]  hit_mem,
 
     // Producer 2: interrupt-entry ROM writeback slot.
     input  logic         v_rom,
     input  logic [2:0]   dst_rom,
     input  logic [1:0]   size_rom,
     input  logic [31:0]  data_rom,      // OPR_R
+    // Producer 2's AH lane select, formed by the caller from its registered
+    // size decode and destination: (size_rom == 0) && dst_rom[2] every cycle.
+    // It feeds pv2's lane-1 choice so no size compare is in front of the merge.
+    input  logic         ah_rom,
 
     // Producer 3: direct-load write-back.
     input  logic         v_wb,
@@ -90,9 +105,21 @@ module gpr_write_merge
     // M3 ALU's add/logic result (and its EFLAGS.CF carry-in) on the commit path
     // only takes it off every forwarding cone, where it was never selected.
     input  logic [31:0]  fwd_wb,
+    // Producer 3's view hit per GPR byte [r*4 + b], registered by the caller
+    // with the write-back: v_wb && !wb_is_alu && byte b of register r in its
+    // lanes (the hit3 && !wb_is_alu below, fused against it).
+    input  logic [31:0]  hitv3_wb,
+    // Producer 3's AH lane select, registered by the caller beside dst_wb/
+    // size_wb: (size_wb == 0) && dst_wb[2] every cycle
+    // (tests/equiv/producer_ah_reg.v).  It feeds pv3f's lane-1 choice so the
+    // vipt_load_wb_size_r/dst_r decode is not in front of the view merge.
+    input  logic         ah_wb,
 
     // Producer 4: delay-slot bypass (views only).
     input  logic         v_dly,
+    // Producer 4's byte lanes per GPR [r*4 + b], registered by the caller:
+    // byte b of register dst_norm(4) in be_of_mode(mode_dly) (en4 below).
+    input  logic [31:0]  lanes_dly,
     input  logic [2:0]   dst_dly,
     input  logic [1:0]   mode_dly,
     input  logic [31:0]  data_dly,
@@ -137,7 +164,34 @@ module gpr_write_merge
     input  logic [2:0]   cap_sel_a,
     input  logic [2:0]   cap_sel_b,
     output logic [31:0]  cap_a_value,
-    output logic [31:0]  cap_b_value
+    output logic [31:0]  cap_b_value,
+
+    // The EA view for two SELECTED registers (the D2 base and index reads),
+    // value-identical to ea_value[sel*32 +: 32] and built the same way as the
+    // capture ports, so an ea_value left unread by the consumer is dropped.
+    input  logic [2:0]   ea_sel_a,
+    input  logic [2:0]   ea_sel_b,
+    output logic [31:0]  ea_a_value,
+    output logic [31:0]  ea_b_value,
+
+    // The EX view for five SELECTED registers (data_unit's dynamic operand
+    // reads: the DSTREG/SRCREG full and byte-pair registers and the IRF
+    // register), value-identical to ex_value[sel*32 +: 32] but merged after
+    // the register is chosen, so a late producer (the load write-back's
+    // vipt_load_wb_data_r, OPR_R) passes one merge LUT instead of the
+    // per-register merge followed by the 8:1 register mux (C4/C4x: pv3f ->
+    // ex_value -> Mux -> byte format -> shifter/ALU).  The hits are the
+    // caller's registered ones indexed by the select, like ea_select's lanes.
+    input  logic [2:0]   ex_sel_a,
+    input  logic [2:0]   ex_sel_b,
+    input  logic [2:0]   ex_sel_c,
+    input  logic [2:0]   ex_sel_d,
+    input  logic [2:0]   ex_sel_e,
+    output logic [31:0]  ex_a_value,
+    output logic [31:0]  ex_b_value,
+    output logic [31:0]  ex_c_value,
+    output logic [31:0]  ex_d_value,
+    output logic [31:0]  ex_e_value
 );
 
 localparam logic [7:0] VIS_COMMIT = 8'h0F;   // shift, mem, rom, wb
@@ -246,18 +300,71 @@ function automatic logic [31:0] producer_value(input int step);
     endcase
 endfunction
 
-// One aligned value per producer, computed once.  Quartus 17 cannot part-select
-// the result of a function call, so the values are named wires.
-wire [31:0] pv0 = producer_value(0);
-wire [31:0] pv1 = producer_value(1);
-wire [31:0] pv2 = producer_value(2);
-wire [31:0] pv3 = producer_value(3);
-wire [31:0] pv4 = producer_value(4);
-wire [31:0] pv5 = producer_value(5);
-wire [31:0] pv6 = producer_value(6);
-wire [31:0] pv7 = producer_value(7);
+// The producer values the merge selects.  Every consumer takes byte b of a
+// producer only in that producer's own lanes (producer_lane: the views and the
+// capture merge under its hit, the commit and pulse values only where their
+// wmask is set), and within its lanes align_of_size/align_of_mode is the
+// datum's own byte b except lane 1 of an AH-type write (the low byte moved up).
+// So each value passes lanes 0, 2 and 3 straight through and selects lane 1
+// alone, and no size/mode decode is in front of the other lanes; the stos,
+// sigsrc and ESP producers are never AH-type and pass their datum unchanged.
+// tests/equiv/producer_lane_align.v proves both forms equal in every owned
+// lane; the reference chains below merge the fully aligned producer_value.
+function automatic logic [31:0] lane_of(input logic ah, input logic [31:0] data);
+    lane_of = {data[31:16], ah ? data[7:0] : data[15:8], data[7:0]};
+endfunction
+// Quartus 17 cannot part-select the result of a function call, so the values
+// are named wires.
+// The AH lane selects (the size==0 && dst[2] term of lane_of) are the caller's
+// registered flags for the shift token, the ROM slot and the write-back view,
+// so their size/dst decode is not in front of the merge.  The other producers'
+// selects stay a decode of the live (already registered) size/mode fields.
+wire [31:0] pv0 = lane_of(ah_shift, data_shift);
+wire [31:0] pv1 = lane_of(mode_mem == EA_FWD_BHI, data_mem);
+wire [31:0] pv2 = lane_of(ah_rom, data_rom);
+wire [31:0] pv3 = lane_of((size_wb == 2'd0) && dst_wb[2], data_wb);
+wire [31:0] pv4 = lane_of(mode_dly == EA_FWD_BHI, data_dly);
+wire [31:0] pv5 = data_stos;
+wire [31:0] pv6 = data_sigsrc;
+wire [31:0] pv7 = data_esp;
 // Producer 3 as the views see it (see fwd_wb): equal to pv3 wherever hitv3.
-wire [31:0] pv3f = align_of_size(size_wb, dst_wb[2], fwd_wb);
+wire [31:0] pv3f = lane_of(ah_wb, fwd_wb);
+// synthesis translate_off
+wire [31:0] pv3f_aligned = align_of_size(size_wb, dst_wb[2], fwd_wb);
+always_comb begin : producer_lane_fuse
+    for (int k = 0; k < 8; k++) begin
+        logic [31:0] pvk;
+        logic [3:0]  lanes;
+        case (k)
+            0: pvk = pv0; 1: pvk = pv1; 2: pvk = pv2; 3: pvk = pv3;
+            4: pvk = pv4; 5: pvk = pv5; 6: pvk = pv6; default: pvk = pv7;
+        endcase
+        lanes = producer_lane(k);
+        for (int bb = 0; bb < 4; bb++)
+            if (producer_valid(k) && lanes[bb] &&
+                (pvk[bb*8 +: 8] !== producer_value(k)[bb*8 +: 8]))
+                $fatal(1, "GPR MERGE PRODUCER %0d LANE %0d: %02x, aligned %02x", k, bb,
+                       pvk[bb*8 +: 8], producer_value(k)[bb*8 +: 8]);
+    end
+    for (int bb = 0; bb < 4; bb++)
+        if (v_wb && producer_lane(3)[bb] && (pv3f[bb*8 +: 8] !== pv3f_aligned[bb*8 +: 8]))
+            $fatal(1, "GPR MERGE PV3F: lane %0d %02x, aligned %02x", bb,
+                   pv3f[bb*8 +: 8], pv3f_aligned[bb*8 +: 8]);
+end
+
+// The registered AH lane selects must equal the size/dst decode of the
+// producers they belong to (tests/equiv/producer_ah_reg.v): the shift token's
+// only where it is visible, the ROM slot's and the write-back's every cycle,
+// so pv0/pv2/pv3f are bit-identical to the live-form lane_of.
+always_comb begin : producer_ah_fuse
+    if (ah_shift !== (v_shift && (size_shift == 2'd0) && dst_shift[2]))
+        $fatal(1, "GPR MERGE AH SHIFT %b is not the visible shift token's", ah_shift);
+    if (ah_rom !== ((size_rom == 2'd0) && dst_rom[2]))
+        $fatal(1, "GPR MERGE AH ROM %b is not the ROM slot's", ah_rom);
+    if (ah_wb !== ((size_wb == 2'd0) && dst_wb[2]))
+        $fatal(1, "GPR MERGE AH WB %b is not the write-back's", ah_wb);
+end
+// synthesis translate_on
 
 // The capture-view merge for one selected register: the same terms in the same
 // order as byte_cap below, with the register comparison folded into each hit.
@@ -284,6 +391,72 @@ endfunction
 assign cap_a_value = cap_select(cap_sel_a);
 assign cap_b_value = cap_select(cap_sel_b);
 
+// The EA view's merge for one selected register: the terms of byte_ea below in
+// the same order, with the register comparison folded into each hit.
+function automatic logic [31:0] ea_select(input logic [2:0] sel);
+    logic [3:0] en [8];
+    logic [31:0] ev;
+    logic [31:0] pvs [8];
+    pvs[0] = pv0; pvs[1] = pv1; pvs[2] = pv2; pvs[3] = pv3f;
+    pvs[4] = pv4; pvs[5] = pv5; pvs[6] = pv6; pvs[7] = pv7;
+    for (int k = 0; k < 8; k++)
+        en[k] = (dst_norm(k) == sel) ? producer_lane(k) : 4'h0;
+    // Producer 4 takes the caller's registered lanes (hit4 in g_reg), so the
+    // delay-slot dst/mode decode stays off the base/index path (the timing cut
+    // that registered lanes_dly); equal to the decode under the HIT4 fuse.
+    en[4] = lanes_dly[sel*4 +: 4];
+    ev = cur[sel*32 +: 32];
+    for (int bb = 0; bb < 4; bb++) begin
+        for (int k = 0; k < 8; k++) begin
+            if (vis_ea[k] && producer_valid(k) && en[k][bb] &&
+                !((k == 3) && wb_is_alu))
+                ev[bb*8 +: 8] = pvs[k][bb*8 +: 8];
+        end
+    end
+    ea_select = ev;
+endfunction
+
+assign ea_a_value = ea_select(ea_sel_a);
+assign ea_b_value = ea_select(ea_sel_b);
+
+// The EX view's merge for one selected register: the terms of byte_ex below in
+// the same order, each hit the per-register one byte_ex uses (the registered
+// hit_shift / hit_mem / hitv3_wb / lanes_dly bits, the decoded rest) indexed
+// by sel.
+function automatic logic [31:0] ex_select(input logic [2:0] sel);
+    logic [3:0] en [8];
+    logic [3:0] hv [8];
+    logic [31:0] xv;
+    logic [31:0] pvs [8];
+    pvs[0] = pv0; pvs[1] = pv1; pvs[2] = pv2; pvs[3] = pv3f;
+    pvs[4] = pv4; pvs[5] = pv5; pvs[6] = pv6; pvs[7] = pv7;
+    for (int k = 0; k < 8; k++)
+        en[k] = (dst_norm(k) == sel) ? producer_lane(k) : 4'h0;
+    hv[0] = hit_shift[sel*4 +: 4];
+    hv[1] = hit_mem[sel*4 +: 4];
+    hv[2] = v_rom ? en[2] : 4'h0;
+    hv[3] = hitv3_wb[sel*4 +: 4];
+    hv[4] = v_dly ? lanes_dly[sel*4 +: 4] : 4'h0;
+    hv[5] = v_stos ? en[5] : 4'h0;
+    hv[6] = v_sigsrc ? en[6] : 4'h0;
+    hv[7] = v_esp ? en[7] : 4'h0;
+    xv = cur[sel*32 +: 32];
+    for (int bb = 0; bb < 4; bb++) begin
+        // lowest priority first, so a later (younger, higher-priority) hit wins
+        for (int k = 0; k < 8; k++) begin
+            if (vis_ex[k] && hv[k][bb])
+                xv[bb*8 +: 8] = pvs[k][bb*8 +: 8];
+        end
+    end
+    ex_select = xv;
+endfunction
+
+assign ex_a_value = ex_select(ex_sel_a);
+assign ex_b_value = ex_select(ex_sel_b);
+assign ex_c_value = ex_select(ex_sel_c);
+assign ex_d_value = ex_select(ex_sel_d);
+assign ex_e_value = ex_select(ex_sel_e);
+
 genvar r, b;
 generate
 for (r = 0; r < 8; r++) begin : g_reg
@@ -300,16 +473,43 @@ for (r = 0; r < 8; r++) begin : g_reg
     for (b = 0; b < 4; b++) begin : g_byte
         // `forwarding` selects the view enable of the write-back: an M3 ALU
         // result is committed but never forwarded.
-        wire hit0 = v_shift && en0[b];
-        wire hit1 = v_mem   && en1[b];
+        wire hit0 = hit_shift[r*4 + b];
+        // synthesis translate_off
+        always_comb
+            if (hit0 !== (v_shift && en0[b]))
+                $fatal(1, "GPR MERGE HIT0: reg %0d byte %0d registered %b, decoded %b",
+                       r, b, hit0, v_shift && en0[b]);
+        // synthesis translate_on
+        wire hit1 = hit_mem[r*4 + b];
+        // synthesis translate_off
+        always_comb
+            if (hit1 !== (v_mem && en1[b]))
+                $fatal(1, "GPR MERGE HIT1: reg %0d byte %0d registered %b, decoded %b",
+                       r, b, hit1, v_mem && en1[b]);
+        // synthesis translate_on
         wire hit2 = v_rom   && en2[b];
         wire hit3 = v_wb    && en3[b];
-        wire hit4 = v_dly   && en4[b];
+        wire hit4 = v_dly && lanes_dly[r*4 + b];
+        // synthesis translate_off
+        always_comb
+            if (hit4 !== (v_dly && en4[b]))
+                $fatal(1, "GPR MERGE HIT4: reg %0d byte %0d registered %b, decoded %b",
+                       r, b, hit4, v_dly && en4[b]);
+        // synthesis translate_on
         wire hit5 = v_stos  && en5[b];
         wire hit6 = v_sigsrc && en6[b];
         wire hit7 = v_esp   && en7[b];
 
-        wire hitv3 = hit3 && !wb_is_alu;
+        // The views' producer-3 hit is the caller's registered decode: the
+        // size compare, the register decode and !wb_is_alu are not in front
+        // of the view muxes (C4/C4x: vipt_load_wb_size_r/dst_r -> hitv3).
+        wire hitv3 = hitv3_wb[r*4 + b];
+        // synthesis translate_off
+        always_comb
+            if (hitv3 !== (hit3 && !wb_is_alu))
+                $fatal(1, "GPR MERGE HITV3: reg %0d byte %0d registered %b, decoded %b",
+                       r, b, hitv3, hit3 && !wb_is_alu);
+        // synthesis translate_on
 
         // commit_value/pulse_value are defined ONLY in the lanes their wmask sets: the one
         // consumer (data_unit's commit_merged) writes a byte lane only under its mask bit, and
@@ -400,7 +600,7 @@ function automatic logic [31:0] ref_chain(input int rr, input logic [7:0] vis,
         d32 = 32'd0;
         for (int bb = 0; bb < 4; bb++) begin
             be[8*bb +: 8]  = {8{hit_of(step, rr, bb, forwarding)}};
-            d32[8*bb +: 8] = (forwarding && step == 3) ? pv3f[bb*8 +: 8]
+            d32[8*bb +: 8] = (forwarding && step == 3) ? pv3f_aligned[bb*8 +: 8]
                                                        : producer_value(step)[bb*8 +: 8];
         end
         if (vis[step])
@@ -436,6 +636,27 @@ always_comb begin : merge_equiv_fuse
         if (ex_value[rr*32 +: 32] !== ref_chain(rr, vis_ex, 1'b1))
             $fatal(1, "GPR MERGE EX VIEW MISMATCH reg %0d: %08x vs chain %08x",
                    rr, ex_value[rr*32 +: 32], ref_chain(rr, vis_ex, 1'b1));
+        if ((rr == int'(ea_sel_a)) && (ea_a_value !== ref_chain(rr, vis_ea, 1'b1)))
+            $fatal(1, "GPR MERGE SELECTED EA A MISMATCH reg %0d: %08x vs chain %08x",
+                   rr, ea_a_value, ref_chain(rr, vis_ea, 1'b1));
+        if ((rr == int'(ea_sel_b)) && (ea_b_value !== ref_chain(rr, vis_ea, 1'b1)))
+            $fatal(1, "GPR MERGE SELECTED EA B MISMATCH reg %0d: %08x vs chain %08x",
+                   rr, ea_b_value, ref_chain(rr, vis_ea, 1'b1));
+        if ((rr == int'(ex_sel_a)) && (ex_a_value !== ex_value[rr*32 +: 32]))
+            $fatal(1, "GPR MERGE SELECTED EX A MISMATCH reg %0d: %08x vs view %08x",
+                   rr, ex_a_value, ex_value[rr*32 +: 32]);
+        if ((rr == int'(ex_sel_b)) && (ex_b_value !== ex_value[rr*32 +: 32]))
+            $fatal(1, "GPR MERGE SELECTED EX B MISMATCH reg %0d: %08x vs view %08x",
+                   rr, ex_b_value, ex_value[rr*32 +: 32]);
+        if ((rr == int'(ex_sel_c)) && (ex_c_value !== ex_value[rr*32 +: 32]))
+            $fatal(1, "GPR MERGE SELECTED EX C MISMATCH reg %0d: %08x vs view %08x",
+                   rr, ex_c_value, ex_value[rr*32 +: 32]);
+        if ((rr == int'(ex_sel_d)) && (ex_d_value !== ex_value[rr*32 +: 32]))
+            $fatal(1, "GPR MERGE SELECTED EX D MISMATCH reg %0d: %08x vs view %08x",
+                   rr, ex_d_value, ex_value[rr*32 +: 32]);
+        if ((rr == int'(ex_sel_e)) && (ex_e_value !== ex_value[rr*32 +: 32]))
+            $fatal(1, "GPR MERGE SELECTED EX E MISMATCH reg %0d: %08x vs view %08x",
+                   rr, ex_e_value, ex_value[rr*32 +: 32]);
         if (ea_value[rr*32 +: 32] !== ref_chain(rr, vis_ea, 1'b1))
             $fatal(1, "GPR MERGE EA VIEW MISMATCH reg %0d: %08x vs chain %08x",
                    rr, ea_value[rr*32 +: 32], ref_chain(rr, vis_ea, 1'b1));

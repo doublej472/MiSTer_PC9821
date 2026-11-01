@@ -867,7 +867,7 @@ cleanup:
 /* ------------------------------------------------------------------ */
 /* artic_read: EAX = the 24-bit free-running counter (307200 Hz).       */
 /* The high byte is at 005F: 005D and 005E mirror cnt[15:8], so a read */
-/* of 005E would inflate every delta ~513x (r13/207).                   */
+/* of 005E would inflate every delta ~513x.                             */
 /* ------------------------------------------------------------------ */
 artic_read:
     push    dx

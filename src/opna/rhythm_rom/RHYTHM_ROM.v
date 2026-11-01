@@ -4,9 +4,10 @@
 // THIS FILE IS OURS, not vendor code. Upstream PC88_MiSTer ships a Quartus
 // megafunction-wizard wrapper for the same module, whose `init_file` is
 // Yamaha's 8 KiB rhythm sample image (bass drum, snare, top cymbal, hi hat,
-// tom, rim). This repository commits no copyrighted data (README.md, "No
-// copyrighted data is committed"), so the image is deliberately ABSENT from
-// the tree and arrives as a user-supplied runtime file instead.
+// tom, rim). This repository commits no copyrighted data (README.md,
+// "Licensing": "No NEC, Yamaha or other copyrighted firmware is included"), so
+// the image is deliberately ABSENT from the tree and arrives as a
+// user-supplied runtime file instead.
 //
 // AN ALL-ZERO IMAGE IS NOT SILENCE. It was believed to be ("the ROM reads as
 // all-zero ADPCM codes, which the decoder turns into silence"), and a pack
@@ -53,9 +54,8 @@
 // ---------------------------------------------------------------------------
 // The pack-loader write port (now wired)
 //
-// The samples come from the ROM pack, exactly as the font does: bulk data the
-// CPU never reads, so it lives in SDRAM like the BIOS and the ANK font
-// (README.md "Prefer SDRAM over block RAM"), not committed in the tree.
+// The samples come from the ROM pack, exactly as the font does: a runtime file
+// the user supplies, not committed in the tree (README.md, "Licensing").
 // `tools/build_pack.py` writes the region at:
 //
 //     pack offset 0x49000, 8192 bytes

@@ -19,7 +19,7 @@
 //
 // WHY THE TWO PATHS STILL COEXIST. The media-present data path answers in the result
 // phase, NP2kai's shape (fdcsend_success7/error7, io/fdc.c:98-158); the no-media answer is
-// still the old deferred completion - the command runs, claims its drive, and its ST0
+// the deferred completion - the command runs, claims its drive, and its ST0
 // arrives through SENSE INTERRUPT STATUS - because changing its SHAPE would change every
 // existing, bench-pinned no-media answer in this tree in one go. WHAT IS NO LONGER
 // DEFERRED IS THE CLASS: the ST0 those commands leave is NP2kai's own per-state value now
@@ -34,7 +34,19 @@
 // controller behind two port windows and the 0x00BE strap (chgreg bit 0, exported
 // as `strap_2hd`) selects which window answers, which IRQ the completion goes to
 // (11 vs 10) and which DMA channel carries it (2 vs 3). See pc9821_iobus for the
-// gate and the routing, and `win_2dd` below for the one per-window byte. MSR bits:
+// gate and the routing, and `win_2dd` below for the one per-window byte.
+// THE INACTIVE WINDOW reads 0xFF: NP2kai io/fdc.c fdc_i90 `if (((port >> 4) ^ fdc.chgreg) & 1)
+// { return(0xff); }`, and the machine agrees - docs/probes/FDMODE-XE10.TXT `PORT 00C8=FF` with the
+// 1 MB interface selected. (MAME maps its one uPD765 at both windows with the mode check left as
+// a TODO, pc9801.cpp `map(0x00c8, 0x00cb).m(m_fdc_2hd, ...)`; outranked by the capture.) With
+// 0x00BE bit 2 = the FDD-mode switch (`dip_fixed`, below). FIXED (1): the BIOS POST does NOT
+// initialise the 640 KB window while bit 0 selects the 1 MB one (BANK7@0x7CAE: bit 2 set and
+// bit 0 set -> [0x501] bit 7, clear on this machine -> skip), so no MSR wait at 0xC8 happens,
+// IRQ10 stays masked, and INT 1Bh DA/UA 0x7x answers AH = 0x40 at its IRQ10 check
+// (BANK7@0x74D3) - the measured unit's own answer (FDMODE-XE10.TXT `SENSE DA=70 AH=40 CF=1`).
+// AUTO (0): POST initialises the 640 KB window too (BANK7@0x7736, IRQ10 unmasked at 0x7761),
+// so a 2DD boot disk that calls INT 1Bh with DA/UA 0x70 is served.
+// MSR bits:
 // 7 RQM, 6 DIO, 5 NDM, 4 CB, 3:0 the per-drive busy bits -- the byte is
 // NP2kai's fdc.status verbatim (fdc_i90, io/fdc.c:1035-1043); the firmware
 // polls bit 4 then tests (MSR & 0xC0) == 0x80 to write.
@@ -66,6 +78,13 @@ module pc9821_fdc #(
 ) (
     input  wire       clk,
     input  wire       reset,
+    // THE FDD-MODE SWITCH, read back as 0x00BE/0x00BF bit 2: 1 = Fixed, 0 = Auto-Detection.
+    // Both settings exist on the machine: MAME pc9801.cpp fdc_mode_r `(m_dsw3->read() & 3) << 2`
+    // with DSW3:1 "FDD Fix Mode" (Fixed / Auto-Detection); the measured unit is set to Fixed
+    // (docs/probes/FDMODE-XE10.TXT `PORT 00BE=FF`), NP2kai's fdc_ibe reads Auto (bit 2 = 0).
+    // A switch is sampled by POST, so the input is latched on reset only (dip_fixed_q): a
+    // change applies at the next machine reset, never under the running firmware.
+    input  wire       dip_fixed,
     input  wire       cs,
     input  wire [2:0] addr,   // 0 = 0x90 MSR, 1 = 0x92 data, 2 = 0x94 DOR, 3 = 0x04BE 1.44M/RPM, 4 = 0x00BE/0x00BF channel group
     input  wire       wr,
@@ -73,16 +92,14 @@ module pc9821_fdc #(
     input  wire [7:0] din,
     output reg  [7:0] dout,
     output reg        irq,
-    // THE COMMAND-RESULT DRAIN, one cycle (memmap-audit-ramroute P1-1's FDC leg).
+    // THE COMMAND-RESULT DRAIN, one cycle.
     // Pulsed when the guest reads the LAST byte of a command's result phase - the
-    // command's final event, and the flush trigger's anchor for transfers that end
-    // WITHOUT a DMA terminal count (the EOT end leaves the uPD71071's count
-    // unexhausted, so pc9821_dmac's mem_tc never fires for it). It is anchored here
-    // rather than at the completion IRQ because the sector bytes' FINAL memory write
-    // is still inside the DMAC pipeline when the command ends (the same ordering
-    // dev_tc/mem_tc split above): the result drain is seven guest I/O reads later,
-    // so every write of the command has long been accepted. One consumer: the
-    // cache-flush trigger in pc9821_iobus.
+    // command's final event. It was the cache-flush trigger's anchor for transfers
+    // that end WITHOUT a DMA terminal count (the EOT end leaves the uPD71071's count
+    // unexhausted, so pc9821_dmac's mem_tc never fires for it); the per-write DMA
+    // snoop (T24) replaced that, so pc9821_iobus now keeps the output on a retired
+    // wire and nothing consumes it. Kept (not deleted) so the event stays observable
+    // and a future consumer has the same anchor.
     output wire       res_done,
     // WHICH PORT WINDOW this access arrived at: 1 = the 2DD bank at 0xC8/0xCA/0xCC,
     // 0 = the 2HD one at 0x90/0x92/0x94 (or either windowless register, 0x04BE and
@@ -130,8 +147,24 @@ module pc9821_fdc #(
     output wire       media_req,      // one-cycle: start the request named below
     output wire       media_req_hdr,  // 1 = the sector HEADER at media_idx (READ ID)
     output wire [1:0] media_unit,
+    // THE SECTOR'S ID (media_c/media_h, with media_r/media_n) AND THE TRACK IT IS LOOKED FOR ON
+    // (media_tc/media_hd) ARE SEPARATE. NP2kai locates a sector on the physical track
+    // `(fdc.treg[fdc.us] << 1) + fdc.hd` (fdd_d88.c fdd_read_d88 `trkseek(fdd, (fdc.treg[...`)
+    // and matches the header against the COMMAND's C/H (searchsector_d88 `->c == fdc.C`,
+    // `->h == fdc.H`), so a medium whose ID C/H differ from its physical cylinder/side is read
+    // where the head is, not where the ID says.
     output wire [7:0] media_c,
     output wire [7:0] media_h,
+    output wire [7:0] media_tc,       // the physical cylinder: the drive's track register
+    output wire       media_hd,       // the physical side: the command's HD bit
+    // THE COMMAND'S RECORDING MODE, MF (bit 6 of the opcode byte; 1 = MFM): NP2kai's
+    // `fdc.mf = fdc.cmd & 0x40` (io/fdc.c get_mtmfsk), which the medium checks - an FM command
+    // finds no sector on an MFM medium. The BIOS boot tries FM first and retries MFM on ND.
+    output wire       media_mf,
+    // THE MEDIA MODE the medium is read in: the 0x00BE register's bit 1 (NP2kai CTRL_FDMEDIA,
+    // io/fdc.c fdc_obe) and the unit's 0x04BE rpm bit (fdc.rpm[us]); see pc9821_fdd_media req_2hd.
+    output wire       media_2hd,
+    output wire       media_rpm,
     output wire [7:0] media_r,
     output wire [7:0] media_n,
     output wire [7:0] media_idx,
@@ -195,6 +228,7 @@ module pc9821_fdc #(
   reg [2:0]  st;
   reg [4:0]  cmd;
   reg        cmd_mt;           // the command byte's MT (bit 7), for READ DATA's walk
+  reg        cmd_mf;           // the command byte's MF (bit 6): 1 = MFM (NP2kai get_mtmfsk)
   reg [3:0]  param_left;
   reg [2:0]  p_idx;            // parameters received for the command in flight
   reg [7:0]  cmds [0:7];       // the parameter bytes, NP2kai's fdc.cmds[]
@@ -226,6 +260,14 @@ module pc9821_fdc #(
   // path and SEEK move it, and ST3's T0 bit reports treg == 0 (:277-281), so the
   // no-media answers the probe subset pinned are unchanged.
   reg [7:0]  treg [0:3];
+  // NP2kai's fdc_lasttreg[us] (io/fdc.c:21 `static int fdc_lasttreg[4]`): the track register
+  // as the last SEEK left it (FDC_Seek :850 `fdc_lasttreg[fdc.us] = fdc.treg[fdc.us];`). READ
+  // DATA and WRITE DATA replace treg with the command's C ONLY when it differs
+  // (:301-303/:435-437 `if (fdc_lasttreg[fdc.us] != fdc.treg[fdc.us]) { fdc.treg[fdc.us] =
+  // fdc.C;`), so after a SEEK the head stays on the seeked cylinder whatever ID C the command
+  // names. NOT the datasheet uPD765 (whose READ DATA never moves PCN): the reference's own
+  // provisional rule, followed as the primary reference and recorded as such.
+  reg [7:0]  lasttreg [0:3];
   reg [7:0]  crcn;             // READ ID's per-track header ordinal (fdd_d88.c:494-552)
 
   // 0x04BE, the 1.44M/RPM register (NP2kai io/fdc.c:1117-1134): the write keeps the
@@ -236,7 +278,8 @@ module pc9821_fdc #(
 
   // 0x00BE/0x00BF, the FDD channel-group register (NP2kai fdc_obe/fdc_ibe,
   // io/fdc.c:1096-1114): the write stores the byte (its bit 1 selects 2HD vs 2DD
-  // media) and the read answers (chgreg & 3) | 0xF8 - DOS's FDD driver reads the
+  // media) and the read answers (chgreg & 3) | 0xF8 | dip_fixed << 2 (0xFC with the FDD-mode
+  // switch at Fixed, 0xF8 at Auto; the A_CHGREG read) - DOS's FDD driver reads the
   // 2HD/2DD media strap here. Reset is NP2kai fdc_reset's `fdc.chgreg = 3`.
   // fdc_ibe reads back only bits 1:0 (NP2kai io/fdc.c:1202); bit 2 gates the insert's ready
   // interrupt (fdd/diskdrv.c:239, `ai_gate` below); bits 7:3 carry no behaviour.
@@ -281,8 +324,9 @@ module pc9821_fdc #(
   localparam [2:0] X_IDLE  = 3'd0,  // no data command in flight
                    X_REQ   = 3'd1,  // a media request is being issued / awaited
                    X_XFER  = 3'd2,  // the sector's bytes are moving
-                   X_WEND  = 3'd3;  // a WRITE sector's bytes are in: wait for the medium to
+                   X_WEND  = 3'd3,  // a WRITE sector's bytes are in: wait for the medium to
                                     // have written it, then take FDC_WriteData's next step
+                   X_NDW   = 3'd4;  // the sector is not there: search until the 2nd index pulse
   reg [2:0]  x_st;
   reg        x_isid;          // the request in flight is a READ ID header
   // THE WRITE COMMAND'S STATE (Stage B). x_wr: the command in flight is WRITE DATA / WRITE
@@ -306,9 +350,30 @@ module pc9821_fdc #(
   reg        x_hd;
   reg [7:0]  x_c, x_h, x_r, x_n, x_eot;
   reg        x_mt;
+  reg        x_mf;             // the data command's MF bit, carried to the medium (media_mf)
   reg [7:0]  x_idx;
   reg [15:0] x_left;          // bytes still owed in THIS sector
   reg        x_req_sent;      // this request's `req` pulse has gone out
+  reg        nd_idx;          // X_NDW: the first index pulse of the search has passed
+
+  // THE SPINDLE'S INDEX HOLE, a free-running revolution of the selected drive: 360 rpm on the
+  // 1 MB interface (1.2 MB media) unless the unit's 0x04BE rpm bit selects 300 rpm (1.44 MB),
+  // and 300 rpm on the 640 KB interface (NP2kai io/fdc.c fdc_o4be `fdc.rpm[...]`; the 3-mode
+  // drive's two spindle speeds). The period is real time (SYS_CLOCK_HZ cycles per second), so
+  // a clk_sys change cannot move it. Both drives are taken as one spindle phase: only one unit
+  // is selected at a time and the search starts at an arbitrary angle either way.
+  // idx_pulse is a one-cycle strobe with one consumer, the X_NDW arm.
+  localparam integer REV_360 = SYS_CLOCK_HZ / 6;     // 1/6 s per revolution
+  localparam integer REV_300 = SYS_CLOCK_HZ / 5;     // 1/5 s per revolution
+  localparam integer REV_W   = $clog2(REV_300);
+  reg  [REV_W-1:0] spin;
+  wire             idx_pulse = (spin == {REV_W{1'b0}});
+  wire             spin_360  = strap_2hd && !rpm[x_us];
+  always @(posedge clk) begin
+    if (reset)          spin <= REV_W'(REV_360 - 1);
+    else if (idx_pulse) spin <= spin_360 ? REV_W'(REV_360 - 1) : REV_W'(REV_300 - 1);
+    else                spin <= spin - 1'b1;
+  end
 
   // The machine's FDD strap: two drives, units 0 and 1. The BIOS's probe
   // recalibrates all FOUR units (BANK7 0xFF6CC -> 0xFF22B, `inc bl; cmp bl,4`) and
@@ -321,12 +386,12 @@ module pc9821_fdc #(
     drive_equipped = (u < FDD_DRIVES);
   endfunction
 
-  // AN EQUIPPED DRIVE WITH NO DISKETTE IS PRESENT (NP2kai, owner decision 2026-10-08).
+  // AN EQUIPPED DRIVE WITH NO DISKETTE IS PRESENT (NP2kai).
   // NP2kai's FDC_Recalibrate gives every equipped-but-empty drive SE|NR = 0x28|u
   // (io/fdc.c:613-621), which the BIOS's present test reads as PRESENT because it looks only
   // at the IC bits (`BANK7 0xFF716`: `test byte [0x564+unit*8],0xC0` -> `or [0x55C],al`), so
   // both drives mark and [0x55C] = 0x03. The Xe10 captures read 0x01
-  // (docs/probes/itf-paired-7287bed6/*/D2{COLD,WARM}.TXT), but the owner reports drive 1 was
+  // (docs/probes/itf-paired-7287bed6/*/D2{COLD,WARM}.TXT), but drive 1 was
   // UNPOWERED when they were taken, so they measure a dead drive, not the machine; an earlier
   // model copied them (unit 1 answering the IC0 class when empty). A capture with both drives
   // powered is todo item 59.
@@ -385,7 +450,7 @@ module pc9821_fdc #(
   // guest's forced-ready strap (`fdc.ctrlreg & 0x40`, io/fdc.c:367). Every command's
   // answer below is a function of these.
   wire [3:0] drv_equipped = (4'd1 << FDD_DRIVES) - 4'd1;  // units 0..FDD_DRIVES-1
-  // ---- THE READY CHANGE, NP2kai's diskdrv.c (owner, 2026-10-08: replicate it) ------------
+  // ---- THE READY CHANGE, NP2kai's diskdrv.c, replicated ---------------------------------
   // NP2kai's media change is diskdrv_setfddex (fdd/diskdrv.c:256-284), called for an insert
   // (with a file) and an eject (fname NULL) alike, on an equipped drive:
   //   * fdd_eject(drv), then `fdc.stat[drv] = FDCRLT_AI | FDCRLT_NR | drv; fdc.us = drv;
@@ -477,7 +542,12 @@ module pc9821_fdc #(
   assign media_req_hdr = x_isid || x_fmt;
   assign media_unit    = x_us;
   assign media_c       = x_isid ? treg[x_us] : x_c;
-  assign media_h       = {7'd0, x_hd};
+  assign media_h       = x_isid ? {7'd0, x_hd} : x_h;
+  assign media_tc      = treg[x_us];
+  assign media_hd      = x_hd;
+  assign media_mf      = x_mf;
+  assign media_2hd     = chgreg[1];
+  assign media_rpm     = rpm[x_us];
   assign media_r       = x_r;
   assign media_n       = x_n;
   // A WRITE request carries the command's EOT in the ordinal field (a write has no header
@@ -523,6 +593,14 @@ module pc9821_fdc #(
 
   integer k;
 
+  // The FDD-mode switch as POST reads it: sampled on reset only (see dip_fixed).
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg dip_fixed_q = 1'b0;
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset) dip_fixed_q <= dip_fixed;
+  end
+
   always @(posedge clk) begin
     if (reset) begin
       st <= ST_IDLE;
@@ -550,6 +628,7 @@ module pc9821_fdc #(
       chgreg <= 8'h03;   // NP2kai fdc_reset: fdc.chgreg = 3 (io/fdc.c:1159)
       crcn <= 8'h00;
       for (k = 0; k < 4; k = k + 1) treg[k] <= 8'h00;
+      for (k = 0; k < 4; k = k + 1) lasttreg[k] <= 8'h00;
       x_st <= X_IDLE;
       x_isid <= 1'b0;
       x_us <= 2'd0;
@@ -608,6 +687,7 @@ module pc9821_fdc #(
       if (cs && wr && (addr == A_DATA) && (st == ST_IDLE) && (x_st == X_IDLE)) begin
         cmd <= din[4:0];             // opcode only; MF and the flags sit above it
         cmd_mt <= din[7];
+        cmd_mf <= din[6];
         p_idx <= 3'd0;
         if (din[4:0] == 5'h08) begin
           // SENSE INTERRUPT STATUS: report the oldest pending completion, else
@@ -698,6 +778,7 @@ module pc9821_fdc #(
             drv  <= cur_u;
             exec_st0 <= 8'h20 | {6'd0, cur_u};
             treg[cur_u] <= (cmd == 5'h0F) ? cur_p1 : 8'h00;
+            if (cmd == 5'h0F) lasttreg[cur_u] <= cur_p1;   // FDC_Seek :850
             busy[cur_u] <= 1'b1;
             delay <= RECAL_CYCLES;
             st <= ST_EXEC;
@@ -717,6 +798,7 @@ module pc9821_fdc #(
             x_n    <= cmds[4];
             x_eot  <= cmds[5];
             x_mt   <= cmd_mt;
+            x_mf   <= cmd_mf;
             x_isid <= 1'b0;
             x_idx  <= crcn;
             x_wr   <= 1'b0;
@@ -732,7 +814,8 @@ module pc9821_fdc #(
               // 128 << N bytes. treg := C as READ DATA does (the read arm's note on
               // fdc_lasttreg applies unchanged). The sector is located when it is requested
               // (X_REQ); see x_disc for a sector that is not there.
-              if (drive_equipped(cur_p0[1:0])) treg[cur_p0[1:0]] <= cmds[1];
+              if (drive_equipped(cur_p0[1:0]) && (lasttreg[cur_p0[1:0]] != treg[cur_p0[1:0]]))
+                treg[cur_p0[1:0]] <= cmds[1];
               x_wr <= 1'b1;
               x_st <= X_REQ;
               x_req_sent <= 1'b0;
@@ -785,8 +868,10 @@ module pc9821_fdc #(
               x_req_sent <= 1'b0;
               busy[cur_p0[1:0]] <= 1'b1;
             end else begin
-              // READ DATA: treg := C (FDC_ReadData :468-470), then the first sector.
-              if (drive_equipped(cur_p0[1:0])) treg[cur_p0[1:0]] <= cmds[1];
+              // READ DATA: treg := C unless a SEEK set it (FDC_ReadData, the lasttreg rule
+              // above), then the first sector.
+              if (drive_equipped(cur_p0[1:0]) && (lasttreg[cur_p0[1:0]] != treg[cur_p0[1:0]]))
+                treg[cur_p0[1:0]] <= cmds[1];
               x_st <= X_REQ;
               x_req_sent <= 1'b0;
               busy[cur_p0[1:0]] <= 1'b1;
@@ -812,7 +897,7 @@ module pc9821_fdc #(
       end
 
       // ================================================================= the media path
-      // A MEDIUM EJECTED OR SWAPPED UNDER A DATA COMMAND IS UNDEFINED (owner, 2026-10-08): no arm
+      // A MEDIUM EJECTED OR SWAPPED UNDER A DATA COMMAND IS UNDEFINED: no arm
       // of its own here. pc9821_fdd_media aborts its request on the drive's mount edge with
       // `err`, which the X_REQ/X_XFER error arms below already turn into the missing-sector
       // error7 and its interrupt, so the controller never waits on a medium that is gone - and
@@ -851,18 +936,11 @@ module pc9821_fdc #(
             x_st   <= X_XFER;
             x_left <= x_secbytes;
           end else if (media_err) begin
-            // readsector's missing-sector class (fdc.c:417-427): ST0 = us|hd<<2|IC0,
-            // ST1 = ND; the interrupt comes with the result (fdcsend_error7 :98-119).
-            x_st <= X_IDLE;
-            res_drv <= x_us;
-            res0 <= 8'h40 | {5'd0, x_hd, x_us};
-            res1 <= 8'h04;                       // ST1 ND
-            res_len <= 3'd7;
-            res_pop <= 1'b0;
-            res_rel <= 1'b1;
-            res_irq <= 1'b1;
-            res_idx <= 3'd0;
-            st <= ST_RESULT;
+            // The sector (or, for READ ID, any header) is not on the track: the controller
+            // keeps searching the IDs until it has seen the index hole TWICE, and only then
+            // ends the command (X_NDW below). The answer is readsector's missing-sector class.
+            x_st <= X_NDW;
+            nd_idx <= 1'b0;
             if (x_isid) crcn <= 8'h00;             // fdd_d88.c:545-546
           end else if (x_isid ? media_hdrv : media_rdy) begin
             if (x_isid) begin
@@ -1008,6 +1086,34 @@ module pc9821_fdc #(
           end
         end
 
+        // THE ID SEARCH THAT FINDS NOTHING. uPD765A/uPD72065 READ DATA: "If the FDC detects the
+        // Index Hole twice without finding the right sector (indicated in R), then the FDC sets
+        // the ND (No Data) flag in Status Register 1"; READ ID sets MA the same way. MAME
+        // src/devices/machine/upd765.cpp index_callback, SCAN_ID: `if(fi.counter == 2) {
+        // fi.sub_state = SCAN_ID_FAILED;`. So the command (and its interrupt) ends at the second
+        // index pulse after the search began, 1 to 2 revolutions later - never at once.
+        // DIVERGENCE: NP2kai answers in the command phase (readsector :417-427) and only defers
+        // the interrupt by 512 CPU clocks (fdc_interrupt `nevent_set(NEVENT_FDCINT, 512, ...)`);
+        // the chip's own behaviour is followed. A guest that writes its "result pending" flag
+        // after the last parameter byte (Star Cruiser's loader, 0060:1011 then `mov [0x100],3`)
+        // loses the interrupt to an instant answer and waits forever.
+        // The answer: readsector's class (fdc.c:417-427), ST0 = us|hd<<2|IC0, ST1 = ND, with
+        // the interrupt (fdcsend_error7 :98-119).
+        X_NDW: if (idx_pulse) begin
+          if (nd_idx) begin
+            x_st <= X_IDLE;
+            res_drv <= x_us;
+            res0 <= 8'h40 | {5'd0, x_hd, x_us};
+            res1 <= 8'h04;                       // ST1 ND
+            res_len <= 3'd7;
+            res_pop <= 1'b0;
+            res_rel <= 1'b1;
+            res_irq <= 1'b1;
+            res_idx <= 3'd0;
+            st <= ST_RESULT;
+          end else nd_idx <= 1'b1;
+        end
+
         default: x_st <= X_IDLE;
       endcase
 
@@ -1145,9 +1251,12 @@ module pc9821_fdc #(
       A_DOR:  dout = win_2dd ? 8'h74 : 8'h44;
       // 1.44M/RPM: NP2kai's fdc_i4be answers rpm[reg144[6:5]] | 0xFE.
       A_REG144: dout = 8'hFE | {7'b0, rpm[reg144_sel]};
-      // Channel group: NP2kai's fdc_ibe answers (chgreg & 3) | 0xF8, both
-      // 0x00BE and 0x00BF alike (the handler ignores the port).
-      A_CHGREG: dout = 8'hF8 | {6'b0, chgreg[1:0]};
+      // Channel group: bits 1:0 read back as written, bit 2 is the FDD-mode switch (dip_fixed)
+      // and bits 7:3 read 1, both 0x00BE and 0x00BF alike. THE MACHINE: docs/probes/
+      // FDMODE-XE10.TXT `PORT 00BE=FF` / `PORT 00BF=FF` with the strap at its reset value 3 on
+      // a unit switched to Fixed (MAME pc9801.cpp fdc_mode_r `(m_dsw3->read() & 3) << 2`).
+      // NP2kai's fdc_ibe `(fdc.chgreg & 3) | 8 | 0xf0` is the Auto reading of the same byte.
+      A_CHGREG: dout = {5'b11111, dip_fixed_q, chgreg[1:0]};
       default: dout = 8'hFF;
     endcase
   end

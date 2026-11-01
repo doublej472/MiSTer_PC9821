@@ -23,8 +23,8 @@ module tb_pc9821_scanout_write_race;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg         grcg_we = 1'b0;
   reg  [7:0]  grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -43,9 +43,9 @@ module tb_pc9821_scanout_write_race;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),
@@ -150,7 +150,7 @@ module tb_pc9821_scanout_write_race;
       while (!u_gvram.u_scan.fetch_active && (g < 2000)) begin @(posedge clk); g = g + 1; end
       g = 0;
       // The fill is complete when the last column's registered read has landed: fetch_req_d is
-      // the DUT's own one-clk_sys-deep in-flight flag (r13/283).
+      // the DUT's own one-clk_sys-deep in-flight flag.
       while (!(!u_gvram.u_scan.fetch_active && !u_gvram.u_scan.fetch_req_d) && (g < 4000)) begin
         @(posedge clk); g = g + 1;
       end
@@ -347,7 +347,7 @@ module tb_pc9821_scanout_write_race;
     put_byte(2'd0, base_a + 7, 8'hA5);
     // The array holds the store the instant its clk_sys edge passes, so the line's own fetch
     // reads the NEW byte. There is no write-back window for the fetch to read behind, which is
-    // the r13/277/278 stripe by construction.
+    // the old stripe defect by construction.
     if (u_gvram.u_gmem.mem0[base_a + 7] !== 8'hA5)
       fail("(c) the store did not reach the array immediately (read-after-write)");
     scan_line_base = base_a;

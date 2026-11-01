@@ -29,7 +29,7 @@
  *   PROBE2 /MEMSW > OUT.TXT   the machine's memory-switch view: the 0530/0531
  *                             pair (read-only), the CG-window rows the ITF
  *                             reads, and the TRAM tail cells (CG regs restored)
- *   PROBE2 /MEMCNT > OUT.TXT  the memory-count lane's instrument: the same pair
+ *   PROBE2 /MEMCNT > OUT.TXT  the memory-count instrument: the same pair
  *                             (read-only) plus the CG rows the ITF decodes for
  *                             its extended-size belief
  *   PROBE2 /MEMCNT WRITE > O  ... plus 0531 dumped at every 0530 index 00..FF
@@ -57,7 +57,7 @@
  *                             the calendar's own counters (KNOWN HAZARD for the
  *                             clock: replaces the time, not restorable)
  *   PROBE2 /RDBACK > O.TXT    write-then-read round-trips for the read-back
- *                             divergences the review flagged (palette, GRCG,
+ *                             divergences found in the model (palette, GRCG,
  *                             DMA, 0x9A8/0x9A0/0x610/0x871E, 0x43D window, and
  *                             the GDC LPEN queue arms) - read-first, every
  *                             latch restored, several KNOWN-HAZARD writes
@@ -267,7 +267,7 @@ memcnt_done:
     jz      memrw_done
     call    sec_memrw
 memrw_done:
-    /* r12/63: the timing ladder. /TIME runs first because /TIMEREF converts its
+    /* The timing ladder. /TIME runs first because /TIMEREF converts its
      * rows with the rates /TIMEREF measures, so the two in one invocation give
      * nanosecond and hertz answers out of the run. The bits are bare hex
      * literals for the same reason as the six /XP* flags above: these .equ names
@@ -394,7 +394,7 @@ exit_code_ok:
  * 0xA1/0xA3/0xA5, which it puts back. It gets flags3 bit 1. */
     .equ FLAG3_MEMSW,     0x02
 /* /SHADOW is read-only on its own (it reads the window and the two memory
- * ranges r11/17 section 5 asks about); its single marker write and the 0xDA000
+ * ranges the shadow question asks about); its single marker write and the 0xDA000
  * work-RAM write are behind the same FLAG2_WRITE word as /WIN and /D8, because
  * the window holds the running BIOS. /XPORT is read-only with no opt-in at all:
  * it only reads ports. */
@@ -413,12 +413,12 @@ exit_code_ok:
     .equ FLAG4_XP238,     0x01
     .equ FLAG4_XP18F,     0x02
     .equ FLAG4_XPFLT,     0x04
-/* /MEMCNT is the memory-count lane's own instrument (r11/06 section 2.3): it
+/* /MEMCNT is the memory-count investigation's own instrument: it
  * reads the 0x530/0x531 pair and the user-CG rows the ITF decodes for its
  * extended-size belief, and with WRITE it dumps 0x531 across the whole 0x530
  * index range. It gets flags4 bit 3. */
     .equ FLAG4_MEMCNT,    0x08
-/* r12/63: the timing ladder. /TIME is the read-only ratio pass; /TIMEREF adds
+/* The timing ladder. /TIME is the read-only ratio pass; /TIMEREF adds
  * the calendar-referenced absolute block (it writes the calendar's command
  * latch, which is what the ITF's own clock read does); /TIMESET is the opt-in
  * word that makes /TIMEREF write the calendar's COUNTERS as well, for a machine
@@ -427,13 +427,13 @@ exit_code_ok:
     .equ FLAG4_TIMEREF,   0x20
     .equ FLAG4_TIMESET,   0x40
 
-    /* r12/71: /MEMRW, the 0530/0531 pair's read/write test. This is the last
+    /* /MEMRW, the 0530/0531 pair's read/write test. This is the last
      * free bit in the flag words; a further section needs a fifth word. */
     .equ FLAG4_MEMRW,     0x80
 
     /* r13/hwprobe-followups: the read-back round-trip sections. flags4 is full,
      * so these take a fifth word. /RDBACK writes and restores latches (and, for
-     * 0x43D and the two GDC command ports, issues commands the review named);
+     * 0x43D and the two GDC command ports, issues the commands under test);
      * /PIT writes the PIT's control and count ports and reprograms channel 0 to
      * its measured divisor; /VSYNC unmaskes IRQ2 for its window and restores
      * the master IMR and the INT 0Ah vector exactly. */
@@ -597,7 +597,7 @@ pa_word:
     mov     di, offset arg_srst
     call    arg_match
     jc      pa_srst
-    /* The r12/63 timing sections. TIMESET and TIMEREF are checked before TIME
+    /* The timing sections. TIMESET and TIMEREF are checked before TIME
      * because arg_match is a prefix match: "TIME" is a prefix of both, so the
      * longer names must come first or `/TIMEREF` would be read as `/TIME` (the
      * same trap that puts CALL before CAL). */
@@ -1311,7 +1311,7 @@ rrs_no_wp:
 /* ------------------------------------------------------------------ */
 /* snap_tram: copy the machine's text VRAM into tram_buf.
  *
- * DIRECTION BUG, found by the round-6 review lanes and fixed 2026-09-12. This
+ * DIRECTION BUG (fixed). This
  * routine used to set ES = 0xA000 with DI = offset tram_buf and then run
  * `rep movsb`, which moves DS:SI -> ES:DI: with the VRAM segment as the
  * DESTINATION it never read TRAM at all. It wrote 320 bytes of the PROBE's own
@@ -3105,7 +3105,7 @@ sec_d8:
     call    read_byte
     mov     [d8_was], al
     /* First touch, no write: this is the state the BIOS is in when it calls
-     * D800:000C, so it already answers r10/02 O1 when the ROM is visible. */
+     * D800:000C, so it already answers the D800 question when the ROM is visible. */
     mov     ax, 0xD800
     mov     es, ax
     mov     di, offset d8_first
@@ -4241,15 +4241,15 @@ msw_print_cg:
 /* The card prints `MEMORY 640KB +14336KB OK` where the machine prints
  * `+30720KB OK`. The machine's extended-size belief is built by the ITF
  * (BANK4@0xF8A1F, the protected-mode block the stage-0x25 pass hands on to)
- * from two surfaces, both decoded in r11/06 section 2.3:
+ * from two surfaces, both decoded from the firmware:
  *   - the user-CG store, read through A1/A3/A5 -> A9: the memory-switch image
  *     high nibble at code 0x7157 row 0x27 (BANK4@0xF8BC0), the gates at codes
  *     0x7157/0x7257 rows 0x27/0x28 (BANK4@0xF8A54/0xF8A7E), and the size decode
  *     at code 0x7157 rows 0x27/0x2D/0x2E/0x2F (BANK4@0xF8E3F/0xF8EBD);
  *   - the pair 0x530 (address) / 0x531 (data), driven in a loop at
  *     BANK4@0xF8DC8-0xF8DF6 (`out dx,al; inc dx; in al,dx`).
- * This section reads both so the memory-count lane can match the machine
- * instead of guessing. r11/09's /MEMSW is the read-only memory-switch view; the
+ * This section reads both so the core's memory count can match the machine
+ * instead of guessing. /MEMSW is the read-only memory-switch view; the
  * extra thing here is the index dump of 0x531 across 0x530 = 00..FF, which is
  * what says whether the pair is a real indexed register file on the machine.
  *
@@ -4259,7 +4259,7 @@ msw_print_cg:
  * The index dump is /MEMCNT WRITE: it writes ONLY the 0x530 address latch,
  * never a 0x531 data byte, so the machine's memory-switch configuration values
  * are not modified - but 0x530 is half of the pair, so per the project's own
- * hazard rule its writes stay opt-in (r11/09 section 6). The index is read
+ * hazard rule its writes stay opt-in. The index is read
  * before the sweep, restored after it under cli, and reported in RESTORE. */
 sec_memcnt:
     mov     si, offset msg_begin_memcnt
@@ -4513,15 +4513,14 @@ mcnt_done:
 /* ------------------------------------------------------------------ */
 /* section: /MEMRW - the 0530/0531 pair's read/write test               */
 /* ------------------------------------------------------------------ */
-/* r12/69 section 6.1 asks for this test and r12/71 section 1 says why the
- * answer is load-bearing: the pair is either a WRITABLE REGISTER FILE that the
+/* Why the answer is load-bearing: the pair is either a WRITABLE REGISTER FILE that the
  * firmware programmes itself, or a READ-ONLY STRAP carrying the machine's
  * configuration. The firmware's own use cannot tell the two apart. It writes
  * the pair at BANK4@0x8C12 (`out dx,al; inc dx; out dx,al`) and at
  * BANK4@0x9146 (the register test, which writes the loop index as data), and it
  * reads it back at BANK4@0x8DC8 - and a latch and a strap that ignores writes
  * satisfy both. The resting byte a read-only capture sees is consistent with
- * both readings too, which is exactly why r11/09 left the question open.
+ * both readings too, which is exactly why a read-only capture leaves the question open.
  *
  * The discriminator is one WRITE FOLLOWED BY A READ-BACK at the same index:
  *   - a read-only strap returns the SAME byte it returned before the write, and
@@ -4531,8 +4530,8 @@ mcnt_done:
  * equal the resting byte proves nothing.
  *
  * Index 0x79 is first because it is the one index whose value is already
- * interpretable: r12/69 section 2 reads the machine's resting 0x1E there as the
- * extended size in MiB - 30 on the owner's 32 MB machine, matching that
+ * interpretable: one reading takes the machine's resting 0x1E there as the
+ * extended size in MiB - 30 on the reference 32 MB machine, matching that
  * machine's own `+30720KB` - so the read-back line for 0x79 is the decisive one
  * and a sweep that dies later still has it.
  *
@@ -4719,9 +4718,9 @@ mrw_done:
     ret
 
 /* ------------------------------------------------------------------ */
-/* section: /SHADOW - the writable ROM shadow (r11/17 section 5, Q1)    */
+/* section: /SHADOW - the writable ROM shadow                           */
 /* ------------------------------------------------------------------ */
-/* r11/17 section 5 Q1 is the question this section is the instrument for: is
+/* The shadow question is the question this section is the instrument for: is
  * the 32 KiB store under the 0xF8000-0xFFFFF window ONE writable shadow that a
  * store made with any bank selected lands in, or does it follow the bank
  * selection? The ITF stores its IDE drive-candidate bitmap at physical 0xF8E90
@@ -4929,7 +4928,7 @@ sh_write:
     call    puts
     cli
 
-    /* (0) The flat-0x98E90 discriminator (r12/24). The marker write below goes
+    /* (0) The flat-0x98E90 discriminator. The marker write below goes
      * through the ITF's own 0x0461=0x0E alias, logical 98E8:0010. The last run's
      * sweep read A5 in no state at all, so either the store only lands in the
      * BIOS-top bank, or the 0x0461 bias applies to reads but not to writes and
@@ -5159,7 +5158,7 @@ sh_p_mark3:
     call    puthex8
     call    putnl
 
-    /* The r12/24 discriminator line: one byte separates the two candidate write
+    /* The discriminator line: one byte separates the two candidate write
      * rules. `was` is physical 98E90 before the marker, `now` after it. */
     mov     si, offset msg_shadow_flat
     call    puts
@@ -5750,7 +5749,7 @@ mem_report:
 /* ------------------------------------------------------------------ */
 /* section: /XPORT - the firmware-only and measured-float port families */
 /* ------------------------------------------------------------------ */
-/* r12/04 section 5 lists six port families that only the machine's own firmware
+/* Six port families that only the machine's own firmware
  * evidences: no reference models them and no capture has read them, which is
  * why that report calls them where a real bug is most likely hiding. Section 2
  * lists the ports the machine is measured to answer and the core answers with
@@ -5845,7 +5844,7 @@ sec_xpflt:
  * AFTER 0B00 <- 0x0069, bit 3. This section replicates that for the six indices
  * the ITF writes (69, 50, 55, 59, 5C, 00), reads back 0B02 and the neighbours
  * 0B00/0B01/0B03, then does the ITF's own 0B02 bit-7 RMW (`in al / or al,80 /
- * out`) and reads that back too, so the owner can see whether the machine's data
+ * out`) and reads that back too, so the capture shows whether the machine's data
  * port latches bit 7 and bit 3. The as-found 0B00 word and 0B02 byte are put
  * back under cli and recorded for the global restore report.
  *
@@ -6134,7 +6133,7 @@ xpw_no:
     ret
 
 /* ================================================================== */
-/* r12/63: the timing ladder - /TIME, /TIMEREF, /TIMESET               */
+/* The timing ladder - /TIME, /TIMEREF, /TIMESET                       */
 /*                                                                    */
 /* /TIME      the RATIOS. The only clock a 486 offers a DOS program is */
 /*            a counter it can read, so this section uses two: the     */
@@ -6577,9 +6576,9 @@ tw_done:
 
 /* tb_pclocks: [tb_p0]/[tb_p1] first/last latched PIT counts and [tb_reloads]
  * reloads seen -> EAX = the counts moved, in pit_clocks' HALVED-ERA unit.
- * CAUTION (review round 2, P2-5): the /2 below is the refuted mode-3 claim
- * (r13/215 section 1.4 - the machine counts once per oscillator clock), so
- * every Timer-B-derived PIT figure this feeds is 2x small (r13/215),
+ * CAUTION: the /2 below is the refuted mode-3 claim
+ * (the machine counts once per oscillator clock), so
+ * every Timer-B-derived PIT figure this feeds is 2x small,
  * exactly like pit_clocks and tm_run.  It is kept only so the
  * printed columns stay comparable with the archived captures; quote xBASE
  * ratios, and absolute ns only from idelat/ioprobe (raw counts). */
@@ -6857,8 +6856,8 @@ cal_head:
     ret
 
 /* cal_full: 52 bits out of the calendar. The ITF reads 48; 52 covers the
- * uPD4993A four-bit prefix our RTL models (pc9821_calendar.sv:213-219), so both
- * alignments can be printed from one read and the prefix question (r6/08 C19) is
+ * uPD4993A four-bit prefix our RTL models (pc9821_calendar.sv:256-259), so both
+ * alignments can be printed from one read and the prefix question is
  * settled by the capture. cli covers the whole sequence. */
 cal_full:
     push    cx
@@ -6899,7 +6898,7 @@ cba_loop:
 /* cal_decode: DI = the payload bit offset (0 or 4), SI = a six-byte buffer.
  * Decodes six bytes from cal_str: seconds first, each byte LSB-first, the order
  * and direction of the ITF's own reader (BANK7@0x5D37-0x5D58 stores the first
- * byte read at es:[bx+5], and r6/08 reads that structure as seconds first, year
+ * byte read at es:[bx+5], and the structure reads as seconds first, year
  * last). */
 cal_decode:
     push    ax
@@ -7082,7 +7081,7 @@ cpf_done:
 
 /* cal_poll: read 12 bits and look for a one-second change. The byte at bit
  * offset 0 and the byte at offset 4 are both candidates for the seconds field
- * (they differ by the uPD4993A four-bit prefix that r6/08 C19 leaves open).
+ * (they differ by the uPD4993A four-bit prefix that is still open).
  * Whichever candidate changes while the other holds still IS the seconds field,
  * so the alignment is decided by the ticking itself rather than by a decode of
  * counters that may never have been set. [cal_hit] = 1 when a change was seen. */
@@ -7252,11 +7251,11 @@ cw_done:
 
 /* pit_clocks: [cal_p0] and [cal_p1] are the first and last latched counts of a
  * window and [cal_reloads] the reloads seen -> EAX = the counts moved, in the
- * HALVED-ERA "oscillator clocks" unit.  CAUTION (review P2b): the /2 below
- * implements the refuted mode-3 claim - r13/215 section 1.4 measured the
+ * HALVED-ERA "oscillator clocks" unit.  CAUTION: the /2 below
+ * implements the refuted mode-3 claim - a raster check on the machine measured the
  * machine's channel 0 counting ONCE per oscillator clock (8 raw counts per
- * ARTIC tick), so every printed PIT ns from /TIME/pit_clocks is 2x small
- * (r13/215).  The halve is kept only so /TIME's printed
+ * ARTIC tick), so every printed PIT ns from /TIME/pit_clocks is 2x small.
+ * The halve is kept only so /TIME's printed
  * columns stay comparable with the archived captures (docs/probes/T*.TXT);
  * quote xBASE ratios from /TIME, and absolute ns only from idelat/ioprobe,
  * which print raw counts.  One reload is a full divisor sweep of counts, the
@@ -7292,8 +7291,8 @@ pc_pos:
  * over BASE is the access itself.
  * kind 1 = in al,dx     kind 2 = out dx,al     kind 3 = a memory read (ES:DI)
  *
- * The PIT arithmetic is the HALVED-ERA convention (review P2b: the mode-3 /2
- * below is refuted by r13/215 section 1.4 - the machine counts once per
+ * The PIT arithmetic is the HALVED-ERA convention (the mode-3 /2
+ * below is refuted by a raster check on the machine - the machine counts once per
  * oscillator clock - and is kept only so /TIME's printed columns match the
  * archived captures; every printed PIT ns is 2x small). The signed 16-bit
  * difference ps-pe is treated as twice the clocks moved inside one period,
@@ -7361,7 +7360,7 @@ tm_k_done:
     /* PIT: the count distance modulo the divisor is one mode-3 sweep; a
      * negative raw difference means the counter reloaded once, and adding the
      * divisor once recovers it. The halve below is the halved-era unit (see the
-     * tm_run header comment - r13/215: the printed PIT ns
+     * tm_run header comment: the printed PIT ns
      * are 2x small); it is kept for capture comparability only. */
     movzx   eax, word ptr [tm_p0]
     movzx   ecx, word ptr [tm_p1]
@@ -7386,7 +7385,7 @@ tm_pd_half:
 /* tm_div_probe: measure the PIT's own divisor by watching the counter over a
  * window bounded by the ARTIC counter (9216 ticks = 30 ms at the documented
  * 307200 Hz, longer than any possible 16-bit count period).  The absolute
- * latch word tears (r13/215 section 1.1: scans returned 0xFFFA/0xFFEA-class
+ * latch word tears (scans returned 0xFFFA/0xFFEA-class
  * words that cannot be a count of the BIOS's 0x6000 divisor - item 10's
  * self-rejected /PIT run), so each candidate is now sampled TWICE back to
  * back and only a coherent pair (words within 64 counts) is accepted; the
@@ -7990,7 +7989,7 @@ st_div_ok:
     mov     si, offset msg_time_pitd
     call    puts
 
-    /* The GDC clock strap the BIOS published (r12/17: work-area 054D bit 2). */
+    /* The GDC clock strap the BIOS published (work-area 054D bit 2). */
     mov     si, offset msg_time_54d
     call    puts
     mov     al, [wa_buf + 0x14d]
@@ -8909,8 +8908,8 @@ sec_rdback:
 /* section: /PIT - the PIT read byte-phase and byte-only count writes  */
 /* ------------------------------------------------------------------ */
 /* Reuses pit_cal/pit_latch/pit_bytes and tm_div_probe. The only state-changing
- * writes are the control-word + count reprogramming of channel 0.  Gate
- * (review P1-2): the reprogramming tests run ONLY when the coherent-pair scan
+ * writes are the control-word + count reprogramming of channel 0.  Gate:
+ * the reprogramming tests run ONLY when the coherent-pair scan
  * is confident (tm_divok, the >=50% coherence gate) AND tm_div_check accepts
  * the range - the coherent filter can false-accept two identically-torn words,
  * so a range pass alone must never authorize a write.  And the restore writes
@@ -9023,8 +9022,8 @@ pitsec_divok:
     call    puthex8
     call    putnl
 
-    /* Experiment 3: LSB-only count write (review-pit N3). Word mode with the
-     * review's 0x1234, then LSB-only control 0x14, write 0x56, latch+read. */
+    /* Experiment 3: LSB-only count write. Word mode with
+     * 0x1234, then LSB-only control 0x14, write 0x56, latch+read. */
     cli
     mov     dx, 0x0077
     mov     al, 0x36
@@ -9056,7 +9055,7 @@ pitsec_divok:
     call    puthex8
     call    putnl
 
-    /* Experiment 4: MSB-only count write (review-pit N3). */
+    /* Experiment 4: MSB-only count write. */
     cli
     mov     dx, 0x0077
     mov     al, 0x36
@@ -9089,7 +9088,7 @@ pitsec_divok:
     call    putnl
 
     /* Restore channel 0 to the STRAP-DERIVED divisor - never the measured
-     * value (review P1-2): work-area 0501 bit 7 selects exactly one of the two
+     * value: work-area 0501 bit 7 selects exactly one of the two
      * documented divisors and cannot tear, while [p2_div] can. */
     mov     ax, 0x6000
     test    byte ptr [wa_buf + 0x101], 0x80
@@ -11058,7 +11057,7 @@ mcnt_col:       .byte 0
 mcnt_cg:        .space 27   /* 9 entries x {A1 code high, row, A9 value} */
 mcnt_sweepv:    .space 256  /* the 0x531 data at 0x530 = 00..FF */
 
-/* /MEMRW: six indices, 0x79 FIRST (r12/69 section 6.1), then the ends and the
+/* /MEMRW: six indices, 0x79 FIRST, then the ends and the
  * interior of the range the ITF's own copy block reads (BANK4@0xF8DC8 reads
  * 0..9 and 0x80..0x89). 0xFF is outside that range on purpose - a register the
  * firmware never touches is the cleanest control for the write test. */
@@ -11173,8 +11172,8 @@ xbr_dat_was:    .byte 0             /* the as-found 0B02 data byte */
 xbr_idx:        .byte 0x69, 0x50, 0x55, 0x59, 0x5C, 0x00
 xbr_res:        .space XBR_N * 6    /* {index, B02, B00lo, B01, B03, B02|80} */
 
-/* One table per family: the six the firmware evidences but no reference models
- * (r12/04 section 5), each behind its own keyword so a hang is attributable,
+/* One table per family: the six the firmware evidences but no reference models,
+ * each behind its own keyword so a hang is attributable,
  * then the ports the machine answers and the core floats (section 2) plus the
  * 0x09A0-0x09AE graphics block whose 0x09A2 bit 7 the main BIOS polls
  * (section 6): the same defect class, and its fix needs the same measurement. */
@@ -11348,8 +11347,7 @@ msg_memcnt_sweep: .asciz "  sweeping 0530 = 00..FF and reading 0531 at each inde
 msg_memcnt_dump:  .asciz "  0531 data at 0530 = 00..FF (16 per line):\r\n"
 msg_memcnt_rb:    .asciz "  0530 read-back after writing 00/55/AA (a latch returns the last index; a strap returns a constant; the as-found index is then put back) = "
 
-/* /MEMRW: the 0530/0531 pair's read/write test (r12/69 section 6.1, r12/71
- * section 1). */
+/* /MEMRW: the 0530/0531 pair's read/write test. */
 msg_begin_memrw:  .asciz "BEGIN:MEMRW\r\n"
 msg_end_memrw:    .asciz "END:MEMRW\r\n"
 msg_memrw_hdr:    .asciz "MEMRW: is the 0530/0531 pair a writable register file or a read-only strap? Read-only by default; /MEMRW WRITE adds the marker test. The firmware cannot tell the two apart (it writes the pair at BANK4@0x8C12 and 0x9146 and reads it back at 0x8DC8), so only a write followed by a read-back at the same index discriminates."
@@ -11485,7 +11483,7 @@ arg_timeref: .asciz "TIMEREF"
 arg_timeset: .asciz "TIMESET"
 
 /* ------------------------------------------------------------------ */
-/* r12/63: /TIME and /TIMEREF state and output                        */
+/* /TIME and /TIMEREF state and output                                */
 /* ------------------------------------------------------------------ */
 pd_w:           .word 0
 pd_zero:        .word 0

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SYSTEM_INTEGRATION: The I/O port map the fabric actually answers is compared, port by port, against the owner's own PC-9821Xe10 capture, so a decoded byte the machine does not drive and a machine byte the fabric answers open bus are both named; the device-select decode is cross-checked against the ports the fabric routes to the device bus, so the two decoders cannot drift apart silently; and the CPU reset release is checked to still wait for the SDRAM to leave its initialization.
+// TB_PC9821_SYSTEM_INTEGRATION: The I/O port map the fabric actually answers is compared, port by port, against a real PC-9821Xe10's capture, so a decoded byte the machine does not drive and a machine byte the fabric answers open bus are both named; the device-select decode is cross-checked against the ports the fabric routes to the device bus, so the two decoders cannot drift apart silently; and the CPU reset release is checked to still wait for the SDRAM to leave its initialization.
 
 // WHY THIS BENCH EXISTS. Every other I/O bench asserts a port against a value read
 // out of the RTL's own comment. This one asserts against the MACHINE, in the probe's
@@ -17,6 +17,7 @@ module tb_pc9821_system_integration;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -54,6 +55,7 @@ module tb_pc9821_system_integration;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -106,8 +108,14 @@ module tb_pc9821_system_integration;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -123,6 +131,11 @@ module tb_pc9821_system_integration;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench's own decode below is driven independently, so these are named for the
+  // wildcard instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -231,7 +244,7 @@ module tb_pc9821_system_integration;
 
   // Record, but do not fail on, a divergence the tree already knows about: a deliberate
   // diagnostic register the machine does not have, and a read-back the capture has not
-  // explained (r12/29 section 9 item 3). The count is reported; only a byte the tree claims is
+  // explained. The count is reported; only a byte the tree claims is
   // right and is not (0x92) is a hard failure.
   task automatic record_divergence(input [15:0] portnum, input [7:0] machine,
                                    input [8*40-1:0] ref_txt);
@@ -295,8 +308,8 @@ module tb_pc9821_system_integration;
       check_port(16'h0434, 8'hBE, "R10.TXT");
       check_port(16'h0436, 8'h04, "R10.TXT");
       check_port(16'h0439, 8'hB4, "R10.TXT");
-      // 0x043B echoes the live bit-2 request now (NP2kai necio, review
-      // readbacks.md P4), so the machine's byte needs the machine's STATE: the
+      // 0x043B echoes the live bit-2 request now (NP2kai necio),
+      // so the machine's byte needs the machine's STATE: the
       // 0xFB capture is a DOS-prompt state after the firmware's own 0x00 writes
       // (hardware-probe-results: 0x043B = 0xFB), and the core resets the bit
       // clear-the-other-way. Writing the machine's own state lands them - the
@@ -342,7 +355,7 @@ module tb_pc9821_system_integration;
     // 0x0EE0 is this core's own POST/debug latch: the machine answers open bus there
     // (it was moved off 0x1F, a real uPD71071 bank register). 0x043F's read-back moves
     // on the machine after the 0x80/0x82 shadow writes and the core holds the
-    // measured first touch; r12/29 section 9 item 3 leaves the movement unexplained.
+    // measured first touch; the movement is unexplained.
     $display("check 2: the recorded divergences (deliberate debug port; 0x43F read-back)");
     record_divergence(16'h0EE0, 8'hFF, "R10.TXT 0EE0=FF");
     write_byte(16'h043F, 8'h80);

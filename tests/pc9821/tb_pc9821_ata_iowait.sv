@@ -1,30 +1,30 @@
-// tb_pc9821_ata_iowait — what one IDE sector read costs the CPU through the REAL I/O bus.
+// tb_pc9821_ata_iowait - what one IDE sector read costs the CPU through the REAL I/O bus.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_IOWAIT:
-// The CPU-side cost of an IDE PIO sector read, measured through the real pc9821_iobus instead of a bench-inserted gap: one 16-bit data-port word (0x0640) is ONE bus access that walks two lanes and stalls the CPU for 8 clk_sys, because EVERY lane the access FETCHES pays its own class (audit-iobus F5 - the rule the capture supports, docs/probes/IO.TXT pricing 0x0640 and 0x0641 as accesses in their own right, rows IDED0/IDED1, and the machine's per-access values being that capture's IDE.TXT rows IDEDAT0/IDEDAT1) and the min-profile class table puts both IDE data lanes at its FSM floor (IO_MIN_HOLD = 4, r13/276), so a 512-byte sector's data phase is 256 x 9 = 2304 clk_sys (11.1 MB/s at 50 MHz) and 2048 of those cycles are device-wait; the task file charges the same floor, the fabric holds device_rd_wait/device_rd_hold low as pc9821_system's decode does for every ATA port, so the measured cost is the class and nothing else, and the 256 words are byte-exact against a synthetic disk image with the CPU's own view of the port.
+// The CPU-side cost of an IDE PIO sector read, measured through the real pc9821_iobus instead of a bench-inserted gap: one 16-bit data-port word (0x0640) is ONE bus access that walks two lanes and stalls the CPU for 8 clk_sys, because EVERY lane the access FETCHES pays its own class (the rule the capture supports, docs/probes/IO.TXT pricing 0x0640 and 0x0641 as accesses in their own right, rows IDED0/IDED1, and the machine's per-access values being that capture's IDE.TXT rows IDEDAT0/IDEDAT1) and the min-profile class table puts both IDE data lanes at its FSM floor (IO_MIN_HOLD = 4), so a 512-byte sector's data phase is 256 x 9 = 2304 clk_sys (11.1 MB/s at 50 MHz) and 2048 of those cycles are device-wait; the task file charges the same floor, the fabric holds device_rd_wait/device_rd_hold low as pc9821_system's decode does for every ATA port, so the measured cost is the class and nothing else, and the 256 words are byte-exact against a synthetic disk image with the CPU's own view of the port.
 
 // This bench exists because the tree's two throughput benches (ata_datapath,
 // ata_readahead) model the data port with a bench-inserted 28-cycle gap, i.e. the
-// SUPERSEDED class 30 of r13/13; r13/244 re-anchored the table to the machine's
-// measured 8 and r13/276 dropped every non-floor class to 4, so both of those
-// benches were 5x pessimistic about the tree they test (r13/244 section 5, risk 3).
+// SUPERSEDED class 30; the table was later re-anchored to the machine's
+// measured 8 and then dropped every non-floor class to 4, so both of those
+// benches were 5x pessimistic about the tree they test (risk 3).
 // A bench that inserts its own gap cannot notice that: this one takes the number
 // from pc9821_iobus itself, so a re-slowed class, an added S_DEVWAIT or a per-word
 // bubble on the ATA's data port changes the measured figure and fails.
 //
-// The references for the machine's own per-access figures are the owner's captures, and
+// The references for the machine's own per-access figures are the Xe10 captures, and
 // they are per BYTE: the ideprobe's timing loop is `in al,dx` (ideprobe.s `tmL_loop`,
 // tools/hwprobe/ideprobe/ideprobe.s), and it times a byte read of the data port at
 // 170 ns (8.48 clk_sys at 50 MHz) and of the task file at 297 ns (14.9 clk_sys) -
 // docs/probes/IDE.TXT rows IDEDAT0/IDEDAT1 and ATASTAT, whose ratio the probe itself
-// prints as 584/2065 x 30 clk at the 0x5F = 600 ns anchor (r13/243, and r13/244
-// section 3's ladder). One SINGLE-LANE access here is 5 clk_sys = 100 ns, so the model
+// prints as 584/2065 x 30 clk at the 0x5F = 600 ns anchor (and the measured
+// class ladder). One SINGLE-LANE access here is 5 clk_sys = 100 ns, so the model
 // is faster than the machine lane for lane. What the machine charges for a 16-BIT word
 // is NOT captured - the ioprobe prices one port at a time - so the word's figure is the
-// sum of its two lanes' classes and nothing more (audit-iobus section 9.3), which is
+// sum of its two lanes' classes and nothing more, which is
 // what this bench pins.
 
 module tb_pc9821_ata_iowait;
@@ -49,6 +49,7 @@ module tb_pc9821_ata_iowait;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
 
   // ---- the device fabric: the iobus's byte transaction, with the ATA behind it ----
   wire        device_io_wr, device_io_rd;
@@ -76,6 +77,7 @@ module tb_pc9821_ata_iowait;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0]  dbg_gate;
@@ -123,8 +125,14 @@ module tb_pc9821_ata_iowait;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -143,18 +151,11 @@ module tb_pc9821_ata_iowait;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) bus (
       .ide_unit0_present(1'b0),.*);
 
-  // The ATA's chip select is the shipped decode (pc9821_system instantiates the same
-  // module), so the ports this bench touches are the ports the machine's fabric routes.
-  wire ata_cs;
+  // The ATA's chip select is the shipped decode: P5 made the ONE pc9821_device_select
+  // instance live inside pc9821_iobus, so `.*` above binds these to it (the same module and
+  // the same decode pc9821_system routes with - this bench no longer instantiates its own).
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs, opna_cs,
-       pcm_cs, gameport_cs, gdc_cs;
-  pc9821_device_select device_select (
-      .addr(device_io_addr),
-      .pic_master_cs(pic_master_cs), .pic_slave_cs(pic_slave_cs), .pit_cs(pit_cs),
-      .interrupt_cs(interrupt_cs), .cal_cs(cal_cs), .kbd_cs(kbd_cs),
-      .ata_cs(ata_cs), .opna_cs(opna_cs), .pcm_cs(pcm_cs), .gameport_cs(gameport_cs),
-      .gdc_cs(gdc_cs)
-  );
+       pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs, ata_cs;
 
   wire [7:0] ata_io_dout;
   reg  [31:0] ata_capacity = 32'd100000;
@@ -217,7 +218,7 @@ module tb_pc9821_ata_iowait;
   // ---- the block adapter, HPS-shaped: latch a request in idle, wait SD_LAT cycles
   // (the ARM reading the image and the framework's per-block handshake), then stream
   // the 256 words one per cycle and pulse completion, exactly as pc9821_block_io does.
-  localparam integer SD_LAT = 4600;   // r13/68 section 0.5's upward bound for one block
+  localparam integer SD_LAT = 4600;   // the measured upward bound for one block
   reg        ad_active = 0;
   reg [31:0] ad_lba = 0;
   integer    ad_wait = 0;

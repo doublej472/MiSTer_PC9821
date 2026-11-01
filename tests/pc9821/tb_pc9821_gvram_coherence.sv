@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GVRAM_COHERENCE: the write-combining buffer (8 word slots) holds every coherence the GVRAM's single datapath promises, against the REAL src/memory/sdram.v storage shape and a golden byte image: a read of a just-written word returns the buffer's copy and not stale SDRAM, a store to a word updates every write path (the plain lane store, the full-word GRCG/EGC store, the partial-store fill and the EGC two-word burst), every dirty word is written back before the scanout's SDRAM fetch reads it (flush/drain, including a display-page change), a dirty victim is written back and a clean one dropped (eviction), a one-lane store preserves the other three planes (partial-byte RMW), and a read fill never overwrites a word the buffer still holds dirty (the over-fetched beat). It drives interleaved reads and writes to the same and adjacent words, both pages, and the posted-write-then-read-own-word shape, then compares the WHOLE SDRAM image to the golden model, so a lost write-back cannot hide behind a buffer hit.
 //
-// WHY THIS EXISTS. r13/82 built the WCB; r13/142/166/167/169 then changed the fill width and the
+// WHY THIS EXISTS. The WCB was built first; later changes then changed the fill width and the
 // invalidation scope. Every one of those
 // edits is a coherence edit, and the benches that exist check shapes (tb_pc9821_gvram_combine: RAW
 // forwarding and the scanout flush) or counts (gfx_scene/sprite_scene), not the invariants as a
@@ -33,8 +33,8 @@ module tb_pc9821_gvram_coherence;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -59,9 +59,9 @@ module tb_pc9821_gvram_coherence;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -107,7 +107,7 @@ module tb_pc9821_gvram_coherence;
   // ==== STIMULUS ====
   integer cb_burst2 = 0;
   integer cb_fullwr = 0;
-  // The GVRAM is block RAM now (r13/283): there is no backend transaction and no write-combining
+  // The GVRAM is block RAM now: there is no backend transaction and no write-combining
   // buffer, so these counters stay at zero and the image comparison below is the assertion.
 
   // One CPU access. `egc` routes it to the EGC (a SHIFT_CPU load when it is a load, a WS_CPU
@@ -133,7 +133,7 @@ module tb_pc9821_gvram_coherence;
       cpu_write   = wr;
       cpu_valid   = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // `egc_gate` is the machine's EGC arming level (0x6A num 2 AND 0x7C bit 7), not a per-access
@@ -196,7 +196,8 @@ module tb_pc9821_gvram_coherence;
     end
   endtask
 
-  // A 128-bit line load: 16 consecutive plane offsets of ONE plane, assembled in cpu_line_dout.
+  // A line load: 16 consecutive plane offsets of ONE plane, gathered from the route's four
+  // word beats in order (beat N = line word N).
   task automatic line_read(input integer pg, input [1:0] pl, input [14:0] base,
                            input [8*90-1:0] tag);
     integer k;
@@ -214,8 +215,14 @@ module tb_pc9821_gvram_coherence;
       @(negedge clk);
       cpu_valid = 1'b0; cpu_line_read = 1'b0;
       #1;
-      while (!cpu_line_resp_valid) begin @(posedge clk); #1; end
-      d = cpu_line_dout;
+      // The four word beats stream through the walk (P3): gather them in order, beat N into
+      // line word N exactly as the L1 does.
+      d = 128'd0;
+      for (k = 0; k < 4; k = k + 1) begin
+        while (!cpu_line_word_valid) begin @(posedge clk); #1; end
+        d[{k[1:0], 5'b00000} +: 32] = cpu_line_word;
+        @(posedge clk); #1;
+      end
       repeat (2) @(posedge clk);
       for (k = 0; k < 16; k = k + 1)
         chk_byte(pg, pl, base + k, d[{k[3:0], 3'b000} +: 8], tag);
@@ -485,7 +492,7 @@ module tb_pc9821_gvram_coherence;
   endtask
 
   // The whole SDRAM image against the golden model. Only meaningful after a flush.
-  // The GVRAM array is four byte-lane M10K arrays (r13/283's synthesis decision), so a word's
+  // The GVRAM array is four byte-lane M10K arrays (a synthesis decision), so a word's
   // byte `pl` is lane `pl` of the word at `w`.
   function [7:0] gvmem_byte(input [15:0] w, input [1:0] pl);
     case (pl)
@@ -511,7 +518,7 @@ module tb_pc9821_gvram_coherence;
     end
   endtask
 
-  // The write-combining buffer is gone (r13/283): the array IS the read-after-write view, so there
+  // The write-combining buffer is gone: the array IS the read-after-write view, so there
   // is no held-word state left to check - the whole-image comparison in sdram_chk is the check.
   task automatic wcb_chk(input [8*90-1:0] tag);
     begin

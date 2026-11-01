@@ -47,8 +47,8 @@ TABLE = gen.BENCHES
 # One home for the expected count: it used to be written twice, and the two copies
 # disagreed, so the check PASSED while printing "37 benches declared" beside a table of
 # 61. A number stated in a message must come from the same place as the number tested.
-# The expected count used to be a literal here, and every bench-adding lane had to remember to
-# bump it: it conflicted on four separate merges, and a lane that forgot would have failed the
+# The expected count used to be a literal here, and every bench-adding change had to remember to
+# bump it: it conflicted on four separate merges, and a change that forgot would have failed the
 # gate for a reason unrelated to its bench. It is now DERIVED, and the check is stronger than the
 # constant was. Every testbench on disk must be either claimed by a table entry or named below as
 # one an integration script runs on its own, so deleting an entry fails - its bench becomes
@@ -58,6 +58,7 @@ STANDALONE_BENCHES = {
     "TB_PC9821_PORTHARNESS",  # shared port harness, not a bench of its own
     "TB_PC9821_USERDISK",     # run_userdisk.sh
     "TB_PC9821_THROTTLE",     # run_throttle.sh: the real CPU at Full, 8 MHz and 1 MHz
+    "TB_PC9821_DMA_SNOOP_THROTTLE",  # run_dma_snoop_throttle.sh: the real system, gated cpu_ce
 }
 EXPECTED_BENCHES = len(TABLE)
 declared = {marker.upper() for marker, _claim, _files in TABLE.values()}
@@ -79,14 +80,14 @@ print("== the generated file agrees with the table ==")
 # cwd=ROOT, because tools/gen_bench_sources.py resolves the table's paths and its output
 # file RELATIVE TO THE CALLER'S DIRECTORY: run from anywhere else it reports every source
 # as missing and would have this checker fail for a reason that has nothing to do with the
-# table. (AGENTS runs it from the root; that dependency is recorded in the round report.)
+# table. (AGENTS.md runs it from the root.)
 r = subprocess.run([sys.executable, str(ROOT / "tools/gen_bench_sources.py"), "--check"],
                    capture_output=True, text=True, cwd=ROOT)
 check(r.returncode == 0, f"gen_bench_sources.py --check: {r.stdout.strip() or r.stderr.strip()}")
 
 # Functional probe: SOURCE the generated file and call the functions the consumers
-# call. Substring checks are what let a missing bench_sources() pass for a whole
-# session, so this asks the shell what it actually returns.
+# call. Substring checks are what let a missing bench_sources() pass unnoticed,
+# so this asks the shell what it actually returns.
 def sh(expr):
     q = subprocess.run(["bash", "-c",
                         f"source tests/pc9821/bench_sources.sh && {expr}"],
@@ -110,6 +111,12 @@ for n in listed:
     check(rc == 0 and len(claim.split()) >= 5 and "['" not in claim and "']" not in claim,
           f"bench_claim {n} returns a sentence, not a list repr "
           f"(a bracket in prose, like [4:1], is fine)")
+    # The shell must hand back the table's claim byte for byte. A claim emitted in double
+    # quotes had its `...` spans RUN as commands and its $ words expanded: the claims were
+    # mangled, and a span holding a redirect left empty files named `=` and `status` in the
+    # caller's directory on every run of this check.
+    check(claim == TABLE[n][1].strip() and not err,
+          f"bench_claim {n} returns the table's claim verbatim (no shell expansion)")
 print("== the two source lists are used by the tiers they belong to ==")
 # Two lists exist on purpose. bench_sources.sh declares what ONE unit bench is built
 # from; tests/pc9821/z486_rtl.sh declares the whole SoC for the integrated benches.
@@ -215,7 +222,7 @@ for p in wc_files:
 check(checked_ports >= 7, f"found the wildcard DUT instantiations (checked {checked_ports})")
 
 print("== a bench that declares the real SDRAM controller elaborates it ==")
-# FINDING 6 (r13/332). The table checks above prove spelling and file existence, never that a
+# The table checks above prove spelling and file existence, never that a
 # declared source is part of the DUT: a bench could list `src/memory/sdram.v`, compile fine
 # because Verilator ignores a module nothing instantiates, and prove nothing about the
 # controller its claim named. `plain_write` and the stale graphics benches did exactly that --
@@ -391,10 +398,10 @@ check('"verilator"' in bench_src,
       "tools/bench.py invokes Verilator (the one bench runner's engine)")
 
 print("== the core's own reset does not leave the core ==")
-# r11/14 §3.2 measured the defect: the CPU's triple-fault request left the FPGA
+# The defect, as measured: the CPU's triple-fault request left the FPGA
 # as BUTTONS[1] -- the I/O board's USER BUTTON -- and only came back through the
 # HPS, where Main_MiSTer/user_io.cpp masks it while the OSD is visible (the
-# OSD-open stall the owner reported). r12/12 consumes it inside pc9821_system
+# OSD-open stall seen on hardware). The core now consumes it inside pc9821_system
 # instead. z486_mister.sv is not in any Verilator bench's file list, so the
 # wiring is guarded statically here; the CPU-side effect (a shutdown resets the
 # CPU with no external stimulus, RAM and the ROM window intact) is measured by
@@ -406,7 +413,7 @@ check("core_soft_reset_req" not in top,
       "z486_mister.sv does not export the CPU's shutdown request as a button")
 check(re.search(r"wire\s+reset_req\s*=\s*buttons\[1\]\s*\|\s*status\[0\]", top) is not None,
       "the framework's own reset_req = buttons[1] | status[0] still starts the core's reset wire")
-# This is the text z486_mister.sv:406 `reset_req = buttons[1] | status[0]` names as
+# This is the text z486_mister.sv:530 `reset_req = buttons[1] | status[0]` names as
 # LOAD-BEARING. It is a CONTAINMENT check and
 # not an end-anchored one on purpose: the wire legitimately gained a third term
 # (`| disk_change_reset`, the HPS disk-change reset) and the framework's two terms still
@@ -437,7 +444,7 @@ if speaker_assign:
           "speaker_out is driven by BOTH the PIT's tone and the system port's mute")
     # tb_pc9821_beeper proves the tone is CHANNEL 1 (BANK4@0x4B2B) and the amplitude ladder,
     # but on its OWN copy of this expression and of z486_mister.sv's amplitude block, so a
-    # system rewired to pit_out2 left it green (bench-audit 2026-10-12). Hold both copies to
+    # system rewired to pit_out2 left it green. Hold both copies to
     # the shipped text.
     beeper_tb = (ROOT / "tests/pc9821/tb_pc9821_beeper.sv").read_text()
     norm = lambda t: re.sub(r"\s+", "", t)
@@ -461,7 +468,7 @@ if speaker_assign:
 # concatenation, and the benches that prove a device's IRQ lands on its vector
 # (tb_pc9821_opna_timers on IR4 = vector 0x14, the mouse on IR5, the FDC on IR3) each build
 # their OWN copy of that concatenation, so a reordered or dropped term in the system would
-# leave every one of them green (bench-audit 2026-10-12). Hold the real one here, bit by
+# leave every one of them green. Hold the real one here, bit by
 # bit, MSB first: IR7 calendar, IR6 none, IR5 bus mouse (NP2kai io/mouseif.c:135
 # `pic_setirq(0x0d)`), IR4 the sound card's INT5 = IRQ12 (OPNA timers and 86-PCM),
 # IR3 FDC (the BIOS's vector 0x13 ISR), IR2 the FDC's 2DD-window IRQ10, IR1 IDE (HDD and
@@ -476,6 +483,45 @@ if slave:
     check(got == want,
           f"the slave PIC's IR7..IR0 are calendar, -, mouse, OPNA|PCM86, FDC, FDC-2DD, IDE|CD, - "
           f"(found {terms})")
+
+print("== the top level drives the video PLL with the cut-down reconfiguration core ==")
+# z486_mister.sv used to instantiate the full `pll_cfg` (altera_pll_reconfig_top/-core: the
+# status/read, MIF, DPS and manual-DPRIO arms plus the C0..C17 counter file) for the video PLL.
+# pc9821_vpll_ctl writes only N (0x03), M (0x04), K (0x07) and start (0x02), which the
+# framework's write-only `pll_cfg_hdmi` (sys/pll_cfg/pll_cfg_hdmi.v) services against the same
+# DPRIO register map; in the fit's entity table that swap is 410 -> 170 ALMs / 296 -> 192 regs
+# (pll_cfg:vpll_cfg vs pll_cfg_hdmi, main-89a68d43 seed 003). tb_pc9821_pll_cfg_lockstep proves
+# the two cores program a PLL register model identically; this line stops the full core coming
+# back silently, and it FAILED on the tree that still read `pll_cfg vpll_cfg (`.
+top_live = strip_comments_sv((ROOT / "z486_mister.sv").read_text())
+top_inst = sv_instantiates(sv_modules(top_live).get("emu", ""))
+check("pll_cfg_hdmi" in top_inst, "z486_mister.sv instantiates pll_cfg_hdmi for the video PLL")
+check("pll_cfg" not in top_inst,
+      "z486_mister.sv instantiates no full pll_cfg (the video PLL writes only N, M, K and start)")
+
+print("== the framework hears every 24/31 kHz switch, and the UART line follows the OSD mode ==")
+# hps_io re-reports the video mode only when the active hcnt/vcnt change or new_vmode differs from
+# the level latched at the previous frame (sys/hps_io.sv:957 `old_vmode != new_vmode`). The 24 kHz
+# and 31 kHz rasters are both 640 x 400 active, so on the native path new_vmode is the only notice:
+# the top level tied it to 1'b0 and Main kept the 56 Hz frame timing for a 70 Hz picture.
+# tb_pc9821_vmode_notify proves video_out's vmode_31 makes video_calc report each switch; this holds
+# the top level to feeding that output, and not a constant, into hps_io.
+nv = re.search(r"\.new_vmode\s*\(\s*([^)]*?)\s*\)", top_live)
+vm = re.search(r"\.vmode_31\s*\(\s*([^)]*?)\s*\)", top_live)
+check(nv is not None and vm is not None and nv.group(1) == vm.group(1)
+      and re.fullmatch(r"[A-Za-z_]\w*", nv.group(1) or "") is not None,
+      "hps_io's new_vmode is the net pc9821_video_out's vmode_31 drives "
+      f"(new_vmode={nv.group(1) if nv else None!r}, vmode_31={vm.group(1) if vm else None!r})")
+# UART_TXD reaches Linux's ttyS1. Main_MiSTer sends the OSD's UART mode as 0 None, 1 PPP/Modem,
+# 2 Console, 3 MIDI (user_io.cpp SetUARTMode); the debug UART (the reset banner, instrument records)
+# belongs on the line only in None, where no Linux process reads it as input.
+txd = re.search(r"assign\s+UART_TXD\s*=\s*([^;]*);", top_live)
+dbg_mode = re.search(r"wire\s+uart_debug_mode\s*=\s*\(\s*uart_mode\s*==\s*8'd0\s*\)\s*;", top_live)
+rhs = re.sub(r"\s+", "", txd.group(1)) if txd else ""
+check(dbg_mode is not None, "uart_debug_mode is uart_mode == 0 (the OSD's None)")
+check(rhs.count("debug_uart_tx") == 1 and "uart_debug_mode?debug_uart_tx:1'b1" in rhs
+      and "uart_midi_mode?mpu_uart_tx:" in rhs,
+      f"UART_TXD carries the MPU in MIDI, the debug UART only in None, and idles high otherwise ({rhs!r})")
 
 print()
 for n in NOTE:

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// With the 15-16 MiB system-space window ON (port 0x043B bit 2 cleared, which is the guest's request: reset leaves the window OFF so 15-16 MiB is RAM) the machine puts no SYSTEM RAM at 0xF00000-0xFFFFFF, and the subsystem splits it three ways: 0xFA0000-0xFFFFFF reaches the same route and the same address as the low 0xA0000-0xFFFFF it aliases, 0xF00000-0xF7FFFF is the PEGC's 512 KiB extended VRAM (r13/48) served by the mapper as one ordinary backend access at peg_base = pack_base + PACK_BYTES + 0x80000 - but ONLY with the register file's [0xE0102] bit 0 set (NP2kai memvgaf_rd8/wr8's VRAM-enable gate; the ITF sets it inside its own 0x6A 0x21 bracket before filling), and open bus with it clear - and only 0xF80000-0xF9FFFF reaches NO memory at all; with the window OFF the same addresses are ordinary identity RAM. Both references put the alias base at 0xFA0000 and not at 0xF00000 - qemu-pc98 aliases lowmem[0xa0000..0x100000] at 0xfa0000 (hw/i386/pc98-mem.c sys16m_mirror) and decodes its 512 KiB PEGC POST store (PEGC_POST_SIZE) at 0xf00000, and NP2kai reduces the address by 0xF00000 but selects that path only for address bits 19:17 = 5..7 (i386c/cpumem.c memsys_* vs memvgaf/memnc), its own 512 KiB memvgaf extended VRAM (vramex[0x80000]) covering the rest - so 0xF80000-0xF9FFFF is the part of the hole the ITF subtracts as the 15-16 MiB system-space hole (pc98-mem.c mem_sync_sys16m_workarea, ram[0x401] -= 8).
+// With the 15-16 MiB system-space window ON (port 0x043B bit 2 cleared, which is the guest's request: reset leaves the window OFF so 15-16 MiB is RAM) the machine puts no SYSTEM RAM at 0xF00000-0xFFFFFF, and the subsystem splits it three ways: 0xFA0000-0xFFFFFF reaches the same route and the same address as the low 0xA0000-0xFFFFF it aliases, 0xF00000-0xF7FFFF is the PEGC's 512 KiB extended VRAM served by the mapper as one ordinary backend access at peg_base = pack_base + PACK_BYTES + 0x80000 - but ONLY with the register file's [0xE0102] bit 0 set (NP2kai memvgaf_rd8/wr8's VRAM-enable gate; the ITF sets it inside its own 0x6A 0x21 bracket before filling), and open bus with it clear - and only 0xF80000-0xF9FFFF reaches NO memory at all; with the window OFF the same addresses are ordinary identity RAM. Both references put the alias base at 0xFA0000 and not at 0xF00000 - qemu-pc98 aliases lowmem[0xa0000..0x100000] at 0xfa0000 (hw/i386/pc98-mem.c sys16m_mirror) and decodes its 512 KiB PEGC POST store (PEGC_POST_SIZE) at 0xf00000, and NP2kai reduces the address by 0xF00000 but selects that path only for address bits 19:17 = 5..7 (i386c/cpumem.c memsys_* vs memvgaf/memnc), its own 512 KiB memvgaf extended VRAM (vramex[0x80000]) covering the rest - so 0xF80000-0xF9FFFF is the part of the hole the ITF subtracts as the 15-16 MiB system-space hole (pc98-mem.c mem_sync_sys16m_workarea, ram[0x401] -= 8).
 
 // ==== DUT ====
 // pc9821_memory_subsystem, which owns the translation. It MUST happen ahead of
@@ -40,6 +40,8 @@ module tb_pc9821_sys16m;
   reg [7:0]  grcg_addr = 0;
   reg [7:0]  grcg_din = 0;
   wire       grcg_expand;   // the GRCG's CG-mode bit 7, fed back from the subsystem
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
 
   // EGC off: this bench is about address translation, not the plane engines.
   reg        egc_enable = 0;
@@ -76,12 +78,11 @@ module tb_pc9821_sys16m;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire       cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire       cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0]  tram_din;
@@ -117,7 +118,7 @@ module tb_pc9821_sys16m;
 
   // The immediate backend stub: accept straight away, answer the next cycle.
   reg         mem_ready = 1, mem_resp_valid = 0, mem_line_resp_valid = 0;
-  // The GVRAM scanout's SDRAM requester (r13/35). The wildcard instantiation needs every port
+  // The GVRAM scanout's SDRAM requester. The wildcard instantiation needs every port
   // named; nothing here drives the scanout, so it accepts and never answers.
   wire [31:0] mem3_addr, mem3_din;
   wire  [3:0] mem3_be;
@@ -130,18 +131,18 @@ module tb_pc9821_sys16m;
     else       mem_resp_valid <= mem_valid && !mem_write;
   end
 
-  // The GVRAM write client's two-word payload (r13/137); this bench's backend ignores it.
+  // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
   wire [31:0] mem_din_hi;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -152,6 +153,7 @@ module tb_pc9821_sys16m;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -318,7 +320,7 @@ module tb_pc9821_sys16m;
       errors = errors + 1;
     end
 
-    // CHK-5: WINDOW ON, 0xF00000 is the PEGC's 512 KiB extended VRAM (r13/48), served by
+    // CHK-5: WINDOW ON, 0xF00000 is the PEGC's 512 KiB extended VRAM, served by
     // the mapper as an ordinary backend access at peg_base = pack_base + PACK_BYTES +
     // 0x80000. The ITF's phase-2 test (BANK4@0x1416-0x14B6) fills and verifies 512 KiB here.
     drive_addr(32'h00F0_0000, 1'b1);

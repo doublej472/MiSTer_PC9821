@@ -15,8 +15,8 @@ WHAT COUNTS AS A CITATION. A `tools/<path>` token with one of TOOL_EXTS, or one 
 in `/`. The extension test is what keeps prose out: `tools/build` (as in "the build ran")
 has no extension, and `tools/hwprobe/` is a directory, so both are recognised for what
 they are. A citation of a `.com` is checked against the SOURCE it is built from
-(`<dir>/<name>.s`, the rule in tools/hwprobe/Makefile), not against the binary: AGENTS.md
-is explicit that those binaries are built, never committed.
+(`<dir>/<name>.s`, the rule in tools/hwprobe/Makefile), not against the binary:
+tools/hwprobe/README.md is explicit that those binaries are built, never committed.
 
 WHAT IS DELIBERATELY OUT OF SCOPE, each for a reason and not for convenience:
   * docs/probes/*.TXT are RAW real-machine captures. Their text is what the machine or
@@ -80,12 +80,12 @@ SKIP_PREFIX = ("sys/", "src/z486/", "src/opna/")
 CITATION = re.compile(r"(?<![\w/.-])tools/([A-Za-z0-9_][A-Za-z0-9_./-]*)")
 
 # A `.com` is built from the `.s` beside it by tools/hwprobe/Makefile (`$(1)/$(1).com:
-# $(1)/$(1).s`), and the binaries are not committed (AGENTS.md: "stop vendoring the .com
-# binaries (build them)"). So the citation is checked against its source.
+# $(1)/$(1).s`), and the binaries are not committed (tools/hwprobe/README.md: "The binaries are
+# not committed."). So the citation is checked against its source.
 ARTIFACT_SOURCE = {".com": ".s"}
 
 # THE TOLERATED LEDGER: (citing file, cited path, why it is still there, who owes the fix).
-# Nothing here is a tools/ file -- those are this lane's and are fixed, not tolerated.
+# Nothing here is a tools/ file -- those are fixed, not tolerated.
 TOLERATED = (
     # PRINTED PATH STRINGS inside a probe, not prose about one: the banner is a `.ascii`
     # in the source, so changing it changes the built `.com` that the kept captures in
@@ -302,7 +302,7 @@ def main() -> int:
         print()
 
     for citing, cited, reason, owner in hits:
-        print(f"tolerated  {citing}: {cited} -- {reason} (owner: {owner})")
+        print(f"tolerated  {citing}: {cited} -- {reason} (fixed in: tools/{owner}/)")
 
     stale = stale_ledger(ROOT, TOLERATED, hits)
     for entry in stale:
@@ -317,7 +317,7 @@ def main() -> int:
               f"not exist, {len(stale)} stale ledger entry/entries; {checked} citations checked)")
         return 1
     print(f"\nTOOL CITATION CHECK: PASS ({checked} citations checked, "
-          f"{len(hits)} tolerated in another lane's file and listed above)")
+          f"{len(hits)} tolerated and listed above)")
     return 0
 
 

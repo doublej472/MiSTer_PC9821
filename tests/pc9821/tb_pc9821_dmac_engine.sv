@@ -1,5 +1,5 @@
 // ==== WHAT THIS PROVES ====
-// The uPD71071's transfer engine against a backend with the shape the memory subsystem actually presents - an accept pulse and a SEPARATE completion pulse several cycles later, the returned word valid only at the completion, and the backend's produced-word register starting at a sentinel so a read taken a cycle early returns a value this bench can name. A read that sampled its byte at the accept instead of the completion fails here and passes the module's earlier engine bench, because that bench's memory stub drove a COMBINATIONAL read data path that was already valid in the request cycle. Plus both directions of transfer, the N+1 count at its boundary, the decrement bit, terminal count with the mask and the autoinitialize reload, and a write finishing at the accept with no completion pulse at all. The E7/D2 additions pin the review fdc-dma fixes: terminal count must coincide with the final dack/strobe (8237 EOP-during-final-transfer qualification; FAIL-FIRST against the old late registered pulse), and a CPU register write landing in the engine's S_FIN cycle must LAND - its byte lane of the count/address wins over the engine advance or reload (merged readback), the fresh terminal count survives the count write's own TC clear (set-wins), and R_CLEARMSK beats the TC mask so a held DRQ runs the block again (FAIL-FIRST against the old source-order resolution). E7d pins the fold's bank path: a 0x21-0x27 bank write landing in the S_FIN whose increment carries out of bit 23 must zero adrs.b[31:24] as NP2kai's dmac_o21 does on every bank write (io/dmac.c:242), so the next block runs in the low 16 MiB (FAIL-FIRST against the fold keeping the carried upper bits).
+// The uPD71071's transfer engine against a backend with the shape the memory subsystem actually presents - an accept pulse and a SEPARATE completion pulse several cycles later, the returned word valid only at the completion, and the backend's produced-word register starting at a sentinel so a read taken a cycle early returns a value this bench can name. A read that sampled its byte at the accept instead of the completion fails here and passes the module's earlier engine bench, because that bench's memory stub drove a COMBINATIONAL read data path that was already valid in the request cycle. Plus both directions of transfer, the N+1 count at its boundary, the decrement bit, terminal count with the mask and the autoinitialize reload, and a write finishing at the accept with no completion pulse at all. The E7/D2 cases pin the FDC-DMA fixes: terminal count must coincide with the final dack/strobe (8237 EOP-during-final-transfer qualification; FAIL-FIRST against the old late registered pulse), and a CPU register write landing in the engine's S_FIN cycle must LAND - its byte lane of the count/address wins over the engine advance or reload (merged readback), the fresh terminal count survives the count write's own TC clear (set-wins), and R_CLEARMSK beats the TC mask so a held DRQ runs the block again (FAIL-FIRST against the old source-order resolution). E7d pins the fold's bank path: a 0x21-0x27 bank write landing in the S_FIN whose increment carries out of bit 23 must zero adrs.b[31:24] as NP2kai's dmac_o21 does on every bank write (io/dmac.c:242), so the next block runs in the low 16 MiB (FAIL-FIRST against the fold keeping the carried upper bits).
 //
 // The uPD71071's transfer engine against a backend with the shape the memory subsystem actually presents - an accept pulse and a SEPARATE completion pulse several cycles later, the returned word valid only at the completion, and the backend's produced-word register starting at a sentinel so a read taken a cycle early returns a value this bench can name. A read that sampled its byte at the accept instead of the completion fails here and passes the module's earlier engine bench, because that bench's memory stub drove a COMBINATIONAL read data path that was already valid in the request cycle. Plus both directions of transfer, the N+1 count at its boundary, the decrement bit, terminal count with the mask and the autoinitialize reload, and a write finishing at the accept with no completion pulse at all.
 //
@@ -16,7 +16,7 @@
 // FALSIFIABILITY, and this bench was built around it. The property under test is
 // "the read byte is sampled at the completion, not at the accept". It is shown to
 // CAN FAIL by reverting the module to the single-ack behaviour it carried before
-// this lane: sampling at the accept returns the sentinel (0xA5) instead of the
+// this bench: sampling at the accept returns the sentinel (0xA5) instead of the
 // memory's byte on the first transfer and the previous word's byte thereafter.
 // That plant was run and observed failing on E1 before the good RTL was restored.
 // Two further plants were observed: masking the request with the status nibble
@@ -28,8 +28,8 @@
 // The boundary IS settled against the primary software reference, though - NP2kai's
 // transfer engine (the code that runs) tests leng BEFORE decrementing
 // (mem/dmax86.c:19-24), so its byte consuming a zero count still moves and it is N+1
-// too; only the bulk helper dmac_getdatas is N (review fdc-dma D5 corrected the old
-// "NP2kai uses N" claim). E3 pins the boundary THIS module implements so a change to
+// too; only the bulk helper dmac_getdatas is N (not "NP2kai uses N", which misreads
+// dmax86.c). E3 pins the boundary THIS module implements so a change to
 // it cannot pass silently.
 
 // ==== DUT ====
@@ -106,8 +106,14 @@ module tb_pc9821_dmac_engine;
       if (!mem_we) begin
         // A read: the word is loaded AT the accept and is not visible until the
         // completion, so a sample taken in the accept cycle sees the PREVIOUS
-        // value -- the sentinel on the first transfer.
-        produced <= {4{mem[mem_addr[7:0]]}};
+        // value -- the sentinel on the first transfer. The backend ignores
+        // addr[1:0] (src/memory/sdram.v:95 `addr0, // byte address (bits [1:0] ignored)`)
+        // and returns the ALIGNED 32-bit word, so each byte sits in its own lane
+        // (`mem[{p,2'bxx}]`) and mem_rd_byte's lane choice is observable here. An
+        // earlier model replicated the byte into all four lanes, which hid a
+        // mem_rd_byte lane-order defect; that is the blindness this now removes.
+        produced <= {mem[{mem_addr[7:2], 2'b11}], mem[{mem_addr[7:2], 2'b10}],
+                     mem[{mem_addr[7:2], 2'b01}], mem[{mem_addr[7:2], 2'b00}]};
         pend     <= LATENCY;
       end else begin
         // A write commits AT the accept and arms no completion at all.
@@ -159,7 +165,7 @@ module tb_pc9821_dmac_engine;
   integer   out_n = 0;
   assign dev_din = out_seq[out_n];
 
-  // D2's qualification pin (review fdc-dma D2): every dev_tc must coincide with the
+  // D2's qualification pin: every dev_tc must coincide with the
   // channel's dev_dack AND the strobe - the 8237 asserts EOP during the final transfer
   // cycle and NP2kai fires DMAEXT_END in the final byte's own engine step, so a device
   // may qualify EOP with its DACK. The old registered tc_pulse arrived >= 2 cycles after
@@ -198,7 +204,7 @@ module tb_pc9821_dmac_engine;
     end
   endtask
 
-  // A register write presented in the EXACT S_FIN cycle (review fdc-dma D1's collision):
+  // A register write presented in the EXACT S_FIN cycle:
   // the setup lands on the negedge inside S_FIN, so the write and the engine's advance/
   // reload commit on the same posedge. reg_wr's own @(negedge) entry would sample S_FIN
   // one cycle late, so this form synchronises on dut.state instead.
@@ -362,7 +368,7 @@ module tb_pc9821_dmac_engine;
           "D2: dev_tc fired outside the final dack/strobe cycle (EOP and DACK are not coherent)");
 
     // ---- E7: a CPU register write landing in the S_FIN cycle is NOT dropped -------
-    // (review fdc-dma D1). The register arms and the engine step write the same state;
+    // The register arms and the engine step write the same state;
     // the CPU write used to lose to S_FIN's later NBA silently (and leave the _org copy
     // holding a value the live register never saw). On the chip, and in NP2kai, the CPU
     // access always lands. FAIL-FIRST: every bound below fails against the old

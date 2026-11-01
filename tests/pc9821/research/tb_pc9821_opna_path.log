@@ -1,9 +1,0 @@
-# Captured run, tb_pc9821_opna_path (Verilator 5.052, 50 MHz clk_sys).
-# Trace files are written to the run directory; this is the summary of them.
-
-opna_path_fm.txt     FM carrier, ALG7, block4 fnum 0x269, TL0       n=432   rate= 54047/s  range -4084..4084  max|d|=126
-opna_path_ssg.txt    SSG tone A, level max                          n=8     rate=  1118/s  range 0..4092  max|d|=4092
-opna_path_noise.txt  SSG noise A+B+C, level max                     n=491   rate= 61434/s  range 0..12276  max|d|=12276
-opna_path_eg.txt     FM carrier, AR20/DR10/SR10 moving envelope     n=2069  rate= 51730/s  range -4084..4084  max|d|=148
-opna_path_rhythm.txt ADPCM-A instrument 0, ROM pattern 0x4444       n=147   rate= 18415/s  range -15060..15336  max|d|=27876
-opna_path_all.txt    FM + SSG tone + ADPCM-A drum                   n=665   rate= 55422/s  range -18234..21424  max|d|=17754

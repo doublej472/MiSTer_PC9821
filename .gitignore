@@ -31,7 +31,10 @@ synthesis/
 /rtl/pll.v
 /rtl/pll.bsf
 /rtl/pll/pll_0002.v
-/tests/obj_dir/
+# The video PLL (tools/profile/vpll_template.v), generated the same way.
+/rtl/vpll.qip
+/rtl/vpll.v
+/rtl/vpll/
 /tests/pc9821/build/
 /firmware/diagnostic/*.bin
 /firmware/diagnostic/*.mem
@@ -46,8 +49,6 @@ build_id.v
 c5_pin_model_dump.txt
 # Bench logs (tools/bench.py writes build/measure/)
 /build/measure/
-# Historical gate logs (the gate tool is no longer in the tree; kept so old runs stay ignored)
-/build/gate/
 
 # Python bytecode from the tools importing the generator
 __pycache__/
@@ -58,18 +59,15 @@ abc.history
 # Quartus build scratch: 2.2-2.7 GB per tree, on real storage, never committed.
 .build/
 
-# Lane worktrees: in-repo per AGENTS.md's self-containment rule, never committed.
+# Parallel worktrees (tools/worktree.py), never committed.
 .worktrees/
 
 # hwprobe: the DOS .COM binaries are built by tools/hwprobe/Makefile, not vendored
 /tools/hwprobe/**/*.com
+/tools/hwprobe/cpusuite/build/
 
 # Local scratch space (analysis, recordings, probe packs): never committed.
 /scratch/
-
-# the INT21 capture DECODES: a pure function of the tracked raw logs, so they are not
-# tracked. Regenerate with: tools/decode_telemetry.py --clk-mhz=50 <raw>.log
-docs/probes/int21-mister-2026-09-30/*-decoded.txt
 
 # --- Verilator / C++ build output -------------------------------------------------------
 # A build tree is never an artifact. Quartus outputs are covered above; these are the ones
@@ -91,13 +89,13 @@ pc98pack*.bin
 # must never be committed (AGENTS.md), and an analysis product of one is that same code.
 # `*.EXE` is unambiguous HERE - no build or tool in this repo emits one, and a game off a DOS
 # disk is always the uppercase 8.3 form (both cases are listed because nothing legitimate is
-# being excluded either way) - and `*.idata` is undiet.py's decompressed output, i.e. the game.
+# being excluded either way) - and `*.idata` is a decompressed executable image, i.e. the game.
 # A blanket `*.COM` would be wrong: the DOS probes under tools/hwprobe are built here (and
 # ignored by their own rule above).
 *.EXE
 *.exe
 *.idata
 
-# A raw debug/telemetry dump never belongs in the repo root, which holds only README.md,
-# AGENTS.md and TODO.md. ROOT-ANCHORED on purpose, so it cannot hide a cited capture under docs/.
+# A raw debug/telemetry dump never belongs in the repo root (AGENTS.md, "Repository layout").
+# ROOT-ANCHORED on purpose, so it cannot hide a cited capture under docs/.
 /*-debug.txt

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The EGC's M10K ring is scrubbed on reset, so its contents after a reset are the ones a fresh engine has (zero, exactly the register form and the NP2kai reference's rst() give) and not whatever the run before the reset left. A descending byte-unit produce serves the byte its OWN feed just wrote (NP2kai egcsftb_dnn_sub reads outptr[0] before the decrement, mem/memegc.c:174-178), and the bench pins that against a POISONED ring: it fills all 64 ring entries with 0xA5 through ascending word feeds, patches the next read's source byte to 0x5A, arms a descending byte unit and asserts the read serves 0x5A (the fresh feed) and never the 0xA5 survivor - the fail-first regression for review egc.md F2's within-unit produce-slot fix, where the old slot read one entry BELOW the write pointer and served the survivor. The same shape after a MID-RUN reset serves a third fresh byte 0x5C: no pre-reset ring content may leak from any slot; the scrub keeps the never-fed entries at the register form zero for parity with the reference's rst().
+// The EGC's M10K ring is scrubbed on reset, so its contents after a reset are the ones a fresh engine has (zero, exactly the register form and the NP2kai reference's rst() give) and not whatever the run before the reset left. A descending byte-unit produce serves the byte its OWN feed just wrote (NP2kai egcsftb_dnn_sub reads outptr[0] before the decrement, mem/memegc.c:174-178), and the bench pins that against a POISONED ring: it fills all 64 ring entries with 0xA5 through ascending word feeds, patches the next read's source byte to 0x5A, arms a descending byte unit and asserts the read serves 0x5A (the fresh feed) and never the 0xA5 survivor - the fail-first regression's within-unit produce-slot fix, where the old slot read one entry BELOW the write pointer and served the survivor. The same shape after a MID-RUN reset serves a third fresh byte 0x5C: no pre-reset ring content may leak from any slot; the scrub keeps the never-fed entries at the register form zero for parity with the reference's rst().
 //
 // The EGC's M10K ring is scrubbed on reset, so its contents after a reset are the ones a
 // fresh engine has (zero, exactly the register form and the NP2kai reference's rst() give)
@@ -13,14 +13,13 @@
 // egcsftb_dnn_sub reads outptr[0] BEFORE the decrement (mem/memegc.c:145-179, especially
 // :174-178), and the feed at inptr == outptr just wrote that entry. The pre-fix RTL took
 // the word unit's SECOND-step slot (`outptr_feed + mv1`) for byte units too, reading the
-// ring entry one BELOW the write pointer -- review egc.md F2's within-unit bug, corrected
+// ring entry one BELOW the write pointer -- the within-unit bug, corrected
 // by the produce-slot fix in pc9821_egc.sv (and transcribed in
-// tests/pc9821/pc9821_egc_ref.sv's sftb_*_sub order). The r13/246 finding F1 account of
+// tests/pc9821/pc9821_egc_ref.sv's sftb_*_sub order). The first account of
 // this bench was written against that old slot and expected the SURVIVOR read; against
 // NP2kai's own order (and the golden reference, which returns the fed byte) that
 // expectation was the bug, so the checks below pin the corrected semantics instead:
-//   [source: an earlier review's finding F1 - superseded on
-//    the read slot by NP2kai mem/memegc.c:174-178 / review egc.md F2]
+//   [source: NP2kai mem/memegc.c:174-178 for the read slot]
 //
 // WHAT IS ASSERTED:
 //   1. with the ring POISONED with 0xA5 all around it and the read's source byte patched
@@ -31,7 +30,7 @@
 //      neither the 0xA5 poison nor check 1's 0x5A may leak from any ring slot. Under the
 //      corrected slot no reachable produce reads a never-fed entry (NP2kai's own stack
 //      gate arms the feed trail first), so the scrub's zeroed never-fed entries are
-//      register-form / reference rst() parity and future-proofing (r13/246 F1 stays
+//      register-form / reference rst() parity and future-proofing (the earlier finding stays
 //      retired) rather than a CPU-visible difference; the scrub stays.
 
 `default_nettype none
@@ -170,7 +169,7 @@ module tb_pc9821_egc_ring_reset;
       cpu_offset = off; cpu_plane = plane; cpu_din = 32'd0; cpu_be = be;
       cpu_write = wr; cpu_valid = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // The negedge below is the old release's own wait, kept so the +1 stays in the cadence.

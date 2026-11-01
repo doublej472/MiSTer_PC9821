@@ -8,11 +8,11 @@
 //  1. THE READ SHAPE IS THE ITF'S, NOT OURS. BANK7@0x5D22 sends command 3, then
 //     command 1, then clocks 8 times per byte with `in al,0x33; shr al,1;
 //     rcr ah,1', for each of 6 bytes, and stores them es:[bx+5] first and
-//     es:[bx+0] last -- seconds first on the wire, year last (r6/08 line 151,
-//     disassembled from the dump). So the reader consumes EXACTLY 48 bits and
+//     es:[bx+0] last -- seconds first on the wire, year last (disassembled
+//     from the dump). So the reader consumes EXACTLY 48 bits and
 //     skips nothing. This bench replays that shape: sample bit 0 of the port,
 //     then one CLK rise on 0x20, eight times per byte.
-//     [source: the firmware dump, BANK7@0x5D22 as recorded in r6/08]
+//     [source: the firmware dump, BANK7@0x5D22]
 //
 //  2. THE SECOND IS THE CALENDAR'S OWN. The ITF and DOS read a date, so the
 //     counter must produce real dates: a day never exceeds its month's length,

@@ -1,36 +1,26 @@
-// The SDRAM bridge: the controller on the requesters' own clock (clk_sys), no crossing.
+// The SDRAM bridge: the controller on the requesters' own clock (clk_sys), no crossing. The
+// controller and its PHY run on clk_sys and its FREQ is clk_sys's rate, so sdram.v derives its
+// CAS/tRCD/tRP/tRC/tWR/refresh cycle counts for that clock. ("sync" in the name: same clock.)
 //
-// The only bridge since the split-clock configuration was removed (owner, 2026-10-09: "the
-// default will always match the sdram and sys_clk clocks ... we should remove the split clock
-// config"). The controller and its PHY run on clk_sys, and
-// the controller's FREQ is clk_sys's rate, so sdram.v derives its CAS/tRCD/tRP/tRC/tWR/refresh
-// cycle counts for that clock. (The name keeps the same-clock lane's "sync"; it was introduced
-// beside the clock-domain bridge)
-//
-// THE REQUESTER-SIDE CONTRACT is the one the removed clock-domain bridge gave: `valid` is held,
-// with its payload stable, until the one-cycle `ready`; a read answers one `resp_valid` pulse per
-// dword, to the port that asked; `dout0` holds port 0's last word between its pulses, and
-// `dout1..3` are valid in their own resp_valid cycle. Every one of those is a property the
-// controller already has on its own clock (sdram.v's port comments: `ready` is a registered
-// 1-cycle pulse at the accept, `resp_valid` a registered pulse per completed 32-bit word, routed
-// by req_id_buf) EXCEPT the port-0 hold: sdram.v keeps ONE completed word for all four ports
-// (`dout_word`, the area-recovery change). So this module is the controller plus that one hold
-// register, and nothing else.
-//
-// What the crossing used to cost (measured when it was removed): the request
-// toggle handshake and its two-flop synchroniser, the presentation/admission credit, the ack
-// toggle's synchroniser back, the response FIFO with its gray-pointer synchroniser and read
-// register, the reset and sdram_size synchronisers, and the busy synchroniser - ~455 ALMs, ~690
-// registers, one M10K and 80-110 ns per read round trip.
+// THE REQUESTER-SIDE CONTRACT: `valid` is held, with its payload stable, until the one-cycle
+// `ready`; a read answers one `resp_valid` pulse per dword, to the port that asked; `dout0` holds
+// port 0's last word between its pulses, and `dout1..3` are valid in their own resp_valid cycle.
+// Every one of those is a property the controller already has on its own clock (sdram.v's port
+// comments: `ready` is a registered 1-cycle pulse at the accept, `resp_valid` a registered pulse
+// per completed 32-bit word, routed by req_id_buf) EXCEPT the port-0 hold: sdram.v keeps ONE
+// completed word for all four ports (`dout_word`). So this module is the controller plus that one
+// hold register, and nothing else.
 `default_nettype none
 
 module sdram_sync_bridge #(
     parameter FREQ = 50_000_000,      // the controller's clock = `clk`'s rate in this build
-    parameter HAS_DQM = 1'b1,
     parameter ADQM = 1'b0,
     parameter FAST_GRADE = 1'b1,
     parameter integer GATHER_K = 4,
-    parameter PRE_ACT = 1'b1
+    parameter DQ_IN_DDIO = 1'b0,      // sdram.v's DQ read-capture cell (its parameter note)
+    parameter OUT_DDIO = 1'b0,        // sdram.v's output-register cells (its parameter note)
+    parameter integer DBG_CL = 0,           // sdram.v's measurement overrides (its parameter note)
+    parameter integer DBG_TRCD_TRP = 0
 ) (
     input                   clk,          // requesters AND controller + PHY (clk_sys)
     input                   resetn,
@@ -98,11 +88,13 @@ wire        ctrl_resp0;
 /* verilator lint_off PINCONNECTEMPTY */   // burst_done has no consumer (split_sdram_backend)
 sdram #(
     .FREQ(FREQ),
-    .HAS_DQM(HAS_DQM),
     .ADQM(ADQM),
     .FAST_GRADE(FAST_GRADE),
     .GATHER_K(GATHER_K),
-    .PRE_ACT(PRE_ACT)
+    .DQ_IN_DDIO(DQ_IN_DDIO),
+    .OUT_DDIO(OUT_DDIO),
+    .DBG_CL(DBG_CL),
+    .DBG_TRCD_TRP(DBG_TRCD_TRP)
 ) ctrl (
     .clk(clk),
     .resetn(resetn),
@@ -131,15 +123,14 @@ sdram #(
 );
 /* verilator lint_on PINCONNECTEMPTY */
 
-// ---- port 0's hold (the one piece of the old clock bridge's response side that is kept) ----
+// ---- port 0's hold ----
 // Port 0 fans out to several readers inside pc9821_memory_subsystem (the CPU's response mux, the
-// DMA byte select, the PEGC store buffer's passthrough), and the clock bridge's `port0_dout` let
-// them read the last port-0 word between pulses. The controller's `dout_word` is overwritten by
+// DMA byte select, the PEGC store buffer's passthrough), which read the last port-0 word between
+// pulses. The controller's `dout_word` is overwritten by
 // the next completed word of ANY port, so without this register a port-1..3 response landing
 // between two port-0 reads would show through on dout0. In the resp_valid0 cycle the new word is
-// passed straight through (as the clock bridge presented it in that cycle), and the register keeps
-// it afterwards. It is 32 flops, no memory, so a reset value costs no inference; reset clears it
-// as the clock bridge's did.
+// passed straight through, and the register keeps it afterwards. It is 32 flops, no memory, so a
+// reset value costs no inference; reset clears it.
 reg [31:0] port0_hold;
 always @(posedge clk) begin
     if (!resetn)         port0_hold <= 32'd0;
@@ -148,10 +139,10 @@ end
 assign dout0       = ctrl_resp0 ? ctrl_dout0 : port0_hold;
 assign resp_valid0 = ctrl_resp0;
 
-// ---- the requester contract, ASSERTED (the old clock bridge's launched_payload check) ----
+// ---- the requester contract, ASSERTED ----
 // With no crossing the controller samples a port's payload on WHICHEVER cycle its arbiter takes
 // the request, so a requester must hold `valid` and the whole payload from the first valid cycle
-// until its ready - the property the clock bridge asserted from launch to ack. A requester that
+// until its ready. A requester that
 // drops valid early, or moves its payload under a held valid, would be served the moved payload
 // (or not at all), so it fails loudly in simulation instead.
 `ifdef VERILATOR

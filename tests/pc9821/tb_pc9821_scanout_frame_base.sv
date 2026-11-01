@@ -49,7 +49,6 @@ module tb_pc9821_scanout_frame_base;
   reg  io_wr = 0, io_rd = 0;
   reg  [7:0] io_addr = 0, io_din = 0;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   wire gfx_access_page;
   wire [15:0] gfx_line_addr;
   wire        gfx_walk_page;   // the packed walk's page bit; parked here so (.*) stays complete
@@ -60,8 +59,6 @@ module tb_pc9821_scanout_frame_base;
   reg  [17:0] font_ld_addr = 0;
   reg  [15:0] font_ld_data = 0;
   reg         font_ld_we = 0;
-  wire cg_code_win;
-  wire cg_lr_win;
   wire  [4:0] cg_win_byte_sel = 5'd0;
   wire        cg_win_rd = 1'b0;
   wire  [7:0] cg_win_dout;
@@ -137,8 +134,8 @@ module tb_pc9821_scanout_frame_base;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg         grcg_we = 1'b0;
   reg  [7:0]  grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -152,9 +149,9 @@ module tb_pc9821_scanout_frame_base;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),
@@ -233,7 +230,7 @@ module tb_pc9821_scanout_frame_base;
   // doubled (a plane byte offset), lines = the word >> 4. Partition 2 is parked at length
   // zero (never expires), so base(L) = start + L*80.
   //
-  // THE ENCODER'S WARRANT (review benches N5; these constants were uncited magic and
+  // THE ENCODER'S WARRANT (these constants were uncited magic and
   // would mirror a wrong DUT decode silently). The parameter LAYOUT is NP2kai's GDC
   // SCROLL handling: bios/bios18.c:172-205 (bios0x18_0f packs the start word with
   // `t >>= 1` - the doubled-byte-offset inverse - and the length word as
@@ -297,7 +294,7 @@ module tb_pc9821_scanout_frame_base;
     for (i = 0; i < 4096; i = i + 1) poke_off(i[14:0]);
 
     // The raster configuration the games run the 640x400 graphics display in.
-    // WARRANT (review benches N5): the four bytes are the games' own 640x400 mode-set
+    // WARRANT: the four bytes are the games' own 640x400 mode-set
     // shape - the machine's GDC2 programming of SYNC/CSRFORM/PITCH/SCROLL as NP2kai
     // keeps it in gdc.m.para[] (io/gdc.c parameter dispatch) and bios18's mode
     // programming (bios/bios18.c) - driven here so the rows below move at the raster
@@ -312,13 +309,13 @@ module tb_pc9821_scanout_frame_base;
     // 1. A mid-vblank SCROLL move: rows 0, 1 AND 2 of the coming frame
     //    show the NEW start (rows 0-1 are latched before the frame-end copy).
     //
-    //    WARRANTED CLAIM (review benches N5): a SCROLL written in vblank must move
+    //    WARRANTED CLAIM: a SCROLL written in vblank must move
     //    the WHOLE coming frame together - the GDC latches its scroll at the frame
     //    boundary (vsync), the uPD7220/GDC frame-latch semantics NP2kai's
     //    full-repaint model also assumes (GDCSCRN_ALLDRAW2, io/gdc.c:343). Rows
     //    0-2 TOGETHER is that reference-shaped claim and is fail-first for the F7
     //    lost-wakeup class.
-    //    CAPTURE-PENDING (named, per the review): the EXACT sub-line swap point
+    //    CAPTURE-PENDING (named): the EXACT sub-line swap point
     //    (row 0 latched at the line-438 tick and row 1 at the line-439 tick, 1-2
     //    clk_sys before the frame-end cfg_snap copy) is THIS pipeline's own
     //    model - no capture pins which frame a write landing exactly on those

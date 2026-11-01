@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GAMEPORT_NP2: an INDEPENDENT differential of the game port against NP2kai cbus/board118.c, the PRIMARY reference, and NOT against the module's own bench: the -118's eight addresses 0x1480-0x1487 and no neighbour, the byte's bits 4..7 = A/B/X/Y active low and bits 0/1 the two axis one-shots, and the whole byte again against a direct port of ao486's joystick.v read expression (with this core's one-term disable-mask correction), which is where the module's fields come from. In every single-stick configuration NP2kai can model, the byte is BIT-FOR-BIT its board118.c:341 transform of the pad, at power-up, the instant after a trigger, and after the axes have run out. It records, one named DIVERGENCE line each, the four remaining places the core and NP2kai disagree - the axis one-shot length (IBM 22..1022 ticks against NP2kai's own clkmax/1430 ~= 0.7 ms), the live second-stick bits 2/3 and 6/7 the OSD default leaves enabled, the no-pad 0xF0 where NP2kai answers 0xFF, and the pad's 3rd/4th buttons not merged onto OPNA register 0x0E's two switch lines - and none of them is asserted, because none is an RTL defect. The fifth divergence, a disabled stick 1's buttons 3/4 leaking in 4-button mode, WAS a latent RTL defect (r13/198 s2.4): it is FIXED in pc9821_gameport and case 5d now asserts the disabled stick reads absent.
+// TB_PC9821_GAMEPORT_NP2: an INDEPENDENT differential of the game port against NP2kai cbus/board118.c, the PRIMARY reference, and NOT against the module's own bench: the -118's eight addresses 0x1480-0x1487 and no neighbour, the byte's bits 4..7 = A/B/X/Y active low and bits 0/1 the two axis one-shots, and the whole byte again against a direct port of ao486's joystick.v read expression (with this core's one-term disable-mask correction), which is where the module's fields come from. In every single-stick configuration NP2kai can model, the byte is BIT-FOR-BIT its board118.c:341 transform of the pad, at power-up, the instant after a trigger, and after the axes have run out. It records, one named DIVERGENCE line each, the four remaining places the core and NP2kai disagree - the axis one-shot length (IBM 22..1022 ticks against NP2kai's own clkmax/1430 ~= 0.7 ms), the live second-stick bits 2/3 and 6/7 the OSD default leaves enabled, the no-pad 0xF0 where NP2kai answers 0xFF, and the pad's 3rd/4th buttons not merged onto OPNA register 0x0E's two switch lines - and none of them is asserted, because none is an RTL defect. The fifth divergence, a disabled stick 1's buttons 3/4 leaking in 4-button mode, WAS a latent RTL defect: it is FIXED in pc9821_gameport and case 5d now asserts the disabled stick reads absent.
 //
 // ---- the references, and the exact transform ----
 // NP2kai cbus/board118.c:816-822 attaches gameport_o1480/gameport_i1480 to 0x1480..0x1487
@@ -104,7 +104,7 @@ module tb_pc9821_gameport_np2;
   endtask
 
   // A direct port of ao486's read expression, with the one-term disable-mask correction
-  // this core carries (r13/198 s2.4): in 4-button mode bits 6/7 are stick 1's, so the
+  // this core carries: in 4-button mode bits 6/7 are stick 1's, so the
   // mask there follows dis[0] and not ao486's dis[1]. Over an idle (all-zero) axis state
   // the byte is a pure function of the fields, so this checks the WHOLE byte function.
   task automatic ao486_byte(input [1:0] d, m, input [7:0] d1, d2,
@@ -358,7 +358,7 @@ module tb_pc9821_gameport_np2;
     discharge;
 
     // 5b. the second stick. The OSD declares no joystick entry, so joystick_dis is 0 and
-    // BOTH sticks are enabled (z486_mister.sv:477): bits 2/3 are stick 2's live axes, which
+    // BOTH sticks are enabled (pc9821_gameport.sv:33, `dis = 2'b00 (both sticks present)`): bits 2/3 are stick 2's live axes, which
     // run down, where NP2kai - which models one pad - latches 2/3 to 1 and never clears them.
     dis = 2'b00; mode = 2'd0; dig_1 = 14'd0; dig_2 = 14'd0;
     trigger;
@@ -376,7 +376,7 @@ module tb_pc9821_gameport_np2;
     if (io_dout !== 8'hFF)
       diverge("no joystick: core's default dis=2'b00 answers an idle enabled stick; NP2kai board118.c:383-386 answers 0xFF with no joystick available");
 
-    // 5d. a disabled stick in 4-button mode. FIXED (r13/198 s2.4): dis=2'b01 disables
+    // 5d. a disabled stick in 4-button mode. FIXED: dis=2'b01 disables
     // stick 1, and in 4-button mode bits 6/7 are stick 1's buttons 3/4, so the mask now
     // covers them and the disabled stick reads absent. On the pre-fix RTL this diverge
     // fired (bit 6 read 0); it must not now.

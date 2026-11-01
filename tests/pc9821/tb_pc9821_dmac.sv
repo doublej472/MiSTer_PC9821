@@ -5,8 +5,8 @@
 //
 // The uPD71071 register file answering the machine's own captured values (the address and count registers readable, 0x11/0x1B/0x29 reading 0x00, the write-only registers driving 0xFF), the ITF self-test shape surviving a real low/high byte flip-flop, and the engine moving bytes in both directions: a programmed count of N+1, the address walking by the mode's direction, terminal count reported on the last byte, the channel masked at terminal count, and the status bits cleared when the status register is read. Plus S7's clear-WIDTH pin: the 0x11 read clears only the terminal-count nibble stat[3:0] and leaves the request-state nibble stat[7:4] standing, which is exactly what NP2kai's dmac_i11 does (`dmac.stat &= 0xf0`, io/dmac.c:290-294) and exactly what a full-byte clear breaks.
 //
-// The register cases are the machine's, not the model's. An earlier review's
-// items B1-B7 record what the real machine answers at these ports: the address
+// The register cases are the machine's, not the model's. The machine
+// captures record what the real machine answers at these ports: the address
 // and count registers are readable, 0x11/0x1B/0x29 read 0x00, and
 // 0x13/0x15/0x17/0x19/0x1D/0x1F read 0xFF because they are write-only and the
 // chip drives that value -- "distinguished by the chip, not by bus float". S3

@@ -1,5 +1,5 @@
 // The Roland MPU-PC98II at 0xE0D0 (data) / 0xE0D2 (status, command): the C-bus MIDI card the
-// PC-98 software on the owner's disk asks for, modelled at the register level for the paths a
+// PC-98 software commonly asks for, modelled at the register level for the paths a
 // MIDI driver actually uses.
 //
 // WHICH CARD, AND WHY THOSE TWO ADDRESSES. MMD.COM (KAJA's M.M.D. 2.2f, the driver TH02's own
@@ -88,7 +88,8 @@ module pc9821_mpu #(
   // both, and that is the static rate built here. The general tempo law is [OPEN]
   // (REPORT sec.7.4.3: the true law is capture-pending and no capture exists), so this is
   // deliberately the rate the reference gives for the driver that would use it.
-  localparam [19:0] HCLK_STEP_CYCLES = SYS_CLOCK_HZ / 200;
+  localparam integer HCLK_STEP_CYCLES_I = SYS_CLOCK_HZ / 200;
+  localparam [19:0]  HCLK_STEP_CYCLES   = HCLK_STEP_CYCLES_I[19:0];
 
   // ---- state -----------------------------------------------------------------------------
   reg  [7:0]  rq [0:RQ_DEPTH-1];
@@ -96,7 +97,7 @@ module pc9821_mpu #(
   reg  [3:0]  rq_rd;
   reg  [4:0]  rq_cnt;
 
-  reg  [7:0]  txq [0:TX_DEPTH-1];
+  reg  [7:0]  txq [0:TX_DEPTH-1];   // indexed by the pointers' low 5 bits (TX_DEPTH 32)
   reg  [6:0]  tx_wr;
   reg  [6:0]  tx_rd;
   reg  [6:0]  tx_cnt;
@@ -136,7 +137,7 @@ module pc9821_mpu #(
   reg         hclk_on;
   reg [19:0]  hclk_sub;          // cycles within one stepclock
   reg  [6:0]  hclk_tick;         // stepclocks within the current 0xE7 step
-  reg  [7:0]  hclk_quarter;      // 1..64, from the 0xE7 follow byte
+  reg  [6:0]  hclk_quarter;      // 1..64, from the 0xE7 follow byte
   reg  [1:0]  hclk_dither;       // the same byte's low two bits (hclk_step1's row)
   reg  [2:0]  hclk_phase;        // the four-phase dither's index
   reg         hclk_kick;         // one immediate tick on 0x95; see the note at its arm
@@ -168,7 +169,7 @@ module pc9821_mpu #(
   wire       tx_push_pend  = !burst_on && !snd_on && pend_valid && tx_room;
   wire       tx_push       = tx_push_burst || tx_push_snd || tx_push_pend;
   wire [7:0] tx_push_byte  = tx_push_burst ?
-                               ((burst_ph == 2'd0) ? (8'hB0 + burst_ch) :
+                               ((burst_ph == 2'd0) ? (8'hB0 + {4'd0, burst_ch}) :
                                 (burst_ph == 2'd1) ? 8'h7B : 8'h00) :
                              tx_push_snd ? snd_buf[snd_pos] : pend_byte;
   wire       tx_pop        = (!tx_go && !tx_empty);
@@ -204,10 +205,10 @@ module pc9821_mpu #(
   reg [6:0] hclk_step_eff;
   always @(*) begin
     case (hclk_dither)
-      2'd0:    hclk_step_eff = hclk_quarter[6:0];
-      2'd1:    hclk_step_eff = hclk_quarter[6:0] + ((hclk_phase == 3'd0) ? 7'd1 : 7'd0);
-      2'd2:    hclk_step_eff = hclk_quarter[6:0] + ((hclk_phase <= 3'd1) ? 7'd1 : 7'd0);
-      default: hclk_step_eff = hclk_quarter[6:0] + ((hclk_phase <= 3'd2) ? 7'd1 : 7'd0);
+      2'd0:    hclk_step_eff = hclk_quarter;
+      2'd1:    hclk_step_eff = hclk_quarter + ((hclk_phase == 3'd0) ? 7'd1 : 7'd0);
+      2'd2:    hclk_step_eff = hclk_quarter + ((hclk_phase <= 3'd1) ? 7'd1 : 7'd0);
+      default: hclk_step_eff = hclk_quarter + ((hclk_phase <= 3'd2) ? 7'd1 : 7'd0);
     endcase
   end
 
@@ -247,7 +248,7 @@ module pc9821_mpu #(
       burst_on <= 1'b0; burst_ch <= 4'd0; burst_ph <= 2'd0;
       pend_valid <= 1'b0; pend_byte <= 8'd0;
       hclk_on <= 1'b0; hclk_sub <= 20'd0; hclk_tick <= 7'd0;
-      hclk_quarter <= 8'd1; hclk_dither <= 2'd0; hclk_phase <= 3'd0; hclk_kick <= 1'b0;
+      hclk_quarter <= 7'd1; hclk_dither <= 2'd0; hclk_phase <= 3'd0; hclk_kick <= 1'b0;
       // mpu98ii_reset:1149 leaves the DATA register holding an ACK, which is the byte MMD's
       // presence probe reads at 0xE0D0 before it has asked for anything.
       dat_latch <= 8'hFE;
@@ -291,9 +292,8 @@ module pc9821_mpu #(
         // The first tick is queued in the cycle after 0x95 rather than one stepclock later.
         // THAT IS A DELIBERATE DEVIATION: MMD waits for the 0xFD inside a 4000-iteration
         // `out 0x5F` loop (CS:0x167E), and this core's wait port is the machine's own
-        // measured 1621 ns (pc9821_iobus's IO_NS_5F_W / docs/probes/IO.TXT; it was the
-        // 600 ns anchor before the item-82 fix), so the driver's window is now
-        // comparable to the machine's
+        // measured 1621 ns (pc9821_iobus's IO_NS_5F_W / docs/probes/IO.TXT), so the
+        // driver's window is comparable to the machine's
         // 3.5 ms here against 8-16 ms on the machine - while the stepclock is 5 ms. Leaving the
         // first tick to the period would make the driver's connection check a race against our
         // own bus speed. The PERIOD afterwards is the reference's rate.
@@ -338,20 +338,20 @@ module pc9821_mpu #(
       if (tx_push_pend) pend_valid <= 1'b0;
       case ({tx_push, tx_pop})
         2'b10: begin
-          txq[tx_wr] <= tx_push_byte;
+          txq[tx_wr[4:0]] <= tx_push_byte;
           tx_wr      <= tx_wr + 7'd1;
           tx_cnt     <= tx_cnt + 7'd1;
         end
         2'b01: begin
-          tx_byte <= txq[tx_rd];
+          tx_byte <= txq[tx_rd[4:0]];
           tx_rd   <= tx_rd + 7'd1;
           tx_cnt  <= tx_cnt - 7'd1;
           tx_go   <= 1'b1;
         end
         2'b11: begin
-          txq[tx_wr] <= tx_push_byte;
+          txq[tx_wr[4:0]] <= tx_push_byte;
           tx_wr      <= tx_wr + 7'd1;
-          tx_byte    <= txq[tx_rd];
+          tx_byte    <= txq[tx_rd[4:0]];
           tx_rd      <= tx_rd + 7'd1;
           tx_go      <= 1'b1;
         end
@@ -376,7 +376,7 @@ module pc9821_mpu #(
               snd_on     <= 1'b0; snd_pos <= 2'd0;
               long_first <= 1'b1; long_pos <= 11'd0;
               // setdefaultcondition (:131-170) clears flag2, so the reset stops the clock too.
-              hclk_on    <= 1'b0; hclk_quarter <= 8'd1; hclk_dither <= 2'd0;
+              hclk_on    <= 1'b0; hclk_quarter <= 7'd1; hclk_dither <= 2'd0;
               hclk_phase <= 3'd0;
             end
             8'h3F: begin                      // UART mode (mpucmd_3f :451-457)
@@ -489,7 +489,7 @@ module pc9821_mpu #(
 
       // ---- a follow byte for 0xE0..0xEF (setmpucmdgroupe, :727-770) ---------------------
       if (dat_wr && !uart_mode && (phase == PH_FOLLOW) && (cmd_prev == 8'hE7)) begin
-        hclk_quarter <= (din[7:2] == 6'd0) ? 8'd64 : {2'd0, din[7:2]};
+        hclk_quarter <= (din[7:2] == 6'd0) ? 7'd64 : {1'b0, din[7:2]};
         hclk_dither  <= din[1:0];
         hclk_sub     <= 20'd0;
         hclk_tick    <= 7'd0;

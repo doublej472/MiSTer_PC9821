@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PEGC posted store buffer's area rewrite (per-entry per-lane merge writes with a one-hot match instead of a read-back merge, 25-bit entry addresses, age counters saturating at HOLD_CYCLES) is cycle-for-cycle identical to the pre-rewrite buffer (pc9821_pegc_storebuf_ref.sv, the module as of ac2538dc): over several hundred thousand cycles of random posted stores into a small pool of dwords and rows (so combines, adjacent pairs, same-row gathers, row changes, age-outs, a full buffer and drain-before-read all occur) with random backend accepts and response-queue back-pressure, in_ready, mem_valid, mem_addr/din/be/burstcount/write/gath and busy match on every cycle, and the payload slots the controller reads - din_hi of a two-dword pair and the carried entries 1..burstcount-1 of a gather - match whenever a request is presented.
+// The PEGC posted store buffer's area rewrite (per-entry per-lane merge writes with a one-hot match instead of a read-back merge, 25-bit entry addresses, age counters saturating at HOLD_CYCLES) is cycle-for-cycle identical to the pre-rewrite buffer (pc9821_pegc_storebuf_ref.sv, the module as of ac2538dc): over several hundred thousand cycles of random posted stores into a small pool of dwords and rows (so combines, adjacent pairs, same-row gathers, row changes, age-outs, a full buffer and drain-before-read all occur) with random backend accepts and response-queue back-pressure, in_ready, mem_valid, mem_burstcount/write/gath and busy match on every cycle, and the payload the controller reads - mem_addr/din/be, din_hi of a two-dword pair and the carried entries 1..burstcount-1 of a gather - match whenever a request is presented (the arbiter picks only a valid port, and an idle buffer's free slot at rp is written on every post since the C5-free cut), in four different 512 KiB windows (the entries hold only the window offset, byte address [18:2], and one shared copy of bits [26:19]).
 
 // ==== DUT ====
 // pc9821_pegc_storebuf vs pc9821_pegc_storebuf_ref, same inputs, two geometries (sdram_size 3 and 1)
@@ -20,6 +20,7 @@ module tb_pc9821_pegc_storebuf_equiv;
   reg  [7:0] in_burstcount = 1;
   reg  [1:0] sdram_size = 2'd3;
   reg        rdy_rnd = 0;
+  reg [31:0] win_base = 32'h0200_0000;   // the 512 KiB window every store of a pass lies in
 
   `define OUTS(p) \
     wire p``_ready, p``_valid, p``_write, p``_gath, p``_busy; \
@@ -79,7 +80,9 @@ module tb_pc9821_pegc_storebuf_equiv;
       in_write <= (x[11:8] != 4'd0);
       in_burstcount <= (x[15:12] == 4'd0) ? 8'd4 : 8'd1;
       // pool: 3 rows x 6 dwords (adjacent pairs inside a row), plus a far row
-      in_addr <= 32'h0200_0000 + ((x[18:16] % 4) * 32'h1000) + ((x[22:19] % 6) * 4);
+      in_addr <= win_base + ((x[18:16] % 4) * 32'h1000) + ((x[22:19] % 6) * 4);
+      // now and then the window's LAST dwords, so the wrap from its last dword to its first is met
+      if (x[31:29] == 3'd0) in_addr <= (win_base & 32'hFFF8_0000) + 32'h0007_FFF0 + {28'd0, x[28:27], 2'b00};
       in_din <= $random(seed);
       in_be <= (x[26:23] < 4'd6) ? 4'hF : x[30:27];
     end
@@ -103,8 +106,8 @@ module tb_pc9821_pegc_storebuf_equiv;
   // compare just before each rising edge
   always @(posedge clk) if (!reset) begin
     if (d_ready !== r_ready || d_valid !== r_valid || d_write !== r_write || d_gath !== r_gath ||
-        d_busy !== r_busy || d_addr !== r_addr || d_din !== r_din ||
-        d_be !== r_be || d_bc !== r_bc || (d_valid && d_gath && !d_write) ||
+        d_busy !== r_busy || d_bc !== r_bc ||
+        (d_valid && ((d_addr !== r_addr) || (d_din !== r_din) || (d_be !== r_be))) || (d_valid && d_gath && !d_write) ||
         (d_valid && !d_gath && d_write && (d_bc == 8'd2) && (d_din_hi !== r_din_hi)) ||
         (d_valid && d_gath && (d_exu_used !== r_exu_used))) begin
       errors = errors + 1;
@@ -121,6 +124,7 @@ module tb_pc9821_pegc_storebuf_equiv;
   initial begin
     for (pass = 0; pass < 4; pass = pass + 1) begin
       sdram_size = (pass % 2) ? 2'd1 : 2'd3;
+      win_base = (pass == 0) ? 32'h0200_0000 : (pass == 1) ? 32'h0007_8000 : (pass == 2) ? 32'h07F8_0000 : 32'h0388_0000;
       seed = 100 + pass;
       for (ph = 0; ph < 3; ph = ph + 1) begin
         reset = 1; in_valid = 0;

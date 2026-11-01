@@ -1,7 +1,10 @@
 // PC-9821 CRTC: the 24 kHz text raster, the text-cell fetch/render and the pixel outputs.
 // It owns the raster counters and their measured geometry, the
-// text RAM and the fetch pipeline, the render registers and pixel generator, the cursor and
-// blink counters, the CPU-side video register decode and the configuration snapshot handshake.
+// text RAM and the fetch pipeline, the text line sequencer (which character row and which line
+// of it each raster line shows: the GDC's LR and display partitions, the CRTC's PL/BL/CL/SSL/
+// SUR/SDR - 20/25/30-line text, split screens and smooth scrolling), the render registers and
+// pixel generator, the cursor and blink counters, the CPU-side video register decode and the
+// configuration snapshot handshake.
 //
 // One clock. clk_sys gated by pixel_ce, which IS the dot enable: there is no second video
 // clock. The graphics display-address decode is pc9821_gdc2's; the glyph path is
@@ -19,7 +22,45 @@
 module pc9821_crtc (
     input wire clk_sys,
     input wire rst_n_sys,
+    // The RASTER POSITION COUNTER's own reset, freed from `rst_n_sys` (which is
+    // `!(reset || !cpu_run)`): pc9821_system drives this from `!reset` (`wire rst_n_vid =
+    // !(reset || cpu_run_rise);`, with a one-cycle
+    // re-seed when cpu_run rises, so the phase a guest then sees is unchanged), so the
+    // power-on defsyncm24 raster runs as soon as the core is out of reset, pack or no pack.
+    // The analog OSD is drawn in the core's own timing (sys_top.v vga_osd), so with
+    // no firmware pack the framework otherwise measures a 0x0 mode, the analog OSD
+    // cannot be placed, and a ROM cannot be loaded from that OSD. EVERY OTHER block
+    // in this module (the status flops, the scanout, the geometry) stays on
+    // `rst_n_sys`, so this changes no guest-visible value: with `!cpu_run` no guest
+    // can be running. See docs/policies.md's rule that the raster comes from the GDC's own
+    // SYNC parameters (the defsyncm24 reset values).
+    input wire rst_n_vid,
     input wire pixel_ce,       // the dot enable (one clk_sys per pixel shown)
+    // The SLAVE is displaying the current raster line: its START latch is on and the line is in
+    // its graphics window (pc9821_gdc2's gfx_grph_on: at or below grph_vbp and above grphymax).
+    // The picture's height is the TALLER of the two GDCs'
+    // windows - NP2kai dispsync_renewalvertical `scrnymax = MAX(grphymax, textymax)` - so a
+    // slave window that runs past the master's active lines extends the displayed area (the
+    // text plane stays inside the master's). The BIOS 640x480 mode needs it: INT 18h AH=30h
+    // with BH=0x31 (25 rows; the Win95 PC-9821 256-colour driver's call, PEGCV8.DRV seg 2
+    // @0x0B0D) programs the master with AL 475 (19-line rows) and the slave with AL 480 (NP2kai
+    // bios/bios18.c gdcmastersync[4] `0xdb,0x95` / gdcslavesync[1] `0xe0,0x95`; the Xe10
+    // firmware's own rows at BANK3@0x1F8E and 0x1E2D carry the same bytes). NP2kai takes the
+    // MAX whether or not the slave was started; a slave that was never STARTed puts nothing on
+    // the screen, so here it extends nothing (a text-only block keeps the master's lines).
+    // THE START TERM IS KEPT DELIBERATELY, against NP2kai: dispsync_renewalvertical (vram/dispsync.c)
+    // reads only gdc.s.para[GDC_SYNC] and has no START term, but that is the emulator's surface
+    // arithmetic, and qemu-pc98 and MAME model no per-GDC picture height at all, so no reference
+    // evidences the real pair raising DE on lines only a stopped slave's window covers. The two
+    // readings differ only in lines that are black either way on the analog output (graphics off,
+    // the master's text over), and dropping the term would stretch every master-only reprogram
+    // (a SYNC written while the slave keeps its power-on 400-line window) to the slave's height
+    // on the HDMI scaler: tb_pc9821_gdc_sync_raster and tb_pc9821_line_doubler pin the master's
+    // lines for that case. A hardware capture cannot tell them apart from a monitor either.
+    input wire gfx_win_on,
+    // 0x09A8 bit 0 (pc9821_iobus): the 31 kHz dot clock is running, so the 31 kHz monitor range
+    // clamps the raster (the geometry section). Sampled at the frame boundary with the block.
+    input wire crt31k,
 
     // I/O port interface (from pc98_iobus; addr = port address [7:0])
     input  wire       io_wr,
@@ -40,16 +81,6 @@ module pc9821_crtc (
     //       mode2_textshift)       [7] gdc.clock[0]  [8] gdc.clock[1]
     //   [9] analog 256 (GDCANALOG_256)             [10] analog 256E
     output wire [10:0] gdc_ff2_state,
-    // The GRCG's live mode register (pc9821_grcg, through
-    // pc9821_memory_subsystem). The 0x7C guest read no longer answers it: that
-    // port is WRITE-ONLY and its byte read is open bus 0xFF (the machine capture
-    // docs/probes/RDBACK.TXT:152). No other logic in this module consumes the
-    // register either, so this input is DEAD-but-wired: pc9821_system and the
-    // test DUT (pc9821_gdc_text_dut) still drive it, and unpicking that
-    // connection is a wider change than a read-port fix.
-    /* verilator lint_off UNUSEDSIGNAL */   // reason: see above - the port is kept wired, not read
-    input  wire [7:0] grcg_mode_r,
-    /* verilator lint_on UNUSEDSIGNAL */
 
     // TRAM CPU port (memory bridge; 0xA0000-0xA3FFF)
     input  wire [13:0] tram_cpu_addr,
@@ -74,7 +105,7 @@ module pc9821_crtc (
     // cell is seeded with the byte the INIT_BYTES literal below already carries (0x01), so a
     // card with no config file is bit-identical.
     //
-    // THE BASE MEMORY (0xA3FEA bits 2:0) IS NO LONGER A PORT: the real Xe10 has no
+    // THE BASE MEMORY (0xA3FEA bits 2:0) IS NOT A PORT: the real Xe10 has no
     // SETUP/DIP option that changes the conventional memory size (its SETUP menu carries no
     // such item, and NP2kai
     // takes the value from the memory-switch cell, not from a guest setting), so it is
@@ -103,8 +134,14 @@ module pc9821_crtc (
     // ---- Raster and configuration the row-cache walker needs ----
     output wire [7:0]  o_v_pitch,
     output wire        o_v_col40,
+    // The start word of the partition the walker's next row is in (partition 0's is the
+    // display-start snapshot, as it always was), and the walk request itself: go on the row's
+    // first line, the row's index in its partition and the cache bank to fill.
     output wire [15:0] o_v_sad,
     output wire        o_v_row0_stale,
+    output wire        o_wk_go,
+    output wire [9:0]  o_wk_k,
+    output wire [1:0]  o_wk_bank,
     output wire [9:0]  o_vline,
     output wire [9:0]  o_hdot,
     // The guest-programmed geometry itself: HTOTAL in dots (pc9821_system's GVRAM line tick
@@ -137,6 +174,12 @@ module pc9821_crtc (
     output wire gfx_access_page,
     // The EGC's gate: the extended-mode bit (FF2 num 2, mode2_egc).
     output wire gfx_egc_gate,
+    // mode2_egc's NEXT state, exported so pc9821_system's pc9821_egc_mem_gate can register the
+    // EGC x GRCG memory gate from BOTH sources' next state (a true pipeline relocate: the register
+    // is cycle-identical to the combinational AND, and the crtc-launched GVRAM cone is cut;
+    // docs/timing.md). This is the register's OWN next-state expression below,
+    // not a copy of it.
+    output wire gfx_egc_gate_nx,
 
     // Bring-up telemetry: the display window the guest programmed.
     output wire [15:0] dbg_sad,
@@ -204,10 +247,10 @@ module pc9821_crtc (
   // THE FIELD MAP (para[] = the eight parameter bytes in arrival order; NP2kai's own names):
   //   cr   = para[1] + 2                     active characters -> HACTIVE = 8*cr
   //   tmp  = word(para[2..3])                para[2] is the LOW byte
-  //     hs   = tmp & 0x1f                    h sync width      -> HSYNC_W = 8*hs
+  //     hs   = tmp & 0x1f                    h sync width      -> HSYNC_W = 8*(hs+1)  (MAME m_hs)
   //     vs   = (tmp >> 5) & 0x1f             v sync width      -> VSYNC_W = vs
-  //     hfp2 = tmp >> 10                     h front porch     the two hfp fields sum
-  //   para[4] & 0x3f                         the rest of the h front porch -> HFP = 8*(hfp2+that)
+  //     hfp2 = tmp >> 10                     h front porch     -> HFP = 8*(hfp2+1)    (MAME m_hfp)
+  //   para[4] & 0x3f                         h back porch      -> HBP = 8*(that+1)    (MAME m_hbp)
   //   para[5] & 0x3f                         v front porch     -> VFP
   //   tmp2 = word(para[6..7])
   //     lf   = ((tmp2 - 1) & 0x3ff) + 1      active lines      -> VACTIVE
@@ -219,8 +262,16 @@ module pc9821_crtc (
   // blanking fields are zero: `if (!vfbs) vfbs = 1`). x and y are then CLAMPED into the
   // 24 kHz machine's monitor range - gdcclk[1] (io/gdc.c:34) is THIS machine's entry: the
   // character clock 21052600/8 with minx 100, maxx 112, miny 400, maxy 575. The GDC clock
-  // select (0x6A nums 0x41/0x42) never moves the raster (measured on the machine), and gdcclk[0] (15.98 kHz) and the
-  // SUPPORT_CRT31KHZ entry belong to other machines' monitors.
+  // select (0x6A nums 0x41/0x42) never moves the raster (measured on the machine), and gdcclk[0]
+  // (15.98 kHz) belongs to other machines' monitors. WHILE 0x09A8 BIT 0 IS SET (crt31k) the dot
+  // clock is the separate 31 kHz oscillator (pc9821_vclk_pkg, docs/probes/CRT31K.TXT) and the range
+  // is NP2kai's SUPPORT_CRT31KHZ entry gdcclk[2] (io/gdc.c:36 `{25260000 / 8, 100 - 8, 100 + 8,
+  // 400, 575}`): minx 92, maxx 108, miny 400, maxy 575 - selected by the same bit in
+  // gdc_updateclock (io/gdc.c:402-404 `if (gdc.display & (1 << GDCDISP_31)) clk = gdcclk + 2`).
+  // Only its range is taken: its 25.26 MHz clock is the capture's divergence. The capture's
+  // 800 x 449 block (x 100, y 449) and the BIOS 640 x 480 block (NP2kai bios/bios18.c
+  // gdcmastersync[3..5]: x 100, y 525) sit inside both ranges, so the capture cannot test the
+  // limits themselves.
   // ONE DIVERGENCE, stated: where the clamp bites, NP2kai also rescales cr/lf by the clamp
   // ratio to keep the emulator's picture in proportion (io/gdc.c:419-430). That divide is not
   // modelled: the active counts are taken from the block and the blanking absorbs the clamp.
@@ -233,7 +284,7 @@ module pc9821_crtc (
   // {10 4e 07 25 07 07 90 65} -> cr 80, hs 7, vs 8, hfp 9+7, vfp 7, lf 400, vbp 25, so
   // x = 106 characters = 848 dots and y = 440 lines: 640 active dots in an 848-dot line and
   // 400 active lines in a 440-line frame, i.e. 24.83 kHz lines and 56.42 Hz frames at the
-  // 21.0526 MHz dot clock, with porches 128/56/24 and 7/8/25 and the VSYNC pulse rising on
+  // 21.0526 MHz dot clock, with porches (front/sync/back) 80/64/64 and 7/8/25 and the VSYNC pulse rising on
   // vline 407 = VACTIVE + VFP (docs/probes/FLIP.TXT).
   //
   // THE PULSE WIDTH IS THE vs FIELD, and the machine's own capture says so: the 2M-sample
@@ -241,14 +292,15 @@ module pc9821_crtc (
   // the 440 lines once its sampling loop's x1.048 duty bias is divided out - the bias the
   // same capture's bit 6 shows against the horizontal blank (23.4 % measured, 208/848 =
   // 24.53 % modelled) - so the machine's VSYNC pulse IS the block's vs = 8 lines, as MAME's
-  // m_vs (upd7220.cpp:1236) and NP2kai's own expression both derive. The 12-line pulse this
-  // file used to hardcode came from a "2.8 %" of the SAME count over a divisor of 1 310 720
-  // instead of the 2 097 152 its own always-set bit 2 (0x200000 samples) prints; that
-  // mis-derivation is corrected here (docs/probes/GDC.TXT).
+  // m_vs (upd7220.cpp:1236) and NP2kai's own expression both derive. A 12-line pulse would
+  // come from a "2.8 %" of the SAME count over a divisor of 1 310 720 instead of the
+  // 2 097 152 its own always-set bit 2 (0x200000 samples) prints - a mis-derivation
+  // (docs/probes/GDC.TXT).
   // ---------------------------------------------------------------
   // gdcclk[1]'s range (see above), in characters and lines, and NP2kai's own h back porch.
   localparam [9:0] CLK_MINX = 10'd100, CLK_MAXX = 10'd112;
   localparam [9:0] CLK_MINY = 10'd400, CLK_MAXY = 10'd575;
+  localparam [9:0] CLK31_MINX = 10'd92, CLK31_MAXX = 10'd108;   // gdcclk[2]; y as gdcclk[1]
   localparam [8:0] HBP_CH   = 9'd3;
   // A sync pulse always LANDS somewhere: a zero-width hsync or vsync would silence the edge
   // the framework's scaler and the 0x64 VSYNC latch count on, and both references drive one
@@ -281,31 +333,37 @@ module pc9821_crtc (
   // (and reset, which loads both halves with the default block's values together). So geom_d
   // can differ from crtc_d(the roots) only in the ONE clk_sys right after that edge, when
   // hdot = vline = 0. Every compare made there has the same answer for ANY two geometries:
-  // HS_ON >= 16 and VS_ON >= VACTIVE >= 1 (no pulse at dot 0 / line 0), and HTOT_M1 >= 799,
+  // HS_ON >= 16 and VS_ON >= VACTIVE >= 1 (no pulse at dot 0 / line 0), and HTOT_M1 >= 735,
   // VTOT_M1 >= 399, WK_SNAP >= 383 (no line
   // end, frame end or walk slot) - tools/equiv/crtc_geom_lag.sv proves exactly that for every
-  // pair of blocks. The one register that samples a compare there, f_wrap_r (VACT_M1), is
-  // re-sampled at the next dot and read only at the line's last cell (its own header). Every
-  // OUTPUT is therefore the pre-change module's at every cycle: tb_pc9821_crtc_geom_equiv
-  // pins that against the pre-change text, and tools/equiv/crtc_geom.sv proves the functions
-  // equal to the old wiring for every block. HTOTAL/VTOTAL/HACTIVE/VACTIVE themselves are roots
-  // (8*x, y and the active window), so o_htotal/o_vtotal, feed_odd, the active window and the
-  // fetch walker read edge-registered values equal to the old decode at every cycle.
+  // pair of blocks. The one compare against VACT_M1 sampled there is the text line sequencer's
+  // restart test (vline == VACT_M1 at a line's first dot); vline = 0 can equal VACT_M1 only
+  // for a one-line picture (lf = 1), the one block whose lag cycle could pick a restart. Every
+  // OUTPUT therefore equals a direct combinational decode's at every cycle:
+  // tb_pc9821_crtc_geom_equiv pins that against a reference copy, and tools/equiv/crtc_geom.sv
+  // proves the functions equal to the direct wiring for every block. HTOTAL/VTOTAL/HACTIVE/
+  // VACTIVE themselves are roots (8*x, y and the active window), so o_htotal/o_vtotal,
+  // feed_odd, the active window and the fetch walker read edge-registered values equal to the
+  // direct decode at every cycle.
   //
   // THE FIELD MAP AND CLAMP (unchanged; see the block comment above).
   /* verilator lint_off UNUSEDSIGNAL */   // each function takes whole parameter bytes and reads
   // only the fields NP2kai's map puts in them (b0, the sync-format byte, is never read).
   function automatic [7:0] crtc_x;
+    input       c31;
     input [7:0] b1, b2, b3, b4;
     reg  [9:0] cr; reg [4:0] hs_f; reg [6:0] hfp_f; reg [8:0] hfbs; reg [9:0] x_raw;
+    reg  [9:0] minx, maxx;
     begin
+      minx  = c31 ? CLK31_MINX : CLK_MINX;
+      maxx  = c31 ? CLK31_MAXX : CLK_MAXX;
       cr    = {2'b00, b1} + 10'd2;
       hs_f  = b2[4:0];
       hfp_f = {1'b0, b3[7:2]} + {1'b0, b4[5:0]};
       hfbs  = {4'b0000, hs_f} + {2'b00, hfp_f} + HBP_CH;
       x_raw = cr + {1'b0, hfbs};
-      crtc_x = (x_raw < CLK_MINX) ? CLK_MINX[7:0]
-             : (x_raw > CLK_MAXX) ? CLK_MAXX[7:0] : x_raw[7:0];
+      crtc_x = (x_raw < minx) ? minx[7:0]
+             : (x_raw > maxx) ? maxx[7:0] : x_raw[7:0];
     end
   endfunction
   // ((tmp2 - 1) & 0x3ff) + 1 is the low ten bits of tmp2 minus one, plus one.
@@ -334,7 +392,7 @@ module pc9821_crtc (
   // The active window always leaves blanking to hold its own sync (x = cr + at least 3
   // characters, so for a block whose cr is inside its line this is cr exactly - and it is
   // clamped INTO the frame). HACTIVE and VACTIVE are ROOTS too (edge-registered, so equal to
-  // the old decode at every cycle like HTOTAL/VTOTAL - the four values the odd-sync-parity
+  // the direct decode at every cycle like HTOTAL/VTOTAL - the four values the odd-sync-parity
   // contract names, tb_pc9821_tram_addr_equiv's geom-shared-bit-identity).
   function automatic [9:0] crtc_hact;
     input [7:0] x; input [7:0] b1;
@@ -361,21 +419,30 @@ module pc9821_crtc (
   function automatic [G_W-1:0] crtc_d;
     input [7:0] x; input [9:0] y; input [9:0] hactive; input [9:0] vactive;
     input [7:0] b2, b3, b4, b5;
-    reg [4:0] hs_f; reg [6:0] hfp_f; reg [4:0] vs_f; reg [5:0] vfp_f;
+    reg [5:0] hs_f; reg [6:0] hfp_f; reg [4:0] vs_f; reg [5:0] vfp_f;
     reg [9:0] htotal, vtotal, hblank, hfp8, hs8, hfp, hsync_w;
     reg [9:0] vblank, vfp10, vfp, vs10, vs_room, vsync_w, wk_slot;
     begin
-      hs_f    = b2[4:0];
-      hfp_f   = {1'b0, b3[7:2]} + {1'b0, b4[5:0]};
+      // THE HORIZONTAL PORCHES ARE THE uPD7220's (MAME upd7220.cpp:1243-1246: `m_hs = (m_pr[3] &
+      // 0x1f) + 1`, `m_hfp = (m_pr[4] >> 2) + 1`, `m_hbp = (m_pr[5] & 0x3f) + 1`, in characters;
+      // MAME's m_pr[n] is this file's para[n-1]): HSYNC_W = 8*(hs+1), HFP = 8*(hfp2+1), and the back
+      // porch is the rest, 8*((para[4] & 0x3f)+1) when the totals are not clamped. NP2kai only sums
+      // the same three fields (+3, its three "+1"s) into the line total and never places a porch,
+      // so the split is MAME's. Taking para[4] as more FRONT porch would give the default block
+      // HFP 128 / HS 56 / HBP 24 dots instead of 80 / 64 / 64: the same blanking and line, but
+      // the hsync 40 dots late, which puts the analog picture far left on a monitor (seen on the
+      // doubled output). Only hs_out depends on it (no guest-visible bit reads hsync).
+      hs_f    = {1'b0, b2[4:0]} + 6'd1;
+      hfp_f   = {1'b0, b3[7:2]} + 7'd1;
       vs_f    = {b3[1:0], b2[7:5]};
       vfp_f   = b5[5:0];
-      // HTOTAL = 8*x characters: 800..896 dots; VTOTAL = y: 400..575 lines; the pulse fits
+      // HTOTAL = 8*x characters: 736..896 dots (800..896 at 24 kHz); VTOTAL = y: 400..575 lines; the pulse fits
       // inside the blanking the active window leaves.
       htotal  = x * 10'd8;
       vtotal  = y;
       hblank  = htotal - hactive;                                     // >= 8 dots
       hfp8    = {hfp_f, 3'b000};
-      hs8     = {2'b00, hs_f, 3'b000};
+      hs8     = {1'b0, hs_f, 3'b000};
       hfp     = (hfp8 <= (hblank - 10'd8)) ? hfp8 : (hblank - 10'd8);
       hsync_w = (hs8 == 10'd0) ? HSYNC_MIN
               : (hs8 <= (hblank - hfp)) ? hs8 : (hblank - hfp);
@@ -389,7 +456,7 @@ module pc9821_crtc (
       wk_slot = (vtotal - 10'd1) & 10'h3F0;
       // Each operand is the 10-bit value its consumer compared against before (the pulses'
       // bounds were 10-bit sums in a 10-bit compare; the "- 1" bounds are exact because
-      // HTOTAL >= 800 and VTOTAL >= 400 never wrap).
+      // HTOTAL >= 736 and VTOTAL >= 400 never wrap).
       crtc_d = {vsync_w, vfp, wk_slot - 10'd1, wk_slot,
                 vactive + vfp + vsync_w, vactive + vfp, vactive - 10'd1,
                 vtotal - 10'd1,
@@ -406,7 +473,7 @@ module pc9821_crtc (
   reg  [9:0] s_va_r;   // VACTIVE
   // The derived operands (registered every clk_sys, below).
   reg [G_W-1:0] geom_d;
-  wire [9:0] HTOTAL   = s_x_r * 10'd8;            // 800..896 dots (8*x: a shift)
+  wire [9:0] HTOTAL   = s_x_r * 10'd8;            // 736..896 dots (8*x: a shift)
   wire [9:0] VTOTAL   = s_y_r;                    // 400..575 lines
   wire [9:0] HTOT_M1  = geom_d[G_HTOT_M1 +: 10];
   wire [9:0] HACTIVE  = s_ha_r;
@@ -441,6 +508,9 @@ module pc9821_crtc (
   wire in_vsync = (vline >= VS_ON) && (vline < VS_OFF);
   wire h_active = (hdot < HACTIVE);
   wire v_active = (vline < VACTIVE);
+  // The DISPLAYED lines: the master's active lines, or the slave's graphics window (see
+  // gfx_win_on) - never into the master's VSYNC, which stays where its block puts it.
+  wire v_disp_any = v_active || (gfx_win_on && (vline < VS_ON));
   wire frame_end = (vline == VTOT_M1) && (hdot == HTOT_M1);
   // The last walk slot of the vertical blanking interval, where the walker's own display-start
   // inputs are copied ahead of the walk trigger in the next slot (vline 432 for the default
@@ -468,9 +538,9 @@ module pc9821_crtc (
       v_sync[2] <= sync_live[2]; v_sync[3] <= sync_live[3];
       v_sync[4] <= sync_live[4]; v_sync[5] <= sync_live[5];
       v_sync[6] <= sync_live[6]; v_sync[7] <= sync_live[7];
-      s_x_r  <= crtc_x(sync_live[1], sync_live[2], sync_live[3], sync_live[4]);
+      s_x_r  <= crtc_x(crt31k, sync_live[1], sync_live[2], sync_live[3], sync_live[4]);
       s_y_r  <= crtc_y(sync_live[2], sync_live[3], sync_live[5], sync_live[6], sync_live[7]);
-      s_ha_r <= crtc_hact(crtc_x(sync_live[1], sync_live[2], sync_live[3], sync_live[4]),
+      s_ha_r <= crtc_hact(crtc_x(crt31k, sync_live[1], sync_live[2], sync_live[3], sync_live[4]),
                           sync_live[1]);
       s_va_r <= crtc_vact(crtc_y(sync_live[2], sync_live[3], sync_live[5], sync_live[6],
                                  sync_live[7]), crtc_lf(sync_live[6], sync_live[7]));
@@ -485,8 +555,14 @@ module pc9821_crtc (
       geom_d <= crtc_d(s_x_r, s_y_r, s_ha_r, s_va_r, v_sync[2], v_sync[3], v_sync[4], v_sync[5]);
   end
 
+  // The raster position counter is the ONE block reset by `rst_n_vid` (i.e. `!reset`, not
+  // `!(reset || !cpu_run)`): it must walk the defsyncm24 geometry before the firmware pack
+  // loads, so the machine emits a valid raster for the analog OSD with no ROM. geom_d and
+  // the sync roots above stay held by `rst_n_sys` at the default block, so the counter walks
+  // exactly that geometry; the status flops below stay on `rst_n_sys` so the reset status is
+  // unchanged.
   always @(posedge clk_sys) begin
-    if (!rst_n_sys) begin
+    if (!rst_n_vid) begin
       hdot  <= 10'd0;
       vline <= 10'd0;
     end else if (pixel_ce && frame_end) begin
@@ -509,11 +585,22 @@ module pc9821_crtc (
   // act on *GVRAM*, not on the text plane. This module keeps no copy of them -
   // 0x7C is write-only and its guest read is open bus 0xFF (RDBACK.TXT:152).
   reg [7:0] pitch;  // words per line
-  // The text GDC's parameter RAM: screen 0's display start only, {sad_lo, sad_hi}. The
-  // four-screen form has no reader past screen 0 - screens 1-3 and every length field are
-  // written by the 0x70/0x74/0x78/0x7C PRAM commands and read back by nothing (the GDC's
-  // PRAM has no read port in the RTL or in NP2kai), so they are not kept.
-  reg [7:0] pram_scr[0:1];
+  // The text GDC's parameter RAM: the four display partitions (NP2kai GDC_SCROLL + GDC_TEXTW,
+  // sixteen bytes, io/gdc_cmd.h:35-36 `GDC_SCROLL = (GDC_CSRFORM+3)`). Command 0x70+n writes
+  // para[GDC_SCROLL+n] onward, up to the sixteenth byte (io/gdc_cmd.tbl:129-144
+  // `{GDC_SCROLL+0, 16, 0, 1}, // 70 CMD_SCROLL` ... `{GDC_TEXTW+7, 1, 0, 1}, // 7f`), and
+  // maketext reads partition i's four bytes at offset 4i (vram/maketext.c:416-418
+  // `esi = LOW12(LOADINTELWORD(gdc.m.para + GDC_SCROLL + scrp))`): the start word is LOW12 of
+  // bytes 0-1 and the line count LOW14 of bytes 2-3 shifted right by four. Only those fields
+  // are kept: partition 0's start stays the two whole bytes it always was (the scanout's
+  // display-start snapshot and its pre-mask tap read them), the rest are the fields alone.
+  // The GDC's PRAM has no read port (NP2kai has none either), so nothing else is stored.
+  reg [7:0]  pram_scr[0:1];
+  reg [9:0]  pram_len0;                          // partition 0's line count
+  reg [11:0] pram_sad1, pram_sad2, pram_sad3;    // partitions 1-3: LOW12 start word
+  reg [9:0]  pram_len1, pram_len2, pram_len3;    // ...and line count
+  reg [3:0]  pram_ptr;                           // the next PRAM byte a parameter writes
+  reg        pram_act;                           // a PRAM command is taking parameter bytes
   reg [7:0] csr_ead[0:1];  // CSRW cursor address
   // CSRW's THIRD byte, the address bits 16+. It is not dropped after all: the
   // CSRR command (0xE0) answers it masked to 2 bits as parameter byte 2
@@ -521,7 +608,10 @@ module pc9821_crtc (
   reg [7:0] csr_ead2;
   reg [7:0] csr_form[0:2];  // CSRFORM params
   reg cmd_active;
-  reg [7:0] cur_cmd;
+  // The command in hand, as the class the parameter path and the read-back need (the byte itself
+  // is read nowhere else): 0 PITCH (0x47), 1 CSRW (0x49), 2 CSRFORM (0x4B), 3 0x06, 4 CSRR (0xE0),
+  // 5 any other.
+  reg [2:0] cur_k;
   reg [2:0] param_cnt;
   reg sync_pending;
   reg [2:0] sync_cnt;
@@ -541,13 +631,21 @@ module pc9821_crtc (
   // a read of 0x62 pops one byte, and any new command replaces it (gdc_work's
   // `item->snd = gdc_cmd[data].indatas`). CSRR answers {CSRW0, CSRW1, CSRW2&3,
   // 0, 0}; LPEN answers para[GDC_LPEN..2] = para[29..31] (io/gdc_cmd.h:34,38:
-  // GDC_CSRFORM = 9, GDC_LPEN = 29 - the old "== 29" claim was false). No
+  // GDC_CSRFORM = 9, GDC_LPEN = 29). No
   // command writes those slots (no gdc_cmd.tbl row stores to pos 29) and
   // gdc_reset zero-fills them (io/gdc.c:1160), so LPEN answers 00 00 00 - NOT
   // the CSRFORM bytes this module keeps for the cursor.
-  reg [7:0] gdc_snd[0:4];
+  // The queue is not stored: 0xE0's answer is {CSRW0, CSRW1, CSRW2 & 3, 0, 0} of the LIVE cursor
+  // registers, which cannot move while it is pending (the CSRW parameters land only under
+  // cmd_active, which 0xE0 clears, and the next command - the only way back to cmd_active -
+  // replaces the queue), and 0xC0's is three zeros. gdc_snd_head is the byte the next pop returns.
   reg [2:0] gdc_snd_cnt;
   reg [2:0] gdc_snd_ptr;
+  wire [7:0] gdc_snd_head;
+  assign gdc_snd_head = (cur_k != 3'd4)        ? 8'h00 :
+                        (gdc_snd_ptr == 3'd0) ? csr_ead[0] :
+                        (gdc_snd_ptr == 3'd1) ? csr_ead[1] :
+                        (gdc_snd_ptr == 3'd2) ? (csr_ead2 & 8'h03) : 8'h00;
   // The read-data register: the pop loads the returned byte here, because every
   // GDC-block read is captured one cycle after the strobe (device_rd_wait in
   // pc9821_system) - the byte the CPU receives must survive the advance.
@@ -563,34 +661,37 @@ module pc9821_crtc (
   reg       mode2_16color;
   reg       mode2_egc;        // FF2 num 2:  EGC extended mode latch
   reg       mode2_wren;       // FF2 num 3:  EGC/PEGC register write enable
-  /* verilator lint_off UNUSEDSIGNAL */  // latched but unconsumed: PEGC 256-colour and
-  // 31 kHz text shift are unimplemented. Kept - the guest's write records that it asked.
   reg       mode2_256col;     // FF2 num 0x10: 256-colour / PEGC select
-  reg       mode2_textshift;  // FF2 num 0x20: text shift (31 kHz CRT)
-  /* verilator lint_on UNUSEDSIGNAL */
+  // FF2 num 0x20/0x40: text shift (31 kHz CRT). Read back only, through the 0x9A0 query's
+  // index 0x05 (gdc_ff2_state[6]); the text shift itself is not implemented.
+  reg       mode2_textshift;
   // The 0xA8 palette-index register: the FULL byte, round-trip. NP2kai stores `dat`
   // unmasked in gdc.palnum (io/gdc.c:841) and gdc_ia8 returns it verbatim (:913-919),
   // so `out 0xA8,0xAB / in 0xA8` reads 0xAB - the register is architecturally 8 bits
-  // (the PEGC 256-colour palette indexes through it, gdc.c:854). The old 4-bit
-  // register answered 0x0B (review-cg F1). Who consumes it, exactly as NP2kai splits
+  // (the PEGC 256-colour palette indexes through it, gdc.c:854); a 4-bit register
+  // would answer 0x0B. Who consumes it, exactly as NP2kai splits
   // it: the DAC takes palnum & 15 (gdc.c:862 gdc_setanalogpal) and the read mirror
   // below takes the MASKED palnum & 15 (the PEGC 256-colour mirror is out of scope).
   reg [7:0] pal_sel;
-  // The analogue table's READ MIRROR: three FULL 8-bit channel bytes per entry
-  // ({B, R, G} = write bytes 0xAE/0xAC/0xAA), kept so a CPU read of
-  // 0xAA/0xAC/0xAE answers the whole byte the guest wrote. NP2kai stores the
-  // full byte in gdc.anareg and reads it back verbatim (io/gdc.c:860-953); the
-  // old mirror kept only io_din[3:0] and answered 0x0F where the guest wrote
-  // 0xFF (review readbacks.md, the palette row). The PIXEL table still takes the
-  // low nibble (pal_wr_data): the 16-colour DAC is 4 bits wide and the visual is
-  // right - only the readback shape was wrong. IMMEDIATE semantics like the
-  // registers it replaces; one 24-bit output register is its read port.
+  // The analogue table's READ MIRROR: three 4-bit channel nibbles per entry
+  // ({B, R, G} = write bytes 0xAE/0xAC/0xAA, low nibble kept), so a CPU read of
+  // 0xAA/0xAC/0xAE answers {4'b0, nibble}. THE CAPTURE IS THE SOURCE:
+  // docs/probes/PEGCRD-XE10.TXT, the measured Xe10 in 16-colour analogue mode, reads
+  // `16  ENTRY=02 WROTE_R=FF G=00 B=7F READ_R=0F G=00 B=0F` and
+  // `ENTRY=01 WROTE_R=12 G=34 B=56 READ_R=02 G=04 B=06`: the upper four bits read 0.
+  // NP2kai io/gdc.c gdc_iaa/iac/iae (`gdc.anareg[...]`) answers the whole written
+  // byte; that is the recorded divergence, the capture outranks it.
+  // The PEGC 256-colour read keeps its own full-byte mirror (pal256_*), also from that capture.
+  // The nibble is what the 16-colour DAC and pc9821_gfx_palette keep (pal_wr_data), so
+  // the mirror holds exactly the live table's bits. IMMEDIATE semantics like the
+  // registers it replaces; one 12-bit output register is its read port.
   // 16 entries, indexed by palnum & 15: the Xe10's own 16-colour analogue palette.
-  // NP2kai's 256-entry anareg[palnum*3+c] mirror (review-cg F7) is the PEGC's
-  // 256-colour palette, which is out of scope here - reverted for area (the 256-entry
-  // register array cost ~6 Kbit of logic on a ~99%-full device).
+  // NP2kai's 256-entry anareg[palnum*3+c] mirror is the PEGC's 256-colour palette,
+  // which is out of scope here - left out for area (a 256-entry register array costs
+  // ~6 Kbit of logic on a ~99%-full device).
   //
-  // THE MIRROR IS THREE 16x8 BYTE LANES, one per channel, not one 16x24 array written in
+  // THE MIRROR IS THREE 16x4 NIBBLE LANES (measured below as 16x8 byte lanes, before the
+  // capture narrowed them), one per channel, not one 16x24 array written in
   // byte pieces. Measured with tools/res_exp_map.py: a 16x24 word written one byte at a
   // time does not infer at all - no block type accepts a byte-granular write into a word -
   // and stays in logic at 206-211 combinational ALUTs plus the 384 registers, while the
@@ -602,14 +703,14 @@ module pc9821_crtc (
   // and an MLAB; M10K is the one that is free here, because a block RAM's read and write
   // registers live inside the block, while an MLAB is a LAB's ALMs reconfigured (10 ALMs).
   // LABs are this device's binding resource, M10K is not.
-  (* ramstyle = "M10K" *) reg [7:0] pal_g[0:15];
-  (* ramstyle = "M10K" *) reg [7:0] pal_r[0:15];
-  (* ramstyle = "M10K" *) reg [7:0] pal_b[0:15];
+  (* ramstyle = "M10K" *) reg [3:0] pal_g[0:15];
+  (* ramstyle = "M10K" *) reg [3:0] pal_r[0:15];
+  (* ramstyle = "M10K" *) reg [3:0] pal_b[0:15];
   // The read port is the registered read the single array always had (one clk_sys from the
   // lane's address to the byte), so the CPU readback's one-cycle latency is unchanged; the
   // three bytes re-join combinationally, which is all the read decode ever needed.
-  reg [7:0] pal_g_q, pal_r_q, pal_b_q;
-  wire [23:0] pal_rd_q = {pal_b_q, pal_r_q, pal_g_q};
+  reg [3:0] pal_g_q, pal_r_q, pal_b_q;
+  wire [11:0] pal_rd_q = {pal_b_q, pal_r_q, pal_g_q};
 
   // The command parameter counts (NP2kai gdc_cmd.tbl's `outdatas` column). SYNC is in
   // the table as eight bytes (rows 0x0e/0x0f) even though its capture runs on
@@ -622,7 +723,7 @@ module pc9821_crtc (
       8'h49:                      cmd_params = 4'd3;  // CSRW (kasumi sends 3rd byte 0)
       8'h4B:                      cmd_params = 4'd3;  // CSRFORM
       8'h0E, 8'h0F:               cmd_params = 4'd8;  // SYNC off/on: the sync block
-      8'h70, 8'h74, 8'h78, 8'h7C: cmd_params = 4'd4;  // PRAM (4 bytes)
+      // PRAM (0x70-0x7F) takes 16 - n bytes and runs on pram_act/pram_ptr, not this count.
       default:                    cmd_params = 4'd0;
     endcase
   endfunction
@@ -660,6 +761,15 @@ module pc9821_crtc (
     endcase
   endfunction
   wire [4:0] pc = port_code(io_addr);
+
+  // The mode2_egc register's NEXT state. `mode2_egc_wr` is the FF2 num-2 write decode
+  // (0x6A, dat bit0 = on, num = (dat>>1)&0x7F == 2), and this is the single next-state
+  // expression the register AND the exported
+  // gfx_egc_gate_nx both read. The reset term matches the register's own `!rst_n_sys` clear
+  // (mode2_wren resets to 0, so the arm could not fire during reset anyway).
+  wire mode2_egc_wr = io_wr && (pc == 5'd4) && (((io_din >> 1) & 8'h7F) == 8'h02);
+  wire mode2_egc_nx = (!rst_n_sys) ? 1'b0 : ((mode2_egc_wr && mode2_wren) ? io_din[0] : mode2_egc);
+  assign gfx_egc_gate_nx = mode2_egc_nx;
 
   integer i;
   always @(posedge clk_sys) begin
@@ -710,6 +820,13 @@ module pc9821_crtc (
       sync_live[4] <= 8'h07; sync_live[5] <= 8'h07;
       sync_live[6] <= 8'h90; sync_live[7] <= 8'h65;
       for (i = 0; i < 2; i = i + 1) pram_scr[i] <= 8'h00;
+      // gdc_reset zero-fills para (io/gdc.c), so every partition's line count is 0 - which
+      // maketext's `if (!(--scroll))` never reaches inside a frame: one partition.
+      pram_len0 <= 10'd0;
+      pram_sad1 <= 12'd0; pram_sad2 <= 12'd0; pram_sad3 <= 12'd0;
+      pram_len1 <= 10'd0; pram_len2 <= 10'd0; pram_len3 <= 10'd0;
+      pram_ptr  <= 4'd0;
+      pram_act  <= 1'b0;
     end else begin
       // The parameter read-back queue's pop: exactly one byte per CPU read of
       // 0x62 (NP2kai gdc_i62, io/gdc.c:684-692). The returned byte is loaded
@@ -717,7 +834,7 @@ module pc9821_crtc (
       // one cycle after this strobe.
       if (io_rd && (pc == 5'd1)) begin
         if (gdc_snd_cnt != 3'd0) begin
-          gdc_snd_q   <= gdc_snd[gdc_snd_ptr];
+          gdc_snd_q   <= gdc_snd_head;
           gdc_snd_ptr <= gdc_snd_ptr + 3'd1;
           gdc_snd_cnt <= gdc_snd_cnt - 3'd1;
         end else gdc_snd_q <= 8'hFF;
@@ -733,6 +850,30 @@ module pc9821_crtc (
               sync_pending <= 1'b0;
               sync_cnt <= 3'd0;
             end else sync_cnt <= sync_cnt + 3'd1;
+          end else if (pram_act) begin
+            // One PRAM byte at pram_ptr, then the pointer moves on; the sixteenth byte ends
+            // the command (gdc_work stores para[ptr++] while rcv counts 16 - n down,
+            // io/gdc.c:340-345 `item->para[item->ptr] = data;`). Each byte lands as it arrives.
+            case (pram_ptr)
+              4'd0:  pram_scr[0]       <= io_din;
+              4'd1:  pram_scr[1]       <= io_din;
+              4'd2:  pram_len0[3:0]    <= io_din[7:4];
+              4'd3:  pram_len0[9:4]    <= io_din[5:0];
+              4'd4:  pram_sad1[7:0]    <= io_din;
+              4'd5:  pram_sad1[11:8]   <= io_din[3:0];
+              4'd6:  pram_len1[3:0]    <= io_din[7:4];
+              4'd7:  pram_len1[9:4]    <= io_din[5:0];
+              4'd8:  pram_sad2[7:0]    <= io_din;
+              4'd9:  pram_sad2[11:8]   <= io_din[3:0];
+              4'd10: pram_len2[3:0]    <= io_din[7:4];
+              4'd11: pram_len2[9:4]    <= io_din[5:0];
+              4'd12: pram_sad3[7:0]    <= io_din;
+              4'd13: pram_sad3[11:8]   <= io_din[3:0];
+              4'd14: pram_len3[3:0]    <= io_din[7:4];
+              default: pram_len3[9:4]  <= io_din[5:0];
+            endcase
+            pram_ptr <= pram_ptr + 4'd1;
+            if (pram_ptr == 4'd15) pram_act <= 1'b0;
           end else if (cmd_active) begin
             // Each parameter byte lands in its register AS IT ARRIVES - the model both
             // references implement (NP2kai gdc_work writes para[ptr++] per byte; QEMU
@@ -741,38 +882,30 @@ module pc9821_crtc (
             // at completion never latches either and the text cursor stays dead.
             // The command count stays 3; the extra CSRW byte (address bit 16+) is
             // kept in csr_ead2 because CSRR answers it (see its declaration).
-            if ((cur_cmd == 8'h49) && (param_cnt[1:0] < 2'd2)) begin
+            if ((cur_k == 3'd1) && (param_cnt[1:0] < 2'd2)) begin
               csr_ead[param_cnt[0]] <= io_din;   // ead = p0 | p1<<8 (QEMU gdc_cmd_csrw)
             end
-            if ((cur_cmd == 8'h49) && (param_cnt[1:0] == 2'd2)) begin
+            if ((cur_k == 3'd1) && (param_cnt[1:0] == 2'd2)) begin
               csr_ead2 <= io_din;
             end
-            if (cur_cmd == 8'h4B) begin
+            if (cur_k == 3'd2) begin
               case (param_cnt[1:0])
                 2'd0:    csr_form[0] <= io_din;
                 2'd1:    csr_form[1] <= io_din;
                 default: csr_form[2] <= io_din;
               endcase
             end
-            // PRAM: a single indexed write of screen 0's {sad_lo, sad_hi}.
-            // Commands 0x70/0x74/0x78/0x7C select screens 0/1/2/3 via {cur_cmd[3:2]}, and
-            // param_cnt is 0..3 (cmd_params == 4, C5). Only screen 0's first two
-            // bytes reach the scanout, so the rest are accepted and dropped: the command
-            // still consumes its four parameter bytes, which is what the firmware's
-            // transaction (BANK7@0x69ac-0x69d4) and the 0x70 spin_one_frame cases need.
-            if ((cur_cmd == 8'h70) && (param_cnt[1:0] < 2'd2)) begin
-              pram_scr[param_cnt[0]] <= io_din;
-            end
-            if (param_cnt + 3'd1 == cmd_params(cur_cmd)) begin
+            if (param_cnt + 3'd1 == ((cur_k == 3'd1 || cur_k == 3'd2) ? 3'd3 : 3'd1)) begin
               cmd_active <= 1'b0;
               param_cnt  <= 3'd0;
               // PITCH is a one-parameter command, so this is its only parameter.
-              if (cur_cmd == 8'h47) pitch <= {io_din[7:1], 1'b0};  // odd bit dropped (NP2kai maketext.c:194)
+              if (cur_k == 3'd0) pitch <= {io_din[7:1], 1'b0};  // odd bit dropped (NP2kai maketext.c:194)
             end else param_cnt <= param_cnt + 3'd1;
           end
         end
         5'd1: begin  // GDC1 command port
-          cur_cmd <= io_din;
+          cur_k <= (io_din == 8'h47) ? 3'd0 : (io_din == 8'h49) ? 3'd1 : (io_din == 8'h4B) ? 3'd2 :
+                   (io_din == 8'h06) ? 3'd3 : (io_din == 8'hE0) ? 3'd4 : 3'd5;
           // Every command REPLACES the parameter read-back queue (NP2kai
           // gdc_work: `item->snd = gdc_cmd[data].indatas`, io/gdc.c:327). The
           // two producers are gdc_cmd.tbl's rows with indatas: 0xE0 CSRR answers
@@ -782,19 +915,11 @@ module pc9821_crtc (
           gdc_snd_ptr <= 3'd0;
           case (io_din)
             8'hE0: begin
-              gdc_snd[0] <= csr_ead[0];
-              gdc_snd[1] <= csr_ead[1];
-              gdc_snd[2] <= csr_ead2 & 8'h03;
-              gdc_snd[3] <= 8'h00;
-              gdc_snd[4] <= 8'h00;
               gdc_snd_cnt <= 3'd5;
             end
             8'hC0: begin
               // para[29..31]: no command writes the LPEN slots, so they hold
               // gdc_reset's zeros whatever CSRFORM holds (io/gdc.c:1160).
-              gdc_snd[0] <= 8'h00;
-              gdc_snd[1] <= 8'h00;
-              gdc_snd[2] <= 8'h00;
               gdc_snd_cnt <= 3'd3;
             end
             default: gdc_snd_cnt <= 3'd0;
@@ -806,6 +931,10 @@ module pc9821_crtc (
           // ONE assignment per command write (R2): armed by 0x0E/0x0F, cleared by the rest.
           sync_pending <= (io_din == 8'h0E) || (io_din == 8'h0F);
           sync_cnt     <= 3'd0;
+          // The same reload for PRAM: 0x70+n arms the byte pointer at n, every other command
+          // disarms it (gdc_work `item->ptr = gdc_cmd[data].pos;`, io/gdc.c:324).
+          pram_act     <= (io_din[7:4] == 4'h7);
+          pram_ptr     <= io_din[3:0];
           if (io_din == 8'h0E || io_din == 8'h0F) begin  // SYNC off/on
             cmd_active   <= 1'b0;
             gdc_start    <= io_din[0];  // 0x0F on / 0x0E off
@@ -843,7 +972,7 @@ module pc9821_crtc (
             8'h00: mode2_16color <= io_din[0];
             // num 1: mode2 bit 1. It moves no pixel in any reference, but a guest
             // RMW of 0x6A must round-trip it (NP2kai returns the live gdc.mode2,
-            // io/gdc.c:703; review readbacks.md P6).
+            // io/gdc.c:703).
             8'h01: mode2_ff2b1 <= io_din[0];
             // num 3: the EGC/PEGC register write enable. A real guard, not decoration:
             // the firmware always brackets the bits below with it (master.lib EGC_ON;
@@ -853,7 +982,7 @@ module pc9821_crtc (
             // CG mode, 0x7C bit 7 - not 0x9A0 bit 2 (ReC98 egc.hpp:58-64; QEMU
             // pc98-vga.c:2465/2559; NP2kai io/gdc.c:534-541 all agree). The GRCG CG mode
             // is decoded in pc9821_grcg, so the EGC gate must be taken from there.
-            8'h02: if (mode2_wren) mode2_egc <= io_din[0];
+            8'h02: mode2_egc <= mode2_egc_nx;
             // num 0x10 (256-colour) and num 0x20 (text shift) are real firmware traffic
             // (BANK4@0xFD6D8-0xFD6E2, BANK6@0xFFD4F-0xFFD87).
             // num 0x10's writes (FF2 dat 0x20/0x21) are NP2kai's GDCANALOG_256
@@ -879,7 +1008,7 @@ module pc9821_crtc (
         // The six CRTC render registers, stored FIVE bits wide: NP2kai's crtc_o70
         // does `dat &= 0x1f` before storing any of pl/bl/cl/ssl/sur/sdr
         // (io/crtc.c:10-17), so `out 70h,0FFh` reads back 0x1F there and the
-        // sur/sdr/pl fields carry no bits above 4 (review iobus-tram F7).
+        // sur/sdr/pl fields carry no bits above 4.
         5'd6:    crtc_pl  <= io_din & 8'h1F;
         5'd7:    crtc_bl  <= io_din & 8'h1F;
         5'd8:    crtc_cl  <= io_din & 8'h1F;
@@ -910,24 +1039,29 @@ module pc9821_crtc (
   end
 
   // vsync, blanking and the data-ready line resampled into clk_sys for status reads. The
-  // bit duties are measured on the real machine with a 2M-sample histogram: bit 2 always
-  // set, bit 5 ~2.7% (VSYNC), bit 6 ~37% (the blank interval), bit 0 ~50%. Driving bit 6
+  // bit duties are measured on the real machine with a 2M-sample histogram (docs/probes/GDC.TXT,
+  // port 0060 over 0x200000 samples): bit 2 always set, bit 5 ~1.7% (VSYNC, `bit05
+  // count=00008E21`), bit 6 ~23.4% (the horizontal blank, 208/848, `bit06 count=00077C8D`;
+  // docs/probes/TIME.TXT `high 1.7% of the time and bit6 23.4%`). NP2kai io/gdc.c gdc_i60
+  // `if ((remain % gdc.rasterclock) < gdc.hsyncclock)` raises bit 6 once per LINE, vertical-blank
+  // lines included, but for cr/x of it (`gdc.hsyncclock = (gdc.rasterclock * cr) / x;`, about 75%
+  // with the default SYNC), which the probe's 23.4% refutes; its phase in the line is unmeasured,
+  // todo item 23. Bit 0 ~50%. Driving bit 6
   // from the real blanking and bit 0 from a DOT-rate toggle makes every guest poll end.
   //
   // BIT 0'S RATE: the toggle is clocked by `pixel_ce` - the PIXEL_HZ-derived dot enable - and
   // NOT by clk_sys, because a clk_sys count is not a time (AGENTS.md's rates rule: raising
-  // clk_sys must not move a guest-visible time; audit rtl-audit-video F6). Before this the bit
-  // toggled every clk_sys, so its period halved at 100 MHz (tb_pc9821_sysclk_invariance pins
-  // the fix). THE REAL PERIOD IS UNMEASURED and this choice is not evidence for it: the
+  // clk_sys must not move a guest-visible time); a per-clk_sys toggle would halve its period
+  // at 100 MHz (tb_pc9821_sysclk_invariance pins this). THE REAL PERIOD IS UNMEASURED and this choice is not evidence for it: the
   // machine capture measures the DUTY alone (docs/probes/GDC.TXT's 2^21-sample histogram at
   // 0x60 has bit 0 set in exactly half its samples), no reference gives the data-ready rate,
   // and the period a real uPD7220 holds it at is unknown - so the dot rate is a stand-in that
   // is at least profile-invariant and of the right order (the DR line is a display signal).
-    // Reset state (review r2-resets F8): vs_sync_ff/de_ff are the rest of the stat_dr family
+    // Reset state: vs_sync_ff/de_ff are the rest of the stat_dr family
     // and reset to 00/00, so the first two GDC status reads after a reset return the reset
     // raster's BLANK (bit 6 = ~de_ff[1]) / NO-VSYNC (bit 5) values the probe measured instead
     // of X - the ITF polls this port early. stat_dr is the documented self-fed toggle (`stat_dr
-    // <= ~stat_dr`, no reset): its power-up seed (gdc review F14) resolves the X-lock its
+    // <= ~stat_dr`, no reset): its power-up seed resolves the X-lock its
     // inversion would otherwise lock in 4-state sim, and it free-runs from there (bit 0 is
     // ~50 % either way). The two resample chains sample live inputs and self-correct in two clocks.
     /* verilator lint_off PROCASSINIT */   // the initialisers are the registers' power-up values
@@ -942,7 +1076,7 @@ module pc9821_crtc (
     end else begin
       vs_sync_ff[0] <= in_vsync;
       vs_sync_ff[1] <= vs_sync_ff[0];
-      de_ff[0] <= de_out;
+      de_ff[0] <= h_active;   // bit 6 is the per-line horizontal blank (see above)
       de_ff[1] <= de_ff[0];
     end
     if (pixel_ce) stat_dr <= ~stat_dr;   // the DOT rate, so clk_sys cannot move it (see above)
@@ -966,8 +1100,11 @@ module pc9821_crtc (
   reg       cfg_ack_seen;
   wire      cfg_ack_edge = cfg_ack_sync[1] != cfg_ack_seen;
   // The write epoch the acknowledgement is qualified with (see the clear rule).
-  reg [7:0] cfg_epoch;       // one count per configuration write
-  reg [7:0] cfg_epoch_snap;  // ...as of the copy's own clock edge (raster block below)
+  // Two bits are enough: the snapshot is taken on the copy edge and compared on cfg_ack_edge, a
+  // fixed three clk_sys later (cfg_ack -> two synchroniser flops -> cfg_ack_seen), so at most
+  // three writes lie between them and the count's difference is 0..3 - equal mod 4 iff equal.
+  reg [1:0] cfg_epoch;       // one count per configuration write (mod 4)
+  reg [1:0] cfg_epoch_snap;  // ...as of the copy's own clock edge (raster block below)
 
   always @(posedge clk_sys) begin
     if (!rst_n_sys) begin
@@ -975,7 +1112,7 @@ module pc9821_crtc (
       cfg_dirty    <= 1'b1;   // force the power-on snapshot at the first frame
       cfg_ack_sync <= 2'b00;
       cfg_ack_seen <= 1'b0;
-      cfg_epoch    <= 8'd0;
+      cfg_epoch    <= 2'd0;
     end else begin
       cfg_data_d <= io_wr;
       // A new write wins over a simultaneous acknowledgement so nothing is lost.
@@ -991,7 +1128,7 @@ module pc9821_crtc (
       // copy missed keeps cfg_dirty set and is re-copied at the NEXT frame end
       // (deferred, not lost).
       else if (cfg_ack_edge && (cfg_epoch == cfg_epoch_snap)) cfg_dirty <= 1'b0;
-      if (io_wr) cfg_epoch <= cfg_epoch + 8'd1;
+      if (io_wr) cfg_epoch <= cfg_epoch + 2'd1;
       cfg_ack_sync <= {cfg_ack_sync[0], cfg_ack};
       cfg_ack_seen <= cfg_ack_sync[1];
     end
@@ -1079,7 +1216,7 @@ module pc9821_crtc (
       v_dig_ac <= 8'hFF;
       v_dig_ae <= 8'hFF;
       v_row0_stale <= 1'b0;
-      cfg_epoch_snap <= 8'd0;
+      cfg_epoch_snap <= 2'd0;
     end else if (pixel_ce) begin
       // Two-flop synchroniser for the configuration-dirty flag. The copy below
       // only runs when the fully synchronised bit is set, so the configuration
@@ -1140,13 +1277,252 @@ module pc9821_crtc (
   assign o_display_page = display_page;
   assign o_v_pitch      = v_pitch;
   assign o_v_col40      = v_col40;
-  assign o_v_sad        = {v_sad_hi, v_sad_lo};
   assign o_v_row0_stale = v_row0_stale;
   assign o_vline        = vline;
   assign o_hdot         = hdot;
   assign o_htotal       = HTOTAL;
   assign o_vtotal       = VTOTAL;
   assign o_vbp          = VBP;
+
+  // ---------------------------------------------------------------
+  // THE TEXT LINE SEQUENCER: which character row, which font line, for every raster line
+  // ---------------------------------------------------------------
+  // The text plane is two chips. The master GDC walks the TRAM a character row at a time: it
+  // starts each display partition at that partition's start word, and every LR+1 lines (LR =
+  // CSRFORM byte 0's low five bits) it advances the row address by the pitch; after a
+  // partition's line count it moves to the next partition. The CRTC (0x70-0x7A) owns the line
+  // INSIDE the row: PL/BL give the row's first line and its length, CL how many of them show
+  // glyph rows, and SSL/SUR/SDR the smooth-scroll region. NP2kai's maketext() is the reference
+  // and this block is its per-line loop transcribed (vram/maketext.c:162-435), one loop
+  // iteration per clk_sys while it runs; the variables keep NP2kai's names in the comments:
+  //   TEXT_LR  = CSRFORM & 0x1f                      (:163 `TEXT_LR = gdc.m.para[GDC_CSRFORM] & 0x1f;`)
+  //   topline  = PL >= 16 ? PL - 32 : PL             (:172-177) - PL as a 5-bit SIGNED value
+  //   lines    = PL >= 16 ? BL + 1 : BL + 1 - PL, +32 when <= 0 (:174-181) - kept as lines - 1
+  //   TEXT_CL  = min(CL, 16)                         (:169-171)
+  //   SUR == 0 : wait2 = SSL, TEXT_SDR = SDR + 1     (:186-189)
+  //   SUR != 0 : TEXT_SUR = 32 - SUR, TEXT_SDR = -1  (:168, :191)
+  // and each loop pass (one raster line OUT when wait2 is 0, a silent pass otherwise):
+  //   A  if (!wait1) { if (LRcnt-- == 0) { LRcnt = TEXT_LR; reloadline = TRUE; } } else wait1--;  (:209-217)
+  //   B  if (reloadline) { the row address = esi; esi += pitch; }                                  (:218-322)
+  //   C  if (!TEXT_SDR && nowline >= topline + ssl) { nowline = topline; TEXT_SDR--; wait1 = ssl; } (:324-328)
+  //   D  if (!wait2) { draw line y from (row, nowline); if (!--scroll) next partition, reload }    (:330-420)
+  //      else wait2--;
+  //   E  nowline++; if (TEXT_SDR && nowline >= lines) { nowline = topline; TEXT_SDR--;
+  //        if (++linecnt == TEXT_SUR) { wait2 = ssl; TEXT_SDR = sdr + 1; } }                      (:426-434)
+  // The row address is not accumulated: a row is named by its partition and its index k in it,
+  // and the fetch forms SAD[p] + k*pitch with the multiply it already had - so partition 0 keeps
+  // the scanout's frame-coherent display-start snapshot (v_sad) exactly as before.
+  //
+  // DEFAULT-MODE IDENTITY. With the CRTC's power-on/DOS registers (PL 0, BL 0x0F, CL 0x10, SSL/
+  // SUR/SDR 0: docs/probes/RDBACK.TXT:82-87 `0070=00` ... `007A=00`), LR = 15 and a zero line
+  // count, line y is row y>>4, font line y&15, partition 0 - the decode this replaced - so the
+  // 25-line picture and every fetch address are unchanged.
+  //
+  // WHEN IT RUNS. Each run produces ONE output line's state (the n_* registers) and starts on
+  // the first dot of a raster line: during line L it computes line L+1, which the fetch reads at
+  // L's last cell (the next line's column-0 prefetch) and which becomes the current line (c_*)
+  // at L's last dot. The frame restarts the loop (NP2kai draws a frame per maketext call) at
+  // the first dot of line VACTIVE-1, so the column-0 prefetch of line 0 has a state, and again
+  // at the first dot of the frame's last line, VTOTAL-1, from the registers as they stand then:
+  // a vertical-blank write (the VSYNC IRQ fires at vline VACTIVE+VFP) reaches the very next
+  // frame. The CRTC registers, LR and the line counts are read LIVE (the CRTC chip has no frame
+  // latch); NP2kai samples them once per drawn frame, so a write landing mid-picture moves the
+  // rest of that frame here and only the next one there - the recorded divergence (todo item 128).
+  //
+  // THE 3-BANK KANJI ROW CACHE. pc9821_cg fills the cache bank of the NEXT character row while
+  // the current one is drawn, so this block also says, for every line that starts a row, which
+  // row comes next (pr_*): the next LR reload in this partition, the next partition when its
+  // line count runs out first, or the next frame's first row when the picture ends first. A
+  // row's bank is a mod-3 count of reloads (e_ord), so the bank being drawn and the bank being
+  // filled always differ, whatever the row heights; the frame's first row takes the bank that
+  // follows the last row's (fb), so the fill made during the last row is the one row 0 reads.
+  // What this prediction cannot see (a row cut short by smooth-scroll's silent passes, or a row
+  // shorter than the walk) draws its kanji from the wrong row - an ANK cell never uses the cache.
+  wire [4:0] t_lr   = csr_form[0][4:0];                          // TEXT_LR
+  wire [6:0] t_top  = {{2{crtc_pl[4]}}, crtc_pl[4:0]};            // topline, signed
+  wire [4:0] t_lnm1 = crtc_pl[4] ? crtc_bl[4:0] : (crtc_bl[4:0] - crtc_pl[4:0]);  // lines - 1
+  wire [4:0] t_cl   = crtc_cl[4] ? 5'd16 : crtc_cl[4:0];         // TEXT_CL (CL > 16 -> 16)
+  wire [4:0] t_ssl  = crtc_ssl[4:0];
+  wire       t_sur0 = (crtc_sur[4:0] == 5'd0);
+  wire [4:0] t_surn = 5'd0 - crtc_sur[4:0];                      // TEXT_SUR = 32 - SUR
+  wire [5:0] t_sdr1 = {1'b0, crtc_sdr[4:0]} + 6'd1;              // sdr + 1
+
+  function automatic [1:0] ord_inc(input [1:0] o);
+    ord_inc = (o == 2'd2) ? 2'd0 : (o + 2'd1);
+  endfunction
+  function automatic [1:0] ord_dec(input [1:0] o);
+    ord_dec = (o == 2'd0) ? 2'd2 : (o - 2'd1);
+  endfunction
+  function automatic [9:0] len_of(input [1:0] p, input [9:0] l0, input [9:0] l1,
+                                  input [9:0] l2, input [9:0] l3);
+    case (p)
+      2'd0: len_of = l0;
+      2'd1: len_of = l1;
+      2'd2: len_of = l2;
+      default: len_of = l3;
+    endcase
+  endfunction
+
+  // The loop state (NP2kai's locals).
+  reg [4:0] e_lr;     // LRcnt
+  reg [4:0] e_w1;     // wait1
+  reg [4:0] e_w2;     // wait2
+  reg       e_rl;     // reloadline (a partition switch's)
+  reg [6:0] e_now;    // nowline, signed
+  reg       e_sdrn;   // TEXT_SDR < 0
+  reg [5:0] e_sdr;    // TEXT_SDR when >= 0
+  reg [5:0] e_lc;     // linecnt, saturating (TEXT_SUR <= 31)
+  reg [1:0] e_p;      // scrp / 4: the partition the GDC is in
+  reg [9:0] e_scr;    // scroll: lines left in the partition
+  reg [9:0] e_kn;     // the row index the next reload takes
+  reg [9:0] e_k;      // the row being drawn: its index in its partition...
+  reg [1:0] e_rp;     // ...its partition
+  reg [1:0] e_ord;    // ...and its cache bank (reloads mod 3)
+  reg       e_new;    // the row has not drawn a line yet
+  reg       e_busy;   // a run is in progress
+  reg       e_r0;     // this run started from the frame's first pass
+  reg [1:0] fb;       // the bank the frame's first row takes
+  // The produced line (n_*) and the line on screen (c_*).
+  reg [9:0] n_k, c_k;
+  reg [1:0] n_rp, c_rp;
+  reg [6:0] n_now, c_now;
+  reg [1:0] n_ord, c_ord;
+  reg       n_new, c_new;
+  // The row after the one a produced line belongs to (read on a row's first line).
+  reg [9:0] pr_k;
+  reg [1:0] pr_p, pr_bank;
+
+  // ---- one loop pass, A..E, as next-state expressions ----
+  wire       a_cnt  = (e_w1 == 5'd0);
+  wire       a_rl   = a_cnt && (e_lr == 5'd0);
+  wire [4:0] a_lr   = !a_cnt ? e_lr : a_rl ? t_lr : (e_lr - 5'd1);
+  wire [4:0] a_w1   = a_cnt ? 5'd0 : (e_w1 - 5'd1);
+  wire       b_rl   = e_rl || a_rl;
+  wire [9:0] b_k    = b_rl ? e_kn : e_k;
+  wire [9:0] b_kn   = b_rl ? (e_kn + 10'd1) : e_kn;
+  wire [1:0] b_rp   = b_rl ? e_p : e_rp;
+  wire [1:0] b_ord  = b_rl ? ord_inc(e_ord) : e_ord;
+  wire       b_new  = e_new || b_rl;
+  wire       sdr_z  = !e_sdrn && (e_sdr == 6'd0);                // TEXT_SDR == 0
+  wire [6:0] top_ssl = t_top + {2'b00, t_ssl};
+  wire       c_hit  = sdr_z && ($signed(e_now) >= $signed(top_ssl));
+  wire [6:0] c_nowv = c_hit ? t_top : e_now;
+  wire       c_sdrn = e_sdrn || c_hit;                           // TEXT_SDR-- from 0 is -1
+  wire [4:0] c_w1   = c_hit ? t_ssl : a_w1;
+  wire       d_out  = (e_w2 == 5'd0);
+  wire [9:0] d_dec  = e_scr - 10'd1;
+  wire       d_sw   = d_out && (d_dec == 10'd0);                 // `if (!(--scroll))`
+  wire [1:0] d_p    = d_sw ? (e_p + 2'd1) : e_p;
+  wire [9:0] d_scr  = !d_out ? e_scr
+                    : d_sw ? len_of(e_p + 2'd1, pram_len0, pram_len1, pram_len2, pram_len3)
+                    : d_dec;
+  wire [9:0] d_kn   = d_sw ? 10'd0 : b_kn;                        // esi = the new start word
+  wire [4:0] d_w2   = d_out ? 5'd0 : (e_w2 - 5'd1);
+  wire [6:0] x_inc  = c_nowv + 7'd1;                             // nowline++
+  wire       x_wrap = (c_sdrn || (e_sdr != 6'd0)) &&
+                      ($signed(x_inc) > $signed({2'b00, t_lnm1}));
+  wire [5:0] x_lci  = (e_lc == 6'd63) ? 6'd63 : (e_lc + 6'd1);
+  wire       x_sur  = x_wrap && !t_sur0 && (x_lci == {1'b0, t_surn});
+  wire [6:0] x_now  = x_wrap ? t_top : x_inc;
+  wire [5:0] x_lc   = x_wrap ? x_lci : e_lc;
+  wire       x_sdrn = x_sur ? 1'b0 : c_sdrn;
+  wire [5:0] x_sdr  = x_sur ? t_sdr1 : (x_wrap && !c_sdrn) ? (e_sdr - 6'd1) : e_sdr;
+  wire [4:0] x_w2   = x_sur ? t_ssl : d_w2;
+
+  // ---- the next row, for the cache walker (only read on a row's first line) ----
+  // The next LR reload is c_w1 + a_lr + 1 passes away; the partition's own reload is d_scr + 1
+  // outputs away (it lands on the pass after the count runs out); and the picture has `rem`
+  // more lines. Ties go the way the loop resolves them: a partition switch and an LR reload on
+  // the same pass are ONE reload at the new partition's start (D's esi overrides B's).
+  wire [5:0] n_lrm1 = {1'b0, c_w1} + {1'b0, a_lr};
+  wire [9:0] e_y    = e_r0 ? 10'd0 : (vline + 10'd1);
+  wire [9:0] rem    = VACT_M1 - e_y;
+  wire       nx_sw  = d_sw || (d_scr <= {4'd0, n_lrm1});
+  wire       nx_fr  = d_sw ? (rem == 10'd0)
+                           : ((rem <= {4'd0, n_lrm1}) && (rem <= d_scr));
+
+  // The run starts ONE clk_sys after the line's first dot: the walker samples pr_* on that dot's
+  // edge, and the restart test reads geom_d after its one-clk_sys lag behind a frame-boundary
+  // geometry change (a one-line picture's VACT_M1 = 0 would otherwise restart line 0's run).
+  reg  e_start;
+  always @(posedge clk_sys)
+    if (!rst_n_sys) e_start <= 1'b0;
+    else            e_start <= pixel_ce && (hdot == 10'd0);
+  wire e_frame = (vline == VACT_M1) || (vline == VTOT_M1);
+  always @(posedge clk_sys) begin
+    if (!rst_n_sys) begin
+      // The state the loop is in after drawing line 0 of the power-on frame, the default
+      // registers': row 0 reloaded (LRcnt = 15), nowline 1, a zero line count wrapped to 1023.
+      e_lr <= 5'd15; e_w1 <= 5'd0; e_w2 <= 5'd0; e_rl <= 1'b0;
+      e_now <= 7'd1; e_sdrn <= 1'b0; e_sdr <= 6'd1; e_lc <= 6'd0;
+      e_p <= 2'd0; e_scr <= 10'h3FF; e_kn <= 10'd1; e_k <= 10'd0; e_rp <= 2'd0;
+      e_ord <= 2'd0; e_new <= 1'b0; e_busy <= 1'b0; e_r0 <= 1'b0; fb <= 2'd0;
+      n_k <= 10'd0; n_rp <= 2'd0; n_now <= 7'd1; n_ord <= 2'd0; n_new <= 1'b0;
+      pr_k <= 10'd1; pr_p <= 2'd0; pr_bank <= 2'd1;
+    end else if (e_start) begin
+      // A run starts. On the frame's two restart lines the loop's locals are re-initialised
+      // (maketext.c:183-206); the run itself begins on the next clk_sys.
+      e_busy <= 1'b1;
+      e_r0   <= e_frame;
+      if (e_frame) begin
+        e_lr <= 5'd0; e_w1 <= 5'd0; e_rl <= 1'b0;
+        e_w2 <= t_sur0 ? t_ssl : 5'd0;
+        e_now <= t_top; e_sdrn <= !t_sur0; e_sdr <= t_sdr1; e_lc <= 6'd0;
+        e_p <= 2'd0; e_scr <= pram_len0; e_kn <= 10'd0; e_k <= 10'd0; e_rp <= 2'd0;
+        e_ord <= ord_dec(fb); e_new <= 1'b0;
+      end
+    end else if (e_busy) begin
+      // One loop pass. Every register is written once, from the A..E expressions above.
+      e_lr <= a_lr; e_w1 <= c_w1; e_w2 <= x_w2; e_rl <= d_sw;
+      e_now <= x_now; e_sdrn <= x_sdrn; e_sdr <= x_sdr; e_lc <= x_lc;
+      e_p <= d_p; e_scr <= d_scr; e_kn <= d_kn; e_k <= b_k; e_rp <= b_rp; e_ord <= b_ord;
+      e_new <= b_new && !d_out;
+      e_busy <= !d_out;
+      if (d_out) begin
+        n_k <= b_k; n_rp <= b_rp; n_now <= c_nowv; n_ord <= b_ord; n_new <= b_new;
+        pr_k    <= nx_fr ? 10'd0 : nx_sw ? 10'd0 : b_kn;
+        pr_p    <= nx_fr ? 2'd0 : nx_sw ? (e_p + 2'd1) : e_p;
+        pr_bank <= ord_inc(b_ord);
+        if (b_new && nx_fr) fb <= ord_inc(b_ord);
+      end
+    end
+  end
+  // The produced line becomes the line on screen at the raster line's last dot.
+  always @(posedge clk_sys) begin
+    if (!rst_n_sys) begin
+      c_k <= 10'd0; c_rp <= 2'd0; c_now <= 7'd0; c_ord <= 2'd0; c_new <= 1'b1;
+    end else if (pixel_ce && (hdot == HTOT_M1)) begin
+      c_k <= n_k; c_rp <= n_rp; c_now <= n_now; c_ord <= n_ord; c_new <= n_new;
+    end
+  end
+`ifdef VERILATOR
+  // R8: a run ends inside its line (at most 32 silent passes and one drawn one), so the next
+  // start never finds it busy.
+  always @(posedge clk_sys)
+    if (rst_n_sys && e_start && e_busy)
+      $error("pc9821_crtc: the text line sequencer was still running at the next line's start");
+`endif
+
+  // The start word of partition p (partition 0's is the scanout's frame-coherent snapshot).
+  function automatic [15:0] sad_of(input [1:0] p, input [15:0] s0, input [11:0] s1,
+                                   input [11:0] s2, input [11:0] s3);
+    case (p)
+      2'd0: sad_of = s0;
+      2'd1: sad_of = {4'h0, s1};
+      2'd2: sad_of = {4'h0, s2};
+      default: sad_of = {4'h0, s3};
+    endcase
+  endfunction
+
+  // ---- the cache walker's request (pc9821_cg latches it on a walk's first dot) ----
+  // A row's first line asks for the row after it; the vline-432 slot re-walks row 0 with the
+  // frame's own display start when the configuration moved after row 0 was filled.
+  wire stale_slot = v_row0_stale && (vline == wk_slot);
+  assign o_wk_go   = stale_slot || (c_new && v_active);
+  assign o_wk_k    = stale_slot ? 10'd0 : pr_k;
+  assign o_wk_bank = stale_slot ? fb : pr_bank;
+  assign o_v_sad   = (stale_slot || (pr_p == 2'd0)) ? {v_sad_hi, v_sad_lo}
+                   : sad_of(pr_p, 16'h0000, pram_sad1, pram_sad2, pram_sad3);
 
   // ---------------------------------------------------------------
   // Text fetch pipeline
@@ -1168,49 +1544,34 @@ module pc9821_crtc (
   wire last_cell = v_col40 ? (adot[9:4] == 6'd39) : (adot[9:3] == 7'd79);
   wire [5:0] f_c40 = last_cell ? 6'd0 : (adot[9:4] + 6'd1);
   wire [6:0] f_c80 = last_cell ? 7'd0 : (adot[9:3] + 7'd1);
-  // ---- THE ROW WRAP FLAG, ONE DOT EARLY (the timing seam, part 2) ----
-  // f_line's wrap select reads this register instead of comparing vline against
-  // VACTIVE - 10'd1 combinationally, so the multiply below is fed from registers. f_wrap_r
-  // is that compare sampled one dot early, and it is bit-identical to it at every dot that
-  // CONSUMES it: f_line only consults it when last_cell (the line's last active cell - dots
-  // 632..639 in 80-column, 624..639 in 40-column) and there it was sampled earlier in the
-  // SAME line, where vline and VACTIVE are constant; at the dots where it lags (dot 0 of
-  // every line, where vline moves) last_cell is false and f_line takes vline either way.
-  // f_line is therefore bit-identical at EVERY cycle (tb_pc9821_tram_addr_equiv's
-  // wordidx-consume and capture-r-raster assertions).
-  reg f_wrap_r;
-  always @(posedge clk_sys) begin
-    if (!rst_n_sys) f_wrap_r <= 1'b0;   // vline 0 never wraps for a VACTIVE >= 2 raster
-    else if (pixel_ce) f_wrap_r <= (vline == VACT_M1);
-  end
-  /* verilator lint_off UNUSEDSIGNAL */   // f_line[9] has no reader: the fetch splits it into
-  // the char row [8:4] and the font raster row [3:0]. KNOWN LIMITATION (audit rtl-audit-video
-  // F4, NOT fixed here): VACTIVE is min(lf, VTOTAL - 1) and VTOTAL is clamped to 575 lines, so a
-  // guest SYNC block can make 574 lines active - text rows 0..35, not the default block's 0..24.
-  // f_row (5 bits) then TRUNCATES rows 32..35 onto rows 0..3, so a >512-line frame fetches the
-  // wrong TRAM row (pc9821_cg.sv's walker row is 5 bits too). The bank rule (row==0) ? 2 :
-  // row[0] still separates ADJACENT rows, so the fix is a 6-bit f_row/wk_row - it moves the TRAM
-  // addressing and belongs with the geometry decision, not with this timing seam. The value
-  // still has to be TEN bits: vline runs to VTOTAL-1 = 574 now.
-  wire [9:0] f_line = last_cell ? (f_wrap_r ? 10'd0 : vline + 10'd1) : vline;
-  /* verilator lint_on UNUSEDSIGNAL */
-  // vline is a scanline: char row = vline[8:4] (400 lines: rows 0..24),
-  // font raster row = vline[3:0]. The fetch pipeline runs per scanline and
-  // prefetches the next cell in raster order (same char row for col<79,
-  // next char row after the wrap).
-  wire [4:0] f_row = f_line[8:4];
-  wire [3:0] f_raster = f_line[3:0];
+  // ---- THE FETCHED LINE: the line sequencer's state for this line, or the next one ----
+  // The fetch pipeline prefetches the next cell in raster order, so last_cell's fetch is the
+  // NEXT raster line's column 0 and reads the sequencer's produced line (n_*); every other
+  // fetch reads the line on screen (c_*). (No vline-derived coordinates are needed: the
+  // sequencer's line VACTIVE-1 restart already makes n_* the frame's first line at the
+  // picture's last line.) The row index is TEN bits, one row per line of the tallest frame:
+  // NP2kai steps the row address with no row limit (maketext.c:321 `esi = LOW12(esi +
+  // pitch);`), so 2-line rows on 400 lines (200 rows) or LR 5 (67 rows) must not wrap onto
+  // row 0; nowline is seven bits signed: a 20-line row runs -2..17.
+  wire [9:0] f_k      = last_cell ? n_k   : c_k;
+  wire [1:0] f_rp     = last_cell ? n_rp  : c_rp;
+  wire [6:0] f_now    = last_cell ? n_now : c_now;
+  wire [1:0] f_ord    = last_cell ? n_ord : c_ord;
+  wire [3:0] f_raster = f_now[3:0];          // fntline & 0x0f (maketext.c:358-361)
 
-  // TRAM word index of fetched cell: sad + row*pitch + cell(80) / +2*cell(40). The fetch
-  // address uses its LOW12 (both planes hold 4096 words); bits 15:12 are the pre-mask
-  // display-start tap tb_pc9821_gdc_text reads to prove a 0x1000-word start is in effect.
-  wire [15:0] f_sad = {v_sad_hi, v_sad_lo};
+  // TRAM word index of fetched cell: SAD[partition] + k*pitch + cell(80) / +2*cell(40). The
+  // fetch address uses its LOW12 (both planes hold 4096 words; maketext.c:196/:416 `LOW12`);
+  // bits 15:12 are partition 0's pre-mask display-start tap tb_pc9821_gdc_text reads to prove a
+  // 0x1000-word start is in effect.
+  wire [15:0] f_sad = sad_of(f_rp, {v_sad_hi, v_sad_lo}, pram_sad1, pram_sad2, pram_sad3);
   // ---- THE ROW BASE, ONE DOT EARLY (the timing seam, part 3) ----
-  // f_row * v_pitch registered on pixel_ce: the multiply leaves the per-fetch path (what
-  // remains is one adder pair and the mux below). f_row and v_pitch only move at dots that
-  // are 0 mod 8 (80-column) / 0 mod 16 (40-column): a line's first dot (vline moves on the
-  // HTOTAL-1 edge), the last cell's first dot (632 / 624, where f_line switches to the next
-  // line) and dot 640 (where it switches back) - and the dots that CONSUME f_wordidx are
+  // f_k * v_pitch registered on pixel_ce: the multiply leaves the per-fetch path (what remains
+  // is one adder pair and the mux below; the start word is added there, as it was before the
+  // text line sequencer - the shape the multiply keeps to the DSP block it always mapped to). f_k/f_rp and v_pitch/v_sad
+  // only move at a line's first dot (the c_* copy and the snapshots land on the HTOTAL-1
+  // edge), the last cell's first dot (632 / 624, where the n_* side is selected) and dot 640
+  // (where it switches back) - n_* itself is written in the line's first few dots, long before
+  // last_cell - and the dots that CONSUME f_wordidx are
   // never those: the fetch arms sit at dots 3/4/5 of a cell (11/12/13 in 40-column) and the
   // render captures at cell_done (dot 7 / 15). The registered product therefore equals the
   // combinational one at every consuming dot, and tram_vid_addr is bit-identical at EVERY
@@ -1221,7 +1582,7 @@ module pc9821_crtc (
   reg [15:0] f_rowbase_r;
   always @(posedge clk_sys) begin
     if (!rst_n_sys) f_rowbase_r <= 16'h0000;   // row 0's base is 0 * v_pitch
-    else if (pixel_ce) f_rowbase_r <= {11'd0, f_row} * {8'd0, v_pitch};
+    else if (pixel_ce) f_rowbase_r <= {6'd0, f_k} * {8'd0, v_pitch};
   end
   /* verilator lint_off UNUSEDSIGNAL */
   wire [15:0] f_wordidx = v_col40
@@ -1276,7 +1637,7 @@ module pc9821_crtc (
   // draws from the block at (kc & 0x7f7f) << 4. The kanji pair consumes two cells (below);
   // the ver0.78 rows draw the slot's LEFT half ALONE in one cell (`kanji2nd` stays clear
   // for kc 0x09-0x0B, maketext.c:292-294) - the half-width glyphs of the NEC extension
-  // rows, which this module drew as NOTHING (review-cg F6).
+  // rows.
   wire        f_jis      = f_two_byte && !f_gaiji && !f_ver078;   // the PAIR-consuming class
   wire        f_jis_any  = f_two_byte && !f_gaiji;   // ...plus the ver0.78 singles
   // The gaiji half is POSITIONAL, not code bit 7: on the Xe10, KTDEMO's lone [0xD6,'A'] then
@@ -1288,7 +1649,7 @@ module pc9821_crtc (
   // ---- the JIS kanji pair ----
   /* verilator lint_off WIDTHEXPAND */   // the glyph address arithmetic is value-bounded
   // ku = the JIS ROW, carried in the code's LOW byte; ten = the column, in the HIGH byte. The
-  // walker inside pc9821_cg owns the glyph ADDRESS (the font is in SDRAM now); the scanout only
+  // walker inside pc9821_cg owns the glyph ADDRESS (the font is in SDRAM); the scanout only
   // needs to know whether the fetched cell is a JIS glyph inside the grid, so that the row cache
   // and the ANK store can be told apart.
   wire [7:0]  f_ku_i  = {1'b0, code_lo_r[6:0]} - 8'h01;   // ku - 0x21
@@ -1298,10 +1659,10 @@ module pc9821_crtc (
   // flag must NOT survive the line wrap: last_cell's fetch is the NEXT line's column 0, and
   // both references reset the pair per line (NP2kai maketext.c declares kanji2nd inside the
   // line loop, QEMU pc98-vga.c likewise), so the flag the ADDRESS uses is AND NOT last_cell.
-  // Without it, a kanji code in a line's last cell made the next line's column 0 draw that
-  // glyph's RIGHT half - the wrong glyph, at a cell the machine draws as a fresh character.
+  // Without it, a kanji code in a line's last cell would make the next line's column 0 draw
+  // that glyph's RIGHT half - the wrong glyph, at a cell the machine draws as a fresh character.
   wire        f_pair2nd = f_jis2nd && !last_cell;
-  // The gaiji twin of the mask above (review F4): last_cell's fetch is the next
+  // The gaiji twin of the mask above: last_cell's fetch is the next
   // line's column 0 and NP2kai resets gaiji1st per line (maketext.c:238,
   // declared inside the line loop), so a carried positional half must not
   // survive the line wrap either - the wrap cell is a fresh LEFT half and its
@@ -1342,10 +1703,11 @@ module pc9821_crtc (
     end
   end
 
-  // The JIS row cache's read coordinates, packed inside pc9821_cg. Three banks: row 0 takes
-  // bank 2 and every other row its parity (bank = (row == 0) ? 2 : row[0]), so the walker's
-  // NEXT row and the scanout's current row are never the same bank.
-  assign jc_rd_bank = (f_row == 5'd0) ? 2'd2 : {1'b0, f_row[0]};
+  // The JIS row cache's read coordinates, packed inside pc9821_cg. Three banks, numbered by the
+  // line sequencer's mod-3 count of the GDC's row reloads (ord_inc), carried across the frame
+  // boundary (fb): a row draws from the bank its fill was made in, and the walker is always sent
+  // to the bank after the one on screen, so the two are never the same bank (cg's assertion).
+  assign jc_rd_bank = f_ord;   // the row's mod-3 bank, the one its fill was made in (above)
   assign jc_rd_cell = v_col40 ? {1'b0, f_c40} : f_c80;
   assign jc_rd_word = f_raster[3:2];
 
@@ -1393,6 +1755,7 @@ module pc9821_crtc (
   reg [15:0] r_wordidx;
   /* verilator lint_on UNUSEDSIGNAL */
   reg [ 3:0] r_raster;
+  reg [ 2:0] r_nowh;       // nowline's sign and high bits: {r_nowh, r_raster} is nowline
   reg [ 7:0] r_code_hi;
   reg [ 7:0] r_code_lo;
   /* verilator lint_off UNUSEDSIGNAL */  // only r_attr[7:5] are the colour index (colour_idx)
@@ -1401,7 +1764,7 @@ module pc9821_crtc (
   reg [ 7:0] r_font;
   reg        r_jis_ok;     // the rendered cell is a JIS kanji whose glyph is in the store
   reg        r_jis_2nd;    // the rendered cell is a kanji pair's RIGHT half
-  reg        r_gaiji_2nd;  // ...or a same-code gaiji pair's RIGHT half (review F5)
+  reg        r_gaiji_2nd;  // ...or a same-code gaiji pair's RIGHT half
   // The previous fetched cell's class and code: the pair-coherence test for
   // r_gaiji_2nd below (NP2kai maketext.c:274-277 propagates the cursor across a
   // gaiji pair only when the two cells carry the same code).
@@ -1417,6 +1780,7 @@ module pc9821_crtc (
       attr_r    <= 8'h00;
       r_wordidx <= 16'h0;
       r_raster <= 4'd0;
+      r_nowh   <= 3'd0;
       r_code_hi <= 8'h00;
       r_code_lo <= 8'h00;
       r_attr   <= 8'h00;
@@ -1454,6 +1818,7 @@ module pc9821_crtc (
         p_code_hi <= code_hi_r;
         r_wordidx <= f_wordidx;
         r_raster  <= f_raster;
+        r_nowh    <= f_now[6:4];
         r_code_hi <= code_hi_r;
         r_code_lo <= code_lo_r;
         r_attr    <= attr_r;
@@ -1484,7 +1849,7 @@ module pc9821_crtc (
   // The row-cache cells draw from the cache exactly as the ANK do; r_jis_ok is false for
   // a row the grid does not hold (ku above 0x7C), which keeps those cells blank rather
   // than showing a wrapped address's glyph. It covers the kanji left cells, the ver0.78
-  // half-width rows (review-cg F6, maketext.c:280-296), and the pair's right cell, whose
+  // half-width rows (maketext.c:280-296), and the pair's right cell, whose
   // own code is ignored (maketext.c:254 `if (kanji2nd)` comes first). That right cell
   // carries no code of its own on the machine (the ITF's TEXTDISP.X86 leaves it at the
   // cleared 0x0020, and NP2kai/QEMU ignore it), so it usually arrives here as the ANK
@@ -1519,13 +1884,12 @@ module pc9821_crtc (
   wire [4:0] csr_blink_field = {v_csrform[2][2:0], v_csrform[1][7:6]};
   wire [6:0] cur_timing = |csr_blink_field ? {1'b0, csr_blink_field, 1'b0} : 7'd64;
   reg  [6:0] cur_div;
-  // cur_phase is that count's parity, the cursor VISIBLE while it is 0 (the power-on phase the
-  // old frame_cnt[5] gate used).
+  // cur_phase is that count's parity, the cursor VISIBLE while it is 0 (the power-on phase).
   reg        cur_phase;
   // The CHARACTER BLINK's count is frame_cnt[5:4] (the duty test below), so this register is
   // stepped by 16: bits [5:4] run 0,1,2,3 and wrap, which IS NP2kai's `count & 3`. Advancing it
-  // once per cur_timing frames is what the old every-frame step was missing - it blinked 16 of
-  // every 64 frames regardless of the CSRFORM field (audit rtl-audit-video F1).
+  // once per cur_timing frames is what makes the blink follow the CSRFORM field; an every-frame
+  // step would blink 16 of every 64 frames regardless of it.
   reg  [5:0] frame_cnt;
   always @(posedge clk_sys)
     if (!rst_n_sys) begin
@@ -1554,8 +1918,13 @@ module pc9821_crtc (
   wire [4:0] csr_top = v_csrform[1][4:0];
   wire [4:0] csr_bot = v_csrform[2][7:3];
   wire [15:0] csr_word = {v_csread[1], v_csread[0]};
-  wire        csr_row_ok = ({2'b0, r_raster} >= {1'b0, csr_top}) &&
-                           ({2'b0, r_raster} <= {1'b0, csr_bot});
+  // The cursor's line test is on nowline, the CRTC's line inside the row, not the font line:
+  // `if ((nowline >= (CSRFORM+1 & 0x1f)) && (nowline <= (CSRFORM+2 >> 3)))` (maketext.c:334-335),
+  // so a negative nowline (a 20-line row's two leading blank lines) is never inside it.
+  wire [6:0]  r_now      = {r_nowh, r_raster};
+  wire        csr_row_ok = !r_now[6] &&
+                           (r_now[5:0] >= {1'b0, csr_top}) &&
+                           (r_now[5:0] <= {1'b0, csr_bot});
   // The compare uses the 12-bit TRAM word index, not the 16-bit register: NP2kai's edi is
   // LOW12, so a CSRW at or above 0x1000 can never match a cell (vram/maketext.c:244).
   wire        csr_own  = csr_enable && csr_blink &&
@@ -1563,13 +1932,19 @@ module pc9821_crtc (
   // NP2kai propagates the cursor to the pair's right cell: the left cell flags 0x80 and
   // maketext then sets bit 8 on cell+1 (vram/maketext.c:337). That mark is on the left cell
   // of ANY 16-dot pair - kanji (maketext.c:258) and gaiji with matching code
-  // (maketext.c:274-277) - so both r_jis_2nd and r_gaiji_2nd (review F5) count.
+  // (maketext.c:274-277) - so both r_jis_2nd and r_gaiji_2nd count.
   wire [11:0] csr_prev = r_wordidx[11:0] - (v_col40 ? 12'd2 : 12'd1);
   wire        csr_pair = csr_enable && csr_blink && (r_jis_2nd || r_gaiji_2nd) &&
                          ({4'b0, csr_prev} == csr_word) && csr_row_ok;
   wire        csr_here = csr_own || csr_pair;
 
-  wire ul_on = underline && (r_raster == 4'd15);
+  // The underline is on the row's LAST line, `(nowline + 1) == lines` (maketext.c:375-376) -
+  // line 15 of the 16-line row, line 17 of a 20-line row's -2..17.
+  wire ul_on = underline && (r_now == {2'b00, t_lnm1});
+  // A glyph line is drawn only for 0 <= nowline < TEXT_CL; every other line of the row draws the
+  // cell's colour with no pattern - `text_table[color[x]]`, so reverse and the cursor still
+  // fill it (maketext.c:348-374).
+  wire glyph_line = !r_now[6] && (r_now[5:0] < {1'b0, t_cl});
   // The underline and the bit-4 vertical line are LINE OVERLAYS: NP2kai accumulates them
   // in line_effect and paints them after the visible test has cleared bitmap
   // (vram/maketext.c:306 vs :375/:395), so neither is gated on attribute bit 0. The vertical
@@ -1587,9 +1962,8 @@ module pc9821_crtc (
   // `color[cur_line] |= 256` regardless of TXTATR_ST and blinkdisp, and
   // text_table[256+m] = text_table[m ^ 0x80] is a reverse toggle), so the cursor
   // is a solid inverted block on an invisible or blink-blanked cell (blank
-  // inverted = solid) and stays visible through the blink phases (reviews F2,
-  // F3). The line overlays run outside all of it.
-  wire glyph_data = glyph_on && r_attr[0] && !blink_off;
+  // inverted = solid) and stays visible through the blink phases. The line overlays run outside all of it.
+  wire glyph_data = glyph_on && r_attr[0] && !blink_off && glyph_line;
   wire pix_on = (glyph_data ^ reverse ^ csr_here) || ul_on || vl_on;
 
   // Text colour is NOT the graphics palette. Both references give the text plane a fixed
@@ -1636,7 +2010,7 @@ module pc9821_crtc (
   // Pixel-timing view and the graphics palette snapshot for pc9821_video_mixer.
   assign pix_dot      = adot;
   assign pix_h_active = h_active;
-  assign pix_v_active = v_active;
+  assign pix_v_active = v_disp_any;
   // The odd interleave line. ONE wire, TWO sample points, and the +2 scanout pipeline
   // makes them want DIFFERENT parities whenever the frame wrap flips one: the line tick
   // (the last dot of raster line L) FEEDS display line (L + 2) mod VTOTAL
@@ -1725,7 +2099,7 @@ module pc9821_crtc (
     pal256_r_q <= pal256_r[pal_sel];
     pal256_b_q <= pal256_b[pal_sel];
   end
-  // POWER-UP DETERMINISM FOR THE READ MIRROR (gdc review F14). The three lane RAMs are
+  // POWER-UP DETERMINISM FOR THE READ MIRROR. The three lane RAMs are
   // written only by guest I/O, so with no seed a 4-state simulation answers X on the
   // 0xAA/0xAC/0xAE reads forever. The seed is the same NEC 16-colour
   // power-on table (itf.rom 0x042F, {R,G,B}) that pc9821_gfx_palette's `pal_power_on` starts
@@ -1758,37 +2132,34 @@ module pc9821_crtc (
   // The read mirror is 16 entries: the Xe10's own 16-colour analogue palette indexed
   // by palnum & 15 (the DAC and pc9821_gfx_palette take the same masked index). The
   // unmasked 256-entry anareg[palnum*3+c] mirror NP2kai models (io/gdc.c:860/:928) is
-  // the PEGC's 256-colour palette, out of scope here (reverted for area).
+  // the PEGC's 256-colour palette, out of scope here (left out for area).
   initial begin
     for (pal_i = 0; pal_i < 16; pal_i = pal_i + 1) begin
       po = pal_power_on(pal_i[3:0]);
-      // One FULL BYTE per lane (green, red, blue), zero-extending the RGB444 power-on
-      // value exactly as the single 24-bit array's implicit assignment always did
-      // (deliberate no-behaviour-change lint fix); the seed's purpose is only that the
-      // read-back is never X (gdc review F14). {12'h0, po} was byte [7:0] = po[7:0],
-      // byte [15:8] = {4'h0, po[11:8]}, byte [23:16] = 8'h00, split here byte for byte.
-      pal_g[pal_i] = po[7:0];
-      // `po` is 12 bits wide, so po[15:8] is illegal (Quartus 10232, Verilator
-      // SELRANGE); the extended word's red byte is 4'h0 + po[11:8].
-      pal_r[pal_i] = {4'h0, po[11:8]};
-      pal_b[pal_i] = 8'h00;
+      // One nibble per lane, split by channel from the {R,G,B} power-on word (the same
+      // order pc9821_gfx_palette's live table seeds; a byte-wide seed would put {G,B} in
+      // the green lane, so an unwritten entry's green read-back would carry its blue
+      // nibble); the seed's purpose is that the read-back is never X and
+      // equals what the screen shows before the first guest write.
+      pal_g[pal_i] = po[7:4];
+      pal_r[pal_i] = po[11:8];
+      pal_b[pal_i] = po[3:0];
     end
     // ALL-ZERO, deliberately: a block RAM's output register powers up to zero anyway, and
     // a NON-DEFAULT power-up value on the register that captures a memory read is what
     // makes Quartus refuse to infer the memory at all (measured: `8'hFF`
     // blocks inference, `8'h00` does not).
-    pal_g_q = 8'h00;
-    pal_r_q = 8'h00;
-    pal_b_q = 8'h00;
+    pal_g_q = 4'h0;
+    pal_r_q = 4'h0;
+    pal_b_q = 4'h0;
   end
   always @(posedge clk_sys) begin
-    // The 16-colour write: one WHOLE byte into the lane its channel names, at
-    // palnum & 15 (the DAC and the mirror share the masked index; PEGC is out of scope).
-    // A lane write is only enabled by its own channel, which is the whole-byte shape
-    // that infers; a byte-granular write into a 24-bit word does not.
-    if (pal_wr_en && pal_wr_chan == 2'd0) pal_g[pal_sel[3:0]] <= io_din;   // 0xAA green
-    if (pal_wr_en && pal_wr_chan == 2'd1) pal_r[pal_sel[3:0]] <= io_din;   // 0xAC red
-    if (pal_wr_en && pal_wr_chan == 2'd2) pal_b[pal_sel[3:0]] <= io_din;   // 0xAE blue
+    // The 16-colour write: the low nibble (pal_wr_data, what the DAC keeps) into the lane
+    // its channel names, at palnum & 15. A lane write is only enabled by its own channel,
+    // which is the whole-lane shape that infers; a sub-word write into a wide word does not.
+    if (pal_wr_en && pal_wr_chan == 2'd0) pal_g[pal_sel[3:0]] <= pal_wr_data;   // 0xAA green
+    if (pal_wr_en && pal_wr_chan == 2'd1) pal_r[pal_sel[3:0]] <= pal_wr_data;   // 0xAC red
+    if (pal_wr_en && pal_wr_chan == 2'd2) pal_b[pal_sel[3:0]] <= pal_wr_data;   // 0xAE blue
   end
   // The lane read port: one clk_sys, the same latency the single array's registered read
   // had, so nothing on the readback path moves.
@@ -1804,8 +2175,20 @@ module pc9821_crtc (
   assign dbg_disp  = v_disp;
 
   assign hs_out = ~in_hsync;
-  assign vs_out = ~in_vsync;
-  assign de_out = h_active && v_active;
+  // THE VSYNC PIN CHANGES ON THE HSYNC LEADING EDGE. The uPD7220 starts each scan line with its
+  // HSYNC (MAME upd7220.cpp update_hsync_timer `next_x = state ? m_hs * horiz_mult : 0` - the pulse
+  // occupies x = 0..HS) and moves VSYNC at x = 0 of its line (update_vsync_timer
+  // `screen().time_until_pos(next_y, 0)`), so on the pin VSYNC switches together with an HSYNC
+  // leading edge. This raster numbers its lines from the first active dot instead, which put the
+  // pin's VSYNC edge HS + HBP dots after the hsync (128 dots for the default block): mid-line, and
+  // in the line-doubled picture at a line's active start, where sys_top's composite sync then
+  // flips mid-line. The pin is therefore taken from the line count as of the last HSYNC leading
+  // edge (vline + 1 from HS_ON on). in_vsync itself - the status bit, the vblank IRQ and their
+  // capture-pinned phase (vline 407) - is unchanged.
+  wire [9:0] vline_hs = (hdot < HS_ON) ? vline : (vline == VTOT_M1) ? 10'd0 : vline + 10'd1;
+  wire in_vsync_pin = (vline_hs >= VS_ON) && (vline_hs < VS_OFF);
+  assign vs_out = ~in_vsync_pin;
+  assign de_out = h_active && v_disp_any;
   // Export the SYNCHRONISED vsync: its consumers (the PIC's rising-edge detector for IRQ2
   // and the 0xA0 status bit) live in clk_sys, and a signal crossing into an edge detector can
   // metastablise into a spurious or missed IRQ2 (sec.3).
@@ -1845,43 +2228,43 @@ module pc9821_crtc (
       5'd10: io_dout_r = crtc_sur;
       5'd11: io_dout_r = crtc_sdr;
       // 0x7C's BYTE READ IS OPEN BUS 0xFF: the port is WRITE-ONLY, and the machine
-      // outranks NP2kai's live grcg.modereg (io/crtc.c:46-50, review iobus-tram F2).
+      // outranks NP2kai's live grcg.modereg (io/crtc.c:46-50).
       // probes/RDBACK.TXT:152 wrote a byte a live register could not miss and read open
-      // bus anyway: `port=007C before=FF wrote=5A after=FF back=FF`. That also refutes
-      // this arm's earlier reading of one as-found byte ("the write-only model also gives
-      // 0xFF when modereg holds 0xFF"): 0x5A is not 0xFF. The GRCG's mode still reaches
+      // bus anyway: `port=007C before=FF wrote=5A after=FF back=FF` (0x5A is not 0xFF, so
+      // no live register is behind the read). The GRCG's mode still reaches
       // its consumers as a signal (pc9821_grcg owns it; the EGC gate takes it directly),
-      // so nothing but the guest read moves. The 16-bit `in ax,7Ch` FOLD is unchanged
-      // (pc9821_iobus's term7c_hi forces lane 1 to 0x00), but the word read's LOW lane
-      // follows this byte read, so `in ax,7Ch` moves from 0x00<mode> to 0x00FF; the word
+      // so only the guest read is open bus. The 16-bit `in ax,7Ch` FOLD
+      // (pc9821_iobus's term7c_hi forces lane 1 to 0x00) and this LOW lane make
+      // `in ax,7Ch` read 0x00FF; the word
       // form was never machine-measured (TODO item 42).
       5'd12: io_dout_r = 8'hFF;
       // NP2kai gdc_i6a returns gdc.mode2 itself, so a set bit reads back (io/gdc.c:703),
-      // bit 1 included (P6: the FF2 num-1 latch round-trips).
+      // bit 1 included (the FF2 num-1 latch round-trips).
       5'd4:  io_dout_r = {4'b0000, mode2_wren, mode2_egc, mode2_ff2b1, mode2_16color};
       // NP2kai gdc_ia8 returns gdc.palnum VERBATIM in analogue modes (io/gdc.c:913-919):
-      // out 0xA8,0xAB / in 0xA8 reads 0xAB, not 0x0B (review-cg F1). The ANALOGUE path is
-      // untouched: the machine capture that settles the DIGITAL path below ran in
+      // out 0xA8,0xAB / in 0xA8 reads 0xAB, not 0x0B. This is the ANALOGUE path: the
+      // machine capture that settles the DIGITAL path below ran in
       // DIGITAL mode (probes/RDBACK.TXT:147 mode bytes FF1/FF2 = 18/00).
       // The DIGITAL bytes read back MASKED with 0x77 (bits 0-2 + 4-6; bit 3 undefined,
-      // bit 7 unused): probes/RDBACK.TXT:148-151 `00A8 wrote=AB after=23`,
+      // bit 7 unused): probes/RDBACK.TXT:148-151 `port=00A8 before=37 wrote=AB after=23`,
       // `00AA/AC/AE wrote=FF after=77`. Both software models answer the raw byte
       // (NP2kai gdc_ia8/iaa/iac/iae, io/gdc.c:913-954), so the capture is the sole source.
       // The mask is applied at the READ PORT only: the capture proves the read, and the
       // digital display decode (pc9821_gfx_palette's digpal) uses bits 0-2 and 4-6 alone,
       // so whether the hardware's stored byte is masked too is unobservable here.
       5'd20: io_dout_r = (mode2_16color || mode2_256col) ? pal_sel : (dig_a8 & 8'h77);
-      // NP2kai gdc_iaa/iac/iae return the full 8-bit written byte (io/gdc.c:922-954):
-      // write 0xFF, read 0xFF. The old nibble shape answered 0x0F. Analogue only; the
-      // digital bytes carry the machine's 0x77 mask (see 5'd20 above).
+      // 16-colour analogue: the LOW NIBBLE only, upper four bits 0 (docs/probes/PEGCRD-XE10.TXT
+      // `WROTE_R=FF G=00 B=7F READ_R=0F G=00 B=0F`). NP2kai io/gdc.c gdc_iaa/iac/iae
+      // returns the full written byte; the capture outranks it. The digital bytes carry
+      // the machine's 0x77 mask (see 5'd20 above).
       // In 256-colour mode the PEGC mirror answers the FULL byte at the unmasked
       // index (NP2kai gdc_iaa/iac/iae; MAME returns 0 - the recorded divergence).
       5'd22: io_dout_r = mode2_256col ? pal256_rd_q[7:0]  :
-                         mode2_16color ? pal_rd_q[7:0]   : (dig_aa & 8'h77);   // 0xAA = G
+                         mode2_16color ? {4'b0, pal_rd_q[3:0]}   : (dig_aa & 8'h77);   // 0xAA = G
       5'd23: io_dout_r = mode2_256col ? pal256_rd_q[15:8] :
-                         mode2_16color ? pal_rd_q[15:8]  : (dig_ac & 8'h77);   // 0xAC = R
+                         mode2_16color ? {4'b0, pal_rd_q[7:4]}  : (dig_ac & 8'h77);   // 0xAC = R
       5'd24: io_dout_r = mode2_256col ? pal256_rd_q[23:16]:
-                         mode2_16color ? pal_rd_q[23:16] : (dig_ae & 8'h77);   // 0xAE = B
+                         mode2_16color ? {4'b0, pal_rd_q[11:8]} : (dig_ae & 8'h77);   // 0xAE = B
       5'd17: io_dout_r = {7'b0, display_page};
       5'd19: io_dout_r = {7'b0, access_page};
       // 0x64 is a CONSTANT 0x1F: the probe read 0x1F there, but it had written 0x1F first,

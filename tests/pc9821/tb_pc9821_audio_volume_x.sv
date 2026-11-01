@@ -1,14 +1,14 @@
-// tb_pc9821_audio_volume_x — the mixer's channel sequencer must never X-lock.
+// tb_pc9821_audio_volume_x - the mixer's channel sequencer must never X-lock.
 //
 // ==== WHAT THIS PROVES ====
-// The 10-channel master mix's channel sequencer never X-locks: `ch`, `gain`, `sample`, `samples_out` and `valid` are seeded, so in 4-state simulation the self-fed counter resolves instead of poisoning the whole audio path with X forever (review r2-resets F2 - the same self-fed shape as crtc's stat_dr, hidden by Verilator's 2-state zero-init; run under iverilog for the fail-first X-lock), valid pulses exactly once per NUM_CH clks, and NUM_CH unity-gain constant channels assemble into samples_out with channel 0 at bits [15:0] in channel order.
+// The 10-channel master mix's channel sequencer never X-locks: `ch`, `gain`, `sample`, `samples_out` and `valid` are seeded, so in 4-state simulation the self-fed counter resolves instead of poisoning the whole audio path with X forever (the same self-fed shape as crtc's stat_dr, hidden by Verilator's 2-state zero-init; run under iverilog for the fail-first X-lock), valid pulses exactly once per NUM_CH clks, and NUM_CH unity-gain constant channels assemble into samples_out with channel 0 at bits [15:0] in channel order.
 //
 // The 10-channel volume attenuator's channel counter `ch` is a self-fed
 // register (ch <= (ch == CH_LAST) ? 0 : ch + 1) on CLK_AUDIO with no reset and
 // no power-up value. In 4-state simulation `ch` = X makes the comparison, the
 // ternary and the increment all X, so the register NEVER resolves and the
 // 10-channel master mix (`samples_out`) and its `valid` strobe are X-poisoned
-// forever (review r2-resets F2). This is the same self-fed shape as
+// forever. This is the same self-fed shape as
 // pc9821_crtc's `stat_dr`; Verilator's 2-state zero-init hides it, which is
 // what this bench's $isunknown checks are for - run it under a 4-state
 // simulator (iverilog) to see the fail-first X-lock.
@@ -74,7 +74,7 @@ module tb_pc9821_audio_volume_x;
       samples_in[i*SAMPLE_WIDTH +: SAMPLE_WIDTH] = 16'h0100 * (i + 1);
     end
 
-    // ==== 4-STATE X-CHECK (review r2-resets F2's confirm shape) ====
+    // ==== 4-STATE X-CHECK ====
     // Nothing about this module may be unknown at any time - it has no inputs
     // that can be unknown here, so ANY X is the self-fed lock.
     for (i = 0; i < 4 * NUM_CH; i = i + 1) begin
@@ -110,7 +110,7 @@ module tb_pc9821_audio_volume_x;
     // The FRAME the consumer latches on valid: channel 0 at bits [15:0] and channel k at
     // [16k +: 16], every channel its own unity-gain product. The next-epochs check below
     // proves the capture order, so a valid that pulses one channel late (a frame
-    // rotated by one slot) is caught by this one (bench-audit mutation, 2026-10-12).
+    // rotated by one slot) is caught by this one.
     begin : frame_at_valid
       integer k;
       @(negedge clk);

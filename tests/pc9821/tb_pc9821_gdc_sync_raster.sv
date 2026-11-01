@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC's SYNC command OWNS the raster: the eight-parameter sync block a guest programs through 0x62/0x60 decides the line length, the active width, every porch and the frame length exactly as NP2kai's gdc_updateclock() derives them (io/gdc.c:370-444, the only reference that derives a raster - qemu-pc98 latches the same bytes and then syncs on a fixed 18 ms), and the machine's power-on block still gives the measured default. The expectations are NP2kai's, computed in the bench from the block bytes by a transcription of gdc_updateclock(), never read out of the DUT; the DUT is measured only through its own sync outputs and raster counters (dots per line, lines per frame, active dots per line, active lines, the dot the hsync pulse starts on, the hsync width, the vline the vsync pulse rises on and its width in lines). Three cases: the default block {10 4e 07 25 07 07 90 65} -> 848x440 total with 640x400 active, hfp 128, hsync 56, VFP 7, an 8-line VSYNC pulse rising on vline 407, VBP 25, 56.42 Hz; defsyncm15 written on a 24 kHz machine -> x = 112 characters = 896 dots and the raw 260-line frame CLAMPED to the machine's 400-line minimum; and a hand-built 550-line block (lf 480, vs 10, vfp 20, vbp 40) whose pulse rises on vline 500 at 45.1 Hz. The default's pulse width is the block's vs field because the machine's own 2M-sample status histogram measures bit 5 high for 36 385 of 2 097 152 samples = 1.735 % = 8 of 440 lines once its loop's x1.048 duty bias is divided out (the factor its bit 6 carries against the 208/848 horizontal blank), where the '2.8 % = 12 lines' the tree used to carry divided the same count by 1 310 720 instead of the capture's own 2^21. FAIL-FIRST: on the pre-change tree cases 2 and 3 cannot move the raster at all, case 1's pulse is 12 lines wide and case 2's line never leaves 848.
+// The GDC's SYNC command OWNS the raster: the eight-parameter sync block a guest programs through 0x62/0x60 decides the line length, the active width, every porch and the frame length exactly as NP2kai's gdc_updateclock() derives them (io/gdc.c:370-444, the only reference that derives a raster - qemu-pc98 latches the same bytes and then syncs on a fixed 18 ms), and the machine's power-on block still gives the measured default. The expectations are NP2kai's, computed in the bench from the block bytes by a transcription of gdc_updateclock(), never read out of the DUT; the DUT is measured only through its own sync outputs and raster counters (dots per line, lines per frame, active dots per line, active lines, the dot the hsync pulse starts on, the hsync width, the vline the vsync pulse rises on and its width in lines). Three cases: the default block {10 4e 07 25 07 07 90 65} -> 848x440 total with 640x400 active, front porch 80, hsync 64 and back porch 64 dots (the uPD7220's field map, MAME upd7220.cpp:1243-1246 - NP2kai only sums those fields into the line), VFP 7, an 8-line VSYNC pulse rising on vline 407, VBP 25, 56.42 Hz; defsyncm15 written on a 24 kHz machine -> x = 112 characters = 896 dots and the raw 260-line frame CLAMPED to the machine's 400-line minimum; and a hand-built 550-line block (lf 480, vs 10, vfp 20, vbp 40) whose pulse rises on vline 500 at 45.1 Hz. The default's pulse width is the block's vs field because the machine's own 2M-sample status histogram measures bit 5 high for 36 385 of 2 097 152 samples = 1.735 % = 8 of 440 lines once its loop's x1.048 duty bias is divided out (the factor its bit 6 carries against the 208/848 horizontal blank), where the '2.8 % = 12 lines' the tree used to carry divided the same count by 1 310 720 instead of the capture's own 2^21. FAIL-FIRST: on the pre-change tree cases 2 and 3 cannot move the raster at all, case 1's pulse is 12 lines wide and case 2's line never leaves 848; and on the tree before 2026-10-15 the default's hsync started at dot 768 (HFP 128) and was 56 dots wide, a 24-dot back porch; and the VSYNC pin moved 128 dots after the HSYNC leading edge (at the first active dot), where the uPD7220 moves it WITH the HSYNC leading edge (MAME upd7220.cpp update_vsync_timer) - every VSYNC-pin edge is now checked to land on an HSYNC-pin leading edge.
 //
 // The GDC's SYNC command OWNS the raster. The eight-parameter sync block a guest programs
 // through 0x62 (command) / 0x60 (parameters) decides the line length, the active width, every
@@ -61,7 +61,6 @@ module tb_pc9821_gdc_sync_raster;
   reg [7:0]  io_addr = 8'h00;
   reg [7:0]  io_din  = 8'h00;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: this bench never reads 0x7C
   reg [13:0] tram_cpu_addr = 14'd0;
   reg [7:0]  tram_cpu_din  = 8'h00;
   reg        tram_cpu_we   = 1'b0;
@@ -69,8 +68,6 @@ module tb_pc9821_gdc_sync_raster;
   reg [17:0] font_ld_addr = 18'd0;
   reg [15:0] font_ld_data = 16'd0;
   reg        font_ld_we   = 1'b0;
-  wire [15:0] cg_code_win;
-  wire        cg_lr_win;
   wire [7:0]  cg_win_dout;
   wire  [4:0] cg_win_byte_sel = 5'd0;
   wire        cg_win_rd = 1'b0;
@@ -112,11 +109,9 @@ module tb_pc9821_gdc_sync_raster;
       .clk_sys(clk_sys), .rst_n_sys(rst_n), .pixel_ce(1'b1),
       .cfg_fdd_mode(3'd0),   // entry 0: the measured boot/FDD nibble
       .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .io_dout(io_dout),
-      .grcg_mode_r(grcg_mode_r),
       .tram_cpu_addr(tram_cpu_addr), .tram_cpu_din(tram_cpu_din),
       .tram_cpu_we(tram_cpu_we), .tram_cpu_dout(tram_cpu_dout),
       .font_ld_addr(font_ld_addr), .font_ld_data(font_ld_data), .font_ld_we(font_ld_we),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .cg_win_byte_hold(cg_win_byte_hold),
@@ -183,8 +178,10 @@ module tb_pc9821_gdc_sync_raster;
       g_vtotal  = g_y;
       g_hact    = 8 * g_cr;
       g_vact    = g_lf;
-      g_hfp_d   = 8 * g_hfp;
-      g_hs_d    = 8 * g_hs;
+      // The porches are the uPD7220's (MAME upd7220.cpp:1243-1246 `m_hfp = (m_pr[4] >> 2) + 1`,
+      // `m_hs = (m_pr[3] & 0x1f) + 1`, `m_hbp = (m_pr[5] & 0x3f) + 1`): NP2kai only sums the fields.
+      g_hfp_d   = 8 * ((tmp >> 10) + 1);
+      g_hs_d    = 8 * (g_hs + 1);
       g_hs_start = g_hact + g_hfp_d;
       g_vfp_e   = g_vfp;
       g_v_rise  = g_vact + g_vfp_e;
@@ -221,6 +218,19 @@ module tb_pc9821_gdc_sync_raster;
 
   reg hs_q, vs_q, in_hs_d, in_vs_d, line_had_de, meas;
   reg [9:0] rise_vline, hs_start_dot;
+  // The PINS: every edge of the VSYNC pin must land on an HSYNC-pin leading edge (the uPD7220 moves
+  // VSYNC at x = 0 of its line, where its HSYNC begins: MAME upd7220.cpp update_vsync_timer
+  // `time_until_pos(next_y, 0)`, update_hsync_timer `next_x = state ? m_hs * horiz_mult : 0`).
+  reg        pin_hs_q = 1'b1, pin_vs_q = 1'b1;
+  integer    n_pin_vs_edges = 0, n_pin_vs_off = 0;
+  always @(posedge clk_sys) begin
+    pin_hs_q <= hs_out;
+    pin_vs_q <= vs_out;
+    if (meas && (pin_vs_q != vs_out)) begin
+      n_pin_vs_edges = n_pin_vs_edges + 1;
+      if (!(pin_hs_q && !hs_out)) n_pin_vs_off = n_pin_vs_off + 1;
+    end
+  end
   reg [31:0] n_cyc, n_hs, n_vs, n_de, n_aline, n_hsdots, n_pulse, n_irq;
   always @(posedge clk_sys) begin
     if (meas) begin
@@ -300,6 +310,7 @@ module tb_pc9821_gdc_sync_raster;
     begin
       @(negedge clk_sys);
       n_cyc = 0; n_hs = 0; n_vs = 0; n_de = 0; n_aline = 0; n_hsdots = 0; n_pulse = 0; n_irq = 0;
+      n_pin_vs_edges = 0; n_pin_vs_off = 0;
       line_had_de = 1'b0;
       meas = 1'b1;
       // EXACTLY one frame of the EXPECTED raster, so every quotient below is a whole number.
@@ -337,6 +348,10 @@ module tb_pc9821_gdc_sync_raster;
       expect_eq(act_lines,   g_vact,    "active lines (VACTIVE)");
       expect_eq(hs_start_dot, g_hs_start, "hsync start dot (HACTIVE + HFP)");
       expect_eq(hs_w,        g_hs_d,    "hsync width (HSYNC_W)");
+      expect_eq(n_pin_vs_off, 0, "VSYNC-pin edges not on an HSYNC-pin leading edge");
+      if (n_pin_vs_edges < 2) fail("no VSYNC-pin edges measured");
+      // The back porch: the hsync's end to the line's end, MAME's m_hbp = (para[4] & 0x3f) + 1 characters.
+      expect_eq(line_dots - hs_start_dot - hs_w, g_htotal - g_hact - g_hfp_d - g_hs_d, "hsync end to line end (HBP)");
       expect_eq(rise_vline,  g_v_rise,  "vsync rise vline (VACTIVE + VFP)");
       expect_eq(pulse_lines, g_vs_w,    "vsync width in lines (VSYNC_W)");
       // One pulse per frame at THIS frame length: the 0x64 latch re-armed every frame (the arm

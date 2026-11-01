@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (a text-plane cell holding a two-byte code still draws nothing) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the 20 configuration cells - the 14 software-DIP record bytes at CG store 0x810..0x81D and the six CPU/size cells - are a STATIC READ-ONLY VIEW of the OSD settings with a WRITE-THROUGH READ ECHO: a guest store through port 0xA9 or the 0xA4000 window commits NOTHING to the stored configuration, but the read echoes the byte the guest just wrote until the ITF's out 0xF0 re-POST (cfg_seed_reload) clears the echo, because the machine's own battery-backed record cells survive the ITF's stage-1A KANJI CG-RAM wipe (the Xa7C9W runtime capture holds the record intact at code 0x2056 rows 0..0xD, qemu-pc98 roms/pc98bios/memsw.inc) and the EMM386 fix's read fallback is structural. The record IMAGE is the OSD Machine field's own model table - Xe10 = the ITF's factory table BANK4@0x4924, Xe = bios/xe/BANK4.BIN@0x48E8 - and its SUM-CHECK byte is COMPUTED as row 0x81A = -(sum of rows 0x811..0x819) mod 256, so the ITF's marker/sum check (BANK4@0xFC677-0xFC6B5) passes for either model with the dumps' own 0x67/0x68. FAIL-FIRST: on the static-no-echo design the guest's write read back as the seed (the KANJI CG RAM ERROR defect), and on a constant-image design the Xe selection still answers the Xe10 rows.
 //
-// The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (that is tb_pc9821_gdc_text's job) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the review-cg read-back splits: port 0xA9's ver0.78 test is the FULL low byte (io/cgrom.c:197), so low byte 0x89-0x8B takes the JIS branch with the half offset when two-byte (io/cgrom.c:208-217) or the ANK table when one-byte (:219-227); one-byte 0x09-0x0B returns 0x00 with NO fetch and no read stall (the slot NP2kai names is ZeroMemory'd, font/font.c:145-151); and the window's unused page is the machine's class-independent dummy 0x8F for every class (docs/probes/VRAM.TXT; NP2kai has one dummy page shared by all of them, io/cgrom.c:18,43-48). FAIL-FIRST: on the masked pre-fix class one-byte 0x09-0x0B returns the grid block's bytes and stalls the read for its burst, the half-set read of two-byte 0x418B answers 0 instead of the slot's right half, one-byte 0x89 reads the grid block instead of the ANK table, and the dummy pages answer 0x00 instead of 0x8F.
+// The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (that is tb_pc9821_gdc_text's job) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the read-back splits: port 0xA9's ver0.78 test is the FULL low byte (io/cgrom.c:197), so low byte 0x89-0x8B takes the JIS branch with the half offset when two-byte (io/cgrom.c:208-217) or the ANK table when one-byte (:219-227); one-byte 0x09-0x0B returns 0x00 with NO fetch and no read stall (the slot NP2kai names is ZeroMemory'd, font/font.c:145-151); and the window's unused page is the machine's class-independent dummy 0x8F for every class (docs/probes/VRAM.TXT; NP2kai has one dummy page shared by all of them, io/cgrom.c:18,43-48). FAIL-FIRST: on the masked pre-fix class one-byte 0x09-0x0B returns the grid block's bytes and stalls the read for its burst, the half-set read of two-byte 0x418B answers 0 instead of the slot's right half, one-byte 0x89 reads the grid block instead of the ANK table, and the dummy pages answer 0x00 instead of 0x8F.
 
 // The defect this bench exists for, and the shape of the fix.
 //
@@ -16,7 +16,7 @@
 // (rec98/th01/hardware/grppsafx.cpp:24-64).
 //
 // The class table now reproduces NP2kai's cgrom_ia9 (io/cgrom.c:193-226) and
-// cgwindowset (:17-58) -- the owner's instruction is to copy NP2kai rather than
+// cgwindowset (:17-58) -- the rule is to copy NP2kai rather than
 // infer the chip -- with one deliberate divergence in the ADDRESSING: NP2kai's
 // `(code & 0x7f7f) << 4` indexes its private BMP-derived 528 KiB font array, not
 // the machine's FONT.ROM, so over a verbatim copy it reads the wrong glyph.
@@ -57,19 +57,17 @@ module tb_pc9821_cg_read_path;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din, tram_dout;
   wire tram_we;
 
   // CG byte channel between the subsystem's window responder and the GDC.
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   wire [4:0] cg_win_byte_sel;
   wire cg_win_rd;
   wire [7:0] cg_win_dout, cg_win_din;
@@ -194,7 +192,7 @@ module tb_pc9821_cg_read_path;
 
   // ==== DUT ====
   // Two blocks, wired exactly as pc9821_system.sv wires them.
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
@@ -288,7 +286,6 @@ module tb_pc9821_cg_read_path;
       .tram_cpu_addr(tram_addr), .tram_cpu_din(tram_din),
       .tram_cpu_we(tram_we), .tram_cpu_dout(tram_dout),
       .font_ld_addr(font_addr), .font_ld_data(font_data), .font_ld_we(font_we),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .font_req_addr(font_req_addr), .font_req(font_req),
@@ -360,7 +357,7 @@ module tb_pc9821_cg_read_path;
       cpu_addr = addr; cpu_be = 4'hF; cpu_valid = 1; cpu_write = 0;
       cpu_line_read = 0;
       while (!cpu_ready) @(negedge clk_sys);
-      while (!cpu_resp_valid && !cpu_line_resp_valid) @(negedge clk_sys);
+      while (!cpu_resp_valid && !cpu_line_word_valid) @(negedge clk_sys);
       #1 data = cpu_dout[lane*8 +: 8];
       @(negedge clk_sys); cpu_valid = 0;
       repeat (4) @(negedge clk_sys);
@@ -483,8 +480,8 @@ module tb_pc9821_cg_read_path;
     check_config_image;
 
     // ---------------------------------------------------------------
-    // 0b. the seeded cells are a STATIC READ-ONLY VIEW with a WRITE-THROUGH READ ECHO
-    //     (owner requirement, lane dip-settings + lane kanji-test-writethrough). A guest
+    // 0b. the seeded cells are a STATIC READ-ONLY VIEW with a WRITE-THROUGH READ ECHO.
+    // A guest
     //     store to a seeded cell commits NOTHING to the stored configuration, but the READ
     //     echoes the byte the guest just wrote for the rest of this pass - the KANJI CG-RAM
     //     test's own write-then-read must match - while an unwritten cell keeps the
@@ -696,7 +693,7 @@ module tb_pc9821_cg_read_path;
       fail("the window and port 0xA9 disagree about the same glyph byte");
 
     // ---------------------------------------------------------------
-    // 6. the port-0xA9 ver0.78 class mask is the FULL low byte (review-cg F3):
+    // 6. the port-0xA9 ver0.78 class mask is the FULL low byte:
     //    NP2kai's cgrom_ia9 tests `type = cr->code & 0x00ff` (io/cgrom.c:197), so
     //    low byte 0x89-0x8B is NOT ver0.78 there and a two-byte code falls to the
     //    JIS branch WITH the half offset (:208-217): the half clear reads the
@@ -738,7 +735,7 @@ module tb_pc9821_cg_read_path;
       fail("ver0.78 code 0x410B with the half clear did not read the slot's left half");
 
     // ---------------------------------------------------------------
-    // 7. one-byte 0x09-0x0B reads 0x00 and fetches nothing (review-cg F4).
+    // 7. one-byte 0x09-0x0B reads 0x00 and fetches nothing.
     //    The ver0.78 branch names fontrom[0x90 + row], which font_load's
     //    ZeroMemory passes and no loader writes (font/font.c:145-151), and with
     //    the half set it falls out with no return (cgrom.c:198-207): 0 either way.
@@ -780,7 +777,7 @@ module tb_pc9821_cg_read_path;
       fail("one-byte 0x0B read non-zero");
 
     // ---------------------------------------------------------------
-    // 8. one-byte 0x89-0x8B is the ANK class on the port (review-cg F3):
+    // 8. one-byte 0x89-0x8B is the ANK class on the port:
     //    past the unmasked ver0.78 test they take the one-byte branch, which
     //    reads the ANK table at 0x80000 + code<<4 (io/cgrom.c:219-227) - the
     //    machine's own FONT.ROM[0x890] bytes for code 0x89 - gated blank by
@@ -813,7 +810,7 @@ module tb_pc9821_cg_read_path;
 
     // ---------------------------------------------------------------
     // 0d. the record IMAGE is the OSD Machine field's own model table with the
-    //     SUM-CHECK BYTE COMPUTED (owner requirement): row A = -(sum of rows 1..9)
+    //     SUM-CHECK BYTE COMPUTED: row A = -(sum of rows 1..9)
     //     mod 256, so the ITF's marker/sum check (BANK4@0xFC677-0xFC6B5) passes for
     //     either model with the DUMPS' own bytes - 0x67 at the Xe10 table
     //     (BANK4@0x4924) and 0x68 at the Xe's (bios/xe/BANK4.BIN@0x48E8). The field

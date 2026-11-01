@@ -5,23 +5,21 @@
 // sample path is PIO. The chip exists because the machine has it and the ITF programs it.
 
 // THE MACHINE OUTRANKS THE MODEL ON READS: write-only registers answer rather than float - 0xFF
-// at 0x13/0x15/0x17/0x19/0x1D/0x1F, 0x00 at 0x11/0x1B (B1-B7). 0x1B does NOT clear the
-// byte flip-flop: NP2kai's dmac_o1b leaves dmac.lh alone (io/dmac.c:202-215) and the live
-// iobus regfile model follows that, so the two in-tree models agree here (review fdc-dma D4;
-// the 8237 Master Clear rule was an unmeasured datasheet deviation).
+// at 0x13/0x15/0x17/0x19/0x1D/0x1F, 0x00 at 0x11/0x1B. 0x1B does NOT clear the
+// byte flip-flop: NP2kai's dmac_o1b leaves dmac.lh alone (io/dmac.c:202-215) (the 8237
+// Master Clear rule is an unmeasured datasheet deviation).
 
 // COUNT IS N+1: an 8237 moves one more byte than programmed, so 0 is 65536 - and so does
 // NP2kai's transfer engine, the code that actually runs (mem/dmax86.c:19-24 tests leng
 // BEFORE decrementing, so the byte that consumes a zero count still moves; only the bulk
 // helper dmac_getdatas is N). The ITF's self-test (BANK4@0xF83EF) writes each register
-// twice and starts no transfer, so it cannot tell N from N+1 by itself (review fdc-dma D5).
+// twice and starts no transfer, so it cannot tell N from N+1 by itself.
 
 // NOT MODELLED: 16-bit transfers (every channel is byte-wide), memory-to-memory, mode pacing
 // (bits 6:5 latched, every transfer single-cycle), the 0xE05-0xE0B window (0x29 is the last
 // register, so ch_addr[30:24] moves only via S_FIN's increment and a 0x21-0x27 bank write
-// zeroes them, NP2kai dmac_o21 io/dmac.c:242). The memory port is EXPOSED,
-// NOT WIRED: a transfer is a second bus master and the subsystem admits three owners, so the
-// requester leaves as ports and the bench drives it.
+// zeroes them, NP2kai dmac_o21 io/dmac.c:242). The memory port is a second bus master:
+// pc9821_iobus exports it and pc9821_memory_subsystem admits it as its third owner.
 
 `default_nettype none
 
@@ -49,8 +47,7 @@ module pc9821_dmac (
     // The per-channel device interface. A device asks by holding drq; the controller answers
     // dack while that channel's byte moves and tc WITH the block's last byte's dack/strobe
     // (the 8237's EOP-during-final-transfer convention), so a device can qualify EOP with
-    // its DACK and terminate after that byte (review fdc-dma D2: tc used to arrive >=2
-    // cycles after the final strobe with every dack down).
+    // its DACK and terminate after that byte.
     // dev_we is the direction (1 = memory to port); dev_stb qualifies the data for one cycle.
     input  wire [3:0]  dev_drq,
     output wire [3:0]  dev_dack,
@@ -64,7 +61,7 @@ module pc9821_dmac (
     // The bus-master port: one byte per transaction, in the shape the memory subsystem's
     // backend actually takes. Four things here are load-bearing.
     //   * mem_be is one-hot because a byte is moving. The backend IGNORES the low address
-    //     bits (src/memory/sdram.v:58), so mem_be picks the byte inside the word; both
+    //     bits (src/memory/sdram.v:95 `(bits [1:0] ignored)`), so mem_be picks the byte inside the word; both
     //     it and the address come from the same counter, so they cannot disagree.
     //   * mem_din REPLICATES the byte into all four lanes rather than placing it in the
     //     selected one, so the module carries no lane-order convention it cannot test.
@@ -74,6 +71,15 @@ module pc9821_dmac (
     //   * A WRITE HAS NO RESPONSE: it completes at the accept, so only the read path
     //     waits for mem_resp_valid.
     output reg  [31:0] mem_addr,
+    // THE VIDEO-WINDOW CLASS OF mem_addr, registered with it: [0] = the address is in a graphics
+    // plane window (the first MiB, 0xA8000-0xBFFFF or 0xE0000-0xE7FFF), [1] = it is in
+    // 0xB0000-0xBFFFF (the part an EMS window can claim) OR in the text RAM 0xA0000-0xA3FFF.
+    // The two [1] cases never overlap and only the B block sets [0] too, so 2'b10 names the
+    // text RAM and 2'b11 the B block. pc9821_memory_subsystem routes such a byte to the GVRAM
+    // or the text RAM; computing the address compare here, at the load of the address it
+    // describes, keeps it out of the subsystem's request mux (a zero-cycle cut: same edge,
+    // same value as decoding mem_addr).
+    output reg  [1:0]  mem_gvwin,
     output wire        mem_we,
     output wire [3:0]  mem_be,
     output reg  [31:0] mem_din,
@@ -81,13 +87,13 @@ module pc9821_dmac (
     output reg         mem_req,
     input  wire        mem_ready,
     input  wire        mem_resp_valid,
-    // THE MEMORY-SIDE TERMINAL COUNT (memmap-audit-ramroute P1-1). dev_tc is the
+    // THE MEMORY-SIDE TERMINAL COUNT. dev_tc is the
     // block's terminal count WITH the final device strobe (the 8237's
     // EOP-during-final-transfer convention, above); THIS one pulses one state later,
     // at S_FIN, where the port-to-memory path's FINAL BYTE HAS BEEN ACCEPTED by the
-    // backend (S_FIN is entered from S_MEM only on mem_ready). A memory-coherency
-    // consumer - the cache-flush trigger in pc9821_iobus - must key on this one and
-    // not on dev_tc: a flush issued at dev_tc can precede the block's last write.
+    // backend (S_FIN is entered from S_MEM only on mem_ready). It has no coherency
+    // consumer: the per-write DMA snoop (T24) covers every accepted write, so no
+    // completion event is needed, and pc9821_iobus holds this on an unused wire.
     // A memory-to-port or verify block writes no memory, so it pulses nothing.
     output wire        mem_tc
 );
@@ -103,10 +109,15 @@ module pc9821_dmac (
   localparam [4:0] R_ALLMSK    = 5'd15;
   localparam [4:0] R_BOUND     = 5'd20;
 
+  function automatic [1:0] gvwin(input [31:14] a);   // the window compare needs no bit below 14
+    gvwin = { (a[31:16] == 16'h000B) || (a[31:14] == 18'h00028),
+              (a[31:20] == 12'd0) && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB) ||
+                                       (a[19:15] == 5'b11100)) };
+  endfunction
+
   // Per-channel state. NP2kai stores the live register and the value it was programmed
   // with (adrs/adrsorg, leng/lengorg) but NEVER reads the _org pair - it has no
-  // autoinitialize reload (mem/dmax86.c clears `working` at TC and never restores; review
-  // fdc-dma D5). The reload the engine performs is 8237-datasheet behaviour adopted over
+  // autoinitialize reload (mem/dmax86.c clears `working` at TC and never restores). The reload the engine performs is 8237-datasheet behaviour adopted over
   // that NP2kai gap, and tb_pc9821_dma_vram names it as such.
   reg [30:0] ch_addr [0:3];      // live, and what a transfer walks
   reg [15:0] ch_count[0:3];      // live, and what a transfer counts down
@@ -148,8 +159,7 @@ module pc9821_dmac (
   // driver always reads request bits of 0. NP2kai has the same gap (io/dmac.c:162-165 vs the
   // tables at :327/:334). Named absent rather than invented. The read clear is NIBBLE-WIDTH:
   // NP2kai's dmac_i11 does `dmac.stat &= 0xf0` (io/dmac.c:290-294), so the read acknowledges
-  // the terminal-count bits and leaves the request-state nibble standing (tb_pc9821_dmac S7;
-  // the live iobus regfile model agrees, `dma_stat & 8'hF0`).
+  // the terminal-count bits and leaves the request-state nibble standing (tb_pc9821_dmac S7).
   reg [3:0] mask;
   reg [7:0] stat;
   reg [3:0] sw_req;
@@ -169,22 +179,25 @@ module pc9821_dmac (
 
   // The byte the backend returned, from the lane mem_be names. Both come from mem_addr's low
   // bits, and mem_addr is held through S_MEM and S_RESP, so the lane is valid when it arrives.
-  wire [7:0] mem_rd_byte = (mem_addr[1:0] == 2'd0) ? mem_dout[7:0]   :
-                           (mem_addr[1:0] == 2'd1) ? mem_dout[15:8]  :
-                           (mem_addr[1:0] == 2'd2) ? mem_dout[23:16] :
-                                                     mem_dout[31:24];
+  // mem_be (assigned below) is the one-hot decode of those SAME bits, so the read byte selects
+  // off it rather than re-comparing mem_addr[1:0]: one decode, value-identical at every cycle.
+  wire [7:0] mem_rd_byte = mem_be[0] ? mem_dout[7:0]   :
+                           mem_be[1] ? mem_dout[15:8]  :
+                           mem_be[2] ? mem_dout[23:16] :
+                                       mem_dout[31:24];
 
   wire [3:0] req      = dev_drq | sw_req;
   wire [3:0] want     = req & ~mask;
   wire       any_want = |want;
 
   // ---------------------------------------------------------------- event folds
-  // The CPU register arms and the engine's S_FIN step write the SAME state (review fdc-dma
-  // D1): a same-cycle CPU write used to lose to S_FIN's later NBA - silently, and leaving
+  // The CPU register arms and the engine's S_FIN step write the SAME state: left to source
+  // order, a same-cycle CPU write would lose to S_FIN's later NBA - silently, and leaving
   // ch_addr_org/ch_count_org holding values the live registers never saw. On the real chip,
   // and in NP2kai (whose register file is plain memory and whose engine a separate
   // function), the CPU access is never dropped. So each collision is MERGED into one
-  // next-state expression per register (race-idiom R2/R4) rather than left to source order:
+  // next-state expression per register (docs/single-cycle-event-discipline.md R2/R4) rather
+  // than left to source order:
   //   * a CPU write wins its BYTE LANE of ch_addr/ch_count over S_FIN's advance or reload
   //     (the transfer still walks the lanes the CPU did not write);
   //   * R_MASTER (0x1B) wins whole registers outright (it zeroes them);
@@ -209,7 +222,7 @@ module pc9821_dmac (
   wire [7:0] stat_set = fin_tc ? (8'h01 << cur) : 8'h00;
   // A count write clears that channel's TC bit (NP2kai dmac_o03); a 0x11 read clears the
   // WHOLE terminal-count nibble and ONLY it (NP2kai dmac_i11's `dmac.stat &= 0xf0`,
-  // io/dmac.c:290-294 - a full-byte clear here used to eat the request-state nibble).
+  // io/dmac.c:290-294 - a full-byte clear would eat the request-state nibble).
   wire [7:0] stat_clr = (cpu_cnt_half  ? (8'h01 << cpu_chan) : 8'h00) |
                         (cpu_status_rd ? 8'h0F : 8'h00);
 
@@ -312,6 +325,7 @@ module pc9821_dmac (
       cur_byte  <= 8'h00;
       mem_req   <= 1'b0;
       mem_addr  <= 32'd0;
+      mem_gvwin <= 2'b00;
       mem_din   <= 32'd0;
       dout      <= 8'hFF;
       for (i = 0; i < 4; i = i + 1) begin
@@ -369,9 +383,8 @@ module pc9821_dmac (
           R_CLEAR_FF: lh <= 1'b0;
           // 0x1B master clear: zero the address and count registers (the mask-all is in
           // the mask fold). It does NOT clear the byte flip-flop: NP2kai's dmac_o1b
-          // leaves dmac.lh alone (io/dmac.c:202-215) and the live iobus regfile model
-          // follows it, so the two in-tree models now agree (review fdc-dma D4 - the
-          // 8237's Master Clear flip-flop rule was the unmeasured deviation). A
+          // leaves dmac.lh alone (io/dmac.c:202-215) (the 8237's Master Clear flip-flop
+          // rule is the unmeasured deviation). A
           // same-cycle S_FIN still books its TC (the stat fold is set-wins) but the
           // CPU's zeros win the walked registers themselves.
           R_MASTER: begin
@@ -469,9 +482,10 @@ module pc9821_dmac (
             // Memory to port: read memory first, then strobe the device with the byte in S_DEV.
             mem_req  <= 1'b1;
             mem_addr <= {1'b0, ch_addr[cur]};
+            mem_gvwin <= gvwin({1'b0, ch_addr[cur][30:14]});
             state    <= S_MEM;
           end else begin
-            // Verify and port-to-memory both strobe now: a verify channel consumes a byte without
+            // Verify and port-to-memory both strobe: a verify channel consumes a byte without
             // touching memory (NP2kai calls only inproc()); port-to-memory takes the device's byte.
             state <= S_DEV;
           end
@@ -507,6 +521,7 @@ module pc9821_dmac (
           // so this is correct regardless of lane order.
           mem_din   <= {4{dev_din}};
           mem_addr  <= {1'b0, ch_addr[cur]};
+          mem_gvwin <= gvwin({1'b0, ch_addr[cur][30:14]});
           mem_req   <= 1'b1;
           state     <= S_MEM;
         end
@@ -514,9 +529,9 @@ module pc9821_dmac (
         S_FIN: begin
           // Advance the address, count down, and book any terminal count - with a
           // same-cycle CPU write folded in (see the event folds above): the CPU wins the
-          // byte lanes it writes, the engine still walks the rest. The old second NBA to
-          // ch_addr[cur] (the autoinit reload) is now part of addr_base's select, so the
-          // two can no longer resolve by source order. stat/mask/sw_req bookkeeping is
+          // byte lanes it writes, the engine still walks the rest. The autoinit reload is
+          // part of addr_base's select, so the two cannot resolve by source order.
+          // stat/mask/sw_req bookkeeping is
           // the folds' set/clear terms, computed from fin_tc here.
           ch_addr[cur]  <= addr_hit ? addr_cpu_val : addr_base;
           ch_count[cur] <= cnt_hit  ? cnt_cpu_val  : cnt_base;
@@ -556,8 +571,8 @@ module pc9821_dmac (
   // be high together. NP2kai's engine fires DMAEXT_END in the same step as the final
   // byte's inproc/outproc (mem/dmax86.c:19-24 calls extproc before the byte moves in the
   // loop iteration that consumes the zero count), and the 8237 asserts EOP during the
-  // final transfer cycle - the old registered tc_pulse came >= 2 cycles LATE (later on
-  // the port->mem path) with every dack down (review fdc-dma D2).
+  // final transfer cycle - a registered tc pulse would come >= 2 cycles LATE (later on
+  // the port->mem path) with every dack down.
   assign dev_tc   = (state == S_DEV) && (ch_count[cur] == 16'd0);
   // The same terminal count on the MEMORY side (see the port comment): by S_FIN a
   // port-to-memory block's every write has been accepted, which is what a

@@ -127,11 +127,10 @@ module emu
 /* verilator lint_on UNUSEDSIGNAL */
 /* verilator lint_on DECLFILENAME */
 
-localparam CLOCK_RATE_HZ = 80_000_000;
+localparam CLOCK_RATE_HZ = 90_000_000;
 // CLOCK_RATE_HZ is ALSO the SDRAM controller's clock: the controller and its PHY run on clk_sys
 // (sdram_sync_bridge, FREQ = CLOCK_RATE_HZ), so there is no separate SDRAM clock and no
-// clock-domain crossing. The split-clock configuration (SDRAM_RATE_HZ / SDRAM_SYNC, a 100 MHz
-// clk_sdram behind sdram_clock_bridge) was removed on 2026-10-09 (owner decision).
+// clock-domain crossing.
 
 // hps_io's PS/2 DEVICE EMULATION IS NOT BUILT (PS2DIV 0 at the hps_io instance below): it
 // re-serialises the HPS's keyboard and mouse bytes as PS/2 clock/data lines for a core that wants a
@@ -166,24 +165,56 @@ localparam [1:0] IO_LATENCY_PROFILE = 2'd0;
 // framework's UART (MiSTer's "UART Mode -> MIDI", which the ARM routes to USB MIDI or to a
 // network MidiLink peer). It threads into pc9821_system and on into pc9821_device_select, the
 // iobus's decode and pc9821_mpu the same way IO_LATENCY_PROFILE does, and build_profile.py
-// rewrites this line for the 'midilink' profile. A COMPILE-TIME choice only (no OSD bit, no
-// status[] bit, no runtime mux): the unselected branch const-folds away, so the base build is
-// unchanged - the measured free LABs (the feature costs 26-50 against ~40 free) are why it must
-// be opt-in rather than always on.
-localparam MPU_EN = 1'b0;
-// ONE IDE HARD DISK, always bank 0's master (IDE unit 0) whatever CDROM_EN says (the fixed layout,
-// owner 2026-10-11). The second disk (OSD "Mount HDD1", hps_io slot 3) was
-// removed by the owner on 2026-10-08; slot 3 stays an
-// unused hps_io index so the CD keeps slot 4 and the MGLs that name it stay valid.
+// rewrites this line (mpu_en: on in every preset except trace, --no-mpu opts out). A COMPILE-TIME choice
+// only (no OSD bit, no status[] bit, no runtime mux): with 0 the card's branch const-folds away
+// (the feature costs 26-50 LABs).
+localparam MPU_EN = 1'b1;
+// HOW SDRAM_CLK LEAVES THE CHIP. 0 = today's: PLL output 1, phase-shifted (tools/profile_gen.py
+// derive_sdram_phase). 1 = an output DDIO cell clocked by clk_sys itself (inverted, T/2), so the
+// launch clock and dq_r's capture clock share the clk_sys net up to the IOE and STA's clock
+// pessimism removal covers the PLL/clock-control spread; it is what closes the SDRAM read capture
+// at 110/120 MHz (the CL3 builds), and it cannot hold below ~100 MHz (hold at 80 MHz extrapolates
+// to -1.6 ns). build_profile.py rewrites this line from clk_sys (>= 100 MHz = 1, the same
+// threshold as sdram.v's CL3), and the generated SDC follows the same value. A COMPILE-TIME
+// choice only: the unselected branch const-folds away.
+localparam SDRAM_CLK_DDIO = 1'b0;
+// THE RUN-TIME SDRAM_CLK PHASE INSTRUMENT, a MEASUREMENT build (src/pc9821/core/pc9821_sdram_phase_ctl.sv):
+// 1 generates the main PLL with its dynamic-phase-shift ports in use and puts a guest-driven
+// stepper on the device bus at 0x5FF0/0x5FF2 (tools/hwprobe/sdshmoo sweeps the SDRAM window from
+// DOS). build_profile.py rewrites this line (sdram_phase_dyn, --dbg-sdram-phase: OFF in every
+// preset, refused with the DDIO SDRAM_CLK, whose clock is not output 1). A COMPILE-TIME choice:
+// with 0 nothing is built - the PLL's phase ports exist on its wrapper but are tied off and
+// unconnected inside it (tools/profile_gen.py), the device decode is the base one.
+localparam SDRAM_PHASE_DYN = 1'b0;
+// MEASUREMENT OVERRIDES of the SDRAM controller's timing table (sdram.v DBG_CL / DBG_TRCD_TRP), for
+// test builds only: build_profile.py rewrites these lines (--dbg-sdram-cl2 writes 2 and keeps the
+// phase-shifted SDRAM_CLK structure at any clock; --dbg-sdram-trcd-cycles N writes N). 0 = the
+// values derived from CLOCK_RATE_HZ, which every preset builds.
+localparam integer SDRAM_DBG_CL = 0;
+localparam integer SDRAM_DBG_TRCD_TRP = 0;
+// The SDRAM DQ read-capture cell (sdram.v DQ_IN_DDIO, whose note says why): 1 = an explicitly
+// instantiated IOE input DDIO cell, 0 = a fabric register the fitter packs into that cell.
+// build_profile.py rewrites this line (sdram_dq_ddio) and renders the SDC's capture collection
+// from the same value. A COMPILE-TIME choice only: the unselected branch const-folds away.
+localparam SDRAM_DQ_DDIO = 1'b1;
+// The SDRAM output-register cells (sdram.v OUT_DDIO, whose note says why): 1 = every SDRAM output
+// and DQ output-enable register is an explicitly instantiated IOE cell, 0 = fabric registers the
+// fitter packs into those cells. build_profile.py rewrites this line (sdram_out_ddio) and renders
+// the SDC's output-cell exception from the same value. A COMPILE-TIME choice only: the unselected
+// branch const-folds away.
+localparam SDRAM_OUT_DDIO = 1'b1;
+// ONE IDE HARD DISK, always bank 0's master (IDE unit 0) whatever CDROM_EN says (the fixed
+// layout). hps_io slot 3 is an unused index (no second disk), so the CD keeps slot 4 and the
+// MGLs that name it stay valid.
 // THE CD-ROM (ATAPI on the built-in IDE, always bank 1's master: src/pc9821/storage/pc9821_atapi.sv;
 // without it bank 1 is empty).
-// With 1 the OSD offers slot 4 ("S4,ISOPCD,CD-ROM"), hps_io
+// With 1 the OSD offers slot 4 ("S4,ISOPCD,Mount CD-ROM"), hps_io
 // declares it and pc9821_system builds the drive; with 0 none of it exists. The OSD entries and
-// the slot count are their own profile-rewritten LINES (CONF_STR_DISKS - FDD2's mount, plus the
-// CD's; CONF_STR_EJECTS - FDD2's eject, plus the CD's on status[11]; and HPS_VDNUM: 3 without the
-// CD, 5 with it, slot 3 tied off), for the same reason CONF_STR_HEADER is: a string cannot be
-// built conditionally without NULs. build_profile.py rewrites all four together and `--check`
-// holds them together.
+// the slot count are their own profile-rewritten LINES (CONF_STR_CD - the HDD's eject, plus the
+// CD's mount and its eject on status[11], and with CDROM_AUDIO_EN the "CD audio volume" field on
+// status[66:64]; and HPS_VDNUM: 3 without the CD, 5 with it, slot 3
+// tied off), for the same reason CONF_STR_HEADER is: a string cannot be built conditionally
+// without NULs. build_profile.py rewrites all three together and `--check` holds them together.
 localparam CDROM_EN = 1'b1;
 // The CD-DA player of that drive (PLAY AUDIO, PAUSE/RESUME, READ SUB-CHANNEL's position and the
 // audio stream into the cdda ring). Follows the drive; a data-only drive is CDROM_AUDIO_EN 0.
@@ -192,7 +223,7 @@ localparam CDROM_AUDIO_EN = 1'b1;
 // through the telemetry's FIFO arm, which is free when PERF_LOG_EN is 0. Off in every preset.
 localparam CDROM_LOG_EN = 1'b0;
 // THE DEBUG-UART INSTRUMENT FRAMEWORK (build_profile.py --dbg-gdc / --dbg-cpu / --dbg-snoop /
-// --dbg-trig ...; AGENTS.md "Testing on a real MiSTer"). Every
+// --dbg-trig ...; docs/mister-testing.md "The debug UART"). Every
 // one is a compile-time constant, OFF in every preset, and build_profile.py rewrites these lines
 // together with the qsf record: with all off nothing below is instantiated (pc9821_system's
 // generate-ifs), and they share the CD log's UART arm, so they are 0 whenever PERF_LOG_EN is 1.
@@ -211,8 +242,16 @@ localparam DBG_ARM_S = 0;
 localparam DBG_POST = 32;
 // Whether anything but the reset banner can enqueue into the debug UART FIFO from the core's arm.
 localparam DBG_UART_EN = CDROM_LOG_EN || DBG_GDC_EN || DBG_CPU_EN || DBG_SNOOP_EN || (DBG_TRIG_KIND != 0);
-localparam CONF_STR_DISKS = "S2,D88FDDHDM,Mount FDD2;S4,ISOPCD,Mount CD-ROM;";
-localparam CONF_STR_EJECTS = "T[10],Eject FDD2;T[11],Eject CD-ROM;";
+// THE ANALOG VIDEO CONVERTER (build_profile.py vga_dbl_en; README "Running", the "Analog video" OSD item).
+// VIDEO_DBL_EN builds pc9821_line_doubler: the GDC's ~24.8 kHz lines sent twice at ~49.7 kHz for VGA
+// monitors that cannot sync to 24 kHz. It is a compile-time knob; whether it runs is the OSD's
+// "Analog video" field (status[81:80]), whose option list - with the "Scanlines" field the doubler
+// adds - is the profile-rewritten CONF_STR_VIDEO line, which ends with the separator that closes the
+// video section (so it is never empty, and a build with no converter has that one separator). The analog modes are VGA Native 24 kHz and
+// Doubled 49 kHz only (no 15 kHz TV converter, no composite/S-Video encoder).
+localparam VIDEO_DBL_EN = 1'b1;
+localparam CONF_STR_VIDEO = "O[81:80],Analog video,Native 24kHz,Doubled 49kHz;O[83:82],Scanlines (doubled),None,25%,50%,75%;-;";
+localparam CONF_STR_CD = "T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;O[66:64],CD audio volume,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;";
 localparam HPS_VDNUM = 5;
 // THE G3 GATHER SESSION'S ENTRY COUNT: how many same-row PEGC packed stores one SDRAM request carries. This is
 // the ONE value both sides of the contract take - pc9821_pegc_storebuf's grouping and
@@ -222,15 +261,16 @@ localparam GATHER_K = 4;
 // The OSD header's FIRST element, which is where the framework parses the core name and the
 // UART/MIDI declarations (Main_MiSTer/user_io.cpp:754-820 parses element 1 for `UART<speeds>`
 // and `MIDI<speeds>`; an empty element declares neither, so no UART page is offered at all).
+// It has two forms: with MPU_EN 1, a core name, the UART speed pair and the MIDI token (this
+// line); with MPU_EN 0, the eight-byte "PC9821;;", which declares no UART page.
 // IT IS ITS OWN LOCALPARAM BECAUSE A STRING CANNOT BE BUILT CONDITIONALLY: Verilator zero-pads
 // the shorter branch of a string ternary to the longer one's width and does it on the HIGH side,
-// so selecting the midilink header (a core name, the UART speed pair and the MIDI token) over
-// this eight-byte one produces a 37-byte element whose first 29 bytes are NULs - which would
-// move the base bitstream and corrupt the OSD. So build_profile.py rewrites this line (and only
-// this line) together with MPU_EN, and `--check` holds the two together.
-localparam CONF_STR_HEADER = "PC9821;;";
-// Cache sizes, reduced from the 8 KB default to leave routing headroom now
-// that the video has its own dot-clock domain (the design sits near the device
+// so a ternary between the two forms makes the eight-byte one a 37-byte element whose first 29
+// bytes are NULs - which would move the bitstream and corrupt the OSD. So build_profile.py
+// rewrites this line (and only this line) together with MPU_EN, and `--check` holds the two
+// together.
+localparam CONF_STR_HEADER = "PC9821;UART115200(Turbo 115200),MIDI;";
+// Cache sizes, reduced from the 8 KB default to leave routing headroom (the design sits near the device
 // limit and the conservative, template-default fit settings must keep working).
 // The caches are M10K-backed, so this buys block RAM and cache control logic
 // without changing any architectural behaviour.
@@ -238,8 +278,8 @@ localparam DCACHE_SET_BITS = 6;   // dcache size: 8 = 16KB, 7 = 8KB, 6 = 4KB
 localparam ICACHE_SET_BITS = 6;   // icache size: 8 = 16KB, 7 = 8KB, 6 = 4KB
 localparam ENABLE_X87 = 1'b0;     // PC-9821: x87 intentionally disabled
 // The CD-DA path - the cdda sample ring and resampler - exists only for the CD drive's player:
-// pc9821_atapi streams the audio sectors of the CD slot into it (cdda
-// 69.5 ALMs + 7 M10K in the base fit). It follows the player
+// pc9821_atapi streams the audio sectors of the CD slot into it (its 6144-word ring alone is
+// 21 M10K: src/soc/cdda.v's bank note). It follows the player
 // (CDROM_AUDIO_EN), so a build without a CD - or with a data-only one - has no CD-DA logic.
 // ao486's hps_ext EXT-command client is NOT used: Main_MiSTer serves it only for x86 core names
 // (todo item 106), and the drive here reads its own image slot.
@@ -248,34 +288,85 @@ localparam CDDA_EN = CDROM_AUDIO_EN;
 localparam CONF_STR = {
 	CONF_STR_HEADER,
 	"-;",
-	// THE DRIVES: every mount, then every eject (the owner's layout, 2026-10-09). The floppy
-	// drives carry the PC-98's own names, FDD1 and FDD2 - hps_io slot 1 is FDD1 and slot 2 is
-	// FDD2; only the LABELS changed, the slot indices (S0/S1/S2, and S4 for the CD) did not.
-	"S0,IMG,Mount HDD;",
-	// The floppy image slots: one per drive, as the machine has. Phase 1 of the floppy work was the
-	// first drive's slot; the second drive is the same medium with its own image, its own track
-	// register (NP2kai fdc.treg[us]) and its own position. The extension list is a hint to
-	// the file browser; the media module decides from the CONTENT (a D88 whose fd_type
-	// major nibble is 3, or a body whose size is one of NP2kai's 1024-byte-sector rows).
-	"S1,D88FDDHDM,Mount FDD1;",
-	// FDD2's entry ("S2,D88FDDHDM,Mount FDD2;"), and with the CD-ROM its "S4" entry after it: a
-	// profile-rewritten line (see CONF_STR_DISKS above). Slot 3 has no entry.
-	CONF_STR_DISKS,
+	// THE FIRMWARE PACK, the menu's first option (the BIOS ROM set comes before everything it
+	// boots). Nothing depends on its POSITION: Main_MiSTer (menu.cpp at 13f1de9) takes the
+	// load's index from the digit of `F0` (menu.cpp:2425 `if (p[idx] >= '0' && p[idx] <= '9')
+	// ioctl_index = p[idx] - '0';`), hps_io reports that index as ioctl_index, and an MGL's
+	// `<file ... index="0">` finds the entry by type and index wherever it sits (menu.cpp:2030
+	// `num == mgl->item[mgl->current].index && (p[0] == mgl->item[mgl->current].type)`), so
+	// moving the line moves no load.
+	"F0,BIN,Load BIOS ROM;",
 	"-;",
+	// THE DRIVES: each Mount directly followed by its own Eject, in the order HDD, CD-ROM,
+	// FDD1, FDD2. The floppy drives carry the PC-98's own names, FDD1 and FDD2 - hps_io slot 1
+	// is FDD1 and slot 2 is FDD2 (S0 the hard disk, S4 the CD). A slot is named by the digit
+	// of its `S{n}` entry, not by its position (Main_MiSTer at 13f1de9: menu.cpp:2462
+	// `ioctl_index = p[idx] - '0';`, mounted with that index, user_io.cpp:2363
+	// `spi_uio_cmd8(UIO_SET_SDSTAT, (1 << index) | ...)`, which sys/hps_io.sv:461 turns into
+	// `img_mounted <= io_din[VD:0] ...`), so the display order moves no slot.
 	// ONE EJECT PER IMAGE SLOT (osd-mount): an explicit unmount that does not depend on what
 	// Main_MiSTer's own file browser offers. pc9821_mount_eject turns each into the slot's mount
 	// event with img_size 0 - the sub-sector unmount every consumer already reads - so a floppy
 	// or CD eject is a media change (no reset) and a hard-disk eject resets once, exactly as a
 	// mount of that slot does.
-	"T[8],Eject HDD;",
+	"S0,IMGHDIVHD,Mount HDD;",
+	// The HDD's eject ("T[8],Eject HDD;"), and with the CD-ROM its "S4" mount and
+	// "T[11],Eject CD-ROM;" after it: the profile-rewritten CONF_STR_CD line (see above). The
+	// HDD's always-present eject leads it so the line is never empty. Slot 3 has no entry.
+	// WITH THE CD DRIVE'S AUDIO PLAYER (CDROM_AUDIO_EN) the line ends with
+	// "O[66:64],CD audio volume,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;": a runtime gain on
+	// the CD-DA channel, like a real CD drive's volume wheel (pc9821_osd decodes the position to
+	// pc9821_audio_volume's code). Position 0 is 0 dB, the unity level shipped before the
+	// field existed (NP2kai's -6 dB is a step); the list descends to Off. status[66:64]
+	// is in hps_io's status[79:64] word, which no field of this core has ever used.
+	CONF_STR_CD,
+	// The floppy image slots: one per drive, as the machine has. The second drive is the same
+	// medium as the first with its own image, its own track
+	// register (NP2kai fdc.treg[us]) and its own position. The extension list is a hint to
+	// the file browser; the media module decides from the CONTENT (a D88 whose fd_type
+	// major nibble is 3, or a body whose size is one of NP2kai's 1024-byte-sector rows).
+	"S1,D88FDDHDM,Mount FDD1;",
 	"T[9],Eject FDD1;",
-	// FDD2's eject ("T[10],Eject FDD2;"), and with the CD-ROM "T[11],Eject CD-ROM;" after it: the
-	// profile-rewritten CONF_STR_EJECTS line (see above), for the same reason as CONF_STR_DISKS.
-	CONF_STR_EJECTS,
+	"S2,D88FDDHDM,Mount FDD2;",
+	"T[10],Eject FDD2;",
+	"-;",
+	// THE MACHINE: RAM Size, CPU Speed and the Keyboard layout, one group.
+	// The guest RAM size. The pack sits at the MODULE CEILING (ram_size_max below),
+	// not at the selected size, so changing this takes effect on an OSD Reset without
+	// moving the pack; a size above the
+	// installed module's ceiling needs a core reload. pc9821_system.sv's size code is
+	// 0..6 = log2(MiB), 7 the 96 MiB ceiling.
+	//
+	// THE LIST IS ROTATED so entry 0 is the 16 MB default, and that is not a style
+	// choice: MiSTer passes OPTION INDEX 0 for every field when a core has no stored
+	// config and CONF_STR has no syntax for a default, so an ascending list cannot
+	// also put 16 MB first. Entry 0 correct makes a card with NO config file behave
+	// exactly like one with a zeroed config.
+	//
+	// 16 MB is the default because a 1 MB guest cannot run the Xe10 BIOS at all -- it
+	// freezes with nothing on screen. pc9821_osd.sv owns the list-position-to-code
+	// mapping; the pack/VRAM layout and the per-size SDRAM budget are
+	// docs/pc9821-port-status.md.
+	"O[63:61],RAM Size,16M,32M,64M,96M,1M,2M,4M,8M;",
+	// CPU Speed: the LIST POSITION goes straight to cpu_throttle's speed_sel,
+	// whose rate_khz() table (src/z486/cpu_throttle.sv) owns position -> rate; the labels are
+	// that table's rates, in its order (tools/check_osd_contract.py holds the two together).
+	// Entry 0 is Full - a strict no-op - so a card with no config file runs at full speed.
+	// Only the CPU slows (a gated CPU clock); the bus and every device keep their rates.
+	"O[17:14],CPU Speed,Full,33 MHz,25 MHz,16 MHz,12 MHz,8 MHz,6 MHz,4 MHz,3 MHz,2 MHz,1.5 MHz,1 MHz,0.75 MHz,0.5 MHz;",
+	// THE HOST KEYBOARD'S LAYOUT: which symbols the four keys that differ between a US and a
+	// JIS keyboard give (pc9821_kbd.sv translate(), THE LAYOUT; README "Keyboard" lists them).
+	// A runtime setting, applied at the next key press with no reset: it is the user's
+	// keyboard, not a build constant or a machine strap. A key held across a change still
+	// breaks as the key it made (pc9821_kbd's held-layout record, tb_pc9821_kbd_layout).
+	// POSITION 0 IS US, the layout the core translated the backslash key in before the option
+	// existed; swapping the two labels here and in pc9821_osd flips the default. status[51] has
+	// never held another field, so an existing config reads US.
+	"O[51],Keyboard,US,JIS;",
 	"-;",
 	// ==== THE DIP SWITCH PAGE =================================================================
-	// The owner's 2026-09-26 request: "all of the relevant DIP switch / BIOS settings in a
-	// dedicated DIP Switch submenu". `P{#}` is the framework's display GROUPING - `P1,Title`
+	// Every relevant DIP switch / BIOS setting sits in this dedicated DIP Switch submenu.
+	// `P{#}` is the framework's display GROUPING - `P1,Title`
 	// opens the sub-page and every entry carrying the `P1` tag inside its bit spec is listed
 	// under it - so this moves NO status bit: every index below is the one it had, saved
 	// configs and benches keep their meaning, and the tag is written BEFORE the option letter
@@ -284,8 +375,7 @@ localparam CONF_STR = {
 	// The page holds the two boot-time STRAPS this core answers - the port-0x31 GDC clock and
 	// the port-0xF0 machine ID, both latched at machine reset / reload - the POST-time BIOS
 	// setup hold - all of it applied at machine reset / reload, never under a running guest.
-	// (The `Reset DIPs`/`Zero DIPs` actions that used to sit here are REMOVED at the owner's
-	// instruction: the configuration stores are now a static, reset-seeded view.)
+	// The configuration stores are a static, reset-seeded view (no reset/zero actions).
 	"P1,DIP Switch;",
 	"P1-;",
 	// WHICH MACHINE'S PORT-0xF0 MACHINE-ID STRAP the core answers, selected to match the
@@ -295,9 +385,7 @@ localparam CONF_STR = {
 	// byte the Xe ITF's BANK4@0xF81DF branch needs -- unmeasured on a real Xe). ONLY THE
 	// SETS THAT EXIST ARE OFFERED: Xe10 and Xe. The field is four bits on [31:28] (the LUT
 	// in pc9821_iobus handles all 16 indices, the rest answering the measured Xe10 strap
-	// 0xA9). The field must NOT go on status[5]/status[6]: those already drive the DDR
-	// framebuffer's BGR/RGB and 1555/565 format (fb_fmt[4:3] below). Bits 28-31 are
-	// otherwise unread and undeclared. THE SELECTION APPLIES ONLY AT MACHINE RESET /
+	// 0xA9). Bits 28-31 are otherwise unread and undeclared. THE SELECTION APPLIES ONLY AT MACHINE RESET /
 	// RELOAD: pc9821_iobus latches the field on the core's reset/reload strobe (its reset,
 	// driven with `reset || !cpu_run`), so a mid-run change cannot move the strap under the
 	// running firmware (tb_pc9821_bios_select).
@@ -325,6 +413,13 @@ localparam CONF_STR = {
 	// the ITF's own, and seeding a guessed bit there cannot reach
 	// 0x54D at all.
 	"P1O[32],GDC Clock,2.5 MHz,5 MHz;",
+	// The FDD-mode switch, port 0x00BE bit 2 (MAME pc9801.cpp DSW3:1 "FDD Fix Mode"). Both
+	// settings exist on the machine; the measured unit is Fixed (docs/probes/FDMODE-XE10.TXT).
+	// POSITION 0 IS AUTO, a deliberate default: with Fixed, POST leaves the 640 KB
+	// floppy interface uninitialised and a 2DD boot disk that addresses it (INT 1Bh DA 0x70) gets
+	// no drive. Read by POST, so a change applies at the next reset. status[38] has never held
+	// another field (37:35 was the removed base-memory field), so old configs read Auto.
+	"P1O[38],FDD mode,Auto,Fixed;",
 	// ==== THE HARDWARE-SWITCH FIELDS ====
 	// The board's PHYSICAL switch bank, the eight memory-switch cells at 0xA3FE2 + i*4 in the
 	// text-VRAM tail (NP2kai bios/biosmem.h MEMB_MSW1..8). The authentic firmware READS these
@@ -369,8 +464,8 @@ localparam CONF_STR = {
 	// so it is hardcoded to the measured 640 KB (code 4) inside pc9821_crtc and no list entry
 	// is offered.
 	// WHY THE FIELD IS ON status[42:40] AND NOT status[34:33]. Appending the four boot-device
-	// entries makes the list 7 long, which no longer fits the 2-bit field the three-value list
-	// had - and widening it IN PLACE at [35:33] would have stolen the (now-removed) Base
+	// entries makes the list 7 long, which does not fit the 2-bit field the three-value list
+	// had - and widening it IN PLACE at [35:33] would have stolen the (since removed) Base
 	// memory field's bit 35, silently re-mapping every saved config whose base-memory LSB was
 	// set to a different machine (the exact trap an OSD option list's "the index IS the value"
 	// carries). The field therefore moved to the free status[42:40]: entries 0..2 keep their
@@ -392,34 +487,9 @@ localparam CONF_STR = {
 	// edge per press), so the core synthesises the hold. Position 0 = Off = the default
 	// a card with no config file passes. IT IS IN THIS PAGE for the same reason as the two
 	// straps above: it is a decision taken BEFORE the guest runs that only takes effect at
-	// POST, and the owner asked for the BIOS settings beside the DIP switches rather than
-	// split between two places. One line moves it back to the root menu if that is preferred.
+	// POST, and the BIOS settings belong beside the DIP switches rather than split between
+	// two places. One line moves it back to the root menu if that is preferred.
 	"P1O[3],Enter BIOS setup (hold HELP),Off,On;",
-	"-;",
-	// The guest RAM size. The pack sits at the MODULE CEILING (ram_size_max below),
-	// not at the selected size, so changing this takes effect on an OSD Reset without
-	// moving the pack; a size above the
-	// installed module's ceiling needs a core reload. pc9821_system.sv's size code is
-	// 0..6 = log2(MiB), 7 the 96 MiB ceiling.
-	//
-	// THE LIST IS ROTATED so entry 0 is the 16 MB default, and that is not a style
-	// choice: MiSTer passes OPTION INDEX 0 for every field when a core has no stored
-	// config and CONF_STR has no syntax for a default, so an ascending list cannot
-	// also put 16 MB first. Entry 0 correct makes a card with NO config file behave
-	// exactly like one with a zeroed config.
-	//
-	// 16 MB is the default because a 1 MB guest cannot run the Xe10 BIOS at all -- it
-	// freezes with nothing on screen. pc9821_osd.sv owns the list-position-to-code
-	// mapping; the pack/VRAM layout and the per-size SDRAM budget are
-	// docs/pc9821-port-status.md.
-	"O[63:61],RAM Size,16M,32M,64M,96M,1M,2M,4M,8M;",
-	"-;",
-	// CPU Speed: the LIST POSITION goes straight to cpu_throttle's speed_sel,
-	// whose rate_khz() table (src/z486/cpu_throttle.sv) owns position -> rate; the labels are
-	// that table's rates, in its order (tools/check_osd_contract.py holds the two together).
-	// Entry 0 is Full - a strict no-op - so a card with no config file runs at full speed.
-	// Only the CPU slows (a gated CPU clock); the bus and every device keep their rates.
-	"O[17:14],CPU Speed,Full,33 MHz,25 MHz,16 MHz,12 MHz,8 MHz,6 MHz,4 MHz,3 MHz,2 MHz,1.5 MHz,1 MHz,0.75 MHz,0.5 MHz;",
 	"-;",
 	// Video options, and the controls the VIDEO section at the bottom of this file
 	// reads. An UNDECLARED status-bit range is hard-wired to 0 -- nothing can set it.
@@ -428,23 +498,19 @@ localparam CONF_STR = {
 	// range as written and applies the lower-case +32 offset only to the
 	// un-bracketed form, so the O/o case carries no meaning here.
 	//
-	// [4] VSync is rotated so entry 0 is the core's native rate, and pc9821_osd.sv
-	// does that decode, including inverting the bit's sense to match the list. The
-	// bits the RTL reads but no option declares are hard-wired to 0.
+	// There is no VSync field (the core keeps the guest's own raster as its only
+	// option). The bits the RTL reads but no option declares are hard-wired to 0.
 	"O[23:22],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[46:45],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
-	"O[4],VSync,Variable,60Hz;",
-	"-;",
+	// With an analog converter built, its "Analog video" field (and the doubler's "Scanlines"
+	// field) and the section's closing separator: the profile-rewritten CONF_STR_VIDEO line (see
+	// above).
+	CONF_STR_VIDEO,
 	"T[0],Reset;",
 	"R[0],Reset and close OSD;",
-	// THE FIRMWARE PACK, at the bottom (the owner's layout, 2026-10-09). Nothing depends on its
-	// POSITION: an MGL names it by its index (`<file ... index="0">`, the 0 of `F0`), and hps_io
-	// reports ioctl_index from that same index, so moving the line moves no load.
-	"-;",
-	"F0,BIN,Load ROM pack;",
 	// The PC-98 joypad has TWO buttons, not four: bits 4/5 of the game port are the pad's
 	// buttons and bits 6/7 are their rapid-fire copies (NP2kai cbus/board118.c:315-341,
-	// sdl/joymng.c:137 with the default sdl/np2.c:69; owner's hardware report). The
+	// sdl/joymng.c:137 with the default sdl/np2.c:69; observed on the real machine). The
 	// framework falls back to the SNES A/B/X/Y default list when CONF_STR declares no
 	// joystick entry, which is the four-button prompt with two dead buttons; this `J` entry
 	// (plain, NOT `J1`, so the keyboard is not locked to joystick mode) narrows the mapping
@@ -456,10 +522,9 @@ localparam CONF_STR = {
 };
 
 wire        clk_sys;
+/* verilator lint_off UNUSEDSIGNAL */   // spare when SDRAM_CLK_DDIO
 wire        clk_sdram_pin;    // SDRAM_CLK: clk_sys's frequency, phase-shifted for the device's setup
-// CLK_VIDEO is clk_sys (50 MHz) with CE_PIXEL as the fractional 21.0526 MHz
-// enable -- see the assignment far below and z486_mister.sdc. Keeping it clk_sys
-// keeps the signal cycle-accurate for the analog output.
+/* verilator lint_on UNUSEDSIGNAL */
 wire        pll_locked;
 wire        reset_async = RESET | ~pll_locked;
 wire        reset_req = buttons[1] | status[0] | disk_change_reset;
@@ -508,6 +573,22 @@ wire        ps2_mouse_clk_in  = 1'b1;
 wire        ps2_mouse_data_in = 1'b1;
 
 wire        core_ce_pixel;
+wire        core_31k;      // 0x09A8 bit 0: the raster is on the 31 kHz dot clock (pc9821_system)
+wire        vid_vmode;     // clk_vid level: the video PLL is in its 31 kHz configuration (hps_io new_vmode)
+// THE VIDEO CLOCK (CLK_VIDEO): the video PLL's output, exactly dot-locked so every pixel and sync
+// period is a constant number of clocks. The PLL is generated as the reconfigurable fractional-N
+// variant at its FASTEST rate, 2 x 25.168 MHz = 50.336 MHz (the 31 kHz clock), so the cleaner's
+// sync-length bound is sized from the generated rate; pc9821_vpll_ctl moves it to the 24 kHz
+// configuration after lock and to the 31 kHz one whenever the guest sets 0x09A8 bit 0
+// (pc9821_vclk_pkg: both settings in one place).
+// Everything from pc9821_video_out's output to CLK_VIDEO runs on it.
+wire        clk_vid;
+localparam integer VIDEO_CLK_HZ = 50_336_015;
+// The picture after the analog converters (the core's own when none is built or selected), on its
+// own enable in the video clock domain: what the cleaner, gamma, video_freak and the framework see.
+wire        vid_ce;
+wire  [7:0] vid_r, vid_g, vid_b;
+wire        vid_hs, vid_vs, vid_de;
 wire  [7:0] clean_r, clean_g, clean_b;
 wire        clean_hs, clean_vs, clean_de;
 wire  [7:0] gamma_r, gamma_g, gamma_b;
@@ -523,7 +604,7 @@ wire [15:0] core_audio_r;
 wire        core_bios_loaded;
 wire        core_first_instruction;
 wire  [7:0] core_dbg_uart_byte;
-// pc9821_system's INT21 arena-error pulse: the instruction ring's freeze trigger. Read only by
+// pc9821_system's trace freeze trigger (a drawing burst's end or a page flip). Read only by
 // the TRACE_EN ring, so the shipped profiles drive it and leave it unread (the cpu_cs waiver).
 /* verilator lint_off UNUSEDSIGNAL */
 wire        core_trace_trig;
@@ -579,7 +660,7 @@ wire  [4:0] vol_cd_r;
 wire  [4:0] vol_midi_l;
 wire  [4:0] vol_midi_r;
 // The line-in volume pair had one reader, the "MT32 Volume Ctl" arm of vol_mt32_l/r, which read
-// the undeclared status[25] and is folded away (the F1 fold, below): pc9821_system still
+// the undeclared status[25] and is folded away (the undeclared-option fold, below): pc9821_system still
 // drives the pair and nothing here reads it.
 /* verilator lint_off UNUSEDSIGNAL */
 wire  [4:0] vol_line_l;
@@ -595,14 +676,14 @@ wire  [1:0] vol_spk;
 wire  [4:0] vol_en;
 /* verilator lint_on UNUSEDSIGNAL */
 reg  [16:0] spk_out;
-// The final DAC's sum (review2/datapaths.md F1/F2): the -86 stream spans
+// The final DAC's sum: the -86 stream spans
 // [+255,996, -239,616], CD adds +-32,768 and the speaker up to +24,576 (beep_vol
 // 3 at the top status shift; see the note on the spk expression below), so the
 // three-source sum spans [+313,340, -272,384] and needs 20 signed bits (range
-// +-524,287). The previous 18-bit accumulator (range +-131,071) would wrap and
+// +-524,287). An 18-bit accumulator (range +-131,071) would wrap and
 // hand the saturator the wrong rail/polarity. The one saturation of the whole
 // machine's audio is the mix_dry saturate below - on the MASTER-SCALED sum,
-// exactly ymfm's clamp16 / NP2kai's _saturation_s16 junction (review-audio-volume F4).
+// exactly ymfm's clamp16 / NP2kai's _saturation_s16 junction.
 reg signed [19:0] mix_tmp_l;
 reg signed [19:0] mix_tmp_r;
 reg  [15:0] mix_dry_l;
@@ -645,24 +726,32 @@ wire        video_rotated = 1'b0;
 // that gets discovered in the field. It has its own bench.
 //
 // `selected_ram_size` is the guest size code the clamp below and pc9821_system take.
-// `vsync_native` is the decoded OSD VSync field (status[4]).
 wire [2:0]  selected_ram_size;
-wire        vsync_native;
 wire        bios_setup;
 // The OSD GDC Clock field (status[32]), decoded: 1 = 5 MHz. It is not a status[] bit read
 // anywhere else, and tools/check_osd_contract.py parses the CONF_STR entry above.
 wire        gdc_clock_5m;
-pc9821_osd u_osd (
+// The OSD FDD mode field (status[38]), decoded: 1 = Fixed (0x00BE bit 2).
+wire        fdd_dip_fixed;
+// The OSD Keyboard field (status[51]), decoded: 1 = JIS host layout, 0 = US.
+wire        kbd_layout_jis;
+// The OSD CD audio volume field (status[66:64]), decoded to pc9821_audio_volume's 5-bit gain
+// code (31 = 0 dB, 0 = mute); constant 0 in a build without the CD drive's player.
+wire  [4:0] cd_volume_code;
+pc9821_osd #(.CD_AUDIO_EN(CDROM_AUDIO_EN)) u_osd (
   .osd_ram_size (status[63:61]),
-  .osd_vsync    (status[4]),
   .osd_bios_setup(status[3]),
   .osd_gdc_clock(status[32]),
+  .osd_fdd_mode (status[38]),
+  .osd_kbd_layout(status[51]),
+  .osd_cd_volume(status[66:64]),
   .ram_size_code(selected_ram_size),
-  .vsync_native (vsync_native),
   .bios_setup   (bios_setup),
-  .gdc_clock_5m (gdc_clock_5m)
+  .gdc_clock_5m (gdc_clock_5m),
+  .fdd_dip_fixed(fdd_dip_fixed),
+  .kbd_layout_jis(kbd_layout_jis),
+  .cd_volume_code(cd_volume_code)
 );
-wire        new_vmode = vsync_native;
 // hps_io provides SIX gamepads, SIX paddles and SIX spinners. This is a PC: its input is a PS/2
 // keyboard and mouse, and the joystick the core does support is the PC gameport mapping below,
 // which reads joystick_0/1 and joystick_l/r_analog_0/1. The remaining four of each family are
@@ -701,15 +790,14 @@ wire [8:0]  spinner_4;
 wire [8:0]  spinner_5;
 /* verilator lint_on UNUSEDSIGNAL */
 
-// PC gameport joystick mapping (the F1 fold of the dead OSD fields, landed 2026-10-08 on
-// the owner's decision). The ancestor (ao486) shaped these words from five OSD fields - the per-stick
+// PC gameport joystick mapping (the undeclared-option fold of the dead OSD fields). The ancestor (ao486) shaped these words from five OSD fields - the per-stick
 // disable status[50:49], the stick map status[48:47] (2 sticks / 2 wheels / 4-axes wheel),
 // the button mode status[13:12] and the timing form status[59:58] - and this CONF_STR declares
 // none of them, so MiSTer hands the core 0 for every one of those bits (an undeclared field is
 // never set by the OSD) and the mapping was ALWAYS its 2'd0 arm: both sticks present, two
 // joysticks, two buttons each, the IBM timed one-shot. The reads are folded to exactly that arm
 // so the gameport's unreachable mode/timed/dis arms const-fold away. To offer a field again,
-// declare it in CONF_STR and restore its read here (the pre-fold form is in git, 57af71ce).
+// declare it in CONF_STR and restore its read here.
 wire [1:0]  joystick_dis   = 2'b00;
 wire [13:0] joystick_dig_1 = joystick_0[13:0];
 wire [13:0] joystick_dig_2 = joystick_1[13:0];
@@ -718,8 +806,8 @@ wire [15:0] joystick_ana_2 = joystick_l_analog_1;
 wire [1:0]  joystick_mode  = 2'd0;
 wire [1:0]  joystick_timed = 2'd0;
 
-// hps_io's two video-mode requests. The core chooses its own video path - video_mixer, the YC
-// chain and the scaler below - so neither a forced scandoubler nor direct video is consumed.
+// hps_io's two video-mode requests. forced_scandoubler (MiSTer.ini) turns on the analog line
+// doubler when one is built (VIDEO_DBL_EN, below); direct video needs nothing from the core.
 /* verilator lint_off UNUSEDSIGNAL */
 wire        forced_scandoubler;
 wire        direct_video;
@@ -740,9 +828,9 @@ wire        img_readonly;
 wire [63:0] img_size;
 // The OSD's eject actions, one per hps_io slot in slot order. EACH IS ONE `assign` so that
 // tools/check_osd_contract.py can hold every `Eject X` trigger to the slot of its `Mount X`.
-// status[11] is the CD's (a --cdrom build): it was only ever a T trigger - the removed second
-// disk's Eject - never a stored option, so no saved config can hold it set, and the slot it
-// served is gone. Slot 3 (that removed disk's, kept so the CD stays slot 4) has no eject.
+// status[11] is the CD's (a --cdrom build): it was only ever a T trigger, never a stored
+// option, so no saved config can hold it set. Slot 3 (unused, kept so the CD stays slot 4)
+// has no eject.
 wire [HPS_VDNUM-1:0] eject_req;
 assign eject_req[0] = status[8];    // T[8]  Eject HDD
 assign eject_req[1] = status[9];    // T[9]  Eject FDD1
@@ -786,7 +874,7 @@ wire [HPS_VDNUM-1:0] sd_rd, sd_wr, sd_ack;
 wire [12:0] sd_buff_addr;
 wire [15:0] sd_buff_dout;
 wire [15:0] sd_buff_din [HPS_VDNUM];
-// Slot 3: no device (the removed second disk's index, kept so the CD stays slot 4). Declared
+// Slot 3: no device (an unused index, kept so the CD stays slot 4). Declared
 // to hps_io only when the CD makes VDNUM 5; nothing requests on it.
 generate if (HPS_VDNUM > 3) begin : unused_slot3
 	/* verilator lint_off UNUSEDSIGNAL */
@@ -835,7 +923,7 @@ wire [1:0] detected_ram_size = |sdram_sz[1:0] ? sdram_sz[1:0] : 2'd1;
 // below depends on the list's ORDER, only on the code, so reordering the OSD list
 // cannot move a size by accident.
 //
-// The hidden firmware reserve sits at the pack, which pc9821_system now places at
+// The hidden firmware reserve sits at the pack, which pc9821_system places at
 // the MODULE CEILING (this ram_size_max), not at the selected guest size; GVRAM and
 // the 256 KiB EMS/ROM-sum window sit above the pack (pc9821_memory_subsystem.sv).
 // The ceiling therefore has to leave the module room for the reserve at the top of
@@ -857,6 +945,11 @@ wire [2:0] configured_ram_size = (selected_ram_size > ram_size_max)
 wire [64:0] rtc;
 wire [32:0] timestamp;
 wire [7:0]  uart_mode;
+// The OSD's UART mode as Main_MiSTer sends it (user_io.cpp SetUARTMode:
+// `spi_w((mode == 4 || mode == 5) ? 1 : mode);`, with menu.cpp's config_uart_msg[] =
+// None, PPP, Console, MIDI, Modem): 3 is MIDI. The MPU-PC98II's line and the card's presence
+// to the guest (pc9821_system's mpu_present) both follow it.
+wire uart_midi_mode = (uart_mode == 8'd3);
 wire [31:0] uart_speed;
 /* verilator lint_on UNUSEDSIGNAL */
 wire        debug_uart_tx;
@@ -904,14 +997,41 @@ function [7:0] debug_banner_char;
 endfunction
 
 assign gamma_bus = 'z;
+// The PLL's dynamic-phase-shift ports (SDRAM_PHASE_DYN): the scan clock is the 50 MHz reference, not
+// a clock of this PLL, so the stepper keeps running whatever the shift does. With SDRAM_PHASE_DYN 0
+// phase_en is a constant 0 and the generated PLL does not connect the ports at all.
+/* verilator lint_off UNUSEDSIGNAL */   // SDRAM_PHASE_DYN=0: the handshake and phase_done are unread
+wire        sdph_step_req, sdph_step_up, sdph_phase_done;
+/* verilator lint_on UNUSEDSIGNAL */
+wire        sdph_step_ack, sdph_fault;
+wire        sdph_phase_en, sdph_updn;
+wire  [4:0] sdph_cntsel;
 pll pll
 (
-	.refclk   (CLK_50M),
-	.rst      (1'b0),
-	.outclk_0 (clk_sys),
-	.outclk_1 (clk_sdram_pin),
-	.locked   (pll_locked)
+	.refclk     (CLK_50M),
+	.rst        (1'b0),
+	.outclk_0   (clk_sys),
+	.outclk_1   (clk_sdram_pin),
+	.locked     (pll_locked),
+	.phase_en   (sdph_phase_en),
+	.scanclk    (CLK_50M),
+	.updn       (sdph_updn),
+	.cntsel     (sdph_cntsel),
+	.phase_done (sdph_phase_done)
 );
+generate if (SDRAM_PHASE_DYN) begin : g_sdph_dps
+	pc9821_sdram_dps sdph_dps (
+		.clk(CLK_50M), .step_req_async(sdph_step_req), .step_up_async(sdph_step_up),
+		.phase_done_async(sdph_phase_done), .phase_en(sdph_phase_en), .updn(sdph_updn),
+		.cntsel(sdph_cntsel), .step_ack(sdph_step_ack), .fault(sdph_fault)
+	);
+end else begin : g_no_sdph_dps
+	assign sdph_phase_en = 1'b0;
+	assign sdph_updn     = 1'b0;
+	assign sdph_cntsel   = 5'd0;
+	assign sdph_step_ack = 1'b0;
+	assign sdph_fault    = 1'b0;
+end endgenerate
 
 always @(posedge clk_sys or posedge reset_async) begin
 	if (reset_async)
@@ -934,7 +1054,7 @@ hps_io #(
 	// ONE SLOT PER S-ENTRY. VDNUM is explicit in hps_io (the framework's own parameter,
 	// not derived from CONF_STR): slot 0 the hard disk (S0), slot 1 FDD1 (S1), slot 2 FDD2
 	// (S2) - three - and with the CD-ROM slot 4 (S4), which makes it five with slot 3 an unused,
-	// tied-off index (the removed second disk's, kept so slot 4 does not move). The vector widths of
+	// tied-off index (kept so slot 4 does not move). The vector widths of
 	// img_mounted/sd_rd/sd_wr/sd_ack and the slot count of sd_lba/sd_blk_cnt/sd_buff_din all
 	// follow it.
 	.VDNUM(HPS_VDNUM),
@@ -999,7 +1119,14 @@ hps_io #(
 	.forced_scandoubler(forced_scandoubler),
 	.direct_video      (direct_video),
 	.video_rotated     (video_rotated),
-	.new_vmode         (new_vmode),
+	// hps_io's `new_vmode` ("toggle to force notify of video mode change", sys/hps_io.sv:115):
+	// any change of the level is compared against the value latched at the previous frame
+	// (hps_io.sv:957 `old_vmode != new_vmode`), so a level that flips on every mode switch is a
+	// toggle. The guest's 0x09A8 bit 0 moves the raster between 24.8 kHz / 56.4 Hz and
+	// 31.5 kHz / 70.1 Hz with the same 640 x 400 active area, which hcnt/vcnt cannot see on the
+	// native path; vid_vmode (pc9821_video_out's vmode_31, the video PLL's configuration on
+	// clk_vid) makes Main re-take the frame timing on every switch.
+	.new_vmode         (vid_vmode),
 	.gamma_bus         (gamma_bus),
 	.status_in         (status_in),
 	.status_set        (status_set),
@@ -1042,6 +1169,9 @@ hps_io #(
 // CDDA_EN 0 the request is tied off below and the write side has no reader.
 /* verilator lint_off UNUSEDSIGNAL */
 wire        cdda_req;
+wire        cdda_req4;
+wire        cdda_played;
+wire        cdda_flush;
 wire        cdda_wr;
 wire [31:0] cdda_dout;
 /* verilator lint_on UNUSEDSIGNAL */
@@ -1112,9 +1242,12 @@ assign trace_ctx_resp_valid = guest_mem0_resp_valid;
 
 split_sdram_backend #(
 	.FREQ(CLOCK_RATE_HZ),   // the controller runs on clk_sys
-	.HAS_DQM(1'b0),
 	.ADQM(1'b1),   // the MiSTer 128MB XSDS wires DQML/DQMH to A11/A12; mask rides a[12:11]
 	.GATHER_K(GATHER_K),
+	.DQ_IN_DDIO(SDRAM_DQ_DDIO),
+	.OUT_DDIO(SDRAM_OUT_DDIO),
+	.DBG_CL(SDRAM_DBG_CL),
+	.DBG_TRCD_TRP(SDRAM_DBG_TRCD_TRP),
 	.FAST_GRADE(1'b0)   // -7 speed grade: matches z486_mister.sdc's Alliance AS4C32M16SB-7 and the ao486 core's target
 ) de10_guest_memory (
 	.clk(clk_sys),
@@ -1181,6 +1314,7 @@ pc9821_system #(
 	.IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
 	.PERF_LOG_EN(PERF_LOG_EN),
 	.MPU_EN(MPU_EN),
+	.SDRAM_PHASE_DYN(SDRAM_PHASE_DYN),
 	.CDROM_EN(CDROM_EN),
 	.CDROM_AUDIO_EN(CDROM_AUDIO_EN),
 	.CDROM_LOG_EN(CDROM_LOG_EN),
@@ -1295,6 +1429,9 @@ pc9821_system #(
 	.cd_rd               (cd_rd),
 	.cd_ack              (cd_ack),
 	.cdda_req            (cdda_req),
+	.cdda_req4           (cdda_req4),
+	.cdda_played         (cdda_played),
+	.cdda_flush          (cdda_flush),
 	.cdda_wr             (cdda_wr),
 	.cdda_data           (cdda_dout),
 	.img_readonly        (img_readonly),
@@ -1335,7 +1472,12 @@ pc9821_system #(
 	.cpu_dbg_issue       (core_dbg_issue),
 	.cpu_dbg_issue_eip   (core_dbg_issue_eip),
 	.dbg_uart_accept     (debug_uart_wdg_accept),
+	.sdph_step_req       (sdph_step_req),
+	.sdph_step_up        (sdph_step_up),
+	.sdph_step_ack       (sdph_step_ack),
+	.sdph_fault          (sdph_fault),
    .mpu_uart_tx         (mpu_uart_tx),
+	.mpu_present         (uart_midi_mode),
 	.ram_size            (configured_ram_size),
 	// The pack sits at the MODULE CEILING, not at the selected guest size: the
 	// pack is only written during a download and the HPS does not re-send it on an
@@ -1343,11 +1485,16 @@ pc9821_system #(
 	// follows the OSD on the reset; only the base is module-fixed.
 	.ram_size_max        (ram_size_max),
 	.bios_setup          (bios_setup),
+	.kbd_layout_jis      (kbd_layout_jis),
 	// OSD Machine field: status[31:28] selects the port-0xF0 machine-ID strap LUT.
 	// Zero (entry 0) is the measured Xe10 strap, so a config-less card is unchanged.
 	.bios_set            (status[31:28]),
 	// OSD GDC Clock field, decoded by u_osd: port 0x31 bit 7 (0xF3 = 2.5 MHz is entry 0).
 	.gdc_clock_5m        (gdc_clock_5m),
+	// OSD FDD mode field, decoded by u_osd: 0x00BE bit 2 (entry 0 = Auto, bit 2 clear).
+	.fdd_dip_fixed       (fdd_dip_fixed),
+	// OSD CD audio volume field, decoded by u_osd: the CD-DA channel's gain code (vol_cd_l/r).
+	.cd_volume_code      (cd_volume_code),
 	// OSD hardware-switch field (the `P1` DIP Switch page), read straight from its own
 	// status bits the way `bios_set` is: it carries the LIST POSITION, not the encoded
 	// switch value, because position 0 must be the measured machine here too - pc9821_crtc
@@ -1360,6 +1507,7 @@ pc9821_system #(
 	.cpu_speed_sel       (status[17:14]),
 
 	.video_ce            (core_ce_pixel),
+	.video_31k           (core_31k),
 	.video_blank_n       (core_de),
 	.video_hsync         (core_hs),
 	.video_vsync         (core_vs),
@@ -1432,15 +1580,21 @@ synchronizer speaker_out_sync (
 // generator the PC-98 defaults to (sound/beepc.c:68 `g_beep.mode = 1`), and
 // sound/beepg.c:161-163 generates exactly nothing at vol 0. The ladder here is therefore
 // 0/1,024/2,048/3,072 at status[19:18]=0: code 2 - NP2kai's default "Mid" (pccore.c:847)
-// - is the historical 2,048 this block emitted at every code before the register had an
-// effect (review-audio-volume F3), and code 0 is TRUE mute. status[19:18] remains
+// - is 2,048, and code 0 is TRUE mute. status[19:18] remains
 // UNDECLARED in this core's CONF_STR, so the shift is always 0 (the absolute level
-// question is still open) - and since the F1 fold the shift is
-// written as the constant 10 it always was. vol_spk is the framework's 0..3 speaker volume
+// question is still open) - and the shift is written as the constant 10. vol_spk is the framework's 0..3 speaker volume
 // (3 = 0 dB), applied as a right shift, and is hard-wired by pc9821_system.
 //
 // The value is UNIPOLAR (0 or +A, never -A), so a sounding beep carries a DC
-// offset of A/2; that convention is A-10 in the audit and is capture-pending.
+// offset of A/2; that convention is capture-pending.
+//
+// `beep_vol` is a GUEST register on clk_sys (0x871E, written by ITF SETUP) sampled here on
+// CLK_AUDIO with no synchroniser (docs/clock-domains.md, "Quasi-static levels"). It is a
+// 2-bit amplitude CODE, not a coherent word with an invalid state: the value changes only
+// when the setup utility writes it, the tone itself (`speaker_out`) is the synchronised
+// signal above, and a transition can at worst land one CLK_AUDIO sample on a neighbouring
+// step. The audible OPNA/-86 samples are not on this path: they cross on the held handshake
+// (`sample_86_cdc`).
 always @(posedge CLK_AUDIO) begin
 	reg [16:0] spk;
 	spk <= speaker_out_audio ? ({15'd0, beep_vol} << 10) : 17'd0;
@@ -1453,7 +1607,7 @@ end
 // left at full scale (matches ao486).
 
 // AUDIO_CE is cdda's own 44.1 kHz sample strobe, and it is deliberately NOT connected: the
-// module only ASSIGNS it (src/soc/cdda.v lines 12/44/47 - it is never read), and this design
+// module only ASSIGNS it (src/soc/cdda.v: its port and the two CLK_AUDIO writes - it is never read), and this design
 // takes the CD audio from CLK_AUDIO and AUDIO_L/R directly. A missing pin on a module this
 // design instantiates is worth a reason even when the reason is 'no consumer'.
 generate
@@ -1463,6 +1617,9 @@ cdda #(24576000) cdda_inst
 (
 	.CLK       (clk_sys),
 	.CDDA_REQ  (cdda_req),
+	.CDDA_REQ4 (cdda_req4),
+	.CDDA_PLAYED(cdda_played),
+	.CDDA_FLUSH(cdda_flush),
 	.CDDA_WR   (cdda_wr),
 	.CDDA_DATA (cdda_dout),
 	.VOLUME_L  (4'b1111),
@@ -1475,20 +1632,26 @@ cdda #(24576000) cdda_inst
 end else begin : g_no_cdda
 	// No CD drive (CDDA_EN above): no request, and the CD channel of the mixer below carries 0 -
 	// the value an idle cdda's AUDIO_L/R hold, since nothing ever streams a sector into it.
-	assign cdda_req = 1'b0;
+	assign cdda_req    = 1'b0;
+	assign cdda_req4   = 1'b0;
+	assign cdda_played = 1'b0;
+	// and nothing to flush
+	/* verilator lint_off UNUSEDSIGNAL */
+	wire cdda_flush_unused = cdda_flush;
+	/* verilator lint_on UNUSEDSIGNAL */
 	assign cdda_l   = 16'd0;
 	assign cdda_r   = 16'd0;
 end
 endgenerate
 
-// pc9821_audio_volume's outputs below are SAMPLE_WIDTH (20) bits now, matching
-// the wide -86 bus (A-1): the master channel is mix_tmp (the WIDE PRE-CLAMP sum)
+// pc9821_audio_volume's outputs below are SAMPLE_WIDTH (20) bits, matching
+// the wide -86 bus: the master channel is mix_tmp (the WIDE PRE-CLAMP sum)
 // scaled by vol_master, and snd86 carries the unclamped card sum to the final
 // mix. Master scaling therefore sits BEFORE mix_dry's saturation - the shape
 // NP2kai has, where every source is scaled by vol_master/100 before the sum and
 // the output clamp (sound/fmboard.c:103-133) - so lowering master pulls an
 // over-rail mix back from the clamp instead of attenuating already-clipped
-// audio (review-audio-volume F4). Scaling the wide sum is that same linear law
+// audio. Scaling the wide sum is that same linear law
 // taken on the exact sum (g*(a+b+c) = g*a+g*b+g*c).
 wire signed [19:0] master_l;
 wire signed [19:0] master_r;
@@ -1509,14 +1672,14 @@ wire signed [19:0] mt32_l;
 wire signed [19:0] mt32_r;
 /* verilator lint_on UNUSEDSIGNAL */
 wire        audio_volume_valid;
-// THREE ANCESTOR OPTIONS FOLDED (the F1 fold, owner decision 2026-10-08). Each read
-// an OSD field this CONF_STR does not declare, so each was always 0, and each is now that 0:
+// THREE ANCESTOR OPTIONS FOLDED (the undeclared-option fold). Each read
+// an OSD field this CONF_STR does not declare, so each is always 0, and each is written as that 0:
 //   * status[21:20] "Audio Boost" chose the acompr compressor's output over the dry mix; at 0 the
-//     dry mix is what the card has always played, and both compressors (~100 ALMs) are gone.
+//     dry mix is what the card plays, and neither compressor (~100 ALMs) is built.
 //   * status[25] "MT32 Volume Ctl" chose the line volume for the MT32 slot; at 0 that slot takes
 //     vol_midi (and no MT32 is instantiated, so the slot's samples are 0 either way).
 //   * status[56] "SB Swap" swapped the -86 card's L/R (below); at 0 it never swapped.
-// Re-offering any of them is a CONF_STR entry plus its read restored (pre-fold: 57af71ce).
+// Re-offering any of them is a CONF_STR entry plus its read restored.
 wire [15:0] mix_pre_l = mix_dry_l;
 wire [15:0] mix_pre_r = mix_dry_r;
 wire  [4:0] vol_mt32_l = vol_midi_l;
@@ -1537,7 +1700,7 @@ pc9821_audio_volume #(.NUM_CH(10), .SAMPLE_WIDTH(20), .USED(10'h3CC)) audio_volu
 	             vol_cd_l,     vol_cd_r,
 	             vol_mt32_l,   vol_mt32_r}),
 	// The master slot carries mix_tmp, the wide pre-clamp sum, so master scaling
-	// happens before the final saturation (review-audio-volume F4). The remaining
+	// happens before the final saturation. The remaining
 	// 16-bit sources sign-extend to the 20-bit fields (the flat concat form:
 	// nested per-element braces are a parse trap).
 	.samples_in({mix_tmp_l,                mix_tmp_r,
@@ -1558,11 +1721,11 @@ wire signed [19:0] snd86_r_swap = snd86_r;
 
 always @(posedge CLK_AUDIO) begin
 	if (audio_volume_valid) begin
-		// THE FINAL DAC (review2/datapaths.md F1/F2): the three sources sum WIDE
+		// THE FINAL DAC: the three sources sum WIDE
 		// (20 bits, no wrap possible) into mix_tmp, the master channel scales
 		// that sum on its next pass, and the ONE saturation below lands on the
-		// SCALED value - master sits before the clamp (review-audio-volume F4,
-		// NP2kai sound/fmboard.c:103-133), symmetrically at the 16-bit rails
+		// SCALED value - master sits before the clamp (NP2kai
+		// sound/fmboard.c:103-133), symmetrically at the 16-bit rails
 		// (ymfm's clamp16 / NP2kai's _saturation_s16 junction).
 		mix_tmp_l <= $signed({3'b0, spk_out})
 		           + snd86_l_swap
@@ -1582,25 +1745,25 @@ end
 // volume mixer, the wide pre-clamp sum and the single saturation at mix_dry (the ancestor's optional
 // compressor is folded away). What changes here is only the RATE at which the framework is handed that mix.
 //
-// Until now core_audio_l_r was loaded on audio_volume_valid - one register write per 10
-// CLK_AUDIO cycles, i.e. a 2.4576 MHz zero-order-hold staircase of the sources' own sample
+// Loading core_audio_l_r on audio_volume_valid - one register write per 10 CLK_AUDIO
+// cycles - would give a 2.4576 MHz zero-order-hold staircase of the sources' own sample
 // instants (55 467 Hz for the OPNA's DAC, 44 100 Hz for PCM86/CD-DA). sys/audio_out.sv
 // SAMPLES that register at 48 kHz (its own DAC rate: AUDIO_RATE = 48000, one value per
 // sample_ce) and its IIR is a +5 dB shaper, not an anti-alias filter (measured: -0.72 dB at
 // 24 kHz, -16.3 dB at 45.5 kHz). Point-sampling the staircase folds its zero-order-hold
-// images straight into the audible band: a 10 kHz FM tone put its 45 467 Hz image at
+// images straight into the audible band: a 10 kHz FM tone puts its 45 467 Hz image at
 // 2 533 Hz, measured at -13.2 dB relative to the tone.
 //
-// pc9821_audio_out is that missing decimator, ratio 2 457 600/48 000 = 256/5 in three
+// pc9821_audio_out is the decimator, ratio 2 457 600/48 000 = 256/5 in three
 // stages (CIC decimate-by-4, FIR decimate-by-2, 5/32 polyphase FIR), and it presents exactly
 // one new sample per 512 CLK_AUDIO cycles. Measured with it in place: the same 45 467 Hz
 // image lands at -66.2 dB (bench tb_pc9821_audio_out_alias measures the folded image against
-// the pre-fix bare latch in the same run: -0.5 dB bare, <= -60 dB here).
+// a bare latch in the same run: -0.5 dB bare, <= -60 dB here).
 //
 // The authentic OPNA-side junction is untouched: this block takes the shipped mix_pre
 // (post single-clamp) and adds nothing upstream of it - the clamp at jt08_acc,
 // the six-drum 16-bit wrap, the SSG's separate analog path with its zero-mean series-cap join
-// and the psg * 33/16 balance are all unchanged.
+// and the psg * 33/16 balance all sit upstream.
 pc9821_audio_out u_audio_out (
 	.clk    (CLK_AUDIO),
 	.valid  (audio_volume_valid),
@@ -1690,13 +1853,13 @@ always @(posedge clk_sys) begin
 			// source is the reset banner, enqueued from index 0 after every reset - which also zeroes
 			// both pointers - and the byte at read pointer rd is always debug_banner_char(rd). The
 			// constant condition picks that table in the shipped profiles (the memory then has no
-			// reader and is removed) and leaves the trace/perf-log builds' FIFO exactly as it was;
-			// the pointers, the count and the handshake are unchanged, so the UART sends the same
+			// reader and is removed) and reads the FIFO in the trace/perf-log builds; the pointers,
+			// the count and the handshake are the same either way, so the UART sends the same
 			// bytes on the same clocks.
 			// DBG_UART_EN (the CD drive's command log and the debug instruments) is the third such source,
-			// on the same arm as the telemetry. Leaving it out of this condition sent every log byte out as the banner
-			// character at that read pointer - the 2026-10-09 hardware capture, a "Z386 start" and
-			// 21 LFs repeating at the log's byte rate.
+			// on the same arm as the telemetry. Left out of this condition, every log byte would go out as the
+			// banner character at that read pointer: a "Z386 start" and 21 LFs repeating at the log's
+			// byte rate.
 			debug_uart_data <= (TRACE_EN || PERF_LOG_EN || DBG_UART_EN) ? debug_uart_fifo[debug_uart_fifo_rd]
 			                                             : debug_banner_char(debug_uart_fifo_rd[4:0]);
 			debug_uart_fifo_rd <= debug_uart_fifo_rd + 9'd1;
@@ -1739,9 +1902,11 @@ defparam debug_uart_tx_i.clk_freq = CLOCK_RATE_HZ;
 defparam debug_uart_tx_i.uart_freq = 115200;
 /* verilator lint_on DEFPARAM */
 
-// Video out follows developer/emu.md's requirement that the video clock exceed
-// 40 MHz and that CE_PIXEL derive from CLK_VIDEO: this chain runs on clk_sys, so
-// CLK_VIDEO = clk_sys and CE_PIXEL = the core's 21.0526 MHz dot enable.
+// Video out follows developer/emu.md's requirement that the video clock exceed 40 MHz and that
+// CE_PIXEL derive from CLK_VIDEO: CLK_VIDEO = clk_vid, the video PLL's exact multiple of the dot rate
+// (42.105 MHz), and CE_PIXEL is a constant whole number of its clocks (pc9821_video_out). A
+// fractional 21.05 MHz enable on clk_sys would make every pixel and sync edge jitter by a clk_sys
+// period on the analog port.
 // The framework's video_cleaner as this chain uses it - the two sync-polarity fixers and one ce_pix
 // register stage - with the fixers' 32-bit counters replaced by CLOCK_RATE_HZ/16-clock saturating
 // ones (src/pc9821/video/pc9821_video_cleaner.sv says why that is output-identical for every sync
@@ -1750,16 +1915,96 @@ defparam debug_uart_tx_i.uart_freq = 115200;
 // HBlank_out / VBlank_out, whose HBlank/VBlank/interlace/f1 inputs this core tied to 0, so the
 // copy has neither. NOTE: video_hsync is ~in_hsync, i.e. LOW during the sync pulse and HIGH
 // through the active period -- it is not a blanking signal.
-pc9821_video_cleaner #(.CLOCK_RATE_HZ(CLOCK_RATE_HZ)) video_cleaner
+// ==== THE ANALOG CONVERTER (VIDEO_DBL_EN) ====
+// The core's one picture feeds both the HDMI scaler and the analog port (sys_top), so a converter
+// that is running changes what the scaler receives as well: the doubled picture is the same image
+// at 640x800. Native (position 0) sends the GDC's raster unchanged.
+// THE OSD FIELD "Analog video", status[81:80]: 0 native, 1 the doubler, exactly as CONF_STR_VIDEO
+// lists them. MiSTer.ini's forced_scandoubler=1 is a user's statement that the analog monitor needs
+// a scan-doubled signal, so with the doubler built it turns doubling on while the field is at Native.
+localparam [1:0] VIDEO_SEL_DBL = 2'd1;
+wire [1:0] video_sel = status[81:80];
+/* verilator lint_off UNUSEDSIGNAL */   // unread in a build without the doubler
+wire       video_dbl_on = VIDEO_DBL_EN && (video_sel == VIDEO_SEL_DBL || (video_sel == 2'd0 && forced_scandoubler));
+/* verilator lint_on UNUSEDSIGNAL */
+// THE VIDEO PLL: a fractional-N PLL, 50 MHz x (M + K/2^32) / 19, generated by build_profile.py from
+// tools/profile/vpll_template.v into rtl/vpll* at its FASTEST run-time configuration (the 31 kHz
+// clock) and read back exact. pc9821_vpll_ctl moves it to the 24 kHz configuration after lock and
+// to the 31 kHz one whenever the guest sets 0x09A8 bit 0 (pc9821_vclk_pkg). The reconfiguration core runs on the 50 MHz
+// reference, as the framework's pll_cfg_hdmi does.
+wire       vpll_locked;
+wire       vclk_31;          // the video PLL is (going to) the 31 kHz configuration
+wire       vclk_busy;        // the video clock is not usable: pc9821_video_out flushes its FIFO
+wire [63:0] vpll_to_pll, vpll_from_pll;
+wire        vcfg_waitrequest, vcfg_write;
+wire  [5:0] vcfg_address;
+wire [31:0] vcfg_writedata;
+vpll vpll (
+	.refclk(CLK_50M), .rst(1'b0), .outclk_0(clk_vid), .locked(vpll_locked),
+	.reconfig_to_pll(vpll_to_pll), .reconfig_from_pll(vpll_from_pll)
+);
+// The framework's write-only reconfiguration core (sys/pll_cfg/pll_cfg_hdmi.v), the same module
+// sys_top drives the HDMI PLL with. pc9821_vpll_ctl writes only N (0x03), M (0x04), K (0x07) and
+// start (0x02), which are exactly this core's N_REG/M_REG/DSM_REG/START_REG, and nothing in the
+// tree reads the core's status registers, so the full pll_cfg core's read/MIF/DPS arms and its
+// C0..C17 counter file are dead weight here. The fit's entity table prices the two at
+// 410 ALMs / 296 regs (pll_cfg:vpll_cfg) against 170 / 192 (pll_cfg_hdmi, one fit);
+// tb_pc9821_pll_cfg_lockstep drives both with the same controller and proves the two
+// cores program a PLL register model with the same sequence and the same final registers.
+pll_cfg_hdmi vpll_cfg (
+	.mgmt_clk(CLK_50M), .mgmt_reset(1'b0),
+	.mgmt_waitrequest(vcfg_waitrequest),
+	.mgmt_write(vcfg_write), .mgmt_address(vcfg_address), .mgmt_writedata(vcfg_writedata),
+	.reconfig_to_pll(vpll_to_pll), .reconfig_from_pll(vpll_from_pll)
+);
+pc9821_vpll_ctl vpll_ctl (
+	.clk(CLK_50M), .want_31k(core_31k), .pll_locked(vpll_locked),
+	.mgmt_waitrequest(vcfg_waitrequest), .mgmt_write(vcfg_write),
+	.mgmt_address(vcfg_address), .mgmt_writedata(vcfg_writedata),
+	.vclk_31(vclk_31), .busy(vclk_busy)
+);
+
+wire       dbl_active;
+wire       vid_fifo_ev;
+/* verilator lint_off PINCONNECTEMPTY */   // clk_video: clk_vid itself, used directly below
+pc9821_video_out #(.DBL_EN(VIDEO_DBL_EN)) video_out (
+	.clk_sys(clk_sys), .ce(core_ce_pixel),
+	.r_in(core_r), .g_in(core_g), .b_in(core_b), .hs_in(core_hs), .vs_in(core_vs), .de_in(core_de),
+	.dbl_on(video_dbl_on),
+	.clk_vid(clk_vid), .vclk_31(vclk_31), .vid_rst(vclk_busy),
+	.clk_video(),
+	.ce_out(vid_ce), .r_out(vid_r), .g_out(vid_g), .b_out(vid_b), .hs_out(vid_hs), .vs_out(vid_vs), .de_out(vid_de),
+	.dbl_active(dbl_active), .vmode_31(vid_vmode), .fifo_ev(vid_fifo_ev)
+);
+/* verilator lint_on PINCONNECTEMPTY */
+
+// A DIAGNOSTIC: VIDEO_MON_EN builds the on-chip monitor of the analog picture (pc9821_video_mon),
+// which owns the UART pin and prints one record a second. Off in every build; set it by hand only
+// on a scratch branch for a measurement run.
+localparam VIDEO_MON_EN = 1'b0;
+wire       video_mon_tx;
+generate if (VIDEO_MON_EN) begin : g_video_mon
+	pc9821_video_mon #(.VCLK_HZ(VIDEO_CLK_HZ), .SYS_HZ(CLOCK_RATE_HZ)) video_mon (
+		.clk_vid(clk_vid), .ce(vid_ce), .hs(vid_hs), .vs(vid_vs), .de(vid_de), .fifo_ev(vid_fifo_ev),
+		.clk_sys(clk_sys), .tx(video_mon_tx)
+	);
+end else begin : g_no_video_mon
+	assign video_mon_tx = 1'b1;
+	/* verilator lint_off UNUSEDSIGNAL */
+	wire unused_mon = vid_fifo_ev;
+	/* verilator lint_on UNUSEDSIGNAL */
+end endgenerate
+
+pc9821_video_cleaner #(.CLOCK_RATE_HZ(VIDEO_CLK_HZ)) video_cleaner
 (
-	.clk_vid            (clk_sys),
-	.ce_pix             (core_ce_pixel),
-	.R                  (core_r),
-	.G                  (core_g),
-	.B                  (core_b),
-	.HSync              (core_hs),
-	.VSync              (core_vs),
-	.DE_in              (core_de),
+	.clk_vid            (clk_vid),
+	.ce_pix             (vid_ce),
+	.R                  (vid_r),
+	.G                  (vid_g),
+	.B                  (vid_b),
+	.HSync              (vid_hs),
+	.VSync              (vid_vs),
+	.DE_in              (vid_de),
 	.VGA_R              (clean_r),
 	.VGA_G              (clean_g),
 	.VGA_B              (clean_b),
@@ -1771,8 +2016,8 @@ pc9821_video_cleaner #(.CLOCK_RATE_HZ(CLOCK_RATE_HZ)) video_cleaner
 /* verilator lint_off PINMISSING */   // HBlank_out/VBlank_out unused: blanking is carried by DE
 gamma_fast gamma
 (
-	.clk_vid            (clk_sys),
-	.ce_pix             (core_ce_pixel),
+	.clk_vid            (clk_vid),
+	.ce_pix             (vid_ce),
 
 	.gamma_bus          (gamma_bus),
 
@@ -1820,7 +2065,7 @@ reg [11:0] ary_i;
 // sits in a 12-bit context because its result goes to arx_i, so `ar` zero-extends there too - and
 // ar is at least 2 on that arm (only the ARC1/ARC2 options use it), so the result is exact.
 /* verilator lint_off WIDTHEXPAND */
-always @(posedge clk_sys) begin
+always @(posedge clk_vid) begin
 	ar    <= status[23:22];
 	scale <= status[46:45];
 	arx_i <= (ar == 3'd0) ? 12'd4 : (ar == 3'd1) ? 12'd3 : (ar - 1'd1);
@@ -1830,8 +2075,8 @@ end
 
 video_freak video_freak
 (
-	.CLK_VIDEO          (clk_sys),
-	.CE_PIXEL           (core_ce_pixel),
+	.CLK_VIDEO          (clk_vid),
+	.CE_PIXEL           (vid_ce),
 	.VGA_VS             (gamma_vs),
 	.HDMI_WIDTH         (HDMI_WIDTH),
 	.HDMI_HEIGHT        (HDMI_HEIGHT),
@@ -1852,8 +2097,8 @@ video_freak video_freak
 	.SCALE              (scale)
 );
 
-assign CLK_VIDEO     = clk_sys;
-assign CE_PIXEL      = core_ce_pixel;
+assign CLK_VIDEO     = clk_vid;
+assign CE_PIXEL      = vid_ce;
 assign VIDEO_ARX     = arx;
 assign VIDEO_ARY     = ary;
 assign VGA_R         = gamma_r;
@@ -1863,15 +2108,15 @@ assign VGA_HS        = gamma_hs;
 assign VGA_VS        = gamma_vs;
 assign VGA_DE        = gamma_de;
 assign VGA_F1        = 1'b0;
-assign VGA_SL        = 2'b00;
-// VGA_SCALER asks the framework to run video through its DDR framebuffer
-// (`vga_fb = cfg[12] | vga_force_scaler` in sys_top). That framebuffer applies
-// its own palette RAM, written ONLY through the FB_PAL_* ports, and this core
-// drives RGB itself and drives none of them -- so forcing the path resolves every
-// pixel to palette entry 0: a black picture with a working OSD and a correctly
-// measured input mode. Left 0 as the upstream template does, letting the framework
-// choose. Enabling the OSD's own "Frame buffer" option selects the same path and
-// goes black again; driving FB_PAL_* from the GDC palette is the follow-up.
+// The framework's scanline darkener (sys/scanlines.v, on the analog AND the scaler input) dims every
+// other line: meaningful on the doubled picture only, so the OSD's "Scanlines" field (status[83:82],
+// built with the doubler) reaches it only while the doubler is running.
+assign VGA_SL        = (VIDEO_DBL_EN && dbl_active) ? status[83:82] : 2'b00;
+// VGA_SCALER would put the scaler's output on the analog port (sys_top: `vga_scaler = cfg[2] |
+// vga_force_scaler`, and `vga_fb = cfg[12] | vga_force_scaler`, which only re-selects the HDMI
+// clock/direct-video mux and the analog source; the ascal's framebuffer and palette are FB_EN's,
+// which this core ties off). It stays 0, as the upstream template has it: the analog port carries
+// the core's own signal, and a user who wants the scaler there sets MiSTer.ini vga_scaler=1.
 assign VGA_SCALER    = 1'b0;
 assign VGA_DISABLE   = 1'b0;
 assign HDMI_FREEZE   = 1'b0;
@@ -1922,7 +2167,7 @@ assign AUDIO_S       = 1'b1;
 // "Stereo Mix" field (ao486.sv:80,987), but this CONF_STR declares no option on those bits, so the
 // field is hard-wired 0 = "no mix" - a legal value, and the one PC88_MiSTer and NES_MiSTer drive
 // literally. Declaring the option is how it becomes reachable.
-// Since the F1 fold the field is written as that constant (sys_top's aud_mix_top pair then
+// The field is written as that constant (sys_top's aud_mix_top pair then
 // folds its crossfeed arms away).
 assign AUDIO_MIX     = 2'd0;
 
@@ -1941,12 +2186,49 @@ assign DDRAM_RD      = 1'b0;
 assign DDRAM_DIN     = 64'd0;
 assign DDRAM_BE      = 8'd0;
 assign DDRAM_WE      = 1'b0;
+generate if (SDRAM_CLK_DDIO) begin : sdram_clk_ddio
+// SDRAM_CLK = inverted clk_sys through an output DDIO (datain_h=0, datain_l=1), the way
+// Template_MiSTer sys_top.v drives HDMI_TX_CLK. PLL output 1 (clk_sdram_pin) is then spare.
+altddio_out
+#(
+	.extend_oe_disable("OFF"),
+	.intended_device_family("Cyclone V"),
+	.invert_output("OFF"),
+	.lpm_hint("UNUSED"),
+	.lpm_type("altddio_out"),
+	.oe_reg("UNREGISTERED"),
+	.power_up_high("OFF"),
+	.width(1)
+)
+sdram_clk_ddr
+(
+	.datain_h(1'b0),
+	.datain_l(1'b1),
+	.outclock(clk_sys),
+	.dataout(SDRAM_CLK),
+	.aclr(1'b0),
+	.aset(1'b0),
+	.oe(1'b1),
+	.outclocken(1'b1),
+	.sclr(1'b0),
+	.sset(1'b0)
+);
+end else begin : sdram_clk_pll
 assign SDRAM_CLK     = clk_sdram_pin;
+end endgenerate
 
-wire uart_midi_mode = (uart_mode != 8'd0);
 
 assign UART_RTS      = 1'b0;
-assign UART_TXD      = uart_midi_mode ? mpu_uart_tx : debug_uart_tx;
+// THE UART LINE BY OSD MODE (user_io.cpp SetUARTMode `spi_w((mode == 4 || mode == 5) ? 1 : mode);`,
+// menu.cpp config_uart_msg[] = None, PPP, Console, MIDI, Modem): MIDI (3) carries the MPU-PC98II's
+// TX; None (0, the default, and the only mode a build without the UART page can be in) carries the
+// debug UART (the reset banner and any instrument records); PPP/Modem (1) and Console (2) hand the
+// line to a Linux process (pppd, the modem emulator, a getty), so it idles high (mark) there and no
+// debug byte is typed into it.
+wire uart_debug_mode = (uart_mode == 8'd0);
+assign UART_TXD      = VIDEO_MON_EN ? video_mon_tx :
+                       uart_midi_mode ? mpu_uart_tx :
+                       uart_debug_mode ? debug_uart_tx : 1'b1;
 assign UART_DTR      = 1'b0;
 
 // The user port has no device in this core, and there is no MIDI source, so

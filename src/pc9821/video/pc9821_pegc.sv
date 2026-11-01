@@ -41,9 +41,12 @@
 // The responder honours the subsystem's contract (pc9821_memory_subsystem): the
 // accept and the response are SEPARATE cycles and the record outlives the accept.
 // A line read (an icache fill through this window) answers the same dword four
-// times: no reference models a 128-bit register read and no guest fetches
-// instructions from 0xE0000, but a fill that never completes would hang the CPU,
-// so the route answers rather than stalls.
+// times as FOUR WORD BEATS on cpu_resp_valid: no reference models a 128-bit
+// register read and no guest fetches instructions from 0xE0000, but a fill that
+// never completes would hang the CPU, so the route answers rather than stalls.
+// The beats ARE the word response repeated (no 128-bit `{4{cpu_dout}}`
+// copy): the L1 gathers word N into line word N, and here every
+// word of the line is this dword.
 
 `default_nettype none
 
@@ -60,10 +63,8 @@ module pc9821_pegc (
     input  wire [31:0] cpu_din,
     input  wire [3:0]  cpu_be,
     output reg  [31:0] cpu_dout,
-    output wire [127:0] cpu_line_dout,
     output reg         cpu_ready,
     output reg         cpu_resp_valid,
-    output reg         cpu_line_resp_valid,
 
     // The state the machine model consumes.
     output wire [3:0]  bank_a,      // 0xE0004 bits 3:0: the 0xA8000 window's bank
@@ -84,7 +85,7 @@ module pc9821_pegc (
   // store merges into the dword's old value (0 while clean), which is exactly the
   // reset-to-zero + byte-store result. The RAM's read address is cpu_addr
   // presented every cycle; the answer is used in S_ACCEPT, one cycle after S_IDLE saw
-  // cpu_valid, where the old text read the byte array combinationally.
+  // cpu_valid.
   (* ramstyle = "M10K, no_rw_check" *) reg [31:0] mio2_ram [0:7];
   reg [7:0]  mio2_dirty;
   reg [31:0] mio2_q;
@@ -108,9 +109,10 @@ module pc9821_pegc (
                        : (req_addr[14:5] == 10'd8) ? mio2_dw : 32'h0000_0000;
 
   // ---- the registered responder (the pc9821_open_bus shape) ----
-  localparam S_IDLE = 2'd0, S_ACCEPT = 2'd1,
-             S_RESPONSE = 2'd2, S_HOLD = 2'd3;
-  reg [1:0] state;
+  localparam [2:0] S_IDLE = 3'd0, S_ACCEPT = 3'd1,
+                   S_RESPONSE = 3'd2, S_LINE = 3'd3, S_HOLD = 3'd4;
+  reg [2:0] state;
+  reg [1:0] line_beat;
   reg request_write, request_line;
 
   // The write lands on the accept edge, while the requester still holds the
@@ -157,16 +159,15 @@ module pc9821_pegc (
   always @(posedge clk) begin
     if (reset) begin
       state <= S_IDLE;
+      line_beat <= 2'd0;
       request_write <= 1'b0;
       request_line <= 1'b0;
       cpu_dout <= 32'h0000_0000;
       cpu_ready <= 1'b0;
       cpu_resp_valid <= 1'b0;
-      cpu_line_resp_valid <= 1'b0;
     end else begin
       cpu_ready <= 1'b0;
       cpu_resp_valid <= 1'b0;
-      cpu_line_resp_valid <= 1'b0;
       case (state)
         S_IDLE: if (cpu_valid) begin
           request_write <= cpu_write;
@@ -183,9 +184,20 @@ module pc9821_pegc (
           state <= request_write ? S_HOLD : S_RESPONSE;
         end
         S_RESPONSE: begin
-          cpu_resp_valid <= !request_line;
-          cpu_line_resp_valid <= request_line;
-          state <= S_HOLD;
+          // A word read answers here; a line read's four beats start the cycle after.
+          if (request_line) begin
+            line_beat <= 2'd0;
+            state <= S_LINE;
+          end else begin
+            cpu_resp_valid <= 1'b1;
+            state <= S_HOLD;
+          end
+        end
+        // One beat per cycle, the same dword every time (cpu_dout, held since the accept).
+        S_LINE: begin
+          cpu_resp_valid <= 1'b1;
+          line_beat <= line_beat + 2'd1;
+          if (line_beat == 2'd3) state <= S_HOLD;
         end
         // One cycle only: never wait for cpu_valid to drop (the responder contract).
         S_HOLD: state <= S_IDLE;
@@ -194,11 +206,8 @@ module pc9821_pegc (
     end
   end
 
-  // A line read repeats the dword (see the header), so the line IS cpu_dout four times: the
-  // same register, not a second 128-bit copy of it. Quartus merges the copy module-alone but
-  // the full design kept all 128 (map.rpt: 457 registers in this entity, and a 3:1 x 160-bit
-  // mux row on cpu_line_dout).
-  assign cpu_line_dout = {4{cpu_dout}};
+  // A line read repeats the dword (see the header) as four cpu_resp_valid beats, in S_LINE:
+  // there is no line register and no 128-bit copy of cpu_dout to mux.
 
   assign bank_a     = mio1[0][3:0];
   assign bank_b     = mio1[2][3:0];

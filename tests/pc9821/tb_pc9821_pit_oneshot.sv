@@ -3,7 +3,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PIT_ONESHOT: PIT modes 1, 4 and 5 are ONE-SHOTS that raise exactly one OUT rising edge (one IRQ0) per count write and never oscillate: after the control word OUT is HIGH in modes 1/4/5 (only mode 0 starts low), a mode-4/5 count makes one OUT low strobe of one PIT clock about N clocks after the write and then OUT stays high while the counter wraps, and a mode-1 count (software-triggered here, as NP2kai counts it) takes OUT low and back high once at terminal count; the read-back status byte returns the control word's bits 5:0 as written (mode 6 stays 6, the BCD bit is kept), not a normalised mode.
+// TB_PC9821_PIT_ONESHOT: PIT modes 1, 4 and 5 are ONE-SHOTS that raise exactly one OUT rising edge (one IRQ0) per count write and never oscillate: after the control word OUT is HIGH in modes 1/4/5 (only mode 0 starts low), a mode-4/5 count makes one OUT low strobe of one PIT clock about N clocks after the write and then OUT stays high while the counter wraps, and a mode-1 count (software-triggered here, as NP2kai counts it) takes OUT low and back high once at terminal count; the read-back status byte returns the control word's bits 5:0 as written (mode 6 stays 6, the BCD bit is kept), not a normalised mode. The read-back status byte's RW field (bits 5:4) is the written control word's own for the single-byte formats too (RL=1 reads 0x14 for control 0x14, RL=2 reads 0x28 for control 0x68), not a fixed LSB+MSB (NP2kai pit_setflag).
 
 // ---- where the expectation comes from ----
 //   8254 datasheet (Intel 231164), "Mode 4: Software Triggered Strobe": "OUT will be
@@ -144,6 +144,18 @@ module tb_pc9821_pit_oneshot;
     write_pit(2'd3, 8'hE8);           // read-back: status only, CT2
     read_pit(2'd2, st);
     expect_int("ch2 status bits 5:0 (0xB7 written)", st[5:0], 8'h37, 8'h37);
+
+    // The status byte's RW field (bits 5:4) is the control word's own for the single-byte
+    // formats too (NP2kai pit_setflag: `ctrl = (value & 0x3f) | PIT_STAT_CMD`, status =
+    // ctrl), not a fixed LSB+MSB: an LSB-only (RL=1) and an MSB-only (RL=2) channel.
+    write_pit(2'd3, 8'h14);           // ch0, LSB only, mode 2
+    write_pit(2'd3, 8'hE2);           // read-back: status only, CT0
+    read_pit(2'd0, st);
+    expect_int("ch0 status bits 5:0 (0x14 written)", st[5:0], 8'h14, 8'h14);
+    write_pit(2'd3, 8'h68);           // ch1, MSB only, mode 4
+    write_pit(2'd3, 8'hE4);
+    read_pit(2'd1, st);
+    expect_int("ch1 status bits 5:0 (0x68 written)", st[5:0], 8'h28, 8'h28);
 
     // ==== VERDICT ====
     if (errors == 0) begin

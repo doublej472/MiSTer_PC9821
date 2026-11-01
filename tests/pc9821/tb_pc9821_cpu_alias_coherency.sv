@@ -3,7 +3,7 @@
 `include "z486_pc98_preset.svh"
 
 // ==== WHAT THIS PROVES ====
-// The z486 L1 data cache holds no line for the PC-98 device-memory ALIASES - the 0xFA0000-0xFFFFFF low-memory mirror of 0xA0000-0xFFFFF, the PEGC windows at 0xF00000 and 0xFFF00000, and fw_high at 0xFFFF8000-0xFFFFFFFF - so a canonical uncached store (or a ROM bank flip, or the sys16m_en remap of 0xF00000-0xFFFFFF) is visible through the alias on the very next read with no flush in between, while RAM around the windows stays cached so the decode cannot pass by refusing to cache anything; and the A20-wrap aliases of 0xA0000-0xBFFFF classify as VGA device memory exactly as the wrapped physical address they resolve to. The platform's alias arithmetic (pc9821_memory_subsystem.sv's sys16m_mirror/peg_high bit splices, pc9821_memory_map.sv's fw_high) is modelled before the backend storage, so the pair really is one byte with two names. FAIL-FIRST: every alias probe and round trip fails on the pre-fix tree, which cached the aliases and served the stale line (cpu-int review F1/F4, memmap review F1/F2).
+// The z486 L1 data cache holds no line for the PC-98 device-memory ALIASES - the 0xFA0000-0xFFFFFF low-memory mirror of 0xA0000-0xFFFFF, the PEGC windows at 0xF00000 and 0xFFF00000, and fw_high at 0xFFFF8000-0xFFFFFFFF - so a canonical uncached store (or a ROM bank flip, or the sys16m_en remap of 0xF00000-0xFFFFFF) is visible through the alias on the very next read with no flush in between, while RAM around the windows stays cached so the decode cannot pass by refusing to cache anything; and the A20-wrap aliases of 0xA0000-0xBFFFF classify as VGA device memory exactly as the wrapped physical address they resolve to. The platform's alias arithmetic (pc9821_memory_subsystem.sv's sys16m_mirror/peg_high bit splices, pc9821_memory_map.sv's fw_high) is modelled before the backend storage, so the pair really is one byte with two names. FAIL-FIRST: every alias probe and round trip fails on the pre-fix tree, which cached the aliases and served the stale line.
 //
 // The z486 L1 data cache holds no line for the PC-98 device-memory ALIASES - the 0xFA0000-0xFFFFFF
 // low-memory mirror of 0xA0000-0xFFFFF, the PEGC windows at 0xF00000 and 0xFFF00000, and fw_high at
@@ -14,16 +14,17 @@
 // cannot strand a cached line. RAM controls stay cached so the decode cannot pass by refusing to
 // cache anything.
 //
-// WHY THIS EXISTS. docs/z486-local-patch.md section 1: PC-98 device memory is "0xA0000-0xFFFFF
-// (plus a mirror at 0xFA0000-0xFFFFFF), and none of it may be cached". The platform decodes those
+// WHY THIS EXISTS. PC-98 device memory is 0xA0000-0xFFFFF (plus a mirror at 0xFA0000-0xFFFFFF),
+// and none of it may be cached (the fork's PC-98 memory-map template, z486_cache_map_pkg,
+// docs/z486-local-patch.md). The platform decodes those
 // alias windows in pc9821_memory_subsystem.sv (sys16m_mirror / peg_window / peg_high) and
 // pc9821_memory_map.sv (fw_high), translating each access onto the SAME storage the canonical
 // window uses - storage the GRCG/EGC, a canonical uncached store, or a ROM bank flip writes
 // underneath the cache. The classification in z486's `memory` named none of the alias windows, so
-// the L1 cached them PIPT and served stale alias lines (cpu-int review F1). The A20 term is the
-// same defect one wrap earlier (cpu-int review F4): with the gate closed, linear 0x1A0000-0x1BFFFF
+// the L1 cached them PIPT and served stale alias lines. The A20 term is the
+// same defect one wrap earlier: with the gate closed, linear 0x1A0000-0x1BFFFF
 // wraps onto TRAM/CG/planes but the VGA test ran on the pre-wrap address. The 0x043B sys16m flip
-// and the bank-flush alias gap are the flush-side twins (memmap review F1/F2), asserted here as
+// and the bank-flush alias gap are the flush-side twins, asserted here as
 // outcomes and in tb_pc9821_iobus as triggers.
 //
 // The aliasing the platform performs is modelled by the alias_map function below: a bit-splice/
@@ -104,7 +105,7 @@ module tb_pc9821_cpu_alias_coherency;
       // The real paging unit drives this from the demand itself (paging_unit.sv:513:
       // `early_idx_drive || pretrans_present || req_mem_present || ...`), so a demand always owns
       // the preread over a VIPT probe. Tying it to 1'b0 makes the core's own invariant fire
-      // (l1_cache.sv:589, "L1 pipelined store accepted without preread priority") on ANY cacheable
+      // (l1_cache.sv:797, "L1 pipelined store accepted without preread priority") on ANY cacheable
       // store, so this bench aborted there instead of running its checks. Same repair as
       // tb_pc9821_cpu_vram_coherency and tb_pc9821_dma_flush_coherency.
       .dcache_req_preread_priority(cpu_valid),
@@ -125,7 +126,7 @@ module tb_pc9821_cpu_alias_coherency;
       .dcache_vipt_probe_valid(1'b0), .dcache_vipt_probe_offset(12'h0),
       .dcache_vipt_probe_ready(), .dcache_vipt_probe_accepted(),
       .dcache_vipt_probe_direct_accepted(),
-      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0),
+      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
       .dcache_vipt_resolve_hit(), .dcache_vipt_resolve_data(),
       .x87_req_selected(), .x87_req_accepted(1'b0), .x87_req_complete(1'b0),
       .x87_read_complete(1'b0), .x87_rdata(32'h0),

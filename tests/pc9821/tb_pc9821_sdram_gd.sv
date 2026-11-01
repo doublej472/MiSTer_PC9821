@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SDRAM_GD: with ADQM=1 a G3 gather request is serviced as a WRITE-ONLY session - one BankActivate, NO half READs, one masked half WRITE per touched half (the byte mask on A[12:11]) with auto-precharge on the last write alone - so K same-row byte stores cost 1 ACT and K WRITEs where the RMW session costs K extra READs, and every stored byte lands byte-exact with the dword's other lanes preserved by the mask.
+// TB_PC9821_SDRAM_GD: with ADQM=1 a G3 gather request is serviced as a WRITE-ONLY session - one BankActivate, NO half READs, one masked half WRITE per touched half (the byte mask on A[12:11]) with auto-precharge on the last write alone - so K same-row byte stores cost 1 ACT and K WRITEs where the RMW session costs K extra READs, and every stored byte lands byte-exact with the dword's other lanes preserved by the mask. A session that touches fewer than two halves is padded with fully masked WRITEs (DQM = 11 on A[12:11]) to two, so its auto-precharge comes tWR after a write at tRCD+1 and the precharge begins after tRAS (AS4C32M16SB datasheet Rev 1.4 Table 16 and its WRITE-with-auto-precharge rule; the -7 chip model checks it), and a session whose every byte enable is 0 still issues its two masked WRITEs and closes its row, leaving memory unchanged (an open bank under the next ACT is a protocol violation the chip model fails on).
 
 // ==== DUT ====
 // ADQM=1: the byte mask rides A[12:11], so the session has no read phase.
@@ -43,7 +43,7 @@ module tb_pc9821_sdram_gd;
   wire        busy;
 
   sdram_sync_bridge #(
-      .FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(GK)
+      .FREQ(`TB_SDRAM_FREQ), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(GK)
   ) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
@@ -64,7 +64,8 @@ module tb_pc9821_sdram_gd;
 
   // The chip model checks tRP/tWR for real (the controller's derived values for this
   // config: FAST_GRADE=0 gives ns_to_cycles(20) = 2 and ns_to_cycles(15) = 2).
-  sdram_chip_model #(.CAS(CAS), .T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR),
+                   .FREQ_HZ(`TB_SDRAM_FREQ), .GRADE(7)) chip (
       .clk(clk_sys), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
@@ -83,7 +84,7 @@ module tb_pc9821_sdram_gd;
   // write carried auto-precharge (A[10]) - a session precharges ONCE, on its last
   // write, and a second ACT inside one session is the shape this bench exists to
   // rule out.
-  integer c_act = 0, c_rd = 0, c_wr = 0, c_wr_ap = 0;
+  integer c_act = 0, c_rd = 0, c_wr = 0, c_wr_ap = 0, c_wr_m = 0;
   reg     count_on = 0;
   always @(posedge clk) begin
     if (count_on && !nCS) begin
@@ -92,6 +93,7 @@ module tb_pc9821_sdram_gd;
       if (nRAS && !nCAS && !nWE) begin
         c_wr <= c_wr + 1;
         if (SDRAM_A[10]) c_wr_ap <= c_wr_ap + 1;
+        if (SDRAM_A[12:11] == 2'b11) c_wr_m <= c_wr_m + 1;   // both byte lanes masked
       end
     end
   end
@@ -102,7 +104,7 @@ module tb_pc9821_sdram_gd;
     begin
       count_on = 1'b0;
       @(negedge clk);
-      c_act = 0; c_rd = 0; c_wr = 0; c_wr_ap = 0;
+      c_act = 0; c_rd = 0; c_wr = 0; c_wr_ap = 0; c_wr_m = 0;
       count_on = 1'b1;
     end
   endtask
@@ -263,17 +265,35 @@ module tb_pc9821_sdram_gd;
     expect_dword(A4, 32'h0000_0055, "check C stranger");
 
     // ---- D: the 1-entry session (the column stream's leftover shape) ----
-    // One ACT, one half read, one merged half write: the single-RMW path's
-    // intermediate precharge/re-ACT is gone even at K=1.
+    // One ACT and no read: the single-RMW path's intermediate precharge/re-ACT is gone even at
+    // K=1. Its one touched half is followed by a fully masked write of the other half, which
+    // carries the auto-precharge: a lone half at tRCD would begin its precharge tWR later, inside
+    // tRAS (the datasheet promises no tRAS lockout).
     counts_start;
     gath_req(1, A2, 32'h0000_0077, 4'h1, 441'd0);
     repeat (40) @(posedge clk_sys);
     counts_stop;
     if (c_act != 1)          fail("check D: a 1-entry session issued more than one ACT");
     if (c_rd != 0)           fail("check D: a GD 1-entry session issued a half READ");
-    if (c_wr != 1)           fail("check D: a 1-entry session issued != 1 merged half WRITE");
+    if (c_wr != 2)           fail("check D: a 1-entry one-half session issued != 2 WRITEs (its half and one masked)");
+    if (c_wr_m != 1)         fail("check D: a 1-entry one-half session issued != 1 fully masked WRITE");
     if (c_wr_ap != 1)        fail("check D: the session's auto-precharge count != 1");
     expect_dword(A2, 32'hCAFE_0077, "check D merge into the half entry");
+
+    // ---- D2: a session with NO byte enabled closes its row and writes nothing ----
+    // Before the padding it issued no WRITE at all, so no auto-precharge, and the bank stayed
+    // open into the read below (the chip model fails an ACT to an open bank).
+    counts_start;
+    gath_req(2, A2, 32'hFFFF_FFFF, 4'h0,
+             pack_extras(A3, 32'hFFFF_FFFF, 4'h0, 27'd0, 32'd0, 4'h0, 27'd0, 32'd0, 4'h0));
+    repeat (40) @(posedge clk_sys);
+    counts_stop;
+    if (c_act != 1)          fail("check D2: an all-masked session issued != 1 ACT");
+    if (c_wr != 2)           fail("check D2: an all-masked session issued != 2 WRITEs");
+    if (c_wr_m != 2)         fail("check D2: an all-masked session's WRITEs were not both fully masked");
+    if (c_wr_ap != 1)        fail("check D2: an all-masked session's auto-precharge count != 1");
+    expect_dword(A2, 32'hCAFE_0077, "check D2 leaves entry 0's dword unchanged");
+    expect_dword(A3, 32'h1122_33EE, "check D2 leaves entry 1's dword unchanged");
 
     // ---- E: a read issued BEHIND a gather sees every entry of it ----
     // Accept order is visibility order (the controller serves one request at a

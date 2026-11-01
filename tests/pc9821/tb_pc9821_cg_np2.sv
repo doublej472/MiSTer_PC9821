@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The character generator's class table and page mapping are swept against NP2kai's own decoder -- io/cgrom.c cgwindowset (:11-53) for the 0xA4000 window and cgrom_ia9 (:189-226) for port 0xA9 -- over every one-byte code and a two-byte set that crosses each class boundary, using a font image that TAGS each byte with the class and row it came from, so the byte a read returns names the class and page the RTL chose; every agreement is asserted and every divergence is printed with its exact code, page and the NP2kai rule it breaks; The 20 configuration cells (the software-DIP record at store 0x810..0x81D and the six CPU/size cells) are a SANCTIONED divergence from NP2kai's writable-fontrom model (owner requirement, lane dip-settings): NP2kai's cgwindowset/cgrom_ia9 answer a tagged store there, while the machine's battery-backed cells survive writes - the Xa7C9W runtime capture holds the record intact after its boot's stage-1A KANJI wipe (qemu-pc98 roms/pc98bios/memsw.inc), a machine capture that outranks the software reference - and the core models that as a static read-only view with a transient write-through read echo. A sweep read of one of those cells must answer the configuration byte captured after the tagged load (the transient read echo, cleared at the `out 0xF0` re-POST), and that check replaces the class check there; the cell VALUES are pinned against the dumps in tb_pc9821_cg_read_path. the window's only gate is the 0xA4000 address decode (port 0x53E is a read-only strap and the window-0 bank cannot move a 0xA4000 access), and the 16x16 JIS fetch is pinned to its FONT.ROM block (0x7C20 for code 0x4109, 0xCC20 for 0x2110).
+// The character generator's class table and page mapping are swept against NP2kai's own decoder -- io/cgrom.c cgwindowset (:11-53) for the 0xA4000 window and cgrom_ia9 (:189-226) for port 0xA9 -- over every one-byte code and a two-byte set that crosses each class boundary, using a font image that TAGS each byte with the class and row it came from, so the byte a read returns names the class and page the RTL chose; every agreement is asserted and every divergence is printed with its exact code, page and the NP2kai rule it breaks; The 20 configuration cells (the software-DIP record at store 0x810..0x81D and the six CPU/size cells) are a SANCTIONED divergence from NP2kai's writable-fontrom model (a deliberate requirement): NP2kai's cgwindowset/cgrom_ia9 answer a tagged store there, while the machine's battery-backed cells survive writes - the Xa7C9W runtime capture holds the record intact after its boot's stage-1A KANJI wipe (qemu-pc98 roms/pc98bios/memsw.inc), a machine capture that outranks the software reference - and the core models that as a static read-only view with a transient write-through read echo. A sweep read of one of those cells must answer the configuration byte captured after the tagged load (the transient read echo, cleared at the `out 0xF0` re-POST), and that check replaces the class check there; the cell VALUES are pinned against the dumps in tb_pc9821_cg_read_path. the window's only gate is the 0xA4000 address decode (port 0x53E is a read-only strap and the window-0 bank cannot move a 0xA4000 access), and the 16x16 JIS fetch is pinned to its FONT.ROM block (0x7C20 for code 0x4109, 0xCC20 for 0x2110).
 //
-// The character generator's class table and page mapping are swept against NP2kai's own decoder -- io/cgrom.c cgwindowset (:11-53) for the 0xA4000 window and cgrom_ia9 (:189-226) for port 0xA9 -- over every one-byte code and a two-byte set that crosses each class boundary, using a font image that TAGS each byte with the class and row it came from, so the byte a read returns names the class and page the RTL chose; every agreement is asserted and every divergence is printed with its exact code, page and the NP2kai rule it breaks, and the divergence set is PINNED AT ZERO (review-cg F2/F3/F4) so any departure fails - the pre-fix RTL diverged on the overlap codes with low byte 0x09-0x0B/0x89-0x8B (the port's masked ver0.78 test where cgrom_ia9:197 tests the full low byte, and the window's one-byte branch where cgwindowset:21-25 is the ANK page); the window's only gate is the 0xA4000 address decode (port 0x53E is a read-only strap and the window-0 bank cannot move a 0xA4000 access), and the 16x16 JIS fetch is pinned to its FONT.ROM block (0x7C20 for code 0x4109, 0xCC20 for 0x2110).
+// The character generator's class table and page mapping are swept against NP2kai's own decoder -- io/cgrom.c cgwindowset (:11-53) for the 0xA4000 window and cgrom_ia9 (:189-226) for port 0xA9 -- over every one-byte code and a two-byte set that crosses each class boundary, using a font image that TAGS each byte with the class and row it came from, so the byte a read returns names the class and page the RTL chose; every agreement is asserted and every divergence is printed with its exact code, page and the NP2kai rule it breaks, and the divergence set is PINNED AT ZERO so any departure fails - the pre-fix RTL diverged on the overlap codes with low byte 0x09-0x0B/0x89-0x8B (the port's masked ver0.78 test where cgrom_ia9:197 tests the full low byte, and the window's one-byte branch where cgwindowset:21-25 is the ANK page); the window's only gate is the 0xA4000 address decode (port 0x53E is a read-only strap and the window-0 bank cannot move a 0xA4000 access), and the 16x16 JIS fetch is pinned to its FONT.ROM block (0x7C20 for code 0x4109, 0xCC20 for 0x2110).
 
 `default_nettype none
 
@@ -43,19 +43,17 @@ module tb_pc9821_cg_np2;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din, tram_dout;
   wire tram_we;
 
   // CG byte channel between the subsystem's window responder and the GDC.
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   wire [4:0] cg_win_byte_sel;
   wire cg_win_rd;
   wire [7:0] cg_win_dout, cg_win_din;
@@ -128,7 +126,7 @@ module tb_pc9821_cg_np2;
 
   // ==== DUT ====
   // Two blocks, wired exactly as pc9821_system.sv wires them.
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
@@ -215,7 +213,6 @@ module tb_pc9821_cg_np2;
       .tram_cpu_addr(tram_addr), .tram_cpu_din(tram_din),
       .tram_cpu_we(tram_we), .tram_cpu_dout(tram_dout),
       .font_ld_addr(font_addr), .font_ld_data(font_data), .font_ld_we(font_we),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .font_req_addr(font_req_addr), .font_req(font_req),
@@ -307,8 +304,8 @@ module tb_pc9821_cg_np2;
     else                               rtl_cls = C_DUMMY;
   endfunction
 
-  // THE 20 CONFIGURATION CELLS ARE A SANCTIONED DIVERGENCE FROM NP2kai's DECODER MODEL
-  // (owner requirement, lane dip-settings). NP2kai backs every gaiji cell with writable
+  // THE 20 CONFIGURATION CELLS ARE A SANCTIONED DIVERGENCE FROM NP2kai's DECODER MODEL.
+  // NP2kai backs every gaiji cell with writable
   // fontrom (memtram_wr8), so a tagged store reads back there; the machine's battery-backed
   // configuration cells do NOT take the store - the Xa7C9W runtime capture holds the record
   // intact at code 0x2056 rows 0..0xD after its boot's stage-1A wipe (qemu-pc98
@@ -386,7 +383,7 @@ module tb_pc9821_cg_np2;
       cpu_addr = addr; cpu_be = 4'hF; cpu_valid = 1; cpu_write = 0;
       cpu_line_read = 0;
       while (!cpu_ready) @(negedge clk_sys);
-      while (!cpu_resp_valid && !cpu_line_resp_valid) @(negedge clk_sys);
+      while (!cpu_resp_valid && !cpu_line_word_valid) @(negedge clk_sys);
       #1 data = cpu_dout[lane*8 +: 8];
       @(negedge clk_sys); cpu_valid = 0;
       repeat (4) @(negedge clk_sys);
@@ -575,7 +572,7 @@ module tb_pc9821_cg_np2;
 
     // ---- the user-CG store for the gaiji codes the sweep drives.
     // The configuration cells are captured AFTER the tagged load: with the write-through
-    // read echo (lane kanji-test-writethrough) a guest store to a covered cell now answers
+    // read echo a guest store to a covered cell now answers
     // the byte it just wrote, so the sweep's expectation is the post-load value. The STORED
     // configuration stays static and the echo clears at cfg_seed_reload (`out 0xF0`) - pinned
     // in tb_pc9821_cg_read_path; what this bench pins is the class/page decode around them.
@@ -631,7 +628,7 @@ module tb_pc9821_cg_np2;
     //    two-byte branch, so a window store under a ONE-byte code 0x0056/0x0057 is
     //    DROPPED. Read the cell the two-byte 0x8056 store occupies, write 0x5A through
     //    the one-byte code, re-select 0x8056 and read the cell again: it must be
-    //    unchanged. Fails on a gate that ignores the code's high byte (r13/195 s3.1).
+    //    unchanged. Fails on a gate that ignores the code's high byte.
     write_io(8'hA1, 8'h00); write_io(8'hA3, 8'h56); write_io(8'hA5, 8'h00);  // lr=1, row 0
     select_code(8'h80, 8'h56);
     mem_read_byte(32'h000A_4001, value);
@@ -642,7 +639,7 @@ module tb_pc9821_cg_np2;
     mem_read_byte(32'h000A_4001, value);
     if (value !== store_before)
       fail("a one-byte 0x0056 window store was NOT dropped: the 0x8056 cell moved");
-    $display("CG-NP2 FINDING one-byte-0x0056 window store DROPPED: the 0x8056 cell stays %02x (NP2kai cgwindowset drops it; r13/195 s3.1)", value);
+    $display("CG-NP2 FINDING one-byte-0x0056 window store DROPPED: the 0x8056 cell stays %02x (NP2kai cgwindowset drops it)", value);
     // 2. The gaiji even (low) page. NP2kai reads fontrom[0x7fff0] (0x00 after
     //    font_load's ZeroMemory); the machine measured 0x8F (docs/probes/VRAM.TXT).
     select_code(8'h20, 8'h56);
@@ -665,7 +662,7 @@ module tb_pc9821_cg_np2;
 
     // ==== VERDICT ====
     $display("CG-NP2: %0d class/page divergences from NP2kai", findings);
-    // The divergence set is PINNED AT ZERO (review-cg F2/F3/F4): both decoders now
+    // The divergence set is PINNED AT ZERO: both decoders now
     // reproduce NP2kai exactly, so ANY divergence is a bug and cannot pass silently.
     // The pre-fix RTL diverged only on the overlap codes whose low byte is 0x09-0x0B
     // or 0x89-0x8B: the port's ver0.78 test masked bit 7 where cgrom_ia9 tests the full

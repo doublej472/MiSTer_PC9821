@@ -5,7 +5,8 @@ pre-rewrite form, for the small rewrites too local to warrant a tool of their ow
 Each tools/equiv/*.sv holds `module m(..., output mismatch)` containing BOTH forms and
 `assign mismatch = old != new`. The runner proves mismatch is 0 for every input. A file lists
 `// PLANT: <text> => <replacement>` lines: each mutation of the file must make the proof FAIL,
-so a proof that cannot fail is caught by --selftest.
+so a proof that cannot fail is caught by --selftest. A file naming `PAIR_MOD` is a
+tools/check_seq_equiv.py --pair template and is skipped here.
 
 A file may also prove the REAL source text rather than a copy of it: a line
 `// SPAN: <path> | <start text> | <end text>` pastes the source lines from the first one
@@ -49,7 +50,11 @@ def main():
     files = sorted(glob.glob(os.path.join(REPO, "tools", "equiv", "*.sv")))
     bad = 0
     for f in files:
-        text = expand(open(f).read())   # a PLANT may then target the pasted source text too
+        raw = open(f).read()
+        if "PAIR_MOD" in raw:   # a tools/check_seq_equiv.py --pair template, not a mismatch proof
+            print("%-28s %s" % (os.path.basename(f), "SKIP (check_seq_equiv --pair template)"))
+            continue
+        text = expand(raw)   # a PLANT may then target the pasted source text too
         ok = prove(text)
         print("%-28s %s" % (os.path.basename(f), "PROVEN" if ok else "FAILED"))
         bad += not ok

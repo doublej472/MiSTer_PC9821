@@ -50,7 +50,7 @@ def repo_root() -> Path:
 def read_doc(doc: Path) -> tuple[str, dict[str, str], set[str], set[str]]:
     """-> (pin or None, {file: entries-cell}, {"only in upstream" names}, {"only in tree" names})
 
-    The pin is OPTIONAL since the owner unfroze src/z486/ (2026-10-02): this repo
+    The pin is OPTIONAL since src/z486/ became a plain copy of the fork: this repo
     no longer names the baseline's provenance (self-containment - an out-of-repo
     path in a citation is a defect), so the document normally carries no 40-hex pin
     and the baseline is whatever `--upstream`/`$Z486_UPSTREAM` supplies. When a pin

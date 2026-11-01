@@ -96,8 +96,8 @@
 // the mode branch (mouseif.c:197-216), and qemu's pc98_mouse_ctrl_write does
 // `pc98_mouse_set_portc(s, 0)` "per the 8255, also resets the Port C output
 // latch to 0" (hw/input/pc98-mouse.c) - the uPD8255 mode-set clears the output
-// latches. An I/O-bus review asked for a real-machine probe before
-// adopting it; both software references are unambiguous and agree, so the
+// latches. A real-machine probe would be the stronger anchor; both
+// software references are unambiguous and agree, so the
 // divergence is fixed toward them and the probe (/MODEW) stays owed as the
 // final anchor.
 

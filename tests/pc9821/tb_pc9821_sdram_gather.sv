@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SDRAM_GATHER: one accepted G3 gather-RMW request carries up to GATHER_K same-row partial PEGC stores and the REAL src/memory/sdram.v services it as ONE session - one BankActivate, one length-1 half READ per half any entry's be touches with some but not all of its bytes, one merged half WRITE per touched half with auto-precharge on the LAST write alone (one precharge for the whole session) - where the same stores as single requests cost one ACT-plus-re-ACT read-modify-write each: K byte stores in one row issue exactly 1 ACT and K READ and K WRITE commands (counted on the SDRAM pins), a mixed group writes full halves directly (a be=1111 entry and a be=1100 entry issue NO reads and take 3 WRITEs between them) and merges only the partial one, every stored byte lands byte-exact with the dword's other lanes preserved (the read-merge writes the untouched bytes back), a 1-entry session keeps the shape at K=1 (1 ACT, 1 READ, 1 WRITE - the single-RMW path's intermediate re-ACT is gone), and a read issued behind a gather sees every entry of it (accept order is visibility order). The session runs through the REAL sdram_sync_bridge (the controller on clk_sys) at the deployed settings (HAS_DQM=0, FAST_GRADE=0) against sdram_chip_model, whose tRP/tWR discipline checks hold the auto-precharge sequencing. FAIL-FIRST: before G3 this request shape did not exist - a stride-640 packed column store was one full controller read-modify-write transaction per byte (5.83 MB/s measured in tb_pc9821_pegc_store_rate) and there was no gath0 port to ask for a session with.
+// TB_PC9821_SDRAM_GATHER: one accepted G3 gather-RMW request carries up to GATHER_K same-row partial PEGC stores and the REAL src/memory/sdram.v services it as ONE session - one BankActivate, one length-1 half READ per half any entry's be touches with some but not all of its bytes, one merged half WRITE per touched half with auto-precharge on the LAST write alone (one precharge for the whole session) - where the same stores as single requests cost one ACT-plus-re-ACT read-modify-write each: K byte stores in one row issue exactly 1 ACT and K READ and K WRITE commands (counted on the SDRAM pins), a mixed group writes full halves directly (a be=1111 entry and a be=1100 entry issue NO reads and take 3 WRITEs between them) and merges only the partial one, every stored byte lands byte-exact with the dword's other lanes preserved (the read-merge writes the untouched bytes back), a 1-entry session keeps the shape at K=1 (1 ACT, 1 READ, 1 WRITE - the single-RMW path's intermediate re-ACT is gone), and a read issued behind a gather sees every entry of it (accept order is visibility order). The session runs through the REAL sdram_sync_bridge (the controller on clk_sys) at the deployed settings (FAST_GRADE=0) against sdram_chip_model, whose tRP/tWR discipline checks hold the auto-precharge sequencing. FAIL-FIRST: before G3 this request shape did not exist - a stride-640 packed column store was one full controller read-modify-write transaction per byte (5.83 MB/s measured in tb_pc9821_pegc_store_rate) and there was no gath0 port to ask for a session with.
 
 // ==== DUT ====
 // sdram_sync_bridge (the controller on clk_sys, as every build runs it) over the
@@ -42,7 +42,7 @@ module tb_pc9821_sdram_gather;
   wire        busy;
 
   sdram_sync_bridge #(
-      .FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .FAST_GRADE(1'b0), .GATHER_K(GK)
+      .FREQ(`TB_SDRAM_FREQ), .FAST_GRADE(1'b0), .GATHER_K(GK)
   ) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
@@ -63,7 +63,8 @@ module tb_pc9821_sdram_gather;
 
   // The chip model checks tRP/tWR for real (the controller's derived values for this
   // config: FAST_GRADE=0 gives ns_to_cycles(20) = 2 and ns_to_cycles(15) = 2).
-  sdram_chip_model #(.CAS(CAS), .T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR),
+                   .FREQ_HZ(`TB_SDRAM_FREQ), .GRADE(7)) chip (
       .clk(clk_sys), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );

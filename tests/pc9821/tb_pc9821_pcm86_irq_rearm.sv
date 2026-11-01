@@ -98,7 +98,7 @@ module tb_pc9821_pcm86_irq_rearm;
   endtask
 
   // ---- the IRQ wire monitor -----------------------------------------------
-  // The wire is the interrupt the edge-latched PIC consumes (pc9821_pic.sv:121
+  // The wire is the interrupt the edge-latched PIC consumes (pc9821_pic.sv:168
   // ir_set = ir_in & ~ir_prev), so the bench counts RISING EDGES, falling
   // edges, and high cycles inside a stimulus-opened mask window. The
   // discipline that keeps both sides race-free: this monitor acts ONLY at

@@ -1,4 +1,4 @@
-// tb_pc9821_ata_th5load — Touhou 5's text-box disk pattern, replayed through the real
+// tb_pc9821_ata_th5load - Touhou 5's text-box disk pattern, replayed through the real
 // ATA engine, and the ROM's no-retry opcode stream served without aborts.
 //
 // ==== WHERE THE PATTERN COMES FROM (ReC98, the game's own code) ====
@@ -29,16 +29,15 @@
 // option ROM (D800:0018, the machine's probe results "The IDE option ROM is
 // installed and owns the boot") turns each contiguous INT 1Bh read of N sectors into
 // ONE READ SECTORS with count = N, one IRQ per sector and one `rep insw` of 256 words
-// per sector (r6/04-storage.md section 1.3; r10/02-ide-rom-driver.md section 2.1's
-// register order). How many sectors the DOS kernel hands the BIOS per call is
+// per sector (the IDE option ROM's disassembly, its register order). How many sectors the DOS kernel hands the BIOS per call is
 // IO.SYS-internal and unmeasured, so this bench replays BOTH granularities:
 //   CMD_PER_READ    one command per file_read (counts 1/5/17 per face + the singles)
 //   CMD_PER_SECTOR  one count=1 command per sector (the gap-immune single-sector path)
 //
 // ==== THE FIX THIS BENCH FAIL-FIRSTS ====
 // The ROM computes its command byte as `(flags & 0xF7) | table[class]`
-// (BANK3 file 0x1085-0x10A9 = r10/02 section 1.5's "0x09085-0x090A9" minus 0x8000,
-// the r13/68-boot-disk-slow.md convention "BANKn file offset o = linear 0xD8000 + o"),
+// (BANK3 file 0x1085-0x10A9 = linear 0x09085-0x090A9 minus 0x8000, by the
+// convention "BANKn file offset o = linear 0xD8000 + o"),
 // and flags
 // bit 0 is set from the INT 1Bh caller's fn bit 5 (BANK3 file 0x03B0-0x03B8:
 // `test [bp+0x1],0x20 / mov ch,1 / mov es:0x2001,ch`), so a block read/write issued
@@ -50,7 +49,7 @@
 // ARTIC delays (file 0x0B16), RECALIBRATE (file 0x0557, which calls the settle at
 // file 0x01F3), and the settle's own `delay(121*(0x28-[es:0x2060]))` ARTIC units
 // (file 0x020B-0x0222) = up to 4,840 units x 833 us = 4.03 s of emulated time, the
-// same pacing family r13/46 section 1.2 and r13/53 section 0 measured a boot walking
+// same pacing family earlier boot measurements found a boot walking
 // into. The fail-first check is therefore the TH5 replay itself driven with the
 // no-retry stream: byte-exact sectors, zero aborts, the same one-IRQ-per-sector
 // cadence and the same cycle profile as the 0x20/0x30 stream.
@@ -59,7 +58,7 @@
 // The TH5 pattern's latency in clk_sys and ns at 50 MHz, per command and per text box,
 // with every measured cycle in one of four buckets (task-file setup + command, the
 // DRQ/payload fetch wait, the PIO drain, the ISR bracket). The absolute machine target
-// is capture-pending (TODO item 66 / the hwprobe latency lane), so the numbers are
+// is capture-pending (todo item 66, a hwprobe latency capture), so the numbers are
 // printed for that comparison and only the SEMANTIC checks are asserted.
 //
 // ==== WHAT THIS PROVES ====
@@ -152,7 +151,7 @@ module tb_pc9821_ata_th5load;
   // write arm presents its address one cycle ahead of the sample (the drive's read
   // port is a registered M10K) and compares every word against the synthetic map, so
   // a wrong LBA or a dropped word is a mismatch.
-  integer hps_lat = 4600;   // r13/68's upward bound for one block round trip
+  integer hps_lat = 4600;   // the measured upward bound for one block round trip
   integer word_clk = 1;
   integer host_reqs = 0;
   integer host_blocks_total = 0;
@@ -348,7 +347,7 @@ module tb_pc9821_ata_th5load;
     end
   endtask
 
-  // The ROM's per-command register order (r10/02 section 2.1): cyl lo, cyl hi,
+  // The ROM's per-command register order: cyl lo, cyl hi,
   // drive/head, sector, count, then the opcode at 0x064E.
   task setup_command(input [7:0] count, input [31:0] lba, input [7:0] cmd);
     begin

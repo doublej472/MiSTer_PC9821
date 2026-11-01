@@ -30,7 +30,7 @@
 //      the drain unable to consume the 16 bytes that were queued before it.
 //   2. A guest byte written at phase P increments dbg_count by exactly one when
 //      the buffer is not full, whatever the engine is doing.
-//   3. (review2/datapaths.md F7 / review2/buffers.md F6) A guest byte written on
+//   3. A guest byte written on
 //      the EXACT cycle a draining frame completes while the ring is FULL must
 //      survive and the count/pointer bookkeeping must stay coherent
 //      (count == wrptr - rdptr mod 0x8000), in NP2kai's serialized order: the

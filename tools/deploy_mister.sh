@@ -54,7 +54,7 @@ mkdir -p "$deploy/Scripts/.pc9821"
 cp -f tools/mister/pc9821_cue2pcd.sh "$deploy/Scripts/pc9821_cue2pcd.sh"
 cp -f tools/cue2pcd.py "$deploy/Scripts/.pc9821/cue2pcd.py"
 
-# CONF_STR: "F0,BIN,Load ROM pack;" and "S0,IMG,Mount HDD;".
+# CONF_STR: "F0,BIN,Load BIOS ROM;" and "S0,IMG,Mount HDD;".
 # F0 -> file type f at index 0; S0 -> mount type s at index 0.
 {
     echo '<mistergamedescription>'
@@ -113,13 +113,13 @@ echo "Staged MiSTer load set in $deploy/:"
 find "$deploy" -type f | sort | sed "s|^$deploy/|  |"
 echo
 
-# CONF_STR: "F0,BIN,Load ROM pack;" and "S0,IMG,Mount HDD;".
+# CONF_STR: "F0,BIN,Load BIOS ROM;" and "S0,IMG,Mount HDD;".
 # F0 -> file type f at index 0; S0 -> mount type s at index 0.
 #
 # WHY NO CONFIG IS STAGED, and why the check above is the point. MiSTer gives a CONF_STR option
 # no default entry, so a card with no stored selection passes 0 for every field; the OSD lists
-# were rotated so that entry 0 IS the wanted default - 16 MB of RAM and the core's native VSync
-# rate - which makes a missing file correct rather than a compromise. Until the rotation entry
+# were rotated so that entry 0 IS the wanted default - 16 MB of RAM - which makes a missing file
+# correct rather than a compromise. Until the rotation entry
 # 0 was the ascending list's 1 MB, a 1 MB guest cannot run the Xe10 BIOS at all, and the core
 # froze with nothing on screen, indistinguishable from broken RTL; the workaround was to
 # install a config, which only worked when someone remembered to.

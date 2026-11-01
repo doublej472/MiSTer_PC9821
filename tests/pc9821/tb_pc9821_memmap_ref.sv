@@ -80,11 +80,10 @@ module tb_pc9821_memmap_ref;
   wire        map_ems_open_bus;
   wire        map_fw_shadow_store;
   wire [31:0] map_cpu_dout, map_mem_addr, map_mem_din;
-  wire [127:0] map_cpu_line_dout;
   wire [3:0]  map_mem_be;
   wire [7:0]  map_mem_burstcount;
   wire        map_mem_line_read, map_mem_valid, map_mem_write;
-  wire        map_cpu_ready, map_cpu_resp_valid, map_cpu_line_resp_valid;
+  wire        map_cpu_ready, map_cpu_resp_valid;
 
   // ---- subsystem instance: 0x043B and the route selects ----
   reg        sys16m_en = 1'b1;
@@ -92,6 +91,8 @@ module tb_pc9821_memmap_ref;
   reg        grcg_we = 0;
   reg [7:0]  grcg_addr = 0, grcg_din = 0;
   wire       grcg_expand;
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
   reg        egc_enable = 0;
   reg [15:0] egc_access = 16'hFFF0, egc_fgbg = 16'h00FF, egc_ope = 16'h0000,
              egc_fg = 16'h0000, egc_mask = 16'hFFFF, egc_bg = 16'h0000,
@@ -127,9 +128,7 @@ module tb_pc9821_memmap_ref;
   wire [7:0]  mem_burstcount;
   wire        mem_line_read, mem_valid, mem_write;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
-  wire [127:0] cpu_line_dout;
+  wire        cpu_ready, cpu_resp_valid;
   wire [31:0] mem_dout;
   wire [127:0] mem_line_dout;
   wire        mem_ready, mem_resp_valid, mem_line_resp_valid;
@@ -166,11 +165,10 @@ module tb_pc9821_memmap_ref;
       .gvram_window(gvram_window), .gvram_win_plane(gvram_win_plane),
       .gvram_win_offset(gvram_win_offset),
       .cpu_addr(cpu_addr), .cpu_addr_raw(cpu_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(cpu_din), .cpu_dout(map_cpu_dout),
-      .cpu_line_dout(map_cpu_line_dout), .cpu_be(cpu_be),
+      .cpu_be(cpu_be),
       .cpu_burstcount(cpu_burstcount), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
       .cpu_ready(map_cpu_ready), .cpu_resp_valid(map_cpu_resp_valid),
-      .cpu_line_resp_valid(map_cpu_line_resp_valid),
       .absent_area(map_absent_area), .ems_open_bus(map_ems_open_bus),
       .fw_shadow_store(map_fw_shadow_store),
       .mem_addr(map_mem_addr), .mem_din(map_mem_din), .mem_dout(mem_dout),
@@ -180,14 +178,14 @@ module tb_pc9821_memmap_ref;
       .mem_resp_valid(mem_resp_valid)
   );
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -198,6 +196,7 @@ module tb_pc9821_memmap_ref;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -456,15 +455,15 @@ module tb_pc9821_memmap_ref;
              "win0 0x0C 0x80000 -> C0000", "MEAS WIN.TXT 0461=0C b=FFFF (absent area)");
     // 0x0461 = 0x00: the machine reads 0xFFFF at the window base and discards the store
     // (WIN.TXT 0461=00 b=FFFF a=FFFF, the same as 0x0C/0x0E/0x0F), while this core maps
-    // the page to 0x00000-0x1FFFF. The mechanism is unknown and r10/11 records it as
-    // OPEN Q2; recorded, not failed.
+    // the page to 0x00000-0x1FFFF. The mechanism is unknown and an open
+    // question; recorded, not failed.
     begin
       reg [31:0] shown;
       win0_sel = 8'h00;
       cpu_addr = 32'h0008_0000; cpu_write = 1'b0; cpu_valid = 1'b1;
       #1;
       shown = map_mem_addr;
-      $display("DIVERGE  win0 0x00 0x80000 -> %08x; MEAS WIN.TXT 0461=00 b=FFFF (reads open bus)   [MEAS vs RTL, r10/11 OPEN Q2]", shown);
+      $display("DIVERGE  win0 0x00 0x80000 -> %08x; MEAS WIN.TXT 0461=00 b=FFFF (reads open bus)   [MEAS vs RTL, OPEN]", shown);
       cpu_valid = 1'b0; cases = cases + 1; diverge = diverge + 1;
       win0_sel = 8'h08;
     end
@@ -617,7 +616,7 @@ module tb_pc9821_memmap_ref;
     win0_sel = 8'h08;
     // 0x0461 = 0x0E aliases the intensity page; the machine answered 0xFFFF there at the
     // DOS prompt (WIN.TXT 0461=0E b=FFFF) because the planar plane is mode-gated, and
-    // this core serves it unconditionally. Recorded, not failed: r11/17 s3 carries it.
+    // this core serves it unconditionally. Recorded, not failed.
     $display("DIVERGE  win0 0x0E 0x80000 = 0xE0000: RTL serves plane 3 (see the map cases above); MEAS WIN.TXT 0461=0E b=FFFF (the plane is mode-gated)   [MEAS vs RTL]");
     cases = cases + 1; diverge = diverge + 1;
     // 0xA5000-0xA7FFF: qemu's window-1 tvram overlay covers it (32 KiB from 0xA0000) and
@@ -701,7 +700,7 @@ module tb_pc9821_memmap_ref;
       end
       for (i = 0; i < 8; i = i + 1) begin
         @(negedge clk);
-        if (cpu_ready && (cpu_resp_valid || cpu_line_resp_valid)) begin
+        if (cpu_ready && cpu_resp_valid) begin
           $display("FAIL     open bus accepted and answered in one cycle (z486 hazard)");
           errors = errors + 1;
         end

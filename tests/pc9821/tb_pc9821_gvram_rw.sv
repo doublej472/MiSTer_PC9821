@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_RW: The GVRAM storage carries a CPU store's bytes to the plane lanes the byte enables name and returns them unchanged on a later read, at BOTH access pages and ALL FOUR plane windows, at byte, word and DWORD widths, at the start and the END of each plane, and a one-plane store preserves the other three lanes -- all of it THROUGH the SDRAM backend (r13/35), whose byte-enable write is the read-modify-write a DQM-less module needs.
+// TB_PC9821_GVRAM_RW: The GVRAM storage carries a CPU store's bytes to the plane lanes the byte enables name and returns them unchanged on a later read, at BOTH access pages and ALL FOUR plane windows, at byte, word and DWORD widths, at the start and the END of each plane, and a one-plane store preserves the other three lanes -- all of it THROUGH the SDRAM backend, whose byte-enable write is the read-modify-write a DQM-less module needs.
 //
 // WHY THIS EXISTS. A CPU read-after-write of GVRAM
 // was NEVER tested in this tree: the map bench checked only the SDRAM address translation, and the
@@ -9,7 +9,7 @@
 // exactly the operation the authentic ITF performs at POST stage 0x1B - fill a plane, read it back
 // - and it is the operation a MiSTer HUNG ON: the CPU sat in a rep stosd fill of 32 KiB at
 // ES=0xA800 while the watchdog reported 'W' every 200 ms. The storage left block RAM again in
-// r13/35, so this bench drives the real pc9821_gvram datapath and observes the bytes IN THE
+// the design, so this bench drives the real pc9821_gvram datapath and observes the bytes IN THE
 // BACKEND MODEL behind it: a byte-granular store becomes one byte-enable transaction, which is
 // what makes the read-modify-write path (src/memory/sdram.v's RMW_*) the thing under test.
 //
@@ -35,8 +35,8 @@ module tb_pc9821_gvram_rw;
   reg        cpu_line_read = 0;
   reg        cpu_valid = 0, cpu_write = 0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0, grcg_din = 0;
@@ -62,9 +62,9 @@ module tb_pc9821_gvram_rw;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),

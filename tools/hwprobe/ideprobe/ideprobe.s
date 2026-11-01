@@ -42,8 +42,8 @@
  *            the vector 0x11 owner, and the stub count. This settles which IRQ
  *            the drive asserts and whether IRQ9 is masked at the prompt.
  *   DRVSEL   the 0x64C drive/head write read-back: re-write the as-found byte
- *            and read ERROR(0642)/STATUS(064E) back, settling io-audit F3 (does a
- *            0x64C write clear a pending ERR bit at idle).
+ *            and read ERROR(0642)/STATUS(064E) back, settling whether a
+ *            0x64C write clears a pending ERR bit at idle.
  *   RESTORE  the 0432 bank byte put back and re-read, so the machine is left as
  *            it was found.
  *
@@ -262,7 +262,7 @@ sec_reg:
     ret
 
 /* ==================================================================
- * section: DRVSEL - the 0x64C drive/head write read-back (io-audit F3)
+ * section: DRVSEL - the 0x64C drive/head write read-back
  * ================================================================== */
 sec_drvsel:
     mov     dx, offset msg_begin_drvsel
@@ -781,7 +781,7 @@ recal_seq_done:
 
 /* ==================================================================
  * section: DIAG - EXECUTE DEVICE DIAGNOSTIC 0x90 and DEVICE RESET 0x08:
- * the ERROR register read-back (review-ata P8: 0x01 vs 0x81)
+ * the ERROR register read-back (0x01 vs 0x81)
  * ================================================================== */
 sec_diag:
     mov     dx, offset msg_begin_diag

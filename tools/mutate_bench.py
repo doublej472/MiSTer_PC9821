@@ -26,7 +26,7 @@ bench that already fails proves nothing.
   tools/mutate_bench.py --selftest       the substitution rules, without Verilator
 
 The committed record is tests/pc9821/mutations.json: mutants each named bench KILLED
-when it was recorded (bench-audit, 2026-10-12). Re-run it after changing a bench's
+when it was recorded. Re-run it after changing a bench's
 checks; re-point an entry whose source moved rather than deleting it.
 
 SRC is a repo-relative path the bench builds: one of its manifest sources, its own
@@ -38,7 +38,7 @@ context to disambiguate. A plan is a JSON list of {"bench", "file", "from", "to"
 Exit 0 iff every control passed and every mutant was KILLED. Builds live under
 .build/mutate/<bench>/ (one object directory per bench, so its mutants rebuild
 incrementally) and are removed afterwards unless --keep; a Verilator object directory is
-large (AGENTS.md: prune build trees).
+large (docs/lanes.md: prune build trees).
 """
 
 from __future__ import annotations

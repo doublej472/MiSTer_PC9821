@@ -32,7 +32,7 @@ that build is reported but is a valid state -- unlike the rhythm's zero fill bel
 
 AN ALL-ZERO RHYTHM IMAGE IS NOT SILENCE. This was believed ("all-zero ADPCM codes, which
 the decoder turns into silence") and a pack built without the image shipped that way,
-which is the owner's harsh percussion pop. An ADPCM-A all-zero nibble is code 0 at step
+which is the harsh percussion pop heard on hardware. An ADPCM-A all-zero nibble is code 0 at step
 0, i.e. a +2 delta every 18.5 kHz sample, so the decoder's 12-bit accumulator RAMPS and
 wraps: the declared drum becomes a DC-carrying sawtooth ending in an abrupt cut, on
 every trigger, at every level. The real image decodes to a normal zero-mean percussion
@@ -196,7 +196,7 @@ def main() -> None:
               "buzz and pop. Pass --rhythm FILE, or put OPNA_ADPCM.ROM in --dumps.",
               file=sys.stderr)
     # A missing SOUND.ROM is a valid state (the machine's own "no -86 fitted" answer),
-    # but say so: the owner's machine HAS the card, so a silent 0xFF window is usually a
+    # but say so: the reference Xe10 HAS the card, so a silent 0xFF window is usually a
     # build that forgot the image rather than a deliberate choice.
     if all(byte == 0xFF for byte in pack[pack_layout.SOUND_OFFSET:
                                         pack_layout.SOUND_OFFSET + pack_layout.SOUND_SIZE]):

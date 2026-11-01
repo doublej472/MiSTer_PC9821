@@ -3,9 +3,9 @@
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GVRAM_RW_CHECK: the GVRAM array's CROSS-PORT read-during-write is deterministic. Port A is the CPU store, port B the scanout fetch, and they share no arbiter, so a port-B read of the exact word a port-A write commits in the SAME clk_sys is REACHABLE; the array keeps `ramstyle = "M10K, no_rw_check"` (dropping it doubles every lane at synthesis), so the module terminates that same-cycle mixed-port read with a cross-port write-forward. The bench instantiates pc9821_gvram_mem directly and drives the worst pattern - the SAME address on both ports, a write on A and a read on B in the one clk_sys - asserting the fetched word is always the whole committed word (the store's byte on every lane the store ENABLES, the array's byte elsewhere), over all 15 partial byte-enable patterns, a full-word store, a no-op store and a non-colliding read. It fails if the forward is removed and on any byte-tear across the four independent lane blocks.
 //
-// WHY THIS EXISTS. r13/283's array carried `no_rw_check`, which makes a cross-port read-during-write
+// WHY THIS EXISTS. The M10K array carried `no_rw_check`, which makes a cross-port read-during-write
 // the M10K's DONT_CARE mode rather than the read-before-write its comment claimed; the CPU store
-// and the scanout fetch are independent, so the collision is reachable. The fix (r13/287) forwards
+// and the scanout fetch are independent, so the collision is reachable. The fix forwards
 // the byte this edge commits on the store's enabled lanes.
 // for the port-ownership analysis and the synthesis cost.
 

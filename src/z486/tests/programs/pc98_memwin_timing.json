@@ -1,0 +1,58 @@
+{
+  "asm": "pc98_memwin_timing.asm",
+  "requires_pc98_map": true,
+  "start_mode": "protected",
+  "cr0": "0x80000001",
+  "cr3": 0,
+  "eip": 0,
+  "seg_cache": {
+    "CS": {
+      "base": "0x10000",
+      "limit": "0xfffff",
+      "flags": "0xa9e0"
+    },
+    "DS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "SS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "ES": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "FS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "GS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    }
+  },
+  "page_tables": [
+    [
+      65536,
+      65536,
+      16,
+      "RW"
+    ],
+    [
+      0,
+      0,
+      256,
+      "RW"
+    ]
+  ],
+  "cycles": 200000,
+  "sim_plusargs": [
+    "expect_pc98_map"
+  ]
+}

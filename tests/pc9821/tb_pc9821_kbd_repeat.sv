@@ -34,6 +34,9 @@ module tb_pc9821_kbd_repeat;
   // 100 cycles to the first repeat, then 200 between repeats: long enough that a single
   // break+make pair is read before the next pair is pushed.
   pc9821_kbd #(
+      // The presentation pace is shrunk so the repeat pair's break and make stay
+      // inside read_byte's budget (the real tick is SYS_CLOCK_HZ / 1280).
+      .XFER_TICK_CYCLES(26'd8),
       .REPEAT_DELAY(25'd100),
       .REPEAT_INTERVAL(25'd200)
   ) dut (

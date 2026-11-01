@@ -41,7 +41,7 @@ module tb_pc9821_fdc_ready_change;
       .media_present({2'b00, present}), .writeprotect(4'b0000),
       .media_chg({2'b00, chg}), .frame_tick(tick),
       .media_req(), .media_req_hdr(), .media_unit(),
-      .media_c(), .media_h(), .media_r(), .media_n(), .media_idx(),
+      .media_c(), .media_h(), .media_tc(), .media_hd(), .media_mf(), .media_2hd(), .media_rpm(), .media_r(), .media_n(), .media_idx(),
       .media_ready(1'b1), .media_rdy(1'b0), .media_hdrv(1'b0), .media_err(1'b0),
       .media_dout(8'h00), .media_hr(8'h00), .media_hn(8'h00), .media_hs(8'h00),
       .media_adv(), .dma_drq(), .dma_dack(1'b0), .dma_stb(1'b0), .dma_tc(1'b0),

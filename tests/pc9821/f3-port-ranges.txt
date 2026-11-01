@@ -1,4 +1,4 @@
-# The port blocks r12/08 F3 touches: the aliased PIT block at 0x3FD9..0x3FDF,
+# The port blocks this check touches: the aliased PIT block at 0x3FD9..0x3FDF,
 # the PIT's own block, the ATA connection ports and both task-file ranges
 # (0x0640..0x064E with its 0x064F boundary, and the second channel's mirror at
 # 0x0740..0x074E), plus the PC-9801-86's 0x0188..0x018E, which gdc_cs has to

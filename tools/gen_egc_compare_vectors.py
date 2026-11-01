@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the EGC conformance-suite replay vectors from the REAL Xe10 captures.
 
-The oracle is `docs/probes/egc-conformance/{xe10,mister}/*.CSV` - the owner's
+The oracle is `docs/probes/egc-conformance/{xe10,mister}/*.CSV` - a
 real PC-9821 (V166, "xe10") and this core on the PC98_EGC_CONFORMANCE v1.3
 `RUNALL` profile. Those CSVs record, per test, the four PLANE values read back
 and the suite's own expectation, but NOT the register program or the VRAM the

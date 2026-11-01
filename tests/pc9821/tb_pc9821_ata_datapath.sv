@@ -9,7 +9,7 @@
 // The DUT is the shipped pair: pc9821_ata wired to pc9821_block_io exactly as
 // pc9821_system wires them, driven on the guest side through the task-file ports
 // and on the host side through an hps_io-shaped block model. Every expectation
-// names its reference: NP2kai cbus/ideio.c is primary (r13/190 read first), qemu
+// names its reference: NP2kai cbus/ideio.c is primary (read first), qemu
 // hw/ide is the cross-check, MAME pc9801.cpp maps 0x640-0x64F as a word region.
 
 module tb_pc9821_ata_datapath;
@@ -170,9 +170,9 @@ module tb_pc9821_ata_datapath;
   endtask
 
   // The same word access with the CURRENT I/O class: iobus charges 0x0640/0x0641
-  // IO_MIN_HOLD = 4 per access (pc9821_iobus.sv, r13/276), and a 16-bit word is ONE
+  // IO_MIN_HOLD = 4 per access (pc9821_iobus.sv), and a 16-bit word is ONE
   // access that walks two lanes, so the word costs 6 clk_sys -- measured through the real
-  // bus by tb_pc9821_ata_iowait (6 delivered, 5 of them stalled). 28 here was r13/13's
+  // bus by tb_pc9821_ata_iowait (6 delivered, 5 of them stalled). 28 here was an earlier
   // superseded class 30 and made every throughput figure 5x pessimistic.
   localparam PIO_GAP = 2;
   task automatic read_word_class(output [15:0] data);
@@ -583,7 +583,7 @@ module tb_pc9821_ata_datapath;
 
     // ---- (d) THROUGHPUT ----
     // The machine's own budget: a 16-bit word costs the current class table's 6 clk_sys on
-    // the data port (1,536 clk_sys per sector), and the HPS round trip costs the r13/68
+    // the data port (1,536 clk_sys per sector), and the HPS round trip costs the measured
     // ~4600 cycles before the burst.
     // The measured figure is the sector cost at 50 MHz, so MB/s is 512*50/cycles.
     begin : throughput

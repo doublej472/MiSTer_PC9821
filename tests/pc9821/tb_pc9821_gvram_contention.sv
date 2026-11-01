@@ -1,8 +1,8 @@
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_CONTENTION: a CPU plane-window store completes while the scanout is fetching, because the two clients reach the planes on SEPARATE SDRAM requesters (r13/35) and the store must never wait on the scanout's line fetch -- the ITF's own boot code fills a whole 32 KiB plane with a rep stosd while the display fetches every line.
+// TB_PC9821_GVRAM_CONTENTION: a CPU plane-window store completes while the scanout is fetching, because the two clients reach the planes on SEPARATE SDRAM requesters and the store must never wait on the scanout's line fetch -- the ITF's own boot code fills a whole 32 KiB plane with a rep stosd while the display fetches every line.
 //
 // The old contention was INSIDE pc9821_gvram: one shared client port served by an
-// arbiter whose fixed scanout priority could starve the CPU. r13/35 removes the
+// arbiter whose fixed scanout priority could starve the CPU. The design removes the
 // sharing: the CPU's D1 accesses go on the memory_subsystem's mem_* requester and
 // the scanout's line fetch on the controller's fourth, so neither can hold the other
 // off. What is left to prove is that the CPU's client accesses still complete
@@ -12,7 +12,7 @@
 // The backend model reproduces the real store's shape: one transaction at a time, a
 // ready pulse at the accept, a read's data a few cycles later, and a byte-enabled
 // write. src/memory/sdram.v states its own timing ("T_RCD + CAS + 2*burst_cnt - 1
-// cycles from ACT to last data", sdram.v:21).
+// cycles from ACT to last data", sdram.v:7).
 //
 // The machine sets the requirement: on a real PC-9821 the CPU has the bus, and
 // the ITF's boot code (BANK4 file offset 0x007D writes port 0x68, 0x0118 sets
@@ -36,8 +36,8 @@ module tb_pc9821_gvram_contention;
   reg        cpu_line_read = 0;
   reg        cpu_valid = 0, cpu_write = 0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0, grcg_din = 0;
@@ -56,7 +56,7 @@ module tb_pc9821_gvram_contention;
   wire        line_sel, line_ready;
 
   // The GVRAM's two SDRAM requesters. The scanout and the CPU are on SEPARATE requesters now
-  // (r13/35), so contention is the shared store + the model's single-transaction arbiter, which is
+  //, so contention is the shared store + the model's single-transaction arbiter, which is
   // the round-robin the controller runs.
 
   pc9821_gvram_dut #(.SYS_CLOCK_HZ(100_000_000)) dut (
@@ -65,9 +65,9 @@ module tb_pc9821_gvram_contention;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -99,7 +99,7 @@ module tb_pc9821_gvram_contention;
   // contention the whole store is what must get through, not one access.
   // A store is COMPLETE ON THE ACCEPT: z486's memory.sv completes an external write on
   // `ready` and consumes `resp_valid` only for a read, so no response strobe follows a store
-  // (r13/272). The request is released in the accept cycle, as z486 releases it -- holding it
+  //. The request is released in the accept cycle, as z486 releases it -- holding it
   // one cycle longer would present a second, identical access.
   localparam integer STORE_LIMIT = 4000;
   integer took;

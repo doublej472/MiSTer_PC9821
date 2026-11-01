@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC2 command path at 0xA2/0xA0 for SCROLL: TH01's and master.lib's eight-parameter transaction lands in the graphics GDC's two display partitions, the firmware's own four-parameter transaction (BANK6@0x788F-0x78C5) leaves partition 2 alone as the machine does, the resulting display start address is the games' own (line*40 words, with partition 2 wrapping the top line in at address 0), the firmware's own CSRFORM write (0xA2 <- 0x4B then one 0xA0 byte, BANK6@0x787e-0x788c) is captured and the address counter advances one 640-dot line per raster line when its line repeat is 1 (640x400) and holds each GDC line for two raster lines when it is 2 (640x200) - the step that fills a 400-line raster from a 200-GDC-line program, keyed on the slave CSRFORM and not on mode1[4] (port 0x68 bit 4), which master.lib's own 200-line routine clears after the mode set so the two registers disagree in both directions (Thexder and Touhou shapes benched) - with the armed VSYNC IRQ still firing once per frame in the 200-line mode and the address wrapping inside the 32 KiB plane, the 0xA4 display page is bit 15 of it, and the status protocol the games and the ITF wait on (bit 2 empty, bit 1 full) reads true before, during and after the transaction, with a status read in mid-stream disturbing nothing; and the partition ARITHMETIC (datapaths.md F3/F4/F5): the partition lengths count RASTER lines with the repeat phase restarting per partition (NP2kai makegrph.c:143-167, MAME upd7220.cpp:1857-1903 - fail-first against the old GDC-line boundary at raster 2*lines1), a zero-length SECOND partition takes over at the boundary and runs to the screen end (MAME's len==0 -> 0x400, real-HW-verified), and the CSRFORM line repeat covers lr = 1..32 rather than just {1,2}; and the SCROLL length word's im bit - bit 14 of EACH partition's LENGTH word - selects that partition's address step (NP2kai vram/makegrph.c:146-148 reads it per partition from para[GDC_SCROLL + gpos + 2] and doubles the pitch at 0, MAME upd7220.cpp:611/624 takes BIT(m_ra[index * 4 + 3], 6) and pc9821.cpp:103-106 shifts by im ^ 1), which is 2 x PITCH in the machine's own im = 0 state and PITCH at the 5 MHz im = 1 a game builds from BIOS work-area 0000:054D bit 2 (rec98/th01/hardware/scrollup.cpp:22-27) - pinned in both directions, one partition's bit each way, so a hard-wired step or a swap of the two partitions' bits cannot pass. It does NOT cover the graphics scanout that consumes the address, the START/STOP/SYNC/CSRW/TEXTW/VECTW commands the firmware issues on 0xA2, or a real FIFO depth. Section 8 pins the review's F1 race (race-idiom #34): a configuration write whose strobe covers the frame_end snapshot edge is DEFERRED to the next frame end and never dropped, swept across the four clk around the snapshot edge with the bus idle in between. Section 13 pins the PACKED page flip: the SCROLL start word's bit 14 is the walk's bit 15 (gfx_walk_page - NP2kai's packed arm walks LOW16(vad << 1) over the full 512 KiB with the page in that bit, vram/makegrex.c:199; MAME's flashb note names the flip register - double buffering at SAD $38fc and $fffc - pc9821.cpp:108-113) and it takes effect at the frame boundary with the rest of the SCROLL block - the uPD7220 reads the SAD at the start of the display scanning process, the machine's full-frames swap - while the planar view ({display page, walk[14:0]}) stays bit-identical across the flip. FAIL-FIRST: the old LOW15 start decode dropped the bit, so two SADs differing only in it decoded to the same walk and gfx_walk_page never set. Sections 9/10b pin NP2kai's four-partition walk (partitions 3 and 4 are the TEXTW parameter-RAM bytes 8..15, and makegrph walks 1-2-3-4-1 until the screen is full), and section 14 pins the slave SYNC's vertical graphics window (NP2kai vram/dispsync.c dispsync_renewalvertical: the walk starts at grph_vbp = slave VBP - master VBP and the graphics end at grphymax = AL + grph_vbp).
+// The GDC2 command path at 0xA2/0xA0 for SCROLL: TH01's and master.lib's eight-parameter transaction lands in the graphics GDC's two display partitions, the firmware's own four-parameter transaction (BANK6@0x788F-0x78C5) leaves partition 2 alone as the machine does, the resulting display start address is the games' own (line*40 words, with partition 2 wrapping the top line in at address 0), the firmware's own CSRFORM write (0xA2 <- 0x4B then one 0xA0 byte, BANK6@0x787e-0x788c) is captured and the address counter advances one 640-dot line per raster line when its line repeat is 1 (640x400) and holds each GDC line for two raster lines when it is 2 (640x200) - the step that fills a 400-line raster from a 200-GDC-line program, keyed on the slave CSRFORM and not on mode1[4] (port 0x68 bit 4), which master.lib's own 200-line routine clears after the mode set so the two registers disagree in both directions (Thexder and Touhou shapes benched) - with the armed VSYNC IRQ still firing once per frame in the 200-line mode and the address wrapping inside the 32 KiB plane, the 0xA4 display page is bit 15 of it, and the status protocol the games and the ITF wait on (bit 2 empty, bit 1 full) reads true before, during and after the transaction, with a status read in mid-stream disturbing nothing; and the partition ARITHMETIC (datapaths.md F3/F4/F5): the partition lengths count RASTER lines with the repeat phase restarting per partition (NP2kai makegrph.c:143-167, MAME upd7220.cpp:1857-1903 - fail-first against the old GDC-line boundary at raster 2*lines1), a zero-length SECOND partition takes over at the boundary and runs to the screen end (MAME's len==0 -> 0x400, real-HW-verified), and the CSRFORM line repeat covers lr = 1..32 rather than just {1,2}; and the SCROLL length word's im bit - bit 14 of EACH partition's LENGTH word - selects that partition's address step (NP2kai vram/makegrph.c:146-148 reads it per partition from para[GDC_SCROLL + gpos + 2] and doubles the pitch at 0, MAME upd7220.cpp:611/624 takes BIT(m_ra[index * 4 + 3], 6) and pc9821.cpp:103-106 shifts by im ^ 1), which is 2 x PITCH in the machine's own im = 0 state and PITCH at the 5 MHz im = 1 a game builds from BIOS work-area 0000:054D bit 2 (rec98/th01/hardware/scrollup.cpp:22-27) - pinned in both directions, one partition's bit each way, so a hard-wired step or a swap of the two partitions' bits cannot pass. It does NOT cover the graphics scanout that consumes the address, the START/STOP/SYNC/CSRW/TEXTW/VECTW commands the firmware issues on 0xA2, or a real FIFO depth. Section 8 pins a same-cycle race (race-idiom #34): a configuration write whose strobe covers the frame_end snapshot edge is DEFERRED to the next frame end and never dropped, swept across the four clk around the snapshot edge with the bus idle in between. Section 13 pins the PACKED page flip: the SCROLL start word's bit 14 is the walk's bit 15 (gfx_walk_page - NP2kai's packed arm walks LOW16(vad << 1) over the full 512 KiB with the page in that bit, vram/makegrex.c:199; MAME's flashb note names the flip register - double buffering at SAD $38fc and $fffc - pc9821.cpp:108-113) and it takes effect at the frame boundary with the rest of the SCROLL block - the uPD7220 reads the SAD at the start of the display scanning process, the machine's full-frames swap - while the planar view ({display page, walk[14:0]}) stays bit-identical across the flip. FAIL-FIRST: the old LOW15 start decode dropped the bit, so two SADs differing only in it decoded to the same walk and gfx_walk_page never set. Sections 9/10b pin NP2kai's four-partition walk (partitions 3 and 4 are the TEXTW parameter-RAM bytes 8..15, and makegrph walks 1-2-3-4-1 until the screen is full), and section 14 pins the slave SYNC's vertical graphics window (NP2kai vram/dispsync.c dispsync_renewalvertical: the walk starts at grph_vbp = slave VBP - master VBP and the graphics end at grphymax = AL + grph_vbp). Section 16 pins the PLANAR walk's step: it is the guest's slave PITCH command (0x47) byte, doubled when the partition's im bit is clear and masked to an even byte (NP2kai vram/makegrph.c:147-151) - PITCH 80 with im = 1, the 5 MHz state NP2kai's BIOS mode set writes (bios/bios18.c:483-487), steps 80 bytes, PITCH 80 with im = 0 steps 160, and PITCH 40 is the reset 40/80 again - FAIL-FIRST against the constant 40-word pitch, which stepped 40 bytes at im = 1 whatever PITCH said and showed each line's two halves side by side.
 //
-// The GDC2 command path at 0xA2/0xA0 for SCROLL: TH01's and master.lib's eight-parameter transaction lands in the graphics GDC's two display partitions, the firmware's own four-parameter transaction (BANK6@0x788F-0x78C5) leaves partition 2 alone as the machine does, the resulting display start address is the games' own (line*40 words, with partition 2 wrapping the top line in at address 0), the firmware's own CSRFORM write (0xA2 <- 0x4B then one 0xA0 byte, BANK6@0x787e-0x788c) is captured and the address counter advances one 640-dot line per raster line when its line repeat is 1 (640x400) and holds each GDC line for two raster lines when it is 2 (640x200) - the step that fills a 400-line raster from a 200-GDC-line program, keyed on the slave CSRFORM and not on mode1[4] (port 0x68 bit 4), which master.lib's own 200-line routine clears after the mode set so the two registers disagree in both directions (Thexder and Touhou shapes benched) - with the armed VSYNC IRQ still firing once per frame in the 200-line mode and the address wrapping inside the 32 KiB plane, the 0xA4 display page is bit 15 of it, and the status protocol the games and the ITF wait on (bit 2 empty, bit 1 full) reads true before, during and after the transaction, with a status read in mid-stream disturbing nothing; and the partition ARITHMETIC (datapaths.md F3/F4/F5): the partition lengths count RASTER lines with the repeat phase restarting per partition (NP2kai makegrph.c:143-167, MAME upd7220.cpp:1857-1903 - fail-first against the old GDC-line boundary at raster 2*lines1), a zero-length SECOND partition takes over at the boundary and runs to the screen end (MAME's len==0 -> 0x400, real-HW-verified), and the CSRFORM line repeat covers lr = 1..32 rather than just {1,2}; and the SCROLL length word's im bit - bit 14 of EACH partition's LENGTH word - selects that partition's address step (NP2kai vram/makegrph.c:146-148 reads it per partition from para[GDC_SCROLL + gpos + 2] and doubles the pitch at 0, MAME upd7220.cpp:611/624 takes BIT(m_ra[index * 4 + 3], 6) and pc9821.cpp:103-106 shifts by im ^ 1), which is 2 x PITCH in the machine's own im = 0 state and PITCH at the 5 MHz im = 1 a game builds from BIOS work-area 0000:054D bit 2 (rec98/th01/hardware/scrollup.cpp:22-27) - pinned in both directions, one partition's bit each way, so a hard-wired step or a swap of the two partitions' bits cannot pass. It does NOT cover the graphics scanout that consumes the address, the START/STOP/SYNC/CSRW/TEXTW/VECTW commands the firmware issues on 0xA2, or a real FIFO depth. Section 8 pins the review's F1 race (race-idiom #34): a configuration write whose strobe covers the frame_end snapshot edge is DEFERRED to the next frame end and never dropped, swept across the four clk around the snapshot edge with the bus idle in between. Section 13 pins the PACKED page flip: the SCROLL start word's bit 14 is the walk's bit 15 (gfx_walk_page - NP2kai's packed arm walks LOW16(vad << 1) over the full 512 KiB with the page in that bit, vram/makegrex.c:199; MAME's flashb note names the flip register - double buffering at SAD $38fc and $fffc - pc9821.cpp:108-113) and it takes effect at the frame boundary with the rest of the SCROLL block - the uPD7220 reads the SAD at the start of the display scanning process, the machine's full-frames swap - while the planar view ({display page, walk[14:0]}) stays bit-identical across the flip. FAIL-FIRST: the old LOW15 start decode dropped the bit, so two SADs differing only in it decoded to the same walk and gfx_walk_page never set. Sections 9/10b pin NP2kai's four-partition walk (partitions 3 and 4 are the TEXTW parameter-RAM bytes 8..15, and makegrph walks 1-2-3-4-1 until the screen is full), and section 14 pins the slave SYNC's vertical graphics window (NP2kai vram/dispsync.c dispsync_renewalvertical: the walk starts at grph_vbp = slave VBP - master VBP and the graphics end at grphymax = AL + grph_vbp).
+// The GDC2 command path at 0xA2/0xA0 for SCROLL: TH01's and master.lib's eight-parameter transaction lands in the graphics GDC's two display partitions, the firmware's own four-parameter transaction (BANK6@0x788F-0x78C5) leaves partition 2 alone as the machine does, the resulting display start address is the games' own (line*40 words, with partition 2 wrapping the top line in at address 0), the firmware's own CSRFORM write (0xA2 <- 0x4B then one 0xA0 byte, BANK6@0x787e-0x788c) is captured and the address counter advances one 640-dot line per raster line when its line repeat is 1 (640x400) and holds each GDC line for two raster lines when it is 2 (640x200) - the step that fills a 400-line raster from a 200-GDC-line program, keyed on the slave CSRFORM and not on mode1[4] (port 0x68 bit 4), which master.lib's own 200-line routine clears after the mode set so the two registers disagree in both directions (Thexder and Touhou shapes benched) - with the armed VSYNC IRQ still firing once per frame in the 200-line mode and the address wrapping inside the 32 KiB plane, the 0xA4 display page is bit 15 of it, and the status protocol the games and the ITF wait on (bit 2 empty, bit 1 full) reads true before, during and after the transaction, with a status read in mid-stream disturbing nothing; and the partition ARITHMETIC (datapaths.md F3/F4/F5): the partition lengths count RASTER lines with the repeat phase restarting per partition (NP2kai makegrph.c:143-167, MAME upd7220.cpp:1857-1903 - fail-first against the old GDC-line boundary at raster 2*lines1), a zero-length SECOND partition takes over at the boundary and runs to the screen end (MAME's len==0 -> 0x400, real-HW-verified), and the CSRFORM line repeat covers lr = 1..32 rather than just {1,2}; and the SCROLL length word's im bit - bit 14 of EACH partition's LENGTH word - selects that partition's address step (NP2kai vram/makegrph.c:146-148 reads it per partition from para[GDC_SCROLL + gpos + 2] and doubles the pitch at 0, MAME upd7220.cpp:611/624 takes BIT(m_ra[index * 4 + 3], 6) and pc9821.cpp:103-106 shifts by im ^ 1), which is 2 x PITCH in the machine's own im = 0 state and PITCH at the 5 MHz im = 1 a game builds from BIOS work-area 0000:054D bit 2 (rec98/th01/hardware/scrollup.cpp:22-27) - pinned in both directions, one partition's bit each way, so a hard-wired step or a swap of the two partitions' bits cannot pass. It does NOT cover the graphics scanout that consumes the address, the START/STOP/SYNC/CSRW/TEXTW/VECTW commands the firmware issues on 0xA2, or a real FIFO depth. Section 8 pins a same-cycle race (race-idiom #34): a configuration write whose strobe covers the frame_end snapshot edge is DEFERRED to the next frame end and never dropped, swept across the four clk around the snapshot edge with the bus idle in between. Section 13 pins the PACKED page flip: the SCROLL start word's bit 14 is the walk's bit 15 (gfx_walk_page - NP2kai's packed arm walks LOW16(vad << 1) over the full 512 KiB with the page in that bit, vram/makegrex.c:199; MAME's flashb note names the flip register - double buffering at SAD $38fc and $fffc - pc9821.cpp:108-113) and it takes effect at the frame boundary with the rest of the SCROLL block - the uPD7220 reads the SAD at the start of the display scanning process, the machine's full-frames swap - while the planar view ({display page, walk[14:0]}) stays bit-identical across the flip. FAIL-FIRST: the old LOW15 start decode dropped the bit, so two SADs differing only in it decoded to the same walk and gfx_walk_page never set. Sections 9/10b pin NP2kai's four-partition walk (partitions 3 and 4 are the TEXTW parameter-RAM bytes 8..15, and makegrph walks 1-2-3-4-1 until the screen is full), and section 14 pins the slave SYNC's vertical graphics window (NP2kai vram/dispsync.c dispsync_renewalvertical: the walk starts at grph_vbp = slave VBP - master VBP and the graphics end at grphymax = AL + grph_vbp). Section 16 pins the PLANAR walk's step: it is the guest's slave PITCH command (0x47) byte, doubled when the partition's im bit is clear and masked to an even byte (NP2kai vram/makegrph.c:147-151) - PITCH 80 with im = 1, the 5 MHz state NP2kai's BIOS mode set writes (bios/bios18.c:483-487), steps 80 bytes, PITCH 80 with im = 0 steps 160, and PITCH 40 is the reset 40/80 again - FAIL-FIRST against the constant 40-word pitch, which stepped 40 bytes at im = 1 whatever PITCH said and showed each line's two halves side by side.
 
 module tb_pc9821_gdc2_scroll;
   reg clk_sys = 0;
@@ -15,7 +15,6 @@ module tb_pc9821_gdc2_scroll;
   reg io_rd = 0;
   reg [7:0] io_addr = 0, io_din = 0;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   wire gfx_access_page;
   wire [15:0] gfx_line_addr;
   wire gfx_walk_page;   // the PACKED walk's page bit (SCROLL start word bit 14): section 13's subject
@@ -23,8 +22,6 @@ module tb_pc9821_gdc2_scroll;
   reg [7:0] tram_cpu_din = 0;
   reg tram_cpu_we = 0;
   wire [7:0] tram_cpu_dout;
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   reg [12:0] cg_win_store_addr = 0;
   reg [7:0] cg_win_store_din = 0;
   reg cg_win_store_we = 0;
@@ -35,14 +32,14 @@ module tb_pc9821_gdc2_scroll;
   reg font_ld_we = 0;
   wire vsync_active, disp_on;
   wire vsync_irq_arm, vsync_irq;
-  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on (r13/321); parked for (.*)
+  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on; parked for (.*)
   // The configuration-image seed (pc9821_gdc_text's cfg_* block / pc9821_iobus's memory-switch
   // strap cell): 0 = no seed, which is what this bench wants. tb_pc9821_cg_read_path drives it.
   wire [6:0] cfg_ram_mib = 7'd0;
   wire       cfg_seed_en = 1'b0;
   wire       cfg_seed_reload = 1'b0;
   // The text plane leaves the GDC as a colour and two opacity flags now, and the
-  // graphics palette as a snapshot of its registers (r12/33 D3+D4). This bench
+  // graphics palette as a snapshot of its registers. This bench
   // drives the GDC2 command path, so they are declared only because the `.*`
   // instantiation below matches ports by name.
   wire        text_opaque, text_cell;
@@ -51,7 +48,7 @@ module tb_pc9821_gdc2_scroll;
   wire        pix_h_active, pix_v_active;
   wire        gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB, r13/225 #2).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -71,11 +68,11 @@ module tb_pc9821_gdc2_scroll;
   wire [15:0] dbg_sad;
   wire  [7:0] dbg_pitch;
   wire        dbg_col40, dbg_disp;
-  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter (r13/305)
+  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter
 
   // The character generator's window port and its glyph fetch. This bench drives
   // the GDC2 command path only, so they are tied off; they are declared because
-  // pc9821_gdc_text carries them (the read path added in r12/21) and the `.*`
+  // pc9821_gdc_text carries them (its read path) and the `.*`
   // instantiation below matches ports by name.
   wire  [4:0]  cg_win_byte_sel = 5'd0;
   wire         cg_win_rd       = 1'b0;
@@ -160,8 +157,8 @@ module tb_pc9821_gdc2_scroll;
   // snapshot has taken a write made before the call. This is also the machine's
   // own timing contract: the games write their SCROLL under a VSYNC wait.
   // The wait is on the raster's own frame_end, NOT on a frame_cnt change: frame_cnt is the
-  // character blink's count and advances once per CSRFORM `timing` frames (audit
-  // rtl-audit-video F1), so it is no longer a frame counter.
+  // character blink's count and advances once per CSRFORM `timing` frames,
+  // so it is no longer a frame counter.
   task automatic next_frame();
     begin
       while (dut.u_crtc.frame_end) @(negedge clk_sys);
@@ -172,8 +169,8 @@ module tb_pc9821_gdc2_scroll;
 
   // Sample the graphics display address for decode line `ln`. The line-buffer pipeline
   // delivers that address two raster lines after the tick that latched it (pc9821_gdc_text's
-  // SCANOUT_LINE_LATENCY, r13/75), so decode(ln) is presented at raster line (ln - 2) mod
-  // VTOTAL. r13/83-video-fix.md owns the compensation; this samples where the raster sees it.
+  // SCANOUT_LINE_LATENCY), so decode(ln) is presented at raster line (ln - 2) mod
+  // VTOTAL. The scanout owns the compensation; this samples where the raster sees it.
   task automatic check_at_line(input [8:0] ln, input [15:0] exp,
                                input [8*100-1:0] what);
     reg [9:0] r;
@@ -238,7 +235,7 @@ module tb_pc9821_gdc2_scroll;
     write_io(8'hA0, 8'h00);   // dp1sta high
     // A status read in the middle of the parameter stream must change nothing:
     // NP2kai drains its FIFO on a status read, which is an emulator artefact
-    // rather than hardware (r12/18 D5), and real code does poll here.
+    // rather than hardware, and real code does poll here.
     read_io(8'hA0, value);
     if (!value[2]) fail("FIFO-empty bit cleared while parameters were arriving");
     write_io(8'hA0, 8'hF0);   // dp1lin low
@@ -270,7 +267,7 @@ module tb_pc9821_gdc2_scroll;
     if (dut.u_gdc2.v_glines1 !== 14'd399)  fail("partition 1 line count did not reach the display");
     if (dut.u_gdc2.v_gstart2 !== 16'h0000) fail("partition 2 start did not reach the display");
     // Partition 2's line count is not kept: only its start is read, and the switch is bounded
-    // by partition 1's count and the screen height (r13/225 s2.4). The address checks below
+    // by partition 1's count and the screen height. The address checks below
     // are what prove the partition 2 entry is live.
     check_at_line(9'd0,   16'h0050, "scrolled: line 0");
     check_at_line(9'd1,   16'h00A0, "scrolled: line 1");
@@ -657,7 +654,7 @@ module tb_pc9821_gdc2_scroll;
     check_at_line(9'd201, 16'h2028, "im = 1 partition 2 steps one PITCH per line");
     check_at_line(9'd399, 16'h3F18, "im = 1 partition 2 runs to the screen end at one PITCH");
 
-    // ---- 8. review F1 / race-idiom #34: the frame-boundary configuration
+    // ---- 8. race-idiom #34: the frame-boundary configuration
     // snapshot DEFERS a write it raced, it does not drop it. ----
     // The frame_end snapshot copies the configuration registers with
     // non-blocking assignments, so a write whose strobe covers the frame_end
@@ -845,6 +842,41 @@ module tb_pc9821_gdc2_scroll;
     write_io(8'hA2, 8'h4B); write_io(8'hA0, 8'h00);
     write_io(8'h6A, 8'h07); write_io(8'h6A, 8'h20); write_io(8'h6A, 8'h06);
 
+    // ---- 16. the PLANAR walk's step is the guest's PITCH, selected by im ----
+    // NP2kai vram/makegrph.c:147-151: `pitch = gdc.s.para[GDC_PITCH]; if (!(remain & (1 <<
+    // 14))) pitch <<= 1; pitch &= 0xfe;` - the slave PITCH command's byte (0x47, one
+    // parameter), doubled when the partition's im bit is clear. NP2kai's BIOS 5 MHz mode set
+    // writes PITCH 80 AND the im bit (bios/bios18.c:483-487 `gdc.s.para[GDC_PITCH] = 80;` ..
+    // `gdc.s.para[GDC_SCROLL+3] = 0x40;`), so that state steps 80 bytes, one 640-dot line.
+    // FAIL-FIRST: the constant 40-word pitch stepped 40 bytes at im = 1 whatever PITCH said
+    // (raster 1 at 0x0028 instead of 0x0050), showing each line's two halves side by side.
+    write_io(8'hA2, 8'h47); write_io(8'hA0, 8'h50);  // slave PITCH = 80
+    write_io(8'hA2, 8'h70);
+    write_io(8'hA0, 8'h00); write_io(8'hA0, 8'h00);  // start1 = 0
+    write_io(8'hA0, 8'h80); write_io(8'hA0, 8'h4C);  // length1 = 200 << 4, im = 1
+    write_io(8'hA0, 8'h00); write_io(8'hA0, 8'h00);  // start2 = 0
+    write_io(8'hA0, 8'h80); write_io(8'hA0, 8'h0C);  // length2 = 200 << 4, im = 0
+    next_frame();
+    next_frame();
+    check_at_line(9'd0,   16'h0000, "PITCH 80 im = 1: raster 0");
+    check_at_line(9'd1,   16'h0050, "PITCH 80 im = 1: one PITCH (80 bytes) per line, not the reset 40");
+    check_at_line(9'd199, 16'h3E30, "PITCH 80 im = 1: partition 1's 199th line (199 x 80)");
+    check_at_line(9'd200, 16'h0000, "PITCH 80 im = 0: partition 2 at its start");
+    check_at_line(9'd201, 16'h00A0, "PITCH 80 im = 0: 2 x PITCH (160 bytes) per line");
+    check_at_line(9'd399, 16'h7C60, "PITCH 80 im = 0: partition 2's 199th line (199 x 160)");
+    // An odd PITCH is masked to an even byte (`pitch &= 0xfe`) at im = 1.
+    write_io(8'hA2, 8'h47); write_io(8'hA0, 8'h51);  // slave PITCH = 81
+    next_frame();
+    next_frame();
+    check_at_line(9'd1,   16'h0050, "PITCH 81 im = 1: masked to 80 bytes");
+    check_at_line(9'd201, 16'h00A2, "PITCH 81 im = 0: 2 x 81 = 162 bytes");
+    // Back to the reset PITCH 40: the step follows the register, not a latch of the 80.
+    write_io(8'hA2, 8'h47); write_io(8'hA0, 8'h28);
+    next_frame();
+    next_frame();
+    check_at_line(9'd1,   16'h0028, "PITCH 40 im = 1: 40 bytes again");
+    check_at_line(9'd201, 16'h0050, "PITCH 40 im = 0: 80 bytes again");
+
     // ==== VERDICT ====
     if (errors == 0) begin
       $display("TB_PC9821_GDC2_SCROLL: PASS");
@@ -855,10 +887,10 @@ module tb_pc9821_gdc2_scroll;
 
   // In-bench watchdog. A frame here is 848 x 440 = 373,120 dots, so the
   // frames this bench walks through (sections 1-12 plus section 8's four
-  // two-frame alignment sweeps) are ~17 M cycles = 170 ms of simulated time;
-  // 300 ms leaves 2x headroom over that and over any future section.
+  // two-frame alignment sweeps) were ~17 M cycles = 170 ms of simulated time; with
+  // sections 13-16 the bench finishes at ~270 ms, and 400 ms leaves ~1.5x headroom.
   initial begin
-    #300_000_000;
+    #400_000_000;
     $fatal(1, "TB_PC9821_GDC2_SCROLL: TIMEOUT");
   end
 

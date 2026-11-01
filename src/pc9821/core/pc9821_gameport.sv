@@ -32,7 +32,7 @@ module pc9821_gameport #(
     // fields below, and an undeclared status range is hard-wired to 0, so today they are
     // dis = 2'b00 (both sticks present), mode = 2'b00 (two buttons each) and timed = 0
     // (the IBM timed one-shot) - exactly the PC-98 pad this machine has. The arms are not
-    // dead code, they are unreachable: exposing them is an OWNER DECISION, priced at
+    // dead code, they are unreachable: exposing them is an open decision, priced at
     // +28 ALMs module-alone, and upstream
     // ao486 exposes all of its joystick fields (`P2oCD,P2oFG,P2oQR,P2oH,P2oI`). The two
     // fields that shape the analog words in z486_mister.sv (status[48:47] and the

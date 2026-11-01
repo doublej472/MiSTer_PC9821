@@ -14,9 +14,14 @@ module prefetch
     output     [63:0] k1q,        // registered raw window at the D1 cursor
     output     [63:0] k1q_early,  // speculative window for synchronous entry ROM
     output     [5:0]  k1q_avail,      // bytes fetched beyond the D1 cursor
+    output     [5:0]  k1q_avail_raw,  //   = min(k1q_avail_raw, k1q_avail_lim): the
+    output     [5:0]  k1q_avail_lim,  //   buffered bytes and the CS-limit bound
     input      [3:0]  k1p_adv,        // D1 cursor advance this cycle (0-11: a
                                      //   prefix, or the instruction rest at handoff)
     input      [3:0]  k1p_preread_adv,// structural advance independent of D2 availability
+    input      [3:0]  k1p_adv_u,      // the advance if D1 steps (availability aside)
+    input             k1p_step_ok,    // k1p_preread_adv == (k1p_step_ok ? k1p_adv_u : 0)
+    input             k1p_commit_u,   // k1p_adv == (k1p_commit_u ? k1p_adv_u : 0)
     output     [31:0] k2q,       // 4 bytes at pop_cursor + k2p_off
     output     [5:0]  k2q_avail,     // bytes fetched beyond that point
     input      [4:0]  k2p_off,       // literal offset from the pop cursor
@@ -157,13 +162,14 @@ wire [3:0] k1p_lead_words = k1p_word - pf_rptr;
 wire [6:0] k1p_lead = {1'b0, k1p_lead_words, 2'b00} + {5'b00000, k1p_boff} -
                      {5'b00000, pf_byte_offset};
 wire [7:0] k1q_avail_s = {2'b00, pf_byte_count} - {1'b0, k1p_lead};
-wire [5:0] k1q_avail_raw = k1q_avail_s[7] ? 6'd0 : k1q_avail_s[5:0];
+assign k1q_avail_raw = k1q_avail_s[7] ? 6'd0 : k1q_avail_s[5:0];
 // The CS limit bounds both decode windows (Intel486 PRM: an instruction any
 // byte of which lies beyond the code-segment limit raises #GP(0); in real
 // mode the limit is 0FFFFh and the fault is interrupt 13).
 wire [7:0] k1_lim_s = {2'b00, fetch_limit_rem} - {1'b0, k1p_lead};
 wire [5:0] k1_lim   = k1_lim_s[7] ? 6'd0 : k1_lim_s[5:0];
 assign k1q_avail = (k1q_avail_raw > k1_lim) ? k1_lim : k1q_avail_raw;
+assign k1q_avail_lim = k1_lim;
 
 // D2 literal window: pop_cursor + k2p_off, over REGISTERED queue words.
 wire [5:0] k2p_sum  = {4'b0000, pf_byte_offset} + {1'b0, k2p_off};
@@ -309,6 +315,25 @@ always_comb begin
             queue_fl[32*j +: 32] = line_word(spec_hit_line, 2'(j));
 end
 
+// The stepped window is formed from the step's size alone (k1p_adv_u: the
+// opcode and the length tables), and the decoder's byte-availability verdict
+// (k1p_step_ok / k1p_commit_u) picks it or the held window last, so the
+// pf pointers -> k1q_avail -> d1_struct_ready path ends at that pick instead
+// of running through the cursor adder and the window mux. A seed (empty
+// queue: nothing is in view, so D1 takes no step) rebases the cursor as
+// before. tests/equiv/kpre_window_split.v proves both windows equal to the
+// k1p_preread_adv / k1p_adv forms; the reference fuses below hold them.
+logic [3:0] k1p_u_word;
+logic [1:0] k1p_u_boff;
+wire  [3:0] k1p_u_sum = {2'b00, k1p_boff} + k1p_adv_u;
+always_comb begin
+    k1p_u_word = k1p_word + {2'b00, k1p_u_sum[3:2]};
+    k1p_u_boff = k1p_u_sum[1:0];
+    if (seed_now) begin
+        k1p_u_word = k1p_word + seed_delta;
+        k1p_u_boff = pf_fetch_addr[1:0];
+    end
+end
 logic [3:0]  rptr_next;
 logic [3:0]  wptr_next;
 logic [1:0]  byte_offset_next;
@@ -320,8 +345,13 @@ always_comb begin
     rptr_next = pf_rptr;
     wptr_next = pf_wptr;
     byte_offset_next = pf_byte_offset;
-    k1p_word_next = k1p_word + {2'b00, k1p_sum[3:2]};
-    k1p_boff_next = k1p_sum[1:0];
+    // The committed D1 cursor follows the same pick as k1q_next: the stepped
+    // cursor (k1p_u_word/boff, the seed rebase included) when D1 commits its
+    // step, else the held one - the late k1p_adv (D2's issue, q_flush) no
+    // longer runs through the cursor adder. tests/equiv/kadv_cursor.v proves
+    // it equal to k1p_word + (k1p_boff + k1p_adv) and the seed rebase.
+    k1p_word_next = (seed_now || k1p_commit_u) ? k1p_u_word : k1p_word;
+    k1p_boff_next = (seed_now || k1p_commit_u) ? k1p_u_boff : k1p_boff;
     // The queue words come from the two next-queue views above: the fill
     // without a flush, the seeded target line on a flush that hits it.
     for (int k = 0; k < 8; k++)
@@ -356,13 +386,32 @@ always_comb begin
         // aligned fill places it at the pop cursor.
         rptr_next = pf_rptr + seed_delta;
         wptr_next = pf_wptr + seed_delta;
-        k1p_word_next = k1p_word_next + seed_delta;
         byte_offset_next = pf_fetch_addr[1:0];
-        k1p_boff_next = pf_fetch_addr[1:0];
     end
 end
 
 // synthesis translate_off
+// The committed cursor against its adder form (k1p_word + (k1p_boff + k1p_adv),
+// the flush origin, the seed rebase), which the window references build on.
+logic [3:0] ref_k1p_word_next;
+logic [1:0] ref_k1p_boff_next;
+always_comb begin
+    ref_k1p_word_next = k1p_word + {2'b00, k1p_sum[3:2]};
+    ref_k1p_boff_next = k1p_sum[1:0];
+    if (q_flush) begin
+        ref_k1p_word_next = {2'b00, flush_word};
+        ref_k1p_boff_next = k1pj_boff;
+    end
+    if (seed_now) begin
+        ref_k1p_word_next = ref_k1p_word_next + seed_delta;
+        ref_k1p_boff_next = pf_fetch_addr[1:0];
+    end
+end
+always @(posedge clk)
+    if (reset_n && ((k1p_word_next !== ref_k1p_word_next) || (k1p_boff_next !== ref_k1p_boff_next)))
+        $fatal(1, "PF: D1 cursor %0d.%0d is not the adder form %0d.%0d (adv=%0d commit=%b seed=%b)",
+               k1p_word_next, k1p_boff_next, ref_k1p_word_next, ref_k1p_boff_next,
+               k1p_adv, k1p_commit_u, seed_now);
 reg PF_CUR = 1'b0;
 initial if ($test$plusargs("pf_cur")) PF_CUR = 1'b1;
 always @(posedge clk) begin
@@ -435,27 +484,34 @@ wire [63:0] k1q_flush_next = d1_window(queue_fl, {2'b00, spec_off[3:2]}, spec_of
 // Run the entry-table cursor from structural decode alone. If the real D1
 // cursor is held by D2, the decoder keeps the prior table output; therefore
 // this address never needs issue, VIPT, paging, or execution readiness.
-logic [3:0] k1p_preread_word;
-logic [1:0] k1p_preread_boff;
-always_comb begin
-    k1p_preread_word = k1p_word + {2'b00, k1p_preread_sum[3:2]};
-    k1p_preread_boff = k1p_preread_sum[1:0];
-    if (seed_now) begin
-        k1p_preread_word = k1p_preread_word + seed_delta;
-        k1p_preread_boff = pf_fetch_addr[1:0];
-    end
-end
-
-wire [63:0] k1q_preread_nf = d1_window(queue_nf, k1p_preread_word, k1p_preread_boff);
+wire [63:0] k1q_step_nf = d1_window(queue_nf, k1p_u_word, k1p_u_boff);
+wire [63:0] k1q_preread_nf = (seed_now || k1p_step_ok) ? k1q_step_nf : k1q_hold_next;
 wire [63:0] k1q_preread_next = q_flush ? k1q_flush_next : k1q_preread_nf;
-assign k1q_early = k1q_preread_next;
+// The entry ROM reads only the window's first byte. On a flush that byte is
+// always the target line's byte at spec_off (the window's first word is slot
+// spec_off[3:2], which queue_fl always seeds from the line), so it is formed
+// from both line candidates and the late spec_data_now (an icache hit's
+// pf_ack_edge) picks it last, instead of selecting 128 line bits before the
+// queue_fl seed, the word and byte aligners. tests/equiv/flush_byte0_late.v
+// proves it equal to k1q_flush_next[7:0] for every input.
+wire [7:0] flush_byte0_ack  = pf_rdata[{spec_off, 3'b000} +: 8];
+wire [7:0] flush_byte0_held = spec_line[{spec_off, 3'b000} +: 8];
+wire [7:0] k1q_flush_byte0  = spec_data_now ? flush_byte0_ack : flush_byte0_held;
+assign k1q_early = {k1q_preread_next[63:8],
+                    q_flush ? k1q_flush_byte0 : k1q_preread_nf[7:0]};
 
 // q_flush gives both cursor views the same redirected origin. Otherwise the
 // real cursor advances exactly when structural preread and committed advance
-// agree; disagreement means D2 held the handoff.
-wire k1p_commit_preread = q_flush || (k1p_adv == k1p_preread_adv);
+// agree (k1p_commit_u); disagreement means D2 held the handoff.
 wire [63:0] k1q_next = q_flush ? k1q_flush_next :
-                       (k1p_adv == k1p_preread_adv) ? k1q_preread_nf : k1q_hold_next;
+                       (seed_now || k1p_commit_u) ? k1q_step_nf : k1q_hold_next;
+// synthesis translate_off
+// The split's premise: a seed cycle (empty queue) has no D1 step.
+always @(posedge clk)
+    if (reset_n && seed_now && (k1p_step_ok || (k1p_adv != 4'd0) || (k1p_preread_adv != 4'd0)))
+        $fatal(1, "PF: D1 steps in a seed cycle (ok=%b adv=%0d pre=%0d)",
+               k1p_step_ok, k1p_adv, k1p_preread_adv);
+// synthesis translate_on
 
 // synthesis translate_off
 wire [31:0] k1p_reference_word_cur = queue_next[ptr_idx(k1p_word_next)];

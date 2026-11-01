@@ -22,7 +22,7 @@
 // The FAIL-FIRST property is recorded by the lane: with the mask placement removed (the
 // WRITE command driving 00 on A[12:11]) but ADQM still selecting the masked arm, check 1
 // fails on the first partial pattern - the RTL would write the whole half and smash the
-// disabled bytes. That run's transcript is in the lane report.
+// disabled bytes.
 
 module tb_pc9821_sdram_adqm;
   localparam integer FREQ = 50_000_000;
@@ -65,7 +65,6 @@ module tb_pc9821_sdram_adqm;
   // ==== DUT ====
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .ADQM(1'b1),          // the MiSTer standard: the byte mask rides A[12:11]
       .FAST_GRADE(1'b1)
   ) dut (
@@ -88,14 +87,13 @@ module tb_pc9821_sdram_adqm;
 
   // The chip model now ties the chip's DQM to A[11]/A[12] and applies the mask (see its
   // header), so a masked WRITE that arrives with the wrong pins is caught by the content.
-  sdram_chip_model #(.CAS(CAS), .T_RP(T_RP), .T_WR(T_WR)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(T_RP), .T_WR(T_WR), .FREQ_HZ(FREQ), .GRADE(6)) chip (
       .clk(clk), .DQ(DQ), .A(SA), .BA(SBA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
 
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .ADQM(1'b0),          // the DQM-less reference: partial stores read-modify-write
       .FAST_GRADE(1'b1)
   ) dut_r (
@@ -116,7 +114,7 @@ module tb_pc9821_sdram_adqm;
       .SDRAM_CKE(CKE_r)
   );
 
-  sdram_chip_model #(.CAS(CAS), .T_RP(T_RP), .T_WR(T_WR)) chip_r (
+  sdram_chip_model #(.CAS(CAS), .T_RP(T_RP), .T_WR(T_WR), .FREQ_HZ(FREQ), .GRADE(6)) chip_r (
       .clk(clk), .DQ(DQ_r), .A(SA_r), .BA(SBA_r),
       .nRAS(nRAS_r), .nCAS(nCAS_r), .nWE(nWE_r), .nCS(nCS_r)
   );

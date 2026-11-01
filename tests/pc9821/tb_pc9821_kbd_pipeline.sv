@@ -1,30 +1,30 @@
-// tb_pc9821_kbd_pipeline — the keyboard event pipeline's DEPTH as a pinned contract, and
+// tb_pc9821_kbd_pipeline - the keyboard event pipeline's DEPTH as a pinned contract, and
 // the event STREAM across it.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_KBD_PIPELINE:
-// The keyboard's event pipeline depth is a PINNED CONTRACT, not a comment: a ps2_key toggle edge posts its FIFO byte on the THIRD clk_sys after the toggle (clk 1 = the translation ROM's registered read, clk 2 = the dedup table's clocked read, clk 3 = the event decision's enqueue), the deliver follows one clk later, and NOTHING is enqueued or delivered on the first two clk_sys. The event STREAM is unchanged across that pipeline: a burst of makes and breaks — including a duplicate make of a key pressed on the previous clk, a locking key, and a back-to-back make/break pair for one key — reaches the guest as exactly the same ordered byte sequence, so the T6 registers-to-MLAB trade moved the decision's cycle and nothing else.
+// The keyboard's event pipeline depth is a PINNED CONTRACT, not a comment: a ps2_key toggle edge posts its FIFO byte on the THIRD clk_sys after the toggle (clk 1 = the translation ROM's registered read, clk 2 = the dedup table's clocked read, clk 3 = the event decision's enqueue), the deliver follows one clk later, and NOTHING is enqueued or delivered on the first two clk_sys. The event STREAM is unchanged across that pipeline: a burst of makes and breaks - including a duplicate make of a key pressed on the previous clk, a locking key, and a back-to-back make/break pair for one key - reaches the guest as exactly the same ordered byte sequence, so the T6 registers-to-MLAB trade moved the decision's cycle and nothing else.
 //
 // ---- the bench's own account of where this expectation comes from ----
 // [source 1: the T6 trade and its approval]
 // `key_down[0:127]` (the M2 mechanical-lock dedup array) was 208 ALMs / 268 ALUTs / 127
-// registers of pc9821_kbd standalone — 46 % of the module, measured with
+// registers of pc9821_kbd standalone - 46 % of the module, measured with
 // tools/res_exp_map.py. Moving it into
 // a block memory is a registers->memory trade with ONE structural consequence: a block
-// RAM's read is registered, so the "is this key already down" comparison — and every signal
-// derived from it — moves one clk_sys later. The owner approved that latency on 2026-09-25
-// (and widened it: up to ~1 ms of added host->core input latency is acceptable for area,
+// RAM's read is registered, so the "is this key already down" comparison - and every signal
+// derived from it - moves one clk_sys later. That latency is accepted
+// (and wider: up to ~1 ms of added host->core input latency is acceptable for area,
 // docs/trade-candidates.md), on the grounds that the keyboard is not on any hot path and
 // the host's USB HID poll dominates the path by milliseconds.
 //
 // [source 2: why the depth is a contract and not a comment]
 // Two existing benches were depth-sensitive and are RE-PINNED by the same change (one
 // settle cycle -> two, with the approval cited in their comments):
-//   * tb_pc9821_kbd.sv    — the FIFO-capacity and overrun checks after 17 send_key calls;
-//   * tb_pc9821_kbd_reset.sv — the "3 queued bytes" count after 4 send_key calls;
-// and tb_pc9821_kbd_reset_race.sv — the bit-3 reset vs a coincident event — moved with the
+//   * tb_pc9821_kbd.sv    - the FIFO-capacity and overrun checks after 17 send_key calls;
+//   * tb_pc9821_kbd_reset.sv - the "3 queued bytes" count after 4 send_key calls;
+// and tb_pc9821_kbd_reset_race.sv - the bit-3 reset vs a coincident event - moved with the
 // event path, because the reset now has to meet the DECISION rather than the enqueue.
 // A re-pinned value with no bench of its own is how a depth becomes folklore, so this bench
 // states the number and fails on the pre-T6 RTL (that is its fail-first evidence: clk 2
@@ -54,7 +54,9 @@ module tb_pc9821_kbd_pipeline;
   reg [10:0] ps2_key = 0;
 
   // ==== DUT ====
-  pc9821_kbd dut (
+  // Shrink the byte-presentation tick so back-to-back keys stay inside read_byte's
+  // budget (the real tick is SYS_CLOCK_HZ / 1280; tb_pc9821_kbd_pace pins the rate).
+  pc9821_kbd #(.XFER_TICK_CYCLES(26'd8)) dut (
       .clk(clk),
       .rst_n(rst_n),
       .cs(cs),
@@ -95,7 +97,7 @@ module tb_pc9821_kbd_pipeline;
   endtask
 
   // One hps_io key event: a fresh ps2_key[10] toggle, two clk_sys wide, so consecutive
-  // send_key calls put their stage-1 clk_sys ADJACENT — which is exactly the back-to-back
+  // send_key calls put their stage-1 clk_sys ADJACENT - which is exactly the back-to-back
   // case the dedup table's bypass exists for.
   task send_key(input pressed, input extended, input [7:0] code);
     begin
@@ -238,22 +240,27 @@ module tb_pc9821_kbd_pipeline;
     send_key(1'b0, 1'b0, 8'h58);
     expect_silent("a CAPS release after the toggle");
 
-    // ---- 4. The reset clears the dedup state (the generation tag): a key that was DOWN
-    //         before the reset is re-announced by its next make instead of being swallowed
-    //         as a duplicate. ----
+    // ---- 4. The 8251 bit-3 keyboard reset KEEPS the dedup state (NP2kai
+    //         keyboard_resetsignal keeps keystat.ref): a key that was DOWN
+    //         before it is not re-announced by a duplicate make, and its own
+    //         break still matches. ----
     send_key(1'b1, 1'b0, 8'h12);   // LShift make -> 0x70
     read_byte(8'h70);
     write_port(1'b1, 8'h3A);       // bit 3 set ...
     write_port(1'b1, 8'h32);       // ... then cleared: the ITF's keyboard reset
     write_port(1'b1, 8'h05);       // re-enable RX/TX (the reset does not touch them)
     send_key(1'b1, 1'b0, 8'h12);   // the SAME key, NO break in between
-    read_byte(8'h70);              // ... and it must DELIVER
-    $display("KBD_PIPE: the reset's generation tag clears the dedup state (re-make delivers)");
+    expect_silent("a duplicate make after the bit-3 reset");
+    send_key(1'b0, 1'b0, 8'h12);   // its break still reaches the guest
+    read_byte(8'hF0);
+    $display("KBD_PIPE: the bit-3 reset keeps the dedup state (duplicate make silent, held break delivered)");
 
     // ---- 5. The sweep is running in the background over the same table. It must not have
-    //         disturbed any of the above: the same key that has now been seen twice is
-    //         still a duplicate when it is pressed a third time without a break. ----
-    send_key(1'b1, 1'b0, 8'h12);   // LShift make AGAIN, NO break: a duplicate
+    //         disturbed any of the above: a NEW press after that break still delivers, and
+    //         a duplicate of it while held is still silent. ----
+    send_key(1'b1, 1'b0, 8'h12);   // a real new press
+    read_byte(8'h70);
+    send_key(1'b1, 1'b0, 8'h12);   // duplicate, no break
     expect_silent("a duplicate LShift make with the sweep running");
     send_key(1'b0, 1'b0, 8'h12);   // its break
     read_byte(8'hF0);

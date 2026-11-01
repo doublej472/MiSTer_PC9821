@@ -7,13 +7,13 @@ Usage:
 GFXBENCH (tools/hwprobe/gfxbench/gfxbench.s) is the frozen raw-window bandwidth
 comparator: 8 x 32 KiB `rep stosw` fills and `rep lodsw` reads per window,
 bracketed by the ARTIC counter at the documented 307200 Hz (machine-confirmed,
-r13/215 section 1.4's raster check) and printed as KiB/s.  One line per window:
+a raster check on the machine) and printed as KiB/s.  One line per window:
 
     TRAM(A0000) WRITE=<kibs> KB/s READ=<kibs> KB/s
 
 WHAT IT DECIDES.  The GVRAM0(A8000) WRITE row refreshes the plain-fill anchor on
-THIS machine (the owner's Xe10, 100 MHz): the long-standing "13.8 MB/s =
-0.145 us/word" figure (r13/61 section 2 via r13/19 section 2) has NO raw capture
+THIS machine (the reference Xe10, 100 MHz): the long-standing "13.8 MB/s =
+0.145 us/word" figure has NO raw capture
 in docs/probes/ and its source does not name which machine produced it, so this
 run is the authoritative one and settles whether that number is machine-portable.
 
@@ -35,7 +35,7 @@ import re
 import sys
 
 NS_PER_TICK = 1e9 / 307_200   # the ARTIC tick, machine-confirmed.
-# Review P2f exemption: this decoder is ARTIC-only (gfxbench never touches the
+# PIT-strap exemption: this decoder is ARTIC-only (gfxbench never touches the
 # PIT), so there is no PIT_HZ strap to cross-check and no sub-tick PIT column.
 
 # The legacy anchor every report quotes: 13.8 MB/s plain GRCG-off fill read as
@@ -83,10 +83,10 @@ def decode(path: str) -> int:
     print()
     if anchor is not None:
         print(f"  THE ANCHOR: GVRAM0 plain-fill write = {anchor / 1000:.4f} us/word on THIS "
-              f"machine,\n    against the legacy {ANCHOR_US_PER_WORD} us/word (13.8 MB/s, "
-              "r13/61 section 2).\n    The legacy figure's capture is not in docs/probes/ and "
-              "its source does not name the\n    machine (r13/136 section 1 says 'the owner's "
-              "machine', unverified); this run on the\n    Xe10 is authoritative and settles "
+              f"machine,\n    against the legacy {ANCHOR_US_PER_WORD} us/word (13.8 MB/s)."
+              "\n    The legacy figure's capture is not in docs/probes/ and "
+              "its source does not name the\n    machine (unverified);"
+              " this run on the\n    Xe10 is authoritative and settles "
               "whether that number is machine-portable.")
     else:
         print("  (no GVRAM0(A8000) WRITE row: the anchor cannot be refreshed from this capture)")

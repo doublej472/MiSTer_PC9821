@@ -1,10 +1,10 @@
-// tb_pc9821_ata_irq_hold — the IRQ level is held until the guest's 0x064E ack;
-// no data-phase or command-issue path may lower it (review ata-ide.md F2).
+// tb_pc9821_ata_irq_hold - the IRQ level is held until the guest's 0x064E ack;
+// no data-phase or command-issue path may lower it.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The IRQ line is level-until-ack exactly as NP2kai's ideio.c holds it: setintr raises and only ideio_i64e's pic_resetirq on a 0x064E status read lowers, so a deferred ISR's 0x0433 source-identification read must still see the 0x02 connect flag after a sector's last word parks the FSM in the read-ahead wait arm - dropping the level there loses the interrupt source and deadlocks READ MULTIPLE at the next block boundary (review ata-ide.md F2). Pinned for the READ MULTIPLE (M=2) wait arm, the WRITE SECTORS per-sector commit, and command issue (NP2kai's command dispatch never lowers it): the level must never fall between a raise and its 0x064E ack.
+// The IRQ line is level-until-ack exactly as NP2kai's ideio.c holds it: setintr raises and only ideio_i64e's pic_resetirq on a 0x064E status read lowers, so a deferred ISR's 0x0433 source-identification read must still see the 0x02 connect flag after a sector's last word parks the FSM in the read-ahead wait arm - dropping the level there loses the interrupt source and deadlocks READ MULTIPLE at the next block boundary. Pinned for the READ MULTIPLE (M=2) wait arm, the WRITE SECTORS per-sector commit, and command issue (NP2kai's command dispatch never lowers it): the level must never fall between a raise and its 0x064E ack.
 //
 // NP2kai is level-until-ack: setintr raises the line (ideio.c:216-221) and the ONLY
 // lowering is ideio_i64e's pic_resetirq on a 0x064E status read (ideio.c:1421-1432).
@@ -17,16 +17,16 @@
 // the read-ahead wait arm used to drop the line in) and asserts (a) the irq LINE never
 // falls before the 0x064E read and (b) the 0x0433 source-identification read answers
 // the CONNECT flag (0x02 while the selected bank has its drive) and is unmoved by the
-// ack - since review readbacks.md P5 the port reports NP2kai's ideio_i433 connect
+// ack - the port reports NP2kai's ideio_i433 connect
 // semantics, NOT an IRQ sample, so the level itself is the only pending-interrupt
 // observation - then that the ack, and only the ack, lowers it. The write path's per-sector commit
-  // HIERARCHY NOTE (the N1-vs-P5 divergence, capture-pending): fix-deadlock's N1 warrant
+  // HIERARCHY NOTE (the N1-vs-P5 divergence, capture-pending): an earlier warrant
   // cited qemu-pc98's pc98_ide_aux_read (irq_levels & 0x03, the IRQ-bit form, 0x01 here)
-  // plus the machine's idle fingerprint 0433300 (idle reads 0x00). The r2-readbacks review's
-  // P5 adjudicated the port to NP2kai's ideio_i433 CONNECT semantics instead (0x02 while the
+  // plus the machine's idle fingerprint 0433300 (idle reads 0x00). The port was
+  // adjudicated to NP2kai's ideio_i433 CONNECT semantics instead (0x02 while the
   // selected bank has its drive), and per the reference hierarchy NP2kai outranks qemu, so
-  // this bench pins the P5 form. The tension with the idle fingerprint is the open question:
-  // one owner 2-state machine probe (0x0433 idle with a drive present, and during an IRQ)
+  // this bench pins the CONNECT form. The tension with the idle fingerprint is the open question:
+  // one 2-state machine probe (0x0433 idle with a drive present, and during an IRQ)
   // settles it and would let both citations be reconciled.
 // and the command-issue path have the same shape and are pinned the same way: NP2kai's
 // command dispatch never calls pic_resetirq either, so issuing a command must not

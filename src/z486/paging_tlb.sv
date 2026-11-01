@@ -34,6 +34,10 @@ module paging_tlb
     input        [31:0] vipt_linear_addr,
     output reg          vipt_hit,
     output reg   [31:0] vipt_physical_addr,
+    // vipt_physical_addr's two arms (vipt_hit ? hit form : miss form), for a
+    // consumer that compares against each arm and selects by vipt_hit last.
+    output       [31:0] vipt_physical_hit_form,
+    output       [31:0] vipt_physical_miss_form,
     output reg          vipt_writable,
     output reg          vipt_user,
     output reg          vipt_dirty,
@@ -378,6 +382,8 @@ wire       vref_refresh = vipt_fresh_r && vipt_match && !tlbt_pend_r && (|vref_m
 wire [1:0] vref_way = vref_match[0] ? 2'd0 : vref_match[1] ? 2'd1 :
                       vref_match[2] ? 2'd2 : 2'd3;
 
+assign vipt_physical_hit_form  = {vipt_tlb_q[23:4], vipt_linear_r[11:0]};
+assign vipt_physical_miss_form = vipt_linear_r;
 always_comb begin
     vipt_hit = vipt_match;
     vipt_physical_addr = {vipt_tlb_q[23:4], vipt_linear_r[11:0]};

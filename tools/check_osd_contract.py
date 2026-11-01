@@ -2,7 +2,7 @@
 """The OSD's option strings and the RTL that decodes them are one contract, stated twice.
 
 WHY THIS IS A PYTHON CHECK AND NOT A VERILATOR BENCH. The fact being checked is not a
-signal level - it is SOURCE TEXT. The owner sees the option list in z486_mister.sv's
+signal level - it is SOURCE TEXT. The user sees the option list in z486_mister.sv's
 CONF_STR; pc9821_osd.sv maps a LIST POSITION to a size code; pc9821_system.sv maps that
 code to a byte count. The failure this guards is those three drifting apart, and a
 Verilator bench cannot read a string literal or a case-statement, so the existing
@@ -13,8 +13,8 @@ which is the tell: a comment is where a fact goes when nothing can check it.
 That is not a criticism of that bench, which is a good bench and pins things this check
 cannot reach (the permutation, the polarity, the default). It is a statement of what it
 cannot see: if the CONF_STR list is reordered and the module is not, the bench stays
-green and the owner's OSD shows one size while the guest gets another. Which is the exact
-shape of the defect that reached the owner's card and froze it - a card with no config
+green and the OSD shows one size while the guest gets another. Which is the exact
+shape of the defect that reached a real card and froze it - a card with no config
 file passes 0 for every field, 0 meant 1 MB, and a 1 MB guest cannot boot the Xe10 BIOS.
 
 So this parses the files and asserts they agree. Nothing here is a copy: every expected
@@ -44,18 +44,23 @@ that reports PASS about a contract nobody checked, so the coverage is now:
      names the reference (`FIELD_DEFAULT`); a new field with no entry is a FAILURE, not a
      silent pass, because position 0 is what a card with no config file gets;
   6. the option count fits the field's width, every `O` field's label is non-empty, and
-     the RAM Size list, the position->code mapping, the code->bytes table and the VSync
-     polarity still agree (the original three-field contract, unchanged);
+     the RAM Size list, the position->code mapping and the code->bytes table still agree
+     (the original RAM Size contract, unchanged);
   7. THE SUB-PAGE TAGS agree with the pages: a `P{#}` already belongs before the option
      letter it scopes (`P1O[32]`, which is what Template_MiSTer and PCXT_MiSTer ship and
-     what the framework's own `d5P1o2` example states), and the owner's complaint was
-     about WHERE a setting appears, so the gate has to see the grouping: every page a field
+     what the framework's own `d5P1o2` example states), and the complaint this
+     answers was about WHERE a setting appears, so the gate has to see the grouping: every page a field
      or separator is filed under must be DECLARED by a `P{n},Title` entry, every declared
      page must have something in it, page 0 (the root menu) is not a page, and a page tag
      written AFTER the field it scopes is rejected rather than silently read as a field
      with a tag in its name. The Field the parse produces keeps `bitspec` (the bits, which
      is what FIELD_DEFAULT is keyed by) apart from `spec` (the entry as spelled), so moving
-     a field between pages cannot silently drop it out of the default table.
+     a field between pages cannot silently drop it out of the default table;
+  8. THE ROOT MENU'S LAYOUT is the one ROOT_LAYOUT states (the owner's order): the firmware
+     pack's Load first, then the drives - each Mount directly followed by its own Eject, HDD,
+     CD-ROM, FDD1, FDD2 - then RAM Size, CPU Speed and Keyboard as one group, the DIP Switch page, the
+     video options, and Reset last, each group set off by a separator. Every Mount has its
+     Eject, wired to that Mount's hps_io slot.
 
 WHAT IT DELIBERATELY DOES NOT DO. It does not require that every status bit the RTL reads
 be declared: this core reads a set of bits no OSD entry declares on purpose (the
@@ -114,13 +119,8 @@ RTL_DIRS = (ROOT / "src", ROOT / "sys")
 FIELD_DEFAULT: dict[str, tuple[str, str]] = {
     "O[63:61]": (
         "16M",
-        "the owner's default and the machine's usable size: a 1 MB guest cannot run the "
-        "Xe10 BIOS at all (the defect that froze the owner's card)",
-    ),
-    "O[4]": (
-        "Variable",
-        "position 0 is the guest's own rate (the ITF's 24 kHz/60.x Hz timing), not the "
-        "forced 60 Hz export; the same rule the list's rotation exists for",
+        "the project's default and the machine's usable size: a 1 MB guest cannot run the "
+        "Xe10 BIOS at all (a card booted that way freezes)",
     ),
     "O[31:28]": (
         "Xe10",
@@ -134,6 +134,14 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
         "it into work-area 0x54D bit 5, and the display-mode setter derives the games' bit 2 "
         "from that), so a config-less card answers the captured machine's clock",
     ),
+    "O[38]": (
+        "Auto",
+        "both positions exist on the machine (MAME pc9801.cpp fdc_mode_r `(m_dsw3->read() & 3) "
+        "<< 2`, DSW3:1 Fixed / Auto-Detection; the measured unit is Fixed, docs/probes/"
+        "FDMODE-XE10.TXT `PORT 00BE=FF`); Auto by design decision because with "
+        "Fixed POST leaves the 640 KB floppy interface uninitialised and a 2DD boot disk "
+        "that addresses it gets no drive",
+    ),
     "O[17:14]": (
         "Full",
         "the CPU at the profile's own clk_sys rate, ungated: position 0 makes cpu_throttle's "
@@ -145,13 +153,40 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
         "the machine enters SETUP only while HELP is held at POST; a config-less card "
         "must POST normally (the ITF writes 0x7FDD/0x7FDF but never reads Port C)",
     ),
+    "O[51]": (
+        "US",
+        "the host keyboard's layout, not a machine setting: the machine's own keyboard is JIS "
+        "and no host key changes its key numbers, only which PC key gives which. US is the "
+        "layout the core translated the backslash key in before the option existed (set-2 0x5D "
+        "-> YEN, the DOS path separator), so a config-less card keeps it",
+    ),
     "O[23:22]": (
         "Original",
         "the machine's own raster, unstretched - the picture a real monitor shows",
     ),
+    "O[81:80]": (
+        "Native 24kHz",
+        "the machine's own 24.8 kHz raster on the analog port, as the PC-9821's monitor connector "
+        "carries it (pc9821_crtc's SYNC-block raster); doubling or TV conversion is a choice the "
+        "user's display makes (MiSTer.ini forced_scandoubler=1 turns the doubler on from Native)",
+    ),
+    "O[83:82]": (
+        "None",
+        "the machine draws no scanlines: the darkening is a display effect on the doubled picture",
+    ),
     "O[46:45]": (
         "Normal",
         "1:1 scaling: the machine's own pixel count, the framework's only neutral option",
+    ),
+    "O[66:64]": (
+        "0 dB",
+        "not a machine setting but the user's CD-DA level, like the volume wheel on a real CD "
+        "drive (the drive's line level against the FM is uncaptured, todo item 106): 0 dB is "
+        "the owner's choice (2026-10-31), unity, the level the CD-DA channel shipped at before "
+        "the field existed - the clipping that had prompted a -6 dB default was a wrong-rail "
+        "clamp in the output FIR (tb_pc9821_audio_out_sat), not a level problem. NP2kai's "
+        "default CD-DA level stays a step of the list: davolume 128 of 255 (sdl/ini.c:704, "
+        "applied as davolume/255 in cbus/ideio.c:1738-1740), 20*log10(128/255) = -5.99 dB",
     ),
     "O[42:40]": (
         "Auto",
@@ -171,7 +206,7 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
 # --- the option LABEL <-> encoded VALUE contracts that are tables, not parses ----------
 #
 # The checks below compare a field's POSITION->CODE table (pc9821_osd.sv) against the
-# owner-facing label in z486_mister.sv. That comparison is the one thing no other check in
+# user-facing label in z486_mister.sv. That comparison is the one thing no other check in
 # this file can make: the RAM Size block at the end of this file has done it for one field
 # since the 1 MB freeze, and these two carry the same contract for the hardware switches,
 # where a swapped pair of labels is a wrong MACHINE DESCRIPTION and not a preference.
@@ -193,18 +228,37 @@ FDD_NIBBLE: dict[str, int] = {
     "Auto": 0x0, "640K": 0x2, "1M": 0x4, "MO": 0x6, "SASI1": 0xa, "SASI2": 0xb, "SCSI": 0xc,
 }
 
-# THE DIP SWITCH PAGE. The owner's requirement, in their words: all DIP/configuration
+# O[66:64],CD audio volume: each option's LABEL against the pc9821_audio_volume gain code
+# pc9821_osd.sv maps its position to. The code scale is that module's gain table, 0 dB at code 31
+# and 2 dB per code (pc9821_audio_volume.sv's gain_lut), so "-N dB" is code 31 - N/2, and "Off"
+# is code 0, the table's exact zero. A label whose code is not this is a volume the menu
+# misnames.
+def cd_volume_label_code(label: str) -> int | None:
+    """'-6 dB' -> 28, '0 dB' -> 31, 'Off' -> 0; None for a label that names no gain step."""
+    if label == "Off":
+        return 0
+    m = re.fullmatch(r"(-?)(\d+) dB", label)
+    if not m:
+        return None
+    n = int(m.group(2))
+    if (m.group(1) == "" and n != 0) or n % 2 or n > 60:
+        return None
+    return 31 - n // 2
+
+
+# THE DIP SWITCH PAGE. The requirement: all DIP/configuration
 # handling lives in the `P1,DIP Switch` sub-page. The ports below are the ones the top level
 # wires the DIP page's fields into - the status[] read at the connection (`osd_bios_setup`,
-# `osd_gdc_clock`, `cfg_fdd_mode`) or the port itself where the field's bits
+# `osd_gdc_clock`, `osd_fdd_mode` - the FDD-mode switch, O[38] - and `cfg_fdd_mode` - the Boot
+# order, whose name only resembles it) or the port itself where the field's bits
 # are read straight off status[] (`bios_set`) - so a field that reaches one of them IS a DIP
 # field and must be filed under that page. A new switch field dropped into the root menu, or
 # an existing one moved out, is a contract change this catches. (`sdip_restore`/`sdip_zero`
-# left this list when the owner had the `Reset DIPs`/`Zero DIPs` actions removed entirely, and
+# left this list when the `Reset DIPs`/`Zero DIPs` actions were removed entirely, and
 # `cfg_base_mem` left when the base memory was hardcoded to 640 KB.)
 DIP_PAGE = 1
 DIP_PORTS = ("bios_set",
-             "osd_bios_setup", "osd_gdc_clock", "cfg_fdd_mode")
+             "osd_bios_setup", "osd_gdc_clock", "osd_fdd_mode", "cfg_fdd_mode")
 
 problems: list[str] = []
 
@@ -300,7 +354,7 @@ class Field:
 CONF_BLOCK = re.compile(r"localparam\s+CONF_STR\s*=\s*\{(.*?)\n\};", re.S)
 
 
-# A profile-rewritten CONF_STR LINE: `localparam NAME = "...";` (CONF_STR_DISKS, CONF_STR_EJECTS),
+# A profile-rewritten CONF_STR LINE: `localparam NAME = "...";` (CONF_STR_CD, CONF_STR_VIDEO),
 # spliced into the block by name because a string cannot be built conditionally.
 STRING_PARAM = re.compile(r'^\s*localparam\s+(\w+)\s*=\s*"([^"]*)"\s*;', re.M)
 # The header is the framework's FIRST element (the core name and the UART/MIDI declaration),
@@ -315,7 +369,7 @@ def conf_str_region(text: str) -> str:
     z486_mister.sv is prose in a comment, and one of them quotes a real entry
     ("S1,D88FDDHDM,FDD0;" beside the floppy-slot wiring): parsed as CONF_STR it became a
     SECOND S1 field, i.e. a phantom member of the root menu, and the page checks this file
-    now carries would report pages and fields the owner never sees. The block is the
+    now carries would report pages and fields the user never sees. The block is the
     contract, so the block is what is parsed; the full text is still what `status_reads`
     (comment-stripped) searches for the RTL side.
     """
@@ -325,7 +379,7 @@ def conf_str_region(text: str) -> str:
     # lines are described that way) would otherwise parse as a phantom entry of the menu.
     region = strip_comments(region)
     # THE PROFILE-REWRITTEN LINES ARE PART OF THE MENU. A bare identifier in the block is a
-    # string localparam (CONF_STR_DISKS, CONF_STR_EJECTS); its value is spliced in one quoted
+    # string localparam (CONF_STR_CD, CONF_STR_VIDEO); its value is spliced in one quoted
     # entry per `;`, as the framework reads it, so the CD's mount and eject - which exist only
     # in every preset since 2026-10-10 and are absent from a --no-cdrom build - are checked
     # exactly as the tree is configured.
@@ -354,7 +408,7 @@ def conf_str_fields(text: str) -> tuple[list[Field], list[str], dict[int, str]]:
     The pages come back as {number: title}. A `P{n},Title` entry DEFINES page n; a bare
     `P{n}-` (with a label) is a separator inside it; a field's tag REFERENCES it. A page
     reference with no definition, or a definition nothing is filed under, is a defect this
-    parser reports rather than a spelling it tolerates - the owner sees the page either way.
+    parser reports rather than a spelling it tolerates - the user sees the page either way.
     """
     fields: list[Field] = []
     unreadable: list[str] = []
@@ -444,13 +498,13 @@ def conf_str_fields(text: str) -> tuple[list[Field], list[str], dict[int, str]]:
             unreadable.append(
                 f"CONF_STR: a field or separator is tagged onto sub-page {number}, but no "
                 f'"P{number},Title;" entry declares that page, so its contents would be '
-                "filed under a sub-page the owner never sees"
+                "filed under a sub-page the user never sees"
             )
     for number, title in pages.items():
         if number not in referenced:
             unreadable.append(
                 f'CONF_STR: sub-page {number} ("{title.strip(chr(59))}") is declared but '
-                "nothing is filed under it, so the owner gets an empty sub-page"
+                "nothing is filed under it, so the user gets an empty sub-page"
             )
     return fields, unreadable, pages
 
@@ -600,7 +654,7 @@ def check(top_text: str, osd_text: str, system_text: str,
             note(
                 f"{f.spec} ({f.label}) is declared in CONF_STR but the RTL reads "
                 f"nothing at status{missing}: the field is wired to nothing, so the "
-                "owner can select an option that does nothing"
+                "user can select an option that does nothing"
             )
         # 3. one hop: a read that is a port connection must be read inside its module.
         for bits, prefix, port in reads:
@@ -616,10 +670,10 @@ def check(top_text: str, osd_text: str, system_text: str,
     # 4. no two declared fields may share a bit.
     #
     # THIS IS THE LIVE FORM OF A GUARD THAT HAD GONE DEAD. The Machine (BIOS-set) field
-    # sat on status[5]/status[6] until r13/318, where the DDR framebuffer's fb_fmt
+    # once sat on status[5]/status[6], where the DDR framebuffer's fb_fmt
     # assignment read the same bits, so selecting a BIOS set silently flipped BGR -> RGB.
     # The old guard parsed that ONE expression; the framebuffer descriptor was deleted
-    # (r13/334 A1) and the framework's FB_* pins are tied off, so the expression it
+    # and the framework's FB_* pins are tied off, so the expression it
     # parsed no longer exists and the guard could never fire again - a check that cannot
     # fail. What replaced it is the general rule below, which fires on the shape a field
     # collision can still take (one declared field's bits inside another's), and the
@@ -633,7 +687,7 @@ def check(top_text: str, osd_text: str, system_text: str,
                 note(
                     f"CONF_STR fields {a.spec} ({a.label}) and {b.spec} ({b.label}) "
                     f"share status{shared}: one option write moves the other field, and "
-                    "which one the owner selected stops meaning anything"
+                    "which one the user selected stops meaning anything"
                 )
     for a in option_fields:
         for b in action_fields:
@@ -675,9 +729,9 @@ def check(top_text: str, osd_text: str, system_text: str,
     summary["defaults"] = ", ".join(default_summary)
 
     # 5c. THE DIP PAGE: every field the top level wires into the DIP sub-page's own ports is
-    #     filed under it. The owner's requirement is that ALL DIP/configuration handling lives
+    #     filed under it. The requirement is that ALL DIP/configuration handling lives
     #     in the `P1,DIP Switch` sub-page, and the failure this catches is a switch field left
-    #     in the root menu (or moved back there) where the owner has to hunt for it.
+    #     in the root menu (or moved back there) where the user has to hunt for it.
     dip_members: list[str] = []
     for bits, _prefix, port in reads:
         if port is None or port not in DIP_PORTS:
@@ -690,7 +744,7 @@ def check(top_text: str, osd_text: str, system_text: str,
                 note(
                     f"{f.spec} ({f.label}) is wired to the DIP sub-page's `{port}` port but "
                     f"is filed in {'the root menu' if f.page is None else f'P{f.page}'}: the "
-                    f"owner's contract is that all DIP/configuration handling lives in the "
+                    f"menu's contract is that all DIP/configuration handling lives in the "
                     f"P{DIP_PAGE} sub-page"
                 )
     summary["dip"] = ", ".join(sorted(set(dip_members))) if dip_members else "(none)"
@@ -779,18 +833,51 @@ def check(top_text: str, osd_text: str, system_text: str,
                                     for p, w in enumerate(fdd_options))
     summary["fdd"] = fdd_summary
 
-    # 5e. THE DRIVES: one Eject per Mount, wired to that mount's slot, in the owner's layout.
+    # 5f. THE CD AUDIO VOLUME (a CD-DA build only): each option's label is the gain code
+    #     pc9821_osd.sv maps its position to (cd_volume_label_code), and every one of the
+    #     field's positions is offered, so no saved value can land on an unlabelled code.
+    cdvol_options = conf_str_options(conf_text, "O[66:64]")
+    cdvol_summary = "(not in this build)"
+    if cdvol_options is not None:
+        arms = {int(m.group(1)): int(m.group(2)) for m in re.finditer(
+            r"3'd(\d):\s*cd_volume_code\s*=\s*5'd(\d+);", osd_text)}
+        dm = re.search(r"default:\s*cd_volume_code\s*=\s*5'd(\d+);", osd_text)
+        dflt = int(dm.group(1)) if dm else None
+        if len(cdvol_options) != 8:
+            note(f"O[66:64] (CD audio volume) offers {len(cdvol_options)} options, want all 8 "
+                 "positions of the 3-bit field labelled")
+        if not arms or dflt is None:
+            note("pc9821_osd.sv has no `3'dN: cd_volume_code = 5'dM;` arms with a `default:`")
+        else:
+            for pos, word in enumerate(cdvol_options):
+                want = cd_volume_label_code(word.strip())
+                code = arms.get(pos, dflt)
+                if want is None:
+                    note(f'CD audio volume position {pos}: option "{word}" names no gain step '
+                         "(want \"Off\" or \"-N dB\" with N even, 0..60)")
+                elif code != want:
+                    note(f'CD audio volume position {pos}: the CONF_STR list says "{word}" '
+                         f"(gain code {want}), but pc9821_osd.sv maps that position to {code}")
+            cdvol_summary = ", ".join(f"{w}->{arms.get(p, dflt)}"
+                                      for p, w in enumerate(cdvol_options))
+    summary["cdvol"] = cdvol_summary
+
+    # 5e. THE DRIVES: one Eject per Mount, wired to that mount's slot.
     #     Every `S{n},<ext>,Mount <drive>` image slot has exactly one `T[b],Eject <drive>`
     #     trigger, and the top level routes status[b] to pc9821_mount_eject's eject_req[n] - one
     #     `assign eject_req[n] = status[b];` per slot - so an eject can never be offered for a
     #     drive the menu cannot mount, nor land on another drive's slot (the CD-ROM's Eject was
-    #     the missing one: its slot passed hps_io's events straight through). The layout is the
-    #     owner's (2026-10-09): every mount, then every eject, and the firmware pack's `F0` load
-    #     below both groups (an MGL loads it by its index, never by its position).
+    #     the missing one: its slot passed hps_io's events straight through).
     drives_summary = check_drives(conf_text, top_code, fields)
     summary["drives"] = drives_summary
 
-    # 5b. THE SUB-PAGES, reported rather than checked for taste: which entries the owner
+    # 8. THE ROOT MENU'S LAYOUT (ROOT_LAYOUT): the order and grouping the user sees.
+    summary["layout"] = check_layout(conf_text)
+
+    # 9. THE FORMATS EACH MOUNT ENTRY OFFERS (MOUNT_EXTS).
+    summary["mount_exts"] = check_mount_exts(conf_text)
+
+    # 5b. THE SUB-PAGES, reported rather than checked for taste: which entries the user
     #     now finds under which sub-menu. Every field's page is already known to be
     #     declared (conf_str_fields rejects the alternatives), so this is the summary a
     #     reader compares against PC-9821_z486_MiSTer's CONF_STR.
@@ -804,14 +891,11 @@ def check(top_text: str, osd_text: str, system_text: str,
     summary["pages"] = "; ".join(page_summary) if page_summary else "(none)"
     summary["root"] = ", ".join(root)
 
-    # --- 6 again: the original three-field contract, unchanged ---------------------
+    # --- 6 again: the original RAM Size contract, unchanged ------------------------
     ram_options = conf_str_options(conf_text, "O[63:61]")
-    vsync_options = conf_str_options(conf_text, "O[4]")
 
     if ram_options is None:
         note("z486_mister.sv has no CONF_STR entry for O[63:61] (RAM Size)")
-    if vsync_options is None:
-        note("z486_mister.sv has no CONF_STR entry for O[4] (VSync)")
 
     pos_to_code: dict[int, int] = {}
     for m in re.finditer(r"3'd(\d):\s*ram_size_code\s*=\s*3'd(\d);", osd_text):
@@ -841,15 +925,9 @@ def check(top_text: str, osd_text: str, system_text: str,
     if set(pos_to_code) != set(range(8)) and pos_to_code:
         note(f"pc9821_osd.sv maps {sorted(pos_to_code)}, want positions 0..7")
 
-    # The VSync polarity, parsed rather than assumed. The whole content of that option is
-    # which bit value means which rate, so a check that hardcodes the polarity would be
-    # checking the wrong fact.
-    vsync_m = re.search(r"assign\s+vsync_native\s*=\s*(~?)\s*osd_vsync\s*;", osd_text)
-    vsync_inverted = None
-    if not vsync_m:
-        note("pc9821_osd.sv has no 'assign vsync_native = [~]osd_vsync;'")
-    else:
-        vsync_inverted = vsync_m.group(1) == "~"
+    # The VSync polarity check departed with the field: its whole content was which bit
+    # value meant which rate, and O[4] no longer exists now that the core keeps the guest's
+    # own raster as its only option.
 
     code_to_bytes: dict[int, int] = {}
     # The assignment target is named guest_ram_bytes in pc9821_system.sv's own comment/name, but
@@ -868,7 +946,7 @@ def check(top_text: str, osd_text: str, system_text: str,
 
     # THE CONTRACT: every position of the OSD list must select the size its own label
     # names. That single sentence is the whole of it: the label comes from the string the
-    # owner reads, the position goes through the module, and the code goes through the
+    # user reads, the position goes through the module, and the code goes through the
     # system's table. If any of the three moves without the others, this fails.
     if ram_options is not None and pos_to_code and code_to_bytes:
         if len(ram_options) != len(pos_to_code):
@@ -904,7 +982,7 @@ def check(top_text: str, osd_text: str, system_text: str,
                         f"{got >> 20} MiB ({got} bytes)"
                     )
 
-        # THE OWNER'S TWO REQUIREMENTS, stated by them rather than inferred, and named here
+        # THE PROJECT'S TWO MENU REQUIREMENTS, stated rather than inferred, and named here
         # so a regression to either is unmistakable. A card with no config file passes 0 for
         # every field, so position 0 is what such a card boots.
         if ram_options:
@@ -912,36 +990,19 @@ def check(top_text: str, osd_text: str, system_text: str,
             if default0 == 1:
                 note(
                     "RAM Size position 0 is 1M: a card with no config file boots a 1 MB "
-                    "guest, which cannot run the Xe10 BIOS at all (the defect that froze "
-                    "the owner's card)"
+                    "guest, which cannot run the Xe10 BIOS at all (the card "
+                    "freezes)"
                 )
             elif default0 != 16:
-                note(f"RAM Size position 0 is {ram_options[0]}, want 16M (the owner's default)")
-
-    if vsync_options is not None and vsync_inverted is not None:
-        if len(vsync_options) != 2:
-            note(f"CONF_STR offers {len(vsync_options)} VSync options, want 2")
-        else:
-            # Position 0 must be the guest's own rate, and the polarity must say so.
-            native_at_0 = vsync_inverted  # ~status[4]: position 0 (bit=0) -> native=1
-            if not native_at_0:
-                note(
-                    "pc9821_osd.sv's VSync polarity makes list position 0 the FORCED 60 Hz "
-                    "option; the owner requires position 0 to be the core's native rate"
-                )
-            if vsync_options[0].lower() == "60hz":
-                note(
-                    f'VSync position 0 is "{vsync_options[0]}" (forced 60 Hz); the owner '
-                    "requires position 0 to be the native rate"
-                )
+                note(f"RAM Size position 0 is {ram_options[0]}, want 16M (the project's default)")
 
     # --- the BIOS-set wiring probe ---------------------------------------------------
     #
     # It reads the CONNECTION rather than a remembered bit number: a check that hardcoded
     # 31:28 would pass the day someone rewired the port to a colliding field and kept the
     # comment. What it adds over the generic field checks above is that this particular
-    # field has to exist at all and its option count has to fit - the contract the owner
-    # was shown when the BIOS set became selectable (r13/318).
+    # field has to exist at all and its option count has to fit - the contract stated
+    # when the BIOS set became selectable.
     bios_wire = re.search(r"\.bios_set\s*\(\s*status\[(\d+)(?:\s*:\s*(\d+))?\]\s*\)", top_code)
     bios_summary = "?"
     if not bios_wire:
@@ -964,7 +1025,6 @@ def check(top_text: str, osd_text: str, system_text: str,
                 )
     summary["bios"] = bios_summary
     summary["ram"] = ", ".join(ram_options) if ram_options else "?"
-    summary["vsync"] = ", ".join(vsync_options) if vsync_options else "?"
     summary["mapping"] = (
         f"{len(pos_to_code)} positions -> size codes, each label's size == "
         "pc9821_system.sv's bytes for that code"
@@ -1036,9 +1096,8 @@ EJECT_ASSIGN = re.compile(r"assign\s+eject_req\s*\[\s*(\d+)\s*\]\s*=\s*status\s*
 
 def check_drives(conf_text: str, top_code: str, fields: list[Field]) -> str:
     """Check 5e (see the call site); return its summary line."""
-    order: list[tuple[str, int]] = []      # ("mount"/"eject"/"rom", position)
     mounts: dict[str, int] = {}            # drive -> hps_io slot
-    for pos, m in enumerate(MENU_ENTRY.finditer(conf_text)):
+    for m in MENU_ENTRY.finditer(conf_text):
         body = m.group(1).rstrip(";")
         parts = [p.strip() for p in body.split(",")]
         sm = re.fullmatch(r"S(\d+)", parts[0])
@@ -1046,16 +1105,13 @@ def check_drives(conf_text: str, top_code: str, fields: list[Field]) -> str:
             label = parts[2]
             if not label.startswith("Mount "):
                 note(f'CONF_STR image slot "{body}": its label must be "Mount <drive>" (the '
-                     "owner's OSD layout), so that its Eject can be named after the same drive")
+                     "project's OSD layout), so that its Eject can be named after the same drive")
                 continue
             drive = label[len("Mount "):].strip()
             if drive in mounts:
                 note(f'CONF_STR offers "Mount {drive}" twice (slots {mounts[drive]} and '
                      f"{sm.group(1)})")
             mounts[drive] = int(sm.group(1))
-            order.append(("mount", pos))
-        elif re.fullmatch(r"F0", parts[0]):
-            order.append(("rom", pos))
     ejects: dict[str, int] = {}            # drive -> status bit
     for f in fields:
         label = f.label.rstrip(";").strip()
@@ -1066,9 +1122,6 @@ def check_drives(conf_text: str, top_code: str, fields: list[Field]) -> str:
             ejects[drive] = min(f.bits)
             if len(f.bits) != 1:
                 note(f"{f.spec} ({f.label}) is a trigger on more than one status bit")
-    for pos, m in enumerate(MENU_ENTRY.finditer(conf_text)):
-        if re.match(r"T\[\d+\],Eject ", m.group(1)):
-            order.append(("eject", pos))
 
     wired: dict[int, int] = {}              # slot -> status bit
     for slot, bit in EJECT_ASSIGN.findall(top_code):
@@ -1089,20 +1142,94 @@ def check_drives(conf_text: str, top_code: str, fields: list[Field]) -> str:
             note(f'CONF_STR offers "Eject {drive}" (T[{bit}]) for a drive no "Mount {drive}" '
                  "image slot offers")
 
-    kinds = [k for k, _ in sorted(order, key=lambda kp: kp[1])]
-    if "eject" in kinds and "mount" in kinds:
-        last_mount = max(i for i, k in enumerate(kinds) if k == "mount")
-        first_eject = min(i for i, k in enumerate(kinds) if k == "eject")
-        if first_eject < last_mount:
-            note("CONF_STR interleaves the drive entries: the owner's layout is every Mount, "
-                 "then every Eject")
-    if "rom" not in kinds:
-        note('CONF_STR has no "F0,..." firmware-pack entry')
-    elif kinds.index("rom") != len(kinds) - 1:
-        note('CONF_STR\'s "F0" Load ROM pack entry is above a drive entry: the owner\'s layout '
-             "puts it at the bottom of the menu")
     by_slot = sorted(mounts.items(), key=lambda kv: kv[1])
     return ", ".join(f"S{slot} {d} <-> T[{ejects.get(d, '?')}]" for d, slot in by_slot)
+
+
+# THE ROOT MENU'S LAYOUT, the owner's order: the firmware pack (the BIOS ROM set) first, then
+# the drives - each Mount directly followed by its own Eject, HDD, CD-ROM, FDD1, FDD2 - then
+# the machine (RAM Size, CPU Speed and the Keyboard layout, one group), the DIP Switch page, the video options, and
+# Reset last. One inner list is one group, set off from the next by a `-` separator. An entry
+# is named by its spec (the text before the first comma); a `?` suffix marks an entry only
+# some builds declare (the CD-ROM's pair with cdrom_en, its CD audio volume with
+# cdrom_audio_en, the analog-video fields with
+# vga_dbl_en: build_profile.py's rewritten lines), which the layout then expects exactly when
+# the build has it. Entries filed under a sub-page are that page's, not the root menu's, and
+# an entry this list does not name is left to the other checks (a new field's default, its
+# reader), so a new option fails here only once it is placed between the named ones wrongly.
+# DISPLAY ORDER ONLY: no status bit, slot index or F index depends on it (the CONF_STR
+# comments in z486_mister.sv cite the framework lines that make that so).
+ROOT_LAYOUT: list[list[str]] = [
+    ["F0"],
+    ["S0", "T[8]", "S4?", "T[11]?", "O[66:64]?", "S1", "T[9]", "S2", "T[10]"],
+    ["O[63:61]", "O[17:14]", "O[51]"],
+    ["P1"],
+    ["O[23:22]", "O[46:45]", "O[81:80]?", "O[83:82]?"],
+    ["T[0]", "R[0]", "J", "V"],
+]
+
+
+# 9. THE IMAGE FORMATS EACH DRIVE'S FILE BROWSER OFFERS: Main_MiSTer shows only files whose
+#    extension is in the entry's list (3-character groups), so a format the core reads but the
+#    entry omits cannot be mounted without renaming the file. The HDD reads raw, HDI and fixed VHD
+#    images by their content (pc9821_hdd_image.sv: the HDI header and the "conectix" footer).
+MOUNT_EXTS: dict[str, str] = {
+    "S0": "IMGHDIVHD",          # Mount HDD: raw, HDI, fixed VHD
+    "S1": "D88FDDHDM",          # Mount FDD1
+    "S2": "D88FDDHDM",          # Mount FDD2
+    "S4": "ISOPCD",             # Mount CD-ROM (CD builds only)
+}
+
+
+def check_mount_exts(conf_text: str) -> str:
+    """Check 9: each image slot offers MOUNT_EXTS' extensions; return the summary."""
+    seen = []
+    for m in re.finditer(r'(S\d),([A-Z0-9]*),Mount ', conf_text):
+        slot, exts = m.group(1), m.group(2)
+        want = MOUNT_EXTS.get(slot)
+        if want is None:
+            continue
+        seen.append(f"{slot}={exts}")
+        if exts != want:
+            note(f"the {slot} Mount entry offers {exts!r}, want {want!r} (MOUNT_EXTS: a format "
+                 "the core reads must be one the file browser shows)")
+    return " ".join(seen)
+
+
+def root_groups(conf_text: str) -> list[list[str]]:
+    """The root menu as groups of entry specs, split at `-` separators (empty groups dropped)."""
+    groups: list[list[str]] = [[]]
+    for m in MENU_ENTRY.finditer(conf_text):
+        spec = m.group(1).split(",", 1)[0].rstrip(";").strip()
+        if spec == "-":
+            groups.append([])
+            continue
+        pm = PAGE_PREFIX.match(spec)
+        if pm and spec[pm.end():]:
+            continue            # a sub-page member (`P1O[32]`, `P1-`): not the root menu's
+        groups[-1].append(spec)
+    return [g for g in groups if g]
+
+
+def check_layout(conf_text: str) -> str:
+    """Check 8: the root menu's groups and their order are ROOT_LAYOUT's; return the summary."""
+    named = {e.rstrip("?") for g in ROOT_LAYOUT for e in g}
+    actual = [[s for s in g if s in named] for g in root_groups(conf_text)]
+    actual = [g for g in actual if g]
+    present = {s for g in actual for s in g}
+    want = [[e.rstrip("?") for e in g if not e.endswith("?") or e.rstrip("?") in present]
+            for g in ROOT_LAYOUT]
+    want = [g for g in want if g]
+
+    def show(groups: list[list[str]]) -> str:
+        return " | ".join(" ".join(g) for g in groups)
+
+    if actual != want:
+        note("CONF_STR's root menu is not the contracted layout (ROOT_LAYOUT: the ROM pack "
+             "first, then each drive's Mount and Eject - HDD, CD-ROM, FDD1, FDD2 - then RAM "
+             "Size, CPU Speed and Keyboard, the DIP Switch page, video, Reset; `|` is a separator): "
+             f"it reads {show(actual)}, want {show(want)}")
+    return show(actual)
 
 
 def conf_str_options(text: str, bits: str) -> list[str] | None:
@@ -1134,15 +1261,16 @@ def report(summary: dict[str, str]) -> None:
     print("OSD CONTRACT CHECK: PASS")
     print(f"  O fields        {summary['fields']}")
     print(f"  RAM Size list   {summary['ram']}")
-    print(f"  VSync list      {summary['vsync']}  (position 0 = native, polarity parsed)")
     print(f"  BIOS set field  {summary['bios']}  (wired to .bios_set, count fits its width)")
     print(f"  CPU Speed       {summary['speed']}  (labels against cpu_throttle.sv)")
     print(f"  position 0      {summary['defaults']}  (each against FIELD_DEFAULT's reference)")
     print(f"  drives          {summary['drives']}  (Mount/Eject pairs, eject_req wired per slot)")
+    print(f"  layout          {summary['layout']}  (the root menu's groups, ROOT_LAYOUT)")
     print(f"  root menu       {summary['root']}")
     print(f"  sub-pages       {summary['pages']}")
     print(f"  DIP page        P{DIP_PAGE} holds {summary['dip']} (every field wired to a DIP port)")
     print(f"  switch values   Boot order {summary['fdd']} (label -> the nibble the cell takes)")
+    print(f"  CD volume       {summary['cdvol']} (label -> pc9821_audio_volume gain code)")
     print(f"  mapping         {summary['mapping']}")
 
 
@@ -1216,26 +1344,25 @@ def selftest() -> int:
             print(f"  - {p}")
         return 1
 
-    # BOTH menus, made in memory the way build_profile.py writes them (its two profile-rewritten
-    # lines), whichever one the tree is configured with: the CD build's (every preset's default
-    # since 2026-10-10) and the --no-cdrom opt-out's, so the CD's mount/eject pair is checked as a
-    # CD build has it and its absence as a build without the drive has it.
-    cd_disks = '"S2,D88FDDHDM,Mount FDD2;S4,ISOPCD,Mount CD-ROM;"'
-    cd_ejects = '"T[10],Eject FDD2;T[11],Eject CD-ROM;"'
-    nocd_disks = '"S2,D88FDDHDM,Mount FDD2;"'
-    nocd_ejects = '"T[10],Eject FDD2;"'
+    # BOTH menus, made in memory the way build_profile.py writes them (its profile-rewritten
+    # CONF_STR_CD line), whichever one the tree is configured with: the CD build's (every
+    # preset's default since 2026-10-10) and the --no-cdrom opt-out's, so the CD's mount/eject
+    # pair is checked as a CD build has it and its absence as a build without the drive has it.
+    # A CD build with the drive's audio player also carries the CD audio volume field; a
+    # data-only drive (--no-cdrom-audio) has the pair alone.
+    cdvol_entry = "O[66:64],CD audio volume,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"
+    cd_line = '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;' + cdvol_entry + '"'
+    cddata_line = '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;"'
+    nocd_line = '"T[8],Eject HDD;"'
 
-    def menu(disks: str, ejects: str) -> str:
-        top = re.sub(r'(?m)^(localparam\s+CONF_STR_DISKS\s*=\s*)"[^"]*"', r"\g<1>" + disks,
-                     texts["top"], count=1)
-        return re.sub(r'(?m)^(localparam\s+CONF_STR_EJECTS\s*=\s*)"[^"]*"', r"\g<1>" + ejects,
-                      top, count=1)
+    def menu(line: str) -> str:
+        return re.sub(r'(?m)^(localparam\s+CONF_STR_CD\s*=\s*)"[^"]*"', r"\g<1>" + line,
+                      texts["top"], count=1)
 
     variants = {}
-    for tag, disks, ejects in (("cd", cd_disks, cd_ejects), ("nocd", nocd_disks, nocd_ejects)):
-        top = menu(disks, ejects)
-        if (top.count(f"CONF_STR_DISKS = {disks};") != 1
-                or top.count(f"CONF_STR_EJECTS = {ejects};") != 1):
+    for tag, line in (("cd", cd_line), ("cddata", cddata_line), ("nocd", nocd_line)):
+        top = menu(line)
+        if top.count(f"CONF_STR_CD = {line};") != 1:
             print(f"OSD CONTRACT SELFTEST: FAIL -- could not build the {tag} menu in memory")
             return 1
         variants[tag] = dict(texts, top=top)
@@ -1246,14 +1373,17 @@ def selftest() -> int:
                 print(f"  - {p}")
             return 1
 
-    vsync_line = '"O[4],VSync,Variable,60Hz;"'
+    # (The VSync entry that used to lead the profile-rewritten CONF_STR_VIDEO line left
+    # with the field, so the new-field plant anchors on the Scale entry, a plain quoted
+    # line of the block.)
+    scale_line = '"O[46:45],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",'
     biosup_line = '"P1O[3],Enter BIOS setup (hold HELP),Off,On;"'
     page_line = '"P1,DIP Switch;"'
     cases: list[tuple[str, str, tuple]] = [
         ("the RAM Size default is 1M again", "top",
          ('"O[63:61],RAM Size,16M,', '"O[63:61],RAM Size,1M,')),
         ("a selected field is never read by the RTL", "top",
-         (".osd_vsync    (status[4]),", ".osd_vsync    (1'b0),")),
+         (".osd_bios_setup(status[3]),", ".osd_bios_setup(1'b0),")),
         ("a field is wired to a port its module ignores", "osd",
          ("assign bios_setup = osd_bios_setup;", "assign bios_setup = 1'b0;")),
         ("two declared fields share a bit", "top",
@@ -1266,15 +1396,13 @@ def selftest() -> int:
         ("an option list longer than its field is wide", "top",
          (biosup_line, '"P1O[3],Enter BIOS setup (hold HELP),Off,On,Maybe;"')),
         ("a new option field with no measured default", "top",
-         (vsync_line, vsync_line + '\n\t"O[5],Teleport,Off,On;"')),
+         (scale_line, scale_line + '\n\t"O[5],Teleport,Off,On;",')),
         ("the RAM size table drifts a code", "osd",
          ("3'd0:    ram_size_code = 3'd4;", "3'd0:    ram_size_code = 3'd5;")),
-        ("the VSync polarity is inverted", "osd",
-         ("assign vsync_native = ~osd_vsync;", "assign vsync_native = osd_vsync;")),
         ("the Machine field loses its CONF_STR entry", "top",
          ('"P1O[31:28],Machine,Xe10,Xe;"', '"P1O[27:24],Machine,Xe10,Xe;"')),
         ("a status-bit field is written in a form the parser cannot read", "top",
-         ('"O[4],VSync,Variable,60Hz;"', '"O(4),VSync,Variable,60Hz;"')),
+         ('"O[17:14],CPU Speed,', '"O(17:14),CPU Speed,')),
         ("an option is filed under a sub-page nothing declares", "top",
          ('"P1O[32],GDC Clock,2.5 MHz,5 MHz;"', '"P3O[32],GDC Clock,2.5 MHz,5 MHz;"')),
         ("a page tag comes after the field it scopes", "top",
@@ -1289,6 +1417,8 @@ def selftest() -> int:
         ("a DIP field is moved out of the DIP sub-page", "top",
          ('"P1O[42:40],Boot order,Auto,640K,1M,MO,SASI1,SASI2,SCSI;"',
           '"O[42:40],Boot order,Auto,640K,1M,MO,SASI1,SASI2,SCSI;"')),
+        ("the FDD mode switch is moved out of the DIP sub-page", "top",
+         ('"P1O[38],FDD mode,Auto,Fixed;"', '"O[38],FDD mode,Auto,Fixed;"')),
         ("the Boot order list's labels are swapped", "top",
          ('"P1O[42:40],Boot order,Auto,640K,1M,MO,SASI1,SASI2,SCSI;"',
           '"P1O[42:40],Boot order,640K,Auto,1M,MO,SASI1,SASI2,SCSI;"')),
@@ -1321,17 +1451,46 @@ def selftest() -> int:
          ("assign eject_req[2] = status[10];", "assign eject_req[2] = 1'b0;")),
         ("an image slot's label is not Mount <drive>", "top",
          ('"S1,D88FDDHDM,Mount FDD1;",', '"S1,D88FDDHDM,FDD1;",')),
-        ("an Eject sits above a Mount", "top",
-         (('"T[8],Eject HDD;",', ''),
-          ('"S0,IMG,Mount HDD;",', '"T[8],Eject HDD;",\n\t"S0,IMG,Mount HDD;",'))),
-        ("the ROM pack's load is back at the top", "top",
-         ('"S0,IMG,Mount HDD;",', '"F0,BIN,Load ROM pack;",\n\t"S0,IMG,Mount HDD;",')),
+        # --- the formats each Mount entry offers (9) ----------------------------------------
+        ("the HDD Mount hides HDI and VHD images", "top",
+         ('"S0,IMGHDIVHD,Mount HDD;",', '"S0,IMG,Mount HDD;",')),
+        ("a CD build's Mount drops PCD images", "top-cd",
+         (cd_line, cd_line.replace("ISOPCD", "ISO"))),
+        # --- the root menu's layout (8) ---------------------------------------------------
+        ("an Eject sits above its Mount", "top",
+         ('"S1,D88FDDHDM,Mount FDD1;",\n\t"T[9],Eject FDD1;",',
+          '"T[9],Eject FDD1;",\n\t"S1,D88FDDHDM,Mount FDD1;",')),
+        ("the drives go back to every Mount, then every Eject", "top",
+         ('"T[9],Eject FDD1;",\n\t"S2,D88FDDHDM,Mount FDD2;",',
+          '"S2,D88FDDHDM,Mount FDD2;",\n\t"T[9],Eject FDD1;",')),
+        ("the ROM pack's load is back at the bottom", "top",
+         (('\t"F0,BIN,Load BIOS ROM;",\n\t"-;",\n', ''),
+          ('"R[0],Reset and close OSD;",', '"R[0],Reset and close OSD;",\n\t"-;",\n\t"F0,BIN,Load BIOS ROM;",'))),
+        ("the floppies are listed above the hard disk", "top",
+         (('\t"S1,D88FDDHDM,Mount FDD1;",\n\t"T[9],Eject FDD1;",\n', ''),
+          ('\t"S0,IMGHDIVHD,Mount HDD;",',
+           '\t"S1,D88FDDHDM,Mount FDD1;",\n\t"T[9],Eject FDD1;",\n\t"S0,IMGHDIVHD,Mount HDD;",'))),
+        ("RAM Size and CPU Speed are split by a separator", "top",
+         ('"O[17:14],CPU Speed,', '"-;",\n\t"O[17:14],CPU Speed,')),
+        ("the DIP Switch page moves above the drives", "top",
+         (('\t"P1,DIP Switch;",\n', ''),
+          ('\t"S0,IMGHDIVHD,Mount HDD;",', '\t"P1,DIP Switch;",\n\t"-;",\n\t"S0,IMGHDIVHD,Mount HDD;",'))),
+        ("a CD build lists the CD-ROM after the floppies", "top-cd",
+         ((cd_line, nocd_line),
+          ('"T[10],Eject FDD2;",', '"T[10],Eject FDD2;",\n\t"S4,ISOPCD,Mount CD-ROM;",\n\t"T[11],Eject CD-ROM;",'))),
         ("a CD build loses the CD-ROM's Eject", "top-cd",
-         (cd_ejects, '"T[10],Eject FDD2;"')),
+         (cd_line, '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;' + cdvol_entry + '"')),
+        ("the CD audio volume's default is NP2kai's -6 dB, not the owner's 0 dB", "top-cd",
+         (cd_line, cd_line.replace("0 dB,-2 dB,-4 dB,-6 dB,",
+                                   "-6 dB,-2 dB,-4 dB,0 dB,"))),
+        ("a CD audio volume label misnames its gain code", "osd",
+         ("3'd6:    cd_volume_code = 5'd25;", "3'd6:    cd_volume_code = 5'd24;")),
+        ("the CD audio volume offers fewer positions than its field holds", "top-cd",
+         (cd_line, cd_line.replace(",-12 dB,Off;", ",-12 dB;"))),
         ("a CD build's Eject is wired to the unused slot 3", "top-cd",
          ("assign eject_req[4] = status[11];", "assign eject_req[3] = status[11];")),
         ("a build without the CD offers the CD-ROM's Eject", "top-nocd",
-         ('"T[10],Eject FDD2;";', '"T[10],Eject FDD2;T[11],Eject CD-ROM;";')),
+         (f"CONF_STR_CD = {nocd_line};", 'CONF_STR_CD = "T[8],Eject HDD;T[11],Eject CD-ROM;";')),
     ]
 
     accepted = []
@@ -1364,7 +1523,7 @@ def selftest() -> int:
             print(f"  - {name}: {why}")
         return 1
     print(f"OSD CONTRACT SELFTEST: PASS ({len(cases)} planted defects rejected, "
-          "honest source and both its CD and --no-cdrom menus clean)")
+          "honest source and its CD, data-only CD and --no-cdrom menus clean)")
     return 0
 
 

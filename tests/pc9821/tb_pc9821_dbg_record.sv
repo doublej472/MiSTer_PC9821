@@ -1,12 +1,12 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DBG_RECORD: The 351+304+100-byte debug report is emitted in order and survives an accept handshake that withholds a byte for as long as the FIFO behind it cannot take it: a byte presented while the FIFO is full is HELD - its strobe stays high and the same byte stays presented - and it is emitted exactly once when the handshake returns, so the whole 755-byte report arrives with no byte lost and none duplicated; and a pending 71-byte INT21 record is emitted between reports with the same pacing, never splitting a report.
+// TB_PC9821_DBG_RECORD: The 351+256+100-byte debug report is emitted in order and survives an accept handshake that withholds a byte for as long as the FIFO behind it cannot take it: a byte presented while the FIFO is full is HELD - its strobe stays high and the same byte stays presented - and it is emitted exactly once when the handshake returns, so the whole 707-byte report arrives with no byte lost and none duplicated.
 //
 // WHY THIS EXISTS. The report is emitted at one byte per clk_sys into a 512-entry FIFO that drains
 // at ~1 byte per 87 us, so the burst overran the FIFO, the overflow boundary landed inside the PRF
 // record's last field, and the rest of the PRF plus the whole GFX record were dropped - the `AP=0`
-// truncation the owner's capture showed (r13/326). The fix is this module's handshake: no index
+// truncation a hardware capture showed. The fix is this module's handshake: no index
 // advances until the byte presented has been ACCEPTED, and the strobe stays on a byte until its own
 // accept - including the last byte of the report, which the pre-fix sequencing presented one cycle
 // outside the record it belonged to. The failure mode is silent everywhere else in this tree,
@@ -14,10 +14,10 @@
 //
 // THE EXPECTED STREAM IS COMPUTED FROM THE STIMULUS, not from the RTL: the bench stands in for the
 // three formatters, drives each char as a known function of the index the DUT reports, and
-// recomputes the expected 683-byte sequence itself. A byte that arrives out of order, twice, or not
+// recomputes the expected 707-byte sequence itself. A byte that arrives out of order, twice, or not
 // at all therefore fails on a POSITION rather than on a plausible-looking value.
 //
-// CHECKS 2 AND 3 ARE THE REGRESSION. With the handshake ignored - the pre-r13/326 emitter - the
+// CHECKS 2 AND 3 ARE THE REGRESSION. With the handshake ignored - the old emitter - the
 // paced run captures a third of the report and the stalled run loses everything after the stall,
 // which is what "the report's tail was dropped" means. Neither case is drivable with the sequencing
 // inline in pc9821_system.sv, which is why it was moved into this module.
@@ -32,15 +32,11 @@ module tb_pc9821_dbg_record;
   wire        dbg_uart_accept;
   reg         wdg_start = 1'b0;
   reg  [7:0]  wdg_path = 8'h50;          // 'P', the heartbeat
-  reg         int21_pending = 1'b0;
   wire [7:0]  dbg_byte;
   wire        dbg_we;
   wire [15:0] wdg_idx;
   wire  [8:0] prf_idx;
   wire  [6:0] gfx_idx;
-  wire  [7:0] int21_idx;
-  wire        int21_ack;
-  wire        int21_active;
   wire        report_active;
 
   // The three formatters, as this bench stands in for them: a pure function of the index the DUT
@@ -49,17 +45,14 @@ module tb_pc9821_dbg_record;
   wire [7:0] wdg_char = wdg_idx[7:0] ^ 8'hA5;
   wire [7:0] prf_char = prf_idx[7:0] ^ 8'h3C;
   wire [7:0] gfx_char = gfx_idx ^ 8'hC9;
-  wire [7:0] int21_char = int21_idx ^ 8'h6B;
 
   pc9821_dbg_record dut (
       .clk_sys(clk_sys), .reset(reset),
       .dbg_uart_accept(dbg_uart_accept),
       .wdg_start(wdg_start), .wdg_path(wdg_path), .wdg_char(wdg_char),
       .prf_char(prf_char), .gfx_char(gfx_char),
-      .int21_char(int21_char), .int21_pending(int21_pending),
       .dbg_byte(dbg_byte), .dbg_we(dbg_we),
       .wdg_idx(wdg_idx), .prf_idx(prf_idx), .gfx_idx(gfx_idx),
-      .int21_idx(int21_idx), .int21_ack(int21_ack), .int21_active(int21_active),
       .report_active(report_active)
   );
 
@@ -73,25 +66,22 @@ module tb_pc9821_dbg_record;
   // The record's shape, restated here on purpose: the bench must not read out of the module under
   // test the lengths it is checking.
   localparam integer WDG_LEN = 351;   // indices 0..350, the trigger at 349, the LF at 350
-  localparam integer PRF_LEN = 304;
+  localparam integer PRF_LEN = 256;
   localparam integer GFX_LEN = 100;
-  localparam integer TOTAL   = WDG_LEN + PRF_LEN + GFX_LEN;   // 755
-  localparam integer INT21_LEN = 71;   // pc9821_int21_msg's INT21_MSG_LEN
+  localparam integer TOTAL   = WDG_LEN + PRF_LEN + GFX_LEN;   // 707
 
   localparam [7:0] PATH_P = 8'h50;   // 'P'
   localparam [7:0] PATH_W = 8'h57;   // 'W'
 
   // The handshake the FIFO would present: `pace_en` off is a FULL FIFO (nothing is accepted),
   // `pace = 1` is room every cycle, `pace = 3` is one byte every three cycles - the shape a
-  // 512-byte FIFO draining slowly presents to a 683-byte burst. It is a function of the cycle
+  // 512-byte FIFO draining slowly presents to a 707-byte burst. It is a function of the cycle
   // counter rather than a value written from a stimulus process, so the capture below and the DUT
   // see the same decision for the same cycle and the two cannot race.
   integer cyc = 0;
   integer pace = 1;
   reg     pace_en = 1'b0;
-  integer ack_pulses = 0;
   always @(posedge clk_sys) cyc = cyc + 1;
-  always @(posedge clk_sys) if (int21_ack) ack_pulses = ack_pulses + 1;
 
   assign dbg_uart_accept = pace_en && ((cyc % pace) == 0);
 
@@ -142,7 +132,6 @@ module tb_pc9821_dbg_record;
   task automatic idle_reset();
     begin
       reset = 1'b1; wdg_start = 1'b0; pace_en = 1'b0;
-      int21_pending = 1'b0; ack_pulses = 0;
       repeat (3) @(posedge clk_sys);
       reset = 1'b0;
       capn = 0;
@@ -158,17 +147,6 @@ module tb_pc9821_dbg_record;
       wdg_start = 1'b1;
       @(negedge clk_sys);
       wdg_start = 1'b0;
-    end
-  endtask
-
-  // A one-cycle INT21 pending pulse, the same shape: the sequencer latches it on the edge between
-  // the two assignments and emits the record after it.
-  task automatic pulse_int21();
-    begin
-      @(negedge clk_sys);
-      int21_pending = 1'b1;
-      @(negedge clk_sys);
-      int21_pending = 1'b0;
     end
   endtask
 
@@ -210,39 +188,17 @@ module tb_pc9821_dbg_record;
     end
   endtask
 
-  // Compare the INT21 record's captured stream: 71 bytes, each the bench's index XOR char.
-  task automatic check_int21_capture(input [511:0] what);
-    integer k, bad_at;
-    begin
-      bad_at = -1;
-      if (capn != INT21_LEN) begin
-        $display("  FAIL %s: captured %0d bytes, want %0d", what, capn, INT21_LEN);
-        errors = errors + 1;
-      end else begin
-        for (k = 0; k < INT21_LEN; k = k + 1)
-          if ((cap[k] !== ((k & 8'hFF) ^ 8'h6B)) && (bad_at < 0)) bad_at = k;
-        if (bad_at >= 0) begin
-          $display("  FAIL %s: byte %0d is %02x, want %02x", what, bad_at, cap[bad_at],
-                   ((bad_at & 8'hFF) ^ 8'h6B));
-          errors = errors + 1;
-        end else begin
-          $display("  ok   %s: all %0d bytes present, in order, once each", what, INT21_LEN);
-        end
-      end
-    end
-  endtask
-
   // ==== CHECKS ====
   reg [7:0] held_byte;
   integer   held_count;
   integer   stall_we_high, stall_byte_stable, stall_count_stable;
 
   initial begin
-    // CHECK 1 - AN IDLE EMITTER PRESENTS NOTHING, and one trigger emits all 683 bytes. A strobe that
+    // CHECK 1 - AN IDLE EMITTER PRESENTS NOTHING, and one trigger emits all 707 bytes. A strobe that
     // floated high while no report was in flight would feed the FIFO bytes no report asked for. The
     // by-position comparison covers the shape, the trigger byte at 349 and the LF at 350; the three
     // index checks cover the record BOUNDARIES, which is what the record lengths are.
-    $display("check 1: idle presents nothing; one trigger emits the whole 683-byte report");
+    $display("check 1: idle presents nothing; one trigger emits the whole 707-byte report");
     idle_reset();
     check_byte("idle strobe", {7'b0, dbg_we}, 8'h00);
     check_byte("idle report_active", {7'b0, report_active}, 8'h00);
@@ -271,7 +227,7 @@ module tb_pc9821_dbg_record;
 
     // CHECK 3 - THE WORST CASE: THE FIFO IS FULL MID-REPORT. The byte presented when the handshake
     // goes away must be HELD - strobe high, the same byte, nothing captured - for as long as the
-    // FIFO is full, and emitted exactly once when room returns. This is the state the pre-r13/326
+    // FIFO is full, and emitted exactly once when room returns. This is the state the old
     // emitter stepped over, and the state the card's `AP=0` capture was taken in.
     $display("check 3: a full FIFO holds the byte and it is emitted exactly once on return");
     idle_reset();
@@ -330,24 +286,6 @@ module tb_pc9821_dbg_record;
     run_report(2000);
     check_int("bytes in the report with the extra trigger", capn, TOTAL);
     check_capture("the report with a trigger inside it");
-
-    // CHECK 6 - THE INT21 ARM: a pending INT21 pair is emitted BETWEEN reports, with the same
-    // hold-until-accept pacing, and it never splits a report. The record is 71 bytes, its ack
-    // pulses once at its start, and the strobe clears after its last byte.
-    $display("check 6: a pending INT21 record emits 71 bytes between reports");
-    idle_reset();
-    pace_en = 1'b1; pace = 1;
-    pulse_int21();
-    i = 0;
-    while (int21_active && (i < 2000)) begin
-      @(negedge clk_sys);
-      i = i + 1;
-    end
-    if (int21_active) $fatal(1, "the INT21 record was still in flight after 2000 cycles");
-    check_int21_capture("free-running INT21 record");
-    check_byte("strobe clear after the INT21 record", {7'b0, dbg_we}, 8'h00);
-    check_int("INT21 index stopped at its last byte", int21_idx, INT21_LEN - 1);
-    check_int("the INT21 record was acknowledged exactly once", ack_pulses, 1);
 
     // ==== VERDICT ====
     if (errors != 0) $fatal(1, "TB_PC9821_DBG_RECORD: %0d check(s) failed", errors);

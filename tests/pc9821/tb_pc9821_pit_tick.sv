@@ -2,11 +2,11 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PIT_TICK:
-// TB_PC9821_PIT_TICK: The 8253 arm of the I/O class table is DERIVED from the profile clock, so the ITF's POST self-test floor holds at every clock the tree can be built for and not only at the 50 MHz base profile: with the iobus parameterised at 85 MHz (the `production` clock) an 8253 WRITE still outlasts one 2.4576 MHz PIT tick, where a fixed 21-cycle arm delivered 22 cycles = 259 ns and fell 148 ns short. The floor is asserted on the WRITE because that is the direction it exists for -- the ITF's self-test programs a count into the counter and reads it back, while the machine READS 8253 count registers at the default class (its PITD0/PITD1 rows in docs/probes/IO.TXT), so the read carries no floor at all (audit-iobus F7). The bench asserts the property -- the delivered write, converted at SYS_CLOCK_HZ, covers one tick -- on the real port 0x0071 and its 0x3FDB alias, and that the arm still fits the bus's 12-bit hold field.
+// TB_PC9821_PIT_TICK: The 8253 arm of the I/O class table is DERIVED from the profile clock, so the ITF's POST self-test floor holds at every clock the tree can be built for and not only at the 50 MHz base profile: with the iobus parameterised at 85 MHz (the `production` clock) an 8253 WRITE still outlasts one 2.4576 MHz PIT tick, where a fixed 21-cycle arm delivered 22 cycles = 259 ns and fell 148 ns short. The floor is asserted on the WRITE because that is the direction it exists for -- the ITF's self-test programs a count into the counter and reads it back, while the machine READS 8253 count registers at the default class (its PITD0/PITD1 rows in docs/probes/IO.TXT), so the read carries no floor at all. The bench asserts the property -- the delivered write, converted at SYS_CLOCK_HZ, covers one tick -- on the real port 0x0071 and its 0x3FDB alias, and that the arm still fits the bus's 12-bit hold field.
 //
 // ---- the bench's own account of where the expectation comes from ----
 //
-// This exists because r13/247 finding 1 is the one review item that can turn a reshaped
+// This exists because this is the one known failure that can turn a reshaped
 // wait-state table into a failed POST, and NOTHING in the tree would have caught it. The
 // ITF's self-test (BANK4@0x038C-0x03CA) loads 0xFF into a PIT channel's counter, then
 // issues a count-latch command and reads the latched count; the read must not be the byte
@@ -69,6 +69,7 @@ module tb_pc9821_pit_tick;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -108,6 +109,7 @@ module tb_pc9821_pit_tick;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -128,8 +130,14 @@ module tb_pc9821_pit_tick;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -145,6 +153,11 @@ module tb_pc9821_pit_tick;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SYS_CLOCK_HZ(CLK_HZ)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -154,7 +167,7 @@ module tb_pc9821_pit_tick;
   integer c_real = 0, c_alias = 0;
   reg [15:0] probe_port = 16'h0000;
 
-  // A WRITE, because that is the direction the floor exists for (audit-iobus F7): the ITF's
+  // A WRITE, because that is the direction the floor exists for: the ITF's
   // POST self-test programs a count into the 8253 and reads it straight back, and it is the
   // PROGRAMMING that must outlast one 2.4576 MHz tick. The READ is the default class, which the
   // capture prices (its PITD0/PITD1 rows in docs/probes/IO.TXT), so it carries no floor at all.

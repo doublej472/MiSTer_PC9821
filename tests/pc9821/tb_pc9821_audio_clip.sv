@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The sound path under a dense worst case -- six full-level drums overlapping with six FM channels at maximum, the SSG at maximum and the 86-PCM voice playing at full scale, with the 0xA46C write-FIFO and the OPNA register queue (WRQ) flooded at the I/O floor cadence -- with three detections running throughout: (a) no dropped write or sample: every host write presented through the real pc9821_iobus master is accepted by the buffer and lands (WRQ entries drained to the chip, 0xA46C bytes stored in SDRAM byte-exact) now that both buffers back-pressure through io_wr_wait instead of silently dropping on full (the pre-fix WRQ lost 94/160 at this cadence and the 0xA46C FIFO dropped past 4 deep under SDRAM contention), with the stall itself counted so the no-drop result cannot be vacuous; (b) the die's drum bus: the six-drum sum is recomputed from jt08_adpcm_acc's per-drum slot inputs as the die's 16-bit two's-complement WRAP (YM2608-LLE fmopna_impl.c:5370) and compared with the DUT accumulator every slot; (c) no clipped-vs-expected sample: jt08_adpcm_acc's pcm_out must equal that wrapped round sum, never a clamped one (the pre-fix 16-bit clamp there flat-topped dense overlaps before the FM mix -- the owner's drums clipping) and the output chain must equal the single-clamp saturating model of the wide FM+ADPCM junction (the ymfm clamp16 / NP2kai _saturation_s16 point) followed by the AC-coupled (zero-mean) SSG and a WIDE join with NO intermediate saturation (datapaths.md F1: the pre-fix tree flat-topped there even when the FM+SSG+PCM86 sum fit in 16 bits; the single clamp is at the final DAC), the over-16 stimulus kept non-vacuous. Phase 1 pins the 0 dB single-drum output to the same model, so the default path stays bit-identical.
+// The sound path under a dense worst case -- six full-level drums overlapping with six FM channels at maximum, the SSG at maximum and the 86-PCM voice playing at full scale, with the 0xA46C write-FIFO and the OPNA register queue (WRQ) flooded at the I/O floor cadence -- with three detections running throughout: (a) no dropped write or sample: every host write presented through the real pc9821_iobus master is accepted by the buffer and lands (WRQ entries drained to the chip, 0xA46C bytes stored in SDRAM byte-exact) now that both buffers back-pressure through io_wr_wait instead of silently dropping on full (the pre-fix WRQ lost 94/160 at this cadence and the 0xA46C FIFO dropped past 4 deep under SDRAM contention), with the stall itself counted so the no-drop result cannot be vacuous; (b) the die's drum bus: the six-drum sum is recomputed from jt08_adpcm_acc's per-drum slot inputs as the die's 16-bit two's-complement WRAP (YM2608-LLE fmopna_impl.c:5370) and compared with the DUT accumulator every slot; (c) no clipped-vs-expected sample: jt08_adpcm_acc's pcm_out must equal that wrapped round sum, never a clamped one (the pre-fix 16-bit clamp there flat-topped dense overlaps before the FM mix -- audible as drums clipping) and the output chain must equal the single-clamp saturating model of the wide FM+ADPCM junction (the ymfm clamp16 / NP2kai _saturation_s16 point) followed by the AC-coupled (zero-mean) SSG and a WIDE join with NO intermediate saturation (datapaths.md F1: the pre-fix tree flat-topped there even when the FM+SSG+PCM86 sum fit in 16 bits; the single clamp is at the final DAC), the over-16 stimulus kept non-vacuous. Phase 1 pins the 0 dB single-drum output to the same model, so the default path stays bit-identical.
 //
 // TB_PC9821_AUDIO_CLIP: the sound path under a DENSE worst case - six full-level
 // drums overlapping with six FM channels at maximum and the SSG at maximum, the
@@ -22,9 +22,9 @@
 //       compared with the DUT's accumulator and its sign-extended round capture.
 //   (c) CLIPPED-VS-EXPECTED: jt08_adpcm_acc's pcm_out must be the die's 16-bit
 //       wrapped round sum, never a clamped one - the pre-fix tree flat-topped it at
-//       16 bits, which is the owner's "drums clipping" -
+//       16 bits, which is the audible "drums clipping" -
 //       and the FM+ADPCM junction must clamp to the 16-bit rail (ymfm's
-//       m_last_fm.clamp16, ymfm_opn.cpp:1410-1414) BEFORE the SSG is added, with
+//       m_last_fm.clamp16, ymfm_opn.cpp:1411 `m_last_fm.clamp16();`) BEFORE the SSG is added, with
 //       the SSG joining after that clamp and mix_dry as the final clamp.
 //
 // WHERE THE EXPECTED VALUES COME FROM. Every constant the models below compare
@@ -33,14 +33,14 @@
 // this RTL, which is the thing under test and never evidence of what the hardware
 // does (the same rule the bench-circular audit applies to the pit/fdc rows):
 //   * the FM+ADPCM value and its ONE clamp16 - ymfm ym2608::clock_fm_and_adpcm
-//     (ymfm_opn.cpp:1408-1414) and NP2kai's single DAC saturation
+//     (ymfm_opn.cpp:1405-1411, `// mix in the ADPCM and clamp`) and NP2kai's single DAC saturation
 //     (_saturation_s16, sdl/soundmng.c:787);
 //   * the SSG term is the DUT's own sound.ssg_ac (the join psg_snd * 33/16, then
 //     AC-coupled to zero mean by the board's C7C1 series cap model): this bench
 //     takes it as given and checks only WHERE it joins; its level is pinned
 //     against the captures by tb_pc9821_opna_ssg_level / _opna_sndtest_balance;
 //   * the single-drum amplitude ceiling - ymfm adpcm_a_channel::output
-//     (ymfm_adpcm.cpp:234-239).
+//     (ymfm_adpcm.cpp:226-239, `int8_t mul = 15 - (vol & 7);` ... `& ~3;`).
 //
 // PHASE 1 plays ONE drum at full level and pins the model every sample; its peak
 // is checked against the reference ADPCM-A amplitude ceiling, not against a
@@ -64,6 +64,7 @@ module tb_pc9821_audio_clip;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -107,6 +108,7 @@ module tb_pc9821_audio_clip;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -125,7 +127,7 @@ module tb_pc9821_audio_clip;
 
   // The EGC's register file and its gate. This bench drives the sound ports, not
   // the graphics accelerator, so the gate is tied off and the registers are left
-  // unread; they are declared because pc9821_iobus carries them (r12/32, merged
+  // unread; they are declared because pc9821_iobus carries them (merged
   // with this branch) and the `.*` instantiation below matches ports by name.
   wire        egc_gate = 1'b0;
   wire [15:0] egc_access, egc_fgbg, egc_ope, egc_fg;
@@ -144,7 +146,7 @@ module tb_pc9821_audio_clip;
   wire [1:0] ems_state;
   wire top_shadow_en;
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
-  // port (r13/57) and the `.*` DUT instantiation matches by name, so it must
+  // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
@@ -170,8 +172,14 @@ module tb_pc9821_audio_clip;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -190,14 +198,13 @@ module tb_pc9821_audio_clip;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
-  // pc9821_system's device glue, reproduced: the OPNA is selected for its four
-  // ports, it is the only device the bus waits a cycle for, and its output is
-  // the only byte on the device bus (0xFF otherwise, standing in for the
-  // devices this bench does not build).
-  wire opna_cs = (device_io_addr == 16'h0188) ||
-                 (device_io_addr == 16'h018A) ||
-                 (device_io_addr == 16'h018C) ||
-                 (device_io_addr == 16'h018E);
+  // pc9821_system's device glue: the OPNA is selected for its four ports (P5 made the ONE
+  // pc9821_device_select instance live inside pc9821_iobus, so `.*` above binds opna_cs/pcm_cs
+  // to the real decode instead of reproducing it here), it is the only device the bus waits a
+  // cycle for, and its output is the only byte on the device bus (0xFF otherwise, standing in
+  // for the devices this bench does not build).
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   wire [7:0] opna_io_dout;
   wire       opna_rd_wait, opna_wr_wait, opna_irq;
   wire signed [19:0] opna_snd_l, opna_snd_r;   // WIDE since A-1 (20-bit FM+ADPCM+SSG sum)
@@ -304,7 +311,7 @@ module tb_pc9821_audio_clip;
 
   // The extended bank's register/data pair (0x18C/0x18E), the port pair the
   // card puts FM channels 4-6 behind: jt12_mmr decodes the chip address's high
-  // bit as the channel's high bit (jt12_mmr.v:536), and the glue reaches it only
+  // bit as the channel's high bit (jt12_mmr.v:535, `up_ch <= {part, selected_register[1:0]};`), and the glue reaches it only
   // when 0xA460 bit 0 is set (pc9821_opna.sv op_sel).
   task automatic sound_x(input [7:0] reg_index, input [7:0] data);
     begin
@@ -315,13 +322,6 @@ module tb_pc9821_audio_clip;
 
 
   // ==== THE 86-PCM BLOCK (the card's other device) =====================
-  wire pcm_cs = (device_io_addr == 16'h0A462) ||
-                (device_io_addr == 16'h0A464) ||
-                (device_io_addr == 16'h0A466) ||
-                (device_io_addr == 16'h0A468) ||
-                (device_io_addr == 16'h0A46A) ||
-                (device_io_addr == 16'h0A46C) ||
-                (device_io_addr == 16'h0A46E);
   wire [7:0] pcm_io_dout;
   wire       pcm_irq, pcm86_wr_wait;
   wire signed [15:0] pcm_snd_l, pcm_snd_r;
@@ -395,7 +395,7 @@ module tb_pc9821_audio_clip;
   // sign-extended round capture every slot. SCOPE: because it
   // takes the decoded drum samples from the DUT, it CANNOT see a wrong ADPCM
   // decode or a wrong drum gain - only an intermediate clamp or an accumulator
-  // overflow (review2/benches.md N4). (c) is the output-chain check; its expected
+  // overflow. (c) is the output-chain check; its expected
   // values are reference-sourced (see the constants below). The monitor compares
   // FIRST (both sides at the same state) and updates second, and captures BEFORE
   // updating because the RTL's `pcm_out <= acc` takes the pre-edge sum.
@@ -415,27 +415,27 @@ module tb_pc9821_audio_clip;
   // the board's C7C1 series cap model, so the join adds the zero-mean term
   // sound.ssg_ac (its level is pinned by tb_pc9821_opna_ssg_level).
   wire signed [19:0] ssg_term = sound.ssg_ac;
-  // The 16-bit rail of the junction clamp16 (ymfm ymfm_opn.cpp:1414). The
+  // The 16-bit rail of the junction clamp16 (ymfm ymfm_opn.cpp:1411 `m_last_fm.clamp16();`). The
   // FM+ADPCM sum is clamped to it here; the SSG is added AFTER (ymfm_opn.cpp:
-  // ~1317), which is why the join itself can still ride past 16 bits.
+  // 1323 `m_ssg_resampler.resample(output - numsamples, numsamples);`), which is why the join itself can still ride past 16 bits.
   localparam integer CLAMP16_MAX =  32767;
   localparam integer CLAMP16_MIN = -32768;
   // A full-level drum's ceiling: ymfm adpcm_a_channel::output (ymfm_adpcm.cpp:
-  // 234-239) over a 12-bit accumulator (+-2048) at the documented full level
+  // 226-239) over a 12-bit accumulator (+-2048) at the documented full level
   // (instrument+total level both max -> vol 0 -> mul 15, shift 5), so
   // |value| <= |(2048 << 4) * 15 >> 5| = 15360.
   localparam integer P1_DRUM_MAX = 15360;
 
   integer model_acc, model_raw, model_expected, model_started;
-  integer clip_events, wrap_events, chain_events, bp_stall_events, join_over16;
+  integer clip_events, wrap_events, chain_events, bp_stall_events, join_over16, drum_wrapped;
   initial begin
     model_acc = 0; model_raw = 0; model_expected = 0; model_started = 0;
     clip_events = 0; wrap_events = 0; chain_events = 0; bp_stall_events = 0;
-    join_over16 = 0;
+    join_over16 = 0; drum_wrapped = 0;
   end
 
-  // The die's six-drum bus WRAPS at 16 bits (fmopna_impl.c:5363-5383,
-  // `ac_rss_accm1[0] = accm1 & 0xffff`; opna-lle-audit.md F1). The model keeps the
+  // The die's six-drum bus WRAPS at 16 bits (fmopna_impl.c:5367-5382,
+  // `chip->ac_rss_accm1[0] = accm1 & 0xffff;`). The model keeps the
   // UNBOUNDED running sum plus its 16-bit two's-complement image, which is what the
   // DUT's accumulator and the sign-extended pcm_out must equal.
   function automatic integer wrap16(input integer v);
@@ -474,11 +474,12 @@ module tb_pc9821_audio_clip;
         if (dr_match) begin
           model_raw = dr_cur_ch[0] ? dr_term : model_raw + dr_term;
           model_acc = wrap16(model_raw);
+          if (model_raw != model_acc) drum_wrapped = drum_wrapped + 1;
         end
       end
 
       // ---- (c) the output chain, re-sourced to the reference arithmetic ----
-      // ymfm ym2608::clock_fm_and_adpcm (ymfm_opn.cpp:1408-1414) sums FM +
+      // ymfm ym2608::clock_fm_and_adpcm (ymfm_opn.cpp:1405-1411) sums FM +
       // ADPCM-A(0x3f) + ADPCM-B(1) into ONE int32 and clamps ONCE
       // (`m_last_fm.clamp16()`); the SSG is added AFTER that clamp. `fmsnd` taps
       // that complete FM+ADPCM sum, so the model clamps IT to the 16-bit rail
@@ -643,7 +644,7 @@ module tb_pc9821_audio_clip;
     // =================================================================
     // PHASE 1: ONE drum at full level, alone - the 0 dB reference pin. The
     // single-drum output is bounded by the ymfm ADPCM-A amplitude:
-    // adpcm_a_channel::output (ymfm_adpcm.cpp:234-239) turns the 12-bit
+    // adpcm_a_channel::output (ymfm_adpcm.cpp:226-239) turns the 12-bit
     // accumulator into ((acc<<4)*(15-vol&7)) >> (5+vol>>3) & ~3, so at the
     // documented full level used here (vol 0 -> mul 15, shift 5) one drum cannot
     // exceed |(+/-2048 << 4)*15 >> 5| = 15360. The 0 dB path must stay inside
@@ -703,11 +704,14 @@ module tb_pc9821_audio_clip;
     if (pcm_peak == 0)
       fail("P2: the 86-PCM voice at full volume produced nothing: the PCM leg of the dense mix is dead");
     if ((clip_events - clip0) != 0)
-      fail("P2: the drum bus is not the die's 16-bit WRAPPED sum under the dense overlap (the owner's clip)");
+      fail("P2: the drum bus is not the die's 16-bit WRAPPED sum under the dense overlap (the audible clip)");
     if ((wrap_events - wrap0) != 0)
       fail("P2: the drum accumulator is not the die's 16-bit wrapping sum under the dense overlap");
     if ((chain_events - chain0) != 0)
       fail("P2: the FM+ADPCM + SSG join does not match the clamp16-then-add-SSG model");
+    $display("     drum bus passed the 16-bit range (wrap exercised) %0d slots", drum_wrapped);
+    if (drum_wrapped == 0)
+      fail("P2: the six-drum sum never left 16 bits: the die's 16-bit WRAP leg would be vacuous");
     if (join_over16 == 0)
       fail("P2: the join never passed 16 bits: the no-clamp check would be vacuous");
 

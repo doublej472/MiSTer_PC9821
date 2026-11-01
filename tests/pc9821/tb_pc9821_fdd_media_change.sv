@@ -9,8 +9,8 @@
 // `FDCRLT_AI | drv` and interrupts when it runs out (gate open here: chgreg = 3 after reset).
 // tb_pc9821_fdc_ready_change pins the gate and the frame count at the controller alone; this
 // bench runs the same change through the real medium and the real adapter.
-// WHAT IS NOT PINNED: the answer of a command whose medium left under it (owner, 2026-10-08:
-// "Ejecting a FDD during a read should be undefined behavior").
+// WHAT IS NOT PINNED: the answer of a command whose medium left under it (ejecting a
+// floppy during a read is undefined behaviour).
 //
 // THE PATH IS THE REAL ONE: pc9821_fdc, pc9821_fdd_media and pc9821_block_share (with its
 // pc9821_block_io engine), with a host model for both floppy slots and a uPD71071-shaped DMA
@@ -105,12 +105,12 @@ module tb_pc9821_fdd_media_change;
       if (which == 0) begin
         imgA[off+0] = c; imgA[off+1] = h; imgA[off+2] = r; imgA[off+3] = nn;
         imgA[off+4] = nsec[7:0]; imgA[off+5] = nsec[15:8];
-        imgA[off+6] = 8'h40;                                    // mfm_flg
+        imgA[off+6] = 8'h00;                                    // mfm_flg: 0x00 = MFM, the mode these reads use (0x40 = FM, NP2kai searchsector_d88)
         imgA[off+14] = size[7:0]; imgA[off+15] = size[15:8];
       end else begin
         imgB[off+0] = c; imgB[off+1] = h; imgB[off+2] = r; imgB[off+3] = nn;
         imgB[off+4] = nsec[7:0]; imgB[off+5] = nsec[15:8];
-        imgB[off+6] = 8'h40;
+        imgB[off+6] = 8'h00;
         imgB[off+14] = size[7:0]; imgB[off+15] = size[15:8];
       end
     end
@@ -191,6 +191,11 @@ module tb_pc9821_fdd_media_change;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx;
+  wire [7:0] fdd_tc;   // the physical track (pc9821_fdc's media_tc)
+  wire       fdd_hd;
+  wire       fdd_mf;
+  wire       fdd_2hd;
+  wire       fdd_rpm;
   wire        fdd_ready, fdd_rdy, fdd_hdrv, fdd_err;
   wire [7:0]  fdd_dout, fdd_hr, fdd_hn, fdd_hs;
 
@@ -213,7 +218,7 @@ module tb_pc9821_fdd_media_change;
       .media_present({2'b00, fdd_present}), .writeprotect({2'b00, fdd_wp}),
       .media_chg({2'b00, fdd_chg}), .frame_tick(ftick),
       .media_req(fdd_req), .media_req_hdr(fdd_req_hdr), .media_unit(fdd_unit),
-      .media_c(fdd_c), .media_h(fdd_h), .media_r(fdd_r), .media_n(fdd_n),
+      .media_c(fdd_c), .media_h(fdd_h), .media_tc(fdd_tc), .media_hd(fdd_hd), .media_mf(fdd_mf), .media_2hd(fdd_2hd), .media_rpm(fdd_rpm), .media_r(fdd_r), .media_n(fdd_n),
       .media_idx(fdd_idx),
       .media_ready(fdd_ready), .media_rdy(fdd_rdy), .media_hdrv(fdd_hdrv),
       .media_err(fdd_err), .media_dout(fdd_dout),
@@ -239,7 +244,7 @@ module tb_pc9821_fdd_media_change;
       .blk_fill_data(blk_fill_data),
       .present(fdd_present), .writeprotect(fdd_wp), .chg(fdd_chg),
       .req(fdd_req), .req_hdr(fdd_req_hdr), .unit(fdd_unit),
-      .req_c(fdd_c), .req_h(fdd_h), .req_r(fdd_r), .req_n(fdd_n), .req_idx(fdd_idx),
+      .req_c(fdd_c), .req_h(fdd_h), .req_tc(fdd_tc), .req_hd(fdd_hd), .req_mf(fdd_mf), .req_2hd(fdd_2hd), .req_rpm(fdd_rpm), .req_r(fdd_r), .req_n(fdd_n), .req_idx(fdd_idx),
       .ready(fdd_ready), .rdy(fdd_rdy), .hdrv(fdd_hdrv), .err(fdd_err),
       .dout(fdd_dout), .adv(fdd_adv),
       .hdr_r(fdd_hr), .hdr_n(fdd_hn), .hdr_sects(fdd_hs)

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SDRAM_SYNC: the SDRAM backend - split_sdram_backend over sdram_sync_bridge, the controller on clk_sys at FREQ = clk_sys, the only build since the split-clock configuration was removed - keeps its requester-side contract at EVERY preset clock, 80 MHz (base, the shipping build), 95 MHz (the fastest CL2 clock), 100 MHz (mediumoc), 120 MHz (heavyoc, at the SDRAM part's limit) and 50 MHz (the clock the other bridge benches run), each driven by the SAME requester program against sdram_chip_model at the deployed module settings (HAS_DQM=0, ADQM=1, FAST_GRADE=0, GATHER_K=4): every ready is one clk_sys cycle and answers a presented request, every read answers exactly one resp_valid per dword on the port that asked and nowhere else, a write answers none, every word read back is the word written (single dwords, 4-dword line fills, byte-masked stores, 8/10-dword bursts), port 0's dout holds its last word between its own pulses while ports 1-3 answer in between (the hold the controller does not keep and the bridge must), and all four ports are served while they contend. The single-dword read/write round trip, the 4-dword line fill, the posted-store and line-fill stream rates and the byte-store cost are MEASURED at each clock in clk_sys cycles and ns and REPORTED, not asserted. Every MODE REGISTER SET the controller issues programs the CAS latency the hardware requires - CL2 below 100 MHz (80, 95, 50), CL3 at 100 MHz and up (100, 120), the cutover two DE10-Nano boards set on 2026-10-13 - and the device model returns read data at that latency, so a controller reading at the CL2 edge at 100 MHz also fails the data checks. FAIL-FIRST: a bare pass-through without port 0's hold fails the dout0 hold check. FAIL-FIRST: with CL2 kept at 100 MHz (the old FREQ <= 100 MHz rule) the 100 MHz harness fails its MRS and read-data checks.
+// TB_PC9821_SDRAM_SYNC: the SDRAM backend - split_sdram_backend over sdram_sync_bridge, the controller on clk_sys at FREQ = clk_sys, the only build since the split-clock configuration was removed - keeps its requester-side contract at EVERY preset clock, 90 MHz (base, the shipping build), 95 MHz (the fastest CL2 clock), 100 MHz (mediumoc), 120 MHz (heavyoc, at the SDRAM part's limit) and 50 MHz (the clock the other bridge benches run), each driven by the SAME requester program against sdram_chip_model at the deployed module settings (ADQM=1, FAST_GRADE=0, GATHER_K=4) with its protocol checks and the -7 grade's AC checks (AS4C32M16SB datasheet Rev 1.4 Table 16) on and the AUTO REFRESH gap held to tREFI = 64 ms / 8192: every ready is one clk_sys cycle and answers a presented request, every read answers exactly one resp_valid per dword on the port that asked and nowhere else, a write answers none, every word read back is the word written (single dwords, 4-dword line fills, byte-masked stores, 8/10-dword bursts), port 0's dout holds its last word between its own pulses while ports 1-3 answer in between (the hold the controller does not keep and the bridge must), and all four ports are served while they contend. The single-dword read/write round trip, the 4-dword line fill, the posted-store and line-fill stream rates and the byte-store cost are MEASURED at each clock in clk_sys cycles and ns and REPORTED, not asserted. Every MODE REGISTER SET the controller issues programs the CAS latency the hardware requires - CL2 below 100 MHz (90, 95, 50), CL3 at 100 MHz and up (100, 120), the cutover two DE10-Nano boards set on 2026-10-13 - and the device model returns read data at that latency, so a controller reading at the CL2 edge at 100 MHz also fails the data checks. FAIL-FIRST: a bare pass-through without port 0's hold fails the dout0 hold check. FAIL-FIRST: with CL2 kept at 100 MHz (the old FREQ <= 100 MHz rule) the 100 MHz harness fails its MRS and read-data checks.
 //
 // Until 2026-10-09 this bench ran the same program on the clock-domain build (sdram_clock_bridge,
 // a 100 MHz clk_sdram) and the same-clock build side by side. The split-clock build is gone,
@@ -9,8 +9,8 @@
 // "As the CPU sees it" means at split_sdram_backend's requester ports: the memory subsystem and
 // the z486 cache add their own clk_sys cycles on top.
 //
-// WHAT IT DOES NOT PROVE: sdram_chip_model is a data/command-order model, not a timing-accurate
-// device; the AC timing of the controller at each clock is tb_pc9821_sdram_strict's (-GFREQ=...),
+// WHAT IT DOES NOT PROVE: sdram_chip_model checks commands at clock resolution, not a timing-accurate
+// device; the AC timing against the strict module model at each clock is tb_pc9821_sdram_strict's,
 // and whether the board meets the I/O timing at a clock is the fit's STA, not a simulation.
 
 `default_nettype none
@@ -18,8 +18,8 @@
 // One backend at one clock, its device model and a requester program. The top instantiates one
 // per preset clock and runs the same program on each.
 module tb_pc9821_sdram_sync_harness #(
-    parameter integer FREQ = 80_000_000,        // clk_sys = the controller's clock
-    parameter real    SYS_NS = 12.5              // one clk_sys, for the ns report
+    parameter integer FREQ = 90_000_000,        // clk_sys = the controller's clock
+    parameter real    SYS_NS = 1000.0 / 90       // one clk_sys, for the ns report
 ) (
     input wire clk           // clk_sys: requesters, controller and device model
 );
@@ -29,8 +29,8 @@ module tb_pc9821_sdram_sync_harness #(
   // CAS is the EXPECTED latency, set by hardware, not read off the RTL: CL2 strictly below
   // 100 MHz, CL3 at 100 MHz and up. On two DE10-Nano boards (2026-10-13, 100 MHz clk_sys =
   // SDRAM, the disk-integrity probe) CL2 failed on one board for 9 of 11 placements while CL3
-  // placements passed on both, and 95 MHz CL2 passed the full regression on both boards (owner
-  // decision 2026-10-13). The device model returns data CAS clocks after each READ, so a
+  // placements passed on both, and 95 MHz CL2 passed the full regression on both boards
+  // (2026-10-13). The device model returns data CAS clocks after each READ, so a
   // controller sampling at the CL2 edge at 100 MHz reads the wrong half and fails the data
   // checks; the MRS check below also pins the mode register's CAS field (A[6:4]) to CAS.
   localparam integer KHZ   = (FREQ + 999) / 1000;
@@ -58,7 +58,7 @@ module tb_pc9821_sdram_sync_harness #(
   wire        nWE, nRAS, nCAS, nCS, CKE;
 
   split_sdram_backend #(
-      .FREQ(FREQ), .HAS_DQM(1'b0), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(4)
+      .FREQ(FREQ), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(4)
   ) backend (
       .clk(clk), .reset(reset), .refresh_allowed(1'b1),
       .sdram_size(2'd2), .busy(busy),
@@ -78,7 +78,10 @@ module tb_pc9821_sdram_sync_harness #(
       .sdram_nwe(nWE), .sdram_nras(nRAS), .sdram_ncas(nCAS), .sdram_ncs(nCS), .sdram_cke(CKE)
   );
 
-  sdram_chip_model #(.CAS(CAS), .T_RP(T_RP), .T_WR(T_WR)) chip (
+  // The AUTO REFRESH gap is held to tREFI = 64 ms / 8192 rows (the AS4C32M16SB datasheet's 8192
+  // refreshes per 64 ms) on the pins; the AC checks use the -7 column (FAST_GRADE=0).
+  sdram_chip_model #(.CAS(CAS), .T_RP(T_RP), .T_WR(T_WR), .FREQ_HZ(FREQ), .GRADE(7),
+                     .REFRESH_INTERVAL(FREQ / 128_000)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
@@ -353,18 +356,18 @@ module tb_pc9821_sdram_sync_harness #(
 endmodule
 
 module tb_pc9821_sdram_sync;
-  // One harness per preset clock (build_profile.py): base/lightoc/trace/iofaithful/midilink 80,
+  // One harness per preset clock (build_profile.py): base/trace/iofaithful 90,
   // mediumoc 100, heavyoc 120; 95 MHz, the fastest clock that keeps CL2 (the CAS cutover's
   // other side); and 50 MHz, the clock the other bridge benches run.
-  reg clk80 = 1'b0, clk95 = 1'b0, clk100 = 1'b0, clk120 = 1'b0, clk50 = 1'b0;
-  always #(12.5 / 2.0)          clk80  = ~clk80;
+  reg clk90 = 1'b0, clk95 = 1'b0, clk100 = 1'b0, clk120 = 1'b0, clk50 = 1'b0;
+  always #(1000.0 / 90 / 2.0)   clk90  = ~clk90;
   always #(1000.0 / 95 / 2.0)   clk95  = ~clk95;
   always #(10.0 / 2.0)          clk100 = ~clk100;
   always #(1000.0 / 120 / 2.0)  clk120 = ~clk120;
   always #(20.0 / 2.0)          clk50  = ~clk50;
 
   // ==== DUT ====
-  tb_pc9821_sdram_sync_harness #(.FREQ(80_000_000),  .SYS_NS(12.5))         h80  (.clk(clk80));
+  tb_pc9821_sdram_sync_harness #(.FREQ(90_000_000),  .SYS_NS(1000.0 / 90))  h90  (.clk(clk90));
   tb_pc9821_sdram_sync_harness #(.FREQ(95_000_000),  .SYS_NS(1000.0 / 95))  h95  (.clk(clk95));
   tb_pc9821_sdram_sync_harness #(.FREQ(100_000_000), .SYS_NS(10.0))         h100 (.clk(clk100));
   tb_pc9821_sdram_sync_harness #(.FREQ(120_000_000), .SYS_NS(1000.0 / 120)) h120 (.clk(clk120));
@@ -376,8 +379,8 @@ module tb_pc9821_sdram_sync;
   // each controller to have issued at least one MRS, every one programming the expected CL.
   initial begin
     #(20.0 * 4_000_000);
-    $fatal(1, "TB_PC9821_SDRAM_SYNC: watchdog - the program did not finish (done 80=%0d 95=%0d 100=%0d 120=%0d 50=%0d)",
-           h80.done, h95.done, h100.done, h120.done, h50.done);
+    $fatal(1, "TB_PC9821_SDRAM_SYNC: watchdog - the program did not finish (done 90=%0d 95=%0d 100=%0d 120=%0d 50=%0d)",
+           h90.done, h95.done, h100.done, h120.done, h50.done);
   end
 
   function automatic bit clean(input integer errors, input bit done, input integer hold_checks,
@@ -390,20 +393,20 @@ module tb_pc9821_sdram_sync;
 
   // ==== VERDICT ====
   initial begin
-    $display("TB_PC9821_SDRAM_SYNC: the controller on clk_sys at 80, 95, 100, 120 and 50 MHz");
+    $display("TB_PC9821_SDRAM_SYNC: the controller on clk_sys at 90, 95, 100, 120 and 50 MHz");
     fork
-      h80.run();
+      h90.run();
       h95.run();
       h100.run();
       h120.run();
       h50.run();
     join
-    h80.report("80/80 (base)");
+    h90.report("90/90 (base)");
     h95.report("95/95 (CL2 top)");
     h100.report("100/100 (mediumoc)");
     h120.report("120/120 (heavyoc)");
     h50.report("50/50");
-    if (clean(h80.errors,  h80.done,  h80.hold_checks,  h80.served[0],  h80.served[1],  h80.served[2],  h80.served[3],  h80.mrs_count,  h80.mrs_bad) &&
+    if (clean(h90.errors,  h90.done,  h90.hold_checks,  h90.served[0],  h90.served[1],  h90.served[2],  h90.served[3],  h90.mrs_count,  h90.mrs_bad) &&
         clean(h95.errors,  h95.done,  h95.hold_checks,  h95.served[0],  h95.served[1],  h95.served[2],  h95.served[3],  h95.mrs_count,  h95.mrs_bad) &&
         clean(h100.errors, h100.done, h100.hold_checks, h100.served[0], h100.served[1], h100.served[2], h100.served[3], h100.mrs_count, h100.mrs_bad) &&
         clean(h120.errors, h120.done, h120.hold_checks, h120.served[0], h120.served[1], h120.served[2], h120.served[3], h120.mrs_count, h120.mrs_bad) &&
@@ -411,10 +414,10 @@ module tb_pc9821_sdram_sync;
       $display("TB_PC9821_SDRAM_SYNC: PASS");
       $finish;
     end else begin
-      $fatal(1, "TB_PC9821_SDRAM_SYNC: FAIL (errors 80=%0d 95=%0d 100=%0d 120=%0d 50=%0d; MRS bad %0d/%0d/%0d/%0d/%0d; hold checks %0d/%0d/%0d/%0d/%0d)",
-             h80.errors, h95.errors, h100.errors, h120.errors, h50.errors,
-             h80.mrs_bad, h95.mrs_bad, h100.mrs_bad, h120.mrs_bad, h50.mrs_bad,
-             h80.hold_checks, h95.hold_checks, h100.hold_checks, h120.hold_checks, h50.hold_checks);
+      $fatal(1, "TB_PC9821_SDRAM_SYNC: FAIL (errors 90=%0d 95=%0d 100=%0d 120=%0d 50=%0d; MRS bad %0d/%0d/%0d/%0d/%0d; hold checks %0d/%0d/%0d/%0d/%0d)",
+             h90.errors, h95.errors, h100.errors, h120.errors, h50.errors,
+             h90.mrs_bad, h95.mrs_bad, h100.mrs_bad, h120.mrs_bad, h50.mrs_bad,
+             h90.hold_checks, h95.hold_checks, h100.hold_checks, h120.hold_checks, h50.hold_checks);
     end
   end
 endmodule

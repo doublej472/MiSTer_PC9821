@@ -61,7 +61,6 @@ module tb_pc9821_gdc_blink;
       .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce),
       .cfg_fdd_mode(3'd0),   // entry 0: the measured boot/FDD nibble
       .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .io_dout(io_dout),
-      .grcg_mode_r(8'h00),
       .tram_cpu_addr(tram_cpu_addr), .tram_cpu_din(tram_cpu_din), .tram_cpu_we(tram_cpu_we),
       .tram_cpu_dout(tram_cpu_dout),
       .font_ld_addr(font_ld_addr), .font_ld_data(font_ld_data), .font_ld_we(font_ld_we),

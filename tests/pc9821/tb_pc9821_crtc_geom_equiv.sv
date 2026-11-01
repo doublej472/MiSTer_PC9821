@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The CRTC's registered raster geometry (V1-a: the clamped totals registered from the SYNC block as it arrives on the frame-boundary edge the copy of the block uses, and every derived compare operand - HACTIVE, the HSYNC/VSYNC bounds, the frame-end/walk-slot bounds - registered every clk_sys from them, one clk_sys behind, so every raster compare reads a register) is cycle-for-cycle identical to the pre-change module (pc9821_crtc_ref.sv, the module as of ad9ed84c): over tens of frames of random, default-perturbed and clamp-extreme SYNC blocks (every field at zero and at its maximum, cr past the line, lf of 0/1/1024, an all-zero blanking), with the block's last byte landing one cycle before, ON and one cycle after the frame-boundary edge, random command/MODE/CRTC/palette/text-RAM traffic, irregular pixel_ce, and machine resets mid-frame, right after a SYNC write and on the frame-boundary edge, every one of the module's 57 outputs (hs/vs/de, o_htotal/o_vtotal/o_vbp, the frame and snapshot strobes, the vsync IRQ and status bits, the text fetch and render ports, the palette ports, io_dout) matches on every clk_sys cycle.
+// The CRTC's registered raster geometry (V1-a: the clamped totals registered from the SYNC block as it arrives on the frame-boundary edge the copy of the block uses, and every derived compare operand - HACTIVE, the HSYNC/VSYNC bounds, the frame-end/walk-slot bounds - registered every clk_sys from them, one clk_sys behind, so every raster compare reads a register) is cycle-for-cycle identical to the pre-change module (pc9821_crtc_ref.sv, the module as of ad9ed84c): over tens of frames of random, default-perturbed and clamp-extreme SYNC blocks (every field at zero and at its maximum, cr past the line, lf of 0/1/1024, an all-zero blanking), with the block's last byte landing one cycle before, ON and one cycle after the frame-boundary edge, random command/MODE/CRTC/palette/text-RAM traffic, irregular pixel_ce, and machine resets mid-frame, right after a SYNC write and on the frame-boundary edge, every one of the module's 57 outputs (hs/vs/de, o_htotal/o_vtotal/o_vbp, the frame and snapshot strobes, the vsync IRQ and status bits, the text fetch and render ports, the palette ports, io_dout) matches on every clk_sys cycle - with the text-modes lane's three stated exceptions: the stimulus keeps the CRTC render registers, CSRFORM's LR and the PRAM partition lengths at their power-on values (the domain where the text line sequencer IS the old 16-line grid; beyond it tb_pc9821_text_modes holds NP2kai's maketext), the kanji row cache's bank NAME (jc_rd_bank) is not compared, and the text fetch/render ports are compared on active lines below 511 (a taller frame now fetches rows 32-35 instead of truncating them).
 
 // The reference is the pre-change TEXT, not a model of the hardware: this bench proves the
 // restructure did not change behaviour. The raster's hardware behaviour itself is pinned by
@@ -17,7 +17,6 @@ module tb_pc9821_crtc_geom_equiv;
   reg        rst_n_sys = 0, pixel_ce = 1;
   reg        io_wr = 0, io_rd = 0;
   reg  [7:0] io_addr = 8'h60, io_din = 8'h00;
-  reg  [7:0] grcg_mode_r = 8'h00;
   reg [13:0] tram_cpu_addr = 0;
   reg  [7:0] tram_cpu_din = 0;
   reg        tram_cpu_we = 0;
@@ -88,8 +87,10 @@ module tb_pc9821_crtc_geom_equiv;
   wire d_de_out, r_de_out;
 
   pc9821_crtc dut (
-      .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce), .io_wr(io_wr),
-      .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .grcg_mode_r(grcg_mode_r),
+      .crt31k(1'b0),   // 0x09A8 bit 0 clear: the 24 kHz monitor range
+      .gfx_win_on(1'b0),   // no slave window: the master's lines alone (the reference's shape)
+      .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .rst_n_vid(rst_n_sys), .pixel_ce(pixel_ce), .io_wr(io_wr),
+      .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din),
       .tram_cpu_addr(tram_cpu_addr), .tram_cpu_din(tram_cpu_din), .tram_cpu_we(tram_cpu_we),
       .cfg_fdd_mode(cfg_fdd_mode), .wk_tr_read(wk_tr_read), .wk_tr_addr(wk_tr_addr),
       .ank_word(ank_word), .jc_rd_q(jc_rd_q), .cg_ram_vid_q(cg_ram_vid_q),
@@ -116,7 +117,7 @@ module tb_pc9821_crtc_geom_equiv;
       .vs_out(d_vs_out), .de_out(d_de_out));
   pc9821_crtc_ref ref0 (
       .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce), .io_wr(io_wr),
-      .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .grcg_mode_r(grcg_mode_r),
+      .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din),
       .tram_cpu_addr(tram_cpu_addr), .tram_cpu_din(tram_cpu_din), .tram_cpu_we(tram_cpu_we),
       .cfg_fdd_mode(cfg_fdd_mode), .wk_tr_read(wk_tr_read), .wk_tr_addr(wk_tr_addr),
       .ank_word(ank_word), .jc_rd_q(jc_rd_q), .cg_ram_vid_q(cg_ram_vid_q),
@@ -142,10 +143,56 @@ module tb_pc9821_crtc_geom_equiv;
       .gfx_pegc_256(r_gfx_pegc_256), .gfx_pegc_256e(r_gfx_pegc_256e), .hs_out(r_hs_out),
       .vs_out(r_vs_out), .de_out(r_de_out));
 
+  // THE TEXT-MODES CHANGE: the reference decodes the text plane's rows as a
+  // fixed 16-line grid of one partition, which is the line sequencer's behaviour for the
+  // power-on CRTC registers, LR = 15 and a zero partition length - so the stimulus below keeps
+  // exactly those (the CRTC ports are written their power-on values, and the command stream's
+  // CSRFORM and PRAM commands are replaced, like SYNC's). What the sequencer adds beyond that
+  // domain is tb_pc9821_text_modes's, against NP2kai's maketext. jc_rd_bank is left out of the
+  // compare: the kanji row cache's banks are now numbered by a mod-3 count of row reloads
+  // instead of (row == 0) ? 2 : row[0] - a different NAME for the same three banks, held
+  // coherent with the walker by pc9821_cg's bank assertion and the kanji benches.
+  // ...and the text fetch/render family is compared on the reference's ACTIVE lines below line
+  // 511 only: on a blanked line those ports are read addresses no fetch consumes, and the
+  // sequencer leaves them at its own run-on state rather than at vline; at line 511 and below
+  // a frame taller than 512 lines now fetches rows 32-35 instead of truncating them onto rows
+  // 0-3 (the known limitation the six-bit row index retires).
+  // A tall frame's last fetched cell is still in the render registers at the next frame's
+  // first cell (its prefetch is not the wrap cell when HACTIVE runs past 640), so the first two
+  // cells of line 0 after such a frame are left out too.
+  reg tall_prev = 1'b0;
+  always @(posedge clk_sys)
+    if (r_pix_v_active && r_o_vline >= 10'd511) tall_prev <= 1'b1;
+    else if (r_o_vline == 10'd0 && r_o_hdot == 10'd16) tall_prev <= 1'b0;
+  wire fetch_cmp = r_pix_v_active && (r_o_vline < 10'd511) &&
+                   !(tall_prev && r_o_vline == 10'd0 && r_o_hdot < 10'd16);
+  wire [7:0] dm_o_tram_vid_q = fetch_cmp ? d_o_tram_vid_q : 8'd0;
+  wire [7:0] rm_o_tram_vid_q = fetch_cmp ? r_o_tram_vid_q : 8'd0;
+  wire [10:0] dm_ank_rd_addr = fetch_cmp ? d_ank_rd_addr : 11'd0;
+  wire [10:0] rm_ank_rd_addr = fetch_cmp ? r_ank_rd_addr : 11'd0;
+  wire [6:0] dm_jc_rd_cell = fetch_cmp ? d_jc_rd_cell : 7'd0;
+  wire [6:0] rm_jc_rd_cell = fetch_cmp ? r_jc_rd_cell : 7'd0;
+  wire [1:0] dm_jc_rd_word = fetch_cmp ? d_jc_rd_word : 2'd0;
+  wire [1:0] rm_jc_rd_word = fetch_cmp ? r_jc_rd_word : 2'd0;
+  wire [12:0] dm_cg_ram_vid_addr = fetch_cmp ? d_cg_ram_vid_addr : 13'd0;
+  wire [12:0] rm_cg_ram_vid_addr = fetch_cmp ? r_cg_ram_vid_addr : 13'd0;
+  wire [0:0] dm_text_opaque = fetch_cmp ? d_text_opaque : 1'd0;
+  wire [0:0] rm_text_opaque = fetch_cmp ? r_text_opaque : 1'd0;
+  wire [0:0] dm_text_cell = fetch_cmp ? d_text_cell : 1'd0;
+  wire [0:0] rm_text_cell = fetch_cmp ? r_text_cell : 1'd0;
+  wire [11:0] dm_text_colour = fetch_cmp ? d_text_colour : 12'd0;
+  wire [11:0] rm_text_colour = fetch_cmp ? r_text_colour : 12'd0;
   localparam integer OW = 276;
-  wire [OW-1:0] d_all = {d_io_dout, d_gdc_ff2_state, d_tram_cpu_dout, d_o_tram_vid_q, d_ank_rd_addr, d_jc_rd_bank, d_jc_rd_cell, d_jc_rd_word, d_cg_ram_vid_addr, d_o_v_pitch, d_o_v_col40, d_o_v_sad, d_o_v_row0_stale, d_o_vline, d_o_hdot, d_o_htotal, d_o_vtotal, d_o_vbp, d_o_frame_end, d_o_cfg_snap, d_o_cfg_pending, d_o_display_page, d_o_stat_blank, d_o_stat_vsync, d_vsync_active, d_vsync_edge, d_vsync_irq, d_disp_on, d_gfx_access_page, d_gfx_egc_gate, d_dbg_sad, d_dbg_pitch, d_dbg_col40, d_dbg_disp, d_text_opaque, d_text_cell, d_text_colour, d_pix_dot, d_pix_h_active, d_pix_v_active, d_gfx_odd_line, d_gfx_mode16, d_gfx_dig, d_pal_wr_en, d_pal_wr_idx, d_pal_wr_chan, d_pal_wr_data, d_pal_commit, d_pal256_wr_en, d_pal256_wr_idx, d_pal256_wr_chan, d_pal256_wr_data, d_gfx_pegc_256, d_gfx_pegc_256e, d_hs_out, d_vs_out, d_de_out};
-  wire [OW-1:0] r_all = {r_io_dout, r_gdc_ff2_state, r_tram_cpu_dout, r_o_tram_vid_q, r_ank_rd_addr, r_jc_rd_bank, r_jc_rd_cell, r_jc_rd_word, r_cg_ram_vid_addr, r_o_v_pitch, r_o_v_col40, r_o_v_sad, r_o_v_row0_stale, r_o_vline, r_o_hdot, r_o_htotal, r_o_vtotal, r_o_vbp, r_o_frame_end, r_o_cfg_snap, r_o_cfg_pending, r_o_display_page, r_o_stat_blank, r_o_stat_vsync, r_vsync_active, r_vsync_edge, r_vsync_irq, r_disp_on, r_gfx_access_page, r_gfx_egc_gate, r_dbg_sad, r_dbg_pitch, r_dbg_col40, r_dbg_disp, r_text_opaque, r_text_cell, r_text_colour, r_pix_dot, r_pix_h_active, r_pix_v_active, r_gfx_odd_line, r_gfx_mode16, r_gfx_dig, r_pal_wr_en, r_pal_wr_idx, r_pal_wr_chan, r_pal_wr_data, r_pal_commit, r_pal256_wr_en, r_pal256_wr_idx, r_pal256_wr_chan, r_pal256_wr_data, r_gfx_pegc_256, r_gfx_pegc_256e, r_hs_out, r_vs_out, r_de_out};
+  wire [OW-1:0] d_all = {d_io_dout, d_gdc_ff2_state, d_tram_cpu_dout, dm_o_tram_vid_q, dm_ank_rd_addr, 2'b00 /* jc_rd_bank: see the note */, dm_jc_rd_cell, dm_jc_rd_word, dm_cg_ram_vid_addr, d_o_v_pitch, d_o_v_col40, d_o_v_sad, d_o_v_row0_stale, d_o_vline, d_o_hdot, d_o_htotal, d_o_vtotal, d_o_vbp, d_o_frame_end, d_o_cfg_snap, d_o_cfg_pending, d_o_display_page, d_o_stat_blank, d_o_stat_vsync, d_vsync_active, d_vsync_edge, d_vsync_irq, d_disp_on, d_gfx_access_page, d_gfx_egc_gate, d_dbg_sad, d_dbg_pitch, d_dbg_col40, d_dbg_disp, dm_text_opaque, dm_text_cell, dm_text_colour, d_pix_dot, d_pix_h_active, d_pix_v_active, d_gfx_odd_line, d_gfx_mode16, d_gfx_dig, d_pal_wr_en, d_pal_wr_idx, d_pal_wr_chan, d_pal_wr_data, d_pal_commit, d_pal256_wr_en, d_pal256_wr_idx, d_pal256_wr_chan, d_pal256_wr_data, d_gfx_pegc_256, d_gfx_pegc_256e, 1'b0 /* hs_out: see below */, 1'b0 /* vs_out: see below */, d_de_out};
+  wire [OW-1:0] r_all = {r_io_dout, r_gdc_ff2_state, r_tram_cpu_dout, rm_o_tram_vid_q, rm_ank_rd_addr, 2'b00 /* jc_rd_bank: see the note */, rm_jc_rd_cell, rm_jc_rd_word, rm_cg_ram_vid_addr, r_o_v_pitch, r_o_v_col40, r_o_v_sad, r_o_v_row0_stale, r_o_vline, r_o_hdot, r_o_htotal, r_o_vtotal, r_o_vbp, r_o_frame_end, r_o_cfg_snap, r_o_cfg_pending, r_o_display_page, r_o_stat_blank, r_o_stat_vsync, r_vsync_active, r_vsync_edge, r_vsync_irq, r_disp_on, r_gfx_access_page, r_gfx_egc_gate, r_dbg_sad, r_dbg_pitch, r_dbg_col40, r_dbg_disp, rm_text_opaque, rm_text_cell, rm_text_colour, r_pix_dot, r_pix_h_active, r_pix_v_active, r_gfx_odd_line, r_gfx_mode16, r_gfx_dig, r_pal_wr_en, r_pal_wr_idx, r_pal_wr_chan, r_pal_wr_data, r_pal_commit, r_pal256_wr_en, r_pal256_wr_idx, r_pal256_wr_chan, r_pal256_wr_data, r_gfx_pegc_256, r_gfx_pegc_256e, 1'b0 /* hs_out: see below */, 1'b0 /* vs_out: see below */, r_de_out};
 
+  // hs_out is OUT of the equivalence since 2026-10-15: the horizontal porches moved deliberately
+  // to the uPD7220 field map (HFP 8*(hfp+1), HS 8*(hs+1), the back porch the rest; MAME
+  // upd7220.cpp:1243-1246), so the hsync sits where the reference's NP2kai-sum split did not put it.
+  // Its new position is pinned against the SYNC block by tb_pc9821_gdc_sync_raster. vs_out likewise
+  // (2026-10-16): the PIN's VSYNC now moves on the HSYNC leading edge (MAME update_vsync_timer), also
+  // pinned there; the internal vsync (status bit 5, the IRQ) stays in the comparison. Every other
+  // output (hblank/status bit 6, vsync, DE, the counters) stays cycle-identical here.
   // ==== CHECKS ====
   integer errors = 0, cycles = 0, frames = 0, hs_edges = 0, vs_edges = 0;
   integer syncs = 0, edge_lands = 0, resets = 0, clamp_blocks = 0;
@@ -163,8 +210,8 @@ module tb_pc9821_crtc_geom_equiv;
     if (seen_reset && d_all !== r_all) begin
       errors = errors + 1;
       if (errors <= 10)
-        $display("MISMATCH cycle %0d: dut^ref %h (hs %b/%b vs %b/%b de %b/%b fe %b/%b htot %0d/%0d vtot %0d/%0d)",
-                 cycles, d_all ^ r_all, d_hs_out, r_hs_out, d_vs_out, r_vs_out, d_de_out, r_de_out,
+        $display("MISMATCH cycle %0d at line %0d dot %0d: dut^ref %h (hs %b/%b vs %b/%b de %b/%b fe %b/%b htot %0d/%0d vtot %0d/%0d)",
+                 cycles, r_o_vline, r_o_hdot, d_all ^ r_all, d_hs_out, r_hs_out, d_vs_out, r_vs_out, d_de_out, r_de_out,
                  d_o_frame_end, r_o_frame_end, d_o_htotal, r_o_htotal, d_o_vtotal, r_o_vtotal);
     end
     if (rst_n_sys && pixel_ce && r_o_frame_end) frames = frames + 1;
@@ -180,7 +227,6 @@ module tb_pc9821_crtc_geom_equiv;
     ank_word     <= $random(seed);
     jc_rd_q      <= $random(seed);
     cg_ram_vid_q <= $random(seed);
-    grcg_mode_r  <= $random(seed);
     wk_tr_read   <= (($random(seed) & 63) == 0);
     wk_tr_addr   <= $random(seed);
     tram_cpu_we  <= (($random(seed) & 31) == 0);
@@ -288,6 +334,13 @@ module tb_pc9821_crtc_geom_equiv;
         // keep the command port's stream mostly to commands the CRTC takes (not SYNC: the
         // blocks are written by sync_block so their landing is controlled)
         if (p == 8'h62 && (d == 8'h0E || d == 8'h0F)) d = 8'h0D;
+        // ...and not CSRFORM (its first byte is the GDC's LR) or a PRAM command (the partition
+        // lengths): the reference has neither (see the note at the compare).
+        if (p == 8'h62 && (d == 8'h4B || d[7:4] == 4'h7)) d = 8'h0D;
+        // The CRTC render registers take their power-on values (RDBACK.TXT:82-87).
+        if (p == 8'h70 || p == 8'h76 || p == 8'h78 || p == 8'h7A) d = 8'h00;
+        if (p == 8'h72) d = 8'h0F;
+        if (p == 8'h74) d = 8'h10;
         if (($random(seed) & 3) == 0) rd(p); else wr(p, d);
         repeat ({$random(seed)} % 200) @(negedge clk_sys);
       end

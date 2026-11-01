@@ -1,4 +1,4 @@
-// tb_pc9821_ata_advertised — the mechanical "advertised => executable" cross-check.
+// tb_pc9821_ata_advertised - the mechanical "advertised => executable" cross-check.
 //
 // Reads the model's own IDENTIFY page and, for every capability bit it sets that
 // maps to a command, drives that command through the task-file ports and requires
@@ -357,8 +357,8 @@ module tb_pc9821_ata_advertised;
 
     // ---- 5. word 80 is the ATA MAJOR-VERSION field, not a capability ----
     // Bits 1..14 name ATA-1..ATA-14 (Linux ATA_ID_MAJOR_VER, NP2kai "support ATA-1
-    // to 5"). It maps to no command, so it is reported rather than exercised; a
-    // reviewer read its bit 1 as a DMA advertisement, and this bench instead pins
+    // to 5"). It maps to no command, so it is reported rather than exercised; bit 1
+    // can be misread as a DMA advertisement, and this bench instead pins
     // the DMA words directly (section 6).
     $display("  - word 80=0x%04x is the ATA major-version field (bit 1 = ATA-1), not a capability", idw[80]);
 

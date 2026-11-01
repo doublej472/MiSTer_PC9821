@@ -8,12 +8,10 @@
 // scanout's line fetch on the controller's fourth (here port 3). The two defects this bench
 // measures against are: the intro running slow (the write path's per-access cost) and the
 // sprites flickering when many objects are on screen (the scanout's line fetch losing its
-// deadline to the write stream). r13/38 modelled the scanout against the controller and said
-// the model was not pc9821_gvram_dut itself (r13/38 section 6); this bench drives the real FSM.
+// deadline to the write stream). An earlier study modelled the scanout against the controller and said
+// the model was not pc9821_gvram_dut itself; this bench drives the real FSM.
 //
-// The controller is built as z486_mister.sv builds it: FREQ = 50 MHz (CLK_SYS), HAS_DQM = 0
-// (the MiSTer module has no DQM pins, so a partial store is the controller's read-modify-write)
-// and FAST_GRADE = 0 (the -7 part the SDC names). The 2014 clk_sys line budget is the machine's
+// The 2014 clk_sys line budget is the machine's
 // own: 848 dots x 440 lines at the 21.0526 MHz dot clock is a 24.825 kHz line rate, 40.28 us.
 //
 // The bench ASSERTS the two defects it exists for are FIXED - the scanout fetches a line in
@@ -52,8 +50,8 @@ module tb_pc9821_gvram_bandwidth;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -87,9 +85,9 @@ module tb_pc9821_gvram_bandwidth;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -112,10 +110,10 @@ module tb_pc9821_gvram_bandwidth;
   integer    cpu_stores = 0;
   integer    cb_txns = 0;
 
-  // The GVRAM is block RAM now (r13/283): there is no backend transaction to count.
+  // The GVRAM is block RAM now: there is no backend transaction to count.
 
   // The two saturating port-1/2 streams were the SDRAM arbiter's worst case; the controller is
-  // gone with the GVRAM's SDRAM backing (r13/283), so the streams are idle placeholders.
+  // gone with the GVRAM's SDRAM backing, so the streams are idle placeholders.
   always @(posedge clk) begin
     ram_valid <= ram_en;
     pcm_valid <= pcm_en;
@@ -164,7 +162,7 @@ module tb_pc9821_gvram_bandwidth;
 
   // ---- THE INSTRUMENTS THE TWO FIXED DEFECTS ARE JUDGED BY ----
   // The columns a line window delivered, and whether the ping-pong select moved in it. The array
-  // is block RAM now (r13/283): the fetch reads one column per clk_sys on its own port, so there
+  // is block RAM now: the fetch reads one column per clk_sys on its own port, so there
   // is no burst to size and no shared controller to lose the deadline to.
   integer   scan_cols = 0;
   integer   line_swaps = 0, line_holds = 0, guard_violations = 0, prev_window_beats;

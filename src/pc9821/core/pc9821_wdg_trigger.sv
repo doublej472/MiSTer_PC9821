@@ -4,7 +4,7 @@
 // require `!z_valid`: a wedged CPU HOLDS z_valid high, so that would suppress the one condition
 // the arm exists to report.
 
-// z_valid is a LEVEL (src/z486/memory.sv:100) held until z_ready answers, so the arithmetic is
+// z_valid is a LEVEL (src/z486/memory.sv:173 `output valid`) held until z_ready answers, so the arithmetic is
 // about COMPLETION: a request that is never answered must age out.
 
 // THREE STATES, and the third is the failure; z_valid sampled when the counter expires is what

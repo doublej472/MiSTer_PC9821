@@ -29,10 +29,29 @@ WHAT THIS CANNOT SEE, stated so nobody over-reads it:
 Expected values are read out of the RTL itself, so this cannot drift from the design - it
 compares a design against ITSELF, which is the only thing a port-list check can do.
 
+THE SAME DEFECT, ONE LEVEL UP: A DROPPED PARAMETER. A compile-time knob travels down the
+hierarchy as a `parameter` (AGENTS.md: "it travels down as a `parameter`, and the unselected
+branch const-folds away"). When a parent declares a parameter (or a localparam) and a child it
+instantiates declares a parameter of the SAME NAME, the instance must say what the child gets:
+`.NAME(NAME)` to pass it through, or `.NAME(<value>)` to pin it on purpose. An instance that says
+nothing silently gives the child its DEFAULT, and the default of every build knob here is "off".
+That happened: pc9821_system declared MPU_EN, its pc9821_iobus instance never passed it, so the
+iobus's device_select decoded the MPU-PC98II's ports with MPU_EN 0 in every build, including the
+`base` preset that carries the card, and the card was unreachable (introduced in f631642e, and
+widened when the device select moved inside the iobus). A unit bench that instantiates the child
+with the parameter set cannot see it, and neither can the port check above. So every
+same-name parameter must appear in the instance's `#(...)`; an intentionally different value is
+written there explicitly, which also documents it. `--selftest` plants each form.
+  Not seen: a parameter passed under a DIFFERENT name (`.SYS_CLOCK_HZ(SYS_FREQ)` is right, a
+  wrong one is review's), positional `#(8)` overrides (reported UNRESOLVED), and anything whose
+  PARENT is inside src/z486/ (the vendored CPU; its modules are still read as children).
+
 Usage: tools/check_port_lists.py [root] [--all | FILE ...]
+       tools/check_port_lists.py --selftest
        (no argument = every file under src/ plus the top level, which is what --all
         spells out; a named FILE narrows it)
-Exit 0 when no input is unconnected; 1 otherwise, naming module, instance and port.
+Exit 0 when no input is unconnected and no same-name parameter is dropped; 1 otherwise,
+naming module, instance and port or parameter.
 """
 import os, re, sys, pathlib
 
@@ -176,8 +195,166 @@ def audit(root, target, verbose):
             print("  ??    %-26s %-20s module not found / non-ANSI - NOT CHECKED" % (mod, inst))
     return errs, unres
 
+
+# ---------------------------------------------------------------------------------------------
+# Parameter pass-through (see the module docstring: the MPU_EN drop).
+# ---------------------------------------------------------------------------------------------
+_PARAM_TYPE = r'(?:(?:integer|int|bit|logic|reg|real|string|signed|unsigned|type)\s+)*'
+
+def _balanced(src, i):
+    """Index of the ')' that closes the '(' at src[i]."""
+    d = 0
+    while i < len(src):
+        if src[i] == '(': d += 1
+        elif src[i] == ')':
+            d -= 1
+            if d == 0: return i
+        i += 1
+    return -1
+
+def _skip_ws(src, i):
+    while i < len(src) and src[i] in ' \t\r\n': i += 1
+    return i
+
+def _header_params(hdr):
+    """Names in a `#( parameter A = 1, B = 2, parameter [3:0] C = 0 )` list."""
+    names = []
+    for item in split_top(hdr):
+        if '=' not in item: continue
+        lhs = re.sub(r'\[[^\]]*\]', ' ', item.split('=')[0])
+        toks = re.findall(r'[A-Za-z_]\w*', lhs)
+        if toks: names.append(toks[-1])
+    return names
+
+def _body_params(body, kinds):
+    """Names declared by `parameter`/`localparam` statements in a module body, including the
+    comma-continued `parameter A = 1, B = 2;` form."""
+    names = []
+    for m in re.finditer(r'\b(' + '|'.join(kinds) + r')\b([^;]*);', body):
+        names += _header_params(m.group(2))
+    return names
+
+def module_table(files):
+    """name -> {'file', 'params' (overridable), 'all' (parameter+localparam), 'body'}."""
+    table = {}
+    for f in files:
+        try: src = strip_comments(pathlib.Path(f).read_text(errors='ignore'))
+        except Exception: continue
+        for m in re.finditer(r'\bmodule\s+([A-Za-z_]\w*)\b', src):
+            name = m.group(1)
+            end = src.find('endmodule', m.end())
+            if end < 0: continue
+            i = _skip_ws(src, m.end())
+            hdr = []
+            if i < len(src) and src[i] == '#':
+                i = _skip_ws(src, i + 1)
+                if i < len(src) and src[i] == '(':
+                    j = _balanced(src, i)
+                    hdr = _header_params(src[i + 1:j])
+                    i = j + 1
+            body = src[i:end]
+            params = set(hdr) | set(_body_params(body, ('parameter',)))
+            alln = params | set(_body_params(body, ('localparam',)))
+            table.setdefault(name, {'file': str(f), 'params': params, 'all': alln, 'body': body})
+    return table
+
+def instances(body):
+    """(child, instance, override text or None) for every `child [#(...)] inst (...);`."""
+    out = []
+    for m in re.finditer(r'\b([A-Za-z_]\w*)\s*(?=[#A-Za-z_])', body):
+        child = m.group(1)
+        if child in RESERVED: continue
+        i = _skip_ws(body, m.end())
+        ov = None
+        if i < len(body) and body[i] == '#':
+            i = _skip_ws(body, i + 1)
+            if i >= len(body) or body[i] != '(': continue
+            j = _balanced(body, i)
+            if j < 0: continue
+            ov = body[i + 1:j]
+            i = _skip_ws(body, j + 1)
+        mi = re.match(r'([A-Za-z_]\w*)\s*(\[[^\]]*\]\s*)?\(', body[i:])
+        if not mi or mi.group(1) in RESERVED: continue
+        k = i + mi.end() - 1
+        j = _balanced(body, k)
+        if j < 0 or not body[j + 1:j + 3].strip().startswith(';'): continue
+        out.append((child, mi.group(1), ov))
+    return out
+
+def param_audit(table, parents):
+    """[(parent file, parent, child, instance, [dropped names])] and [(parent, child, inst)]
+    whose overrides are positional (unresolved)."""
+    errs, unres = [], []
+    for pname in parents:
+        p = table[pname]
+        for child, inst, ov in instances(p['body']):
+            if child not in table or child == pname: continue
+            common = p['all'] & table[child]['params']
+            if not common: continue
+            if ov is not None and ov.strip() and '.' not in ov:
+                unres.append((pname, child, inst)); continue
+            passed = set(re.findall(r'\.\s*([A-Za-z_]\w*)\s*\(', ov or ''))
+            dropped = sorted(common - passed)
+            if dropped:
+                errs.append((p['file'], pname, child, inst, dropped))
+    return errs, unres
+
+def param_main(root, targets):
+    files = sorted(set(list(root.glob('src/**/*.sv')) + list(root.glob('src/**/*.v')) +
+                       list(root.glob('*.sv'))))
+    files = [f for f in files if in_source_tree(f, root)]
+    table = module_table(files)
+    tset = set(str(pathlib.Path(t).resolve()) for t in targets)
+    parents = [n for n, e in table.items()
+               if 'src/z486/' not in str(pathlib.Path(e['file']).resolve().relative_to(root))
+               and str(pathlib.Path(e['file']).resolve()) in tset]
+    return param_audit(table, parents)
+
+def selftest():
+    """Plant each form in a scratch tree and require the verdict the docstring promises."""
+    import tempfile
+    cases = [
+        # (name, parent source, expected dropped list for the one instance)
+        ('passed through', 'module p #(parameter EN = 0) (); c #(.EN(EN)) u (.a(1\'b0)); endmodule', []),
+        ('dropped (the MPU_EN form)',
+         'module p (); parameter EN = 1\'b0; parameter W = 2;\n'
+         'c #(.W(W)) u (.a(1\'b0)); endmodule', ['EN']),
+        ('dropped, no #() at all', 'module p #(parameter EN = 1) (); c u (.a(1\'b0)); endmodule', ['EN']),
+        ('dropped from a localparam knob (the top level form)',
+         'module p (); localparam EN = 1\'b1; c #(.W(3)) u (.a(1\'b0)); endmodule', ['EN']),
+        ('comma-continued header', 'module p #(parameter W = 1, EN = 0) (); c #(.W(W)) u (.a(1\'b0)); endmodule', ['EN']),
+        ('pinned explicitly', 'module p #(parameter EN = 1) (); c #(.EN(1\'b0)) u (.a(1\'b0)); endmodule', []),
+        ('no common name', 'module p #(parameter OTHER = 1) (); c u (.a(1\'b0)); endmodule', []),
+        ('nested override expression', 'module p #(parameter EN = 1, W = 2) (); '
+         'c #(.W((W > 1) ? (W) : 1)) u (.a(1\'b0)); endmodule', ['EN']),
+    ]
+    child = 'module c #(parameter EN = 1\'b0, parameter [3:0] W = 4\'d1) (input wire a); endmodule\n'
+    bad = 0
+    with tempfile.TemporaryDirectory() as d:
+        for name, psrc, want in cases:
+            f = pathlib.Path(d) / 'm.sv'
+            f.write_text(child + psrc + '\n')
+            table = module_table([f])
+            errs, unres = param_audit(table, ['p'])
+            got = errs[0][4] if errs else []
+            ok = got == want and not unres
+            print('  %s  %-52s dropped=%s (want %s)' % ('ok  ' if ok else 'FAIL', name, got, want))
+            bad += not ok
+        # a positional override is reported, never passed silently
+        f = pathlib.Path(d) / 'm.sv'
+        f.write_text(child + 'module p #(parameter EN = 1) (); c #(1) u (.a(1\'b0)); endmodule\n')
+        errs, unres = param_audit(module_table([f]), ['p'])
+        ok = not errs and unres == [('p', 'c', 'u')]
+        print('  %s  %-52s unresolved=%s' % ('ok  ' if ok else 'FAIL', 'positional override', unres))
+        bad += not ok
+    print()
+    print('PORT LIST CHECK SELFTEST: %s' % ('PASS' if not bad else 'FAIL - %d case(s)' % bad))
+    return 1 if bad else 0
+
 def main():
     args = [a for a in sys.argv[1:]]
+    if '--selftest' in args:
+        return selftest()
     # Anchored to the tool, not to the caller's cwd -- the reason check_route_pairs.py states
     # for the same choice: a relative root made a check read whatever happened to be in the
     # caller's directory, which is not the tree under test, and a check that only works from
@@ -224,9 +401,20 @@ def main():
             print("        %s instance %s in %s" % (mod, inst, pathlib.Path(dfile).name))
             print("        UNCONNECTED INPUT or bad port: %s" % port)
         total += len(errs)
+    perrs, punres = param_main(root, [t for t in targets if 'z486/' not in str(t)])
+    for pfile, parent, child, inst, dropped in perrs:
+        print("  FAIL  %s" % pfile)
+        print("        %s instance %s in %s" % (child, inst, parent))
+        print("        PARAMETER DROPPED (declared by both, not in the instance's #()): %s"
+              % ", ".join(dropped))
+    for parent, child, inst in punres:
+        print("  ??    %s instance %s in %s: positional parameter override - NOT CHECKED"
+              % (child, inst, parent))
+    total += len(perrs)
     print()
     if total:
-        print("PORT LIST CHECK: FAIL - %d unconnected input(s)/bad connection(s)" % total)
+        print("PORT LIST CHECK: FAIL - %d unconnected input(s)/bad connection(s)/dropped parameter(s)"
+              % total)
         return 1
     if not audited:
         # Every target was skipped, so a PASS here would be a claim about work that did not
@@ -235,7 +423,8 @@ def main():
         return 1
     # Count what was AUDITED, not what was asked for: the two differ whenever a target is
     # skipped, and the number in a PASS line is a claim about work that was done.
-    print("PORT LIST CHECK: PASS - no instantiation leaves an input undriven (%d file(s))" % audited)
+    print("PORT LIST CHECK: PASS - no instantiation leaves an input undriven or drops a "
+          "same-name parameter (%d file(s))" % audited)
     return 0
 
 if __name__ == '__main__':

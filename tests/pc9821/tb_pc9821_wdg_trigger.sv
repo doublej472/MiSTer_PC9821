@@ -115,7 +115,7 @@ module tb_pc9821_wdg_trigger;
   initial begin
     idle_reset();
 
-    // CHECK 1 - THE WEDGE, and the whole reason this lane exists. A request is asserted and
+    // CHECK 1 - THE WEDGE, and the whole reason this bench exists. A request is asserted and
     // z_ready never comes: z_valid stays HIGH, which is the state the old `!z_valid` guard
     // excluded. The trigger must fire and must say W. Before the fix this bench could not be
     // written, because the condition it drives could not produce a trigger at all.

@@ -1,10 +1,10 @@
-// tb_pc9821_cdda_div_reset — the CDDA ring's CLK_AUDIO divider must resolve.
+// tb_pc9821_cdda_div_reset - the CDDA ring's CLK_AUDIO divider must resolve.
 //
 // ==== WHAT THIS PROVES ====
-// The CDDA block's CLK_AUDIO domain resolves out of reset (review r2-resets F3): the 44.1 kHz divider accumulator, the clk_44100 toggle, the resample flops and the ring pointers are seeded, so the divider does not X-lock in 4-state simulation (run under iverilog for the fail-first X-lock), AUDIO_CE pulses at the divided rate, AUDIO_L/R are never X, and one word written through CDDA_WR comes out of AUDIO_L/R at the full-volume setting.
+// The CDDA block's CLK_AUDIO domain resolves out of reset: the 44.1 kHz divider accumulator, the clk_44100 toggle, the resample flops and the ring pointers are seeded, so the divider does not X-lock in 4-state simulation (run under iverilog for the fail-first X-lock), AUDIO_CE pulses at the divided rate, AUDIO_L/R are never X, and one word written through CDDA_WR comes out of AUDIO_L/R at the full-volume setting.
 //
-// The CDDA block's 44.1 kHz divider and ring pointers power up unseeded
-// (review r2-resets F3). In 4-state simulation `clk_44100_cnt <= clk_44100_cnt
+// The CDDA block's 44.1 kHz divider and ring pointers power up unseeded.
+// In 4-state simulation `clk_44100_cnt <= clk_44100_cnt
 // + 88200` from X stays X forever, the wrap comparison is X, and AUDIO_CE /
 // AUDIO_L / AUDIO_R never resolve: the only path that drains the CDDA ring is
 // X-locked and `read_addr`/`write_addr` X makes `buffer_q <= buffer[read_addr]`
@@ -50,6 +50,9 @@ module tb_pc9821_cdda_div_reset;
   cdda #(.CLK_AUDIO_RATE(CLK_AUDIO_RATE)) dut (
       .CLK(CLK),
       .CDDA_REQ(CDDA_REQ),
+      .CDDA_REQ4(),
+      .CDDA_PLAYED(),
+      .CDDA_FLUSH(1'b0),
       .CDDA_WR(CDDA_WR),
       .CDDA_DATA(CDDA_DATA),
       .VOLUME_L(4'hF),      // ~0xF = 0: full volume, no shift
@@ -74,7 +77,7 @@ module tb_pc9821_cdda_div_reset;
   integer pulses;
 
   initial begin
-    // ==== 4-STATE X-CHECK (review r2-resets F3's confirm shape) ====
+    // ==== 4-STATE X-CHECK ====
     // After two CLK_AUDIO edges the divider accumulator must be resolved and
     // AUDIO_L/R must never be unknown (they hold 0 until the first sample).
     repeat (2) @(posedge CLK_AUDIO);
@@ -103,7 +106,7 @@ module tb_pc9821_cdda_div_reset;
     // ...and at the DIVIDED RATE, not merely alive: CD-DA is 44 100 frames/s (Red Book), so
     // 200 CLK_AUDIO ticks at this bench's CLK_AUDIO_RATE carry 200 * 44100 / 352800 = 25
     // AUDIO_CE pulses (+-1 for the window's two ends). Only `pulses == 0` was checked, so a
-    // divider stepping for 48 kHz (27 pulses) passed (bench-audit mutation, 2026-10-12).
+    // divider stepping for 48 kHz (27 pulses) passed.
     else if (pulses < 24 || pulses > 26) begin
       $display("FAIL: AUDIO_CE pulsed %0d times in 200 CLK_AUDIO ticks, want 25 +-1 (44.1 kHz)", pulses);
       errors = errors + 1;

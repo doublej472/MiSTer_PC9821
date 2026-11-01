@@ -1,151 +1,187 @@
 # Timing: where the critical paths are
 
-The core runs past timing closure at every preset (see AGENTS.md, "Timing and area facts"). This
-page records where the clk_sys critical paths are on the matched-clock tree (SDRAM controller on
-clk_sys, gated-clock CPU throttle, CD drive built in) and which cuts are known to be free in cycles.
-It was measured by a path census over 8 fits (4 seeds at 80 MHz `base`, 4 at 85 MHz `--custom
---clk-sys-mhz 85`, one source); worst-corner clk_sys WNS was -6.99..-8.19 ns at 80 MHz and
--8.08..-8.95 ns at 85 MHz, with 4,180-4,191 of 4,191 LABs used (one 80 MHz seed failed to place).
+The core runs past timing closure in every preset ([`fitting.md`](fitting.md), "Timing and area facts"). This page
+records where the clk_sys critical paths are at the shipping 90 MHz, the tools that find them, which
+zero-cycle cuts have landed (the code cites them by the names below), and why no further zero-cycle
+cut is worth taking. The design is a single core clock: the platform, the SDRAM controller and,
+through a `cyclonev_clkena` gate, the CPU all run on clk_sys.
+
+## Current numbers (`base`, 90 MHz)
+
+A six-seed fit of the current tree (2026-10-28):
+
+| | |
+|---|---|
+| clk_sys setup slack (worst corner) | -4.85 to -5.90 ns |
+| framework `pll_hdmi` setup slack | -0.64 to +0.30 ns; 4 of 6 seeds clear the -0.35 ns deploy floor |
+| LABs | 4,125 of 4,191 (seed 4) |
+| ALMs needed | 37,355 (seed 4) |
+
+The worst cones carry about 17.2-17.8 ns of data, about 54-55 MHz of real closure. clk_sys hold
+and the SDRAM pin I/O group are positive at every corner. A single fit is one placement draw: the
+placer's noise is about 1 ns of WNS and 30-50 LABs over seeds of unchanged source, so compare
+builds with a seed sweep per side ([`fitting.md`](fitting.md), "Seed sweeps").
 
 ## Always load the SDC before a timing query
 
 A `quartus_sta` session must run `create_timing_netlist; read_sdc; update_timing_netlist` before it
 reports anything. A raw `quartus_sta -t` session auto-derives clocks, mis-relates the PLL outputs and
 reports phantom cross-domain "worst paths". STA names the PLL outputs `general[0]` (clk_sys: the
-platform, the SDRAM controller and, through the `cyclonev_clkena` gate, the CPU) and `general[1]`
-(the SDRAM pin clock, from which the SDC derives `PC9821_SDRAM_CLK`).
+platform, the SDRAM controller and, through the gate, the CPU) and `general[1]` (the SDRAM pin
+clock, from which the SDC derives `PC9821_SDRAM_CLK`; it has no register endpoints).
+`z486_mister.clk_sys_top_setup.tcl` is the minimal correct session (the 80 worst clk_sys setup
+paths).
 
 Read slack at the worst corner: the fit summary reports the slow 100 C model, and the slow -40 C
-corner was up to 0.31 ns worse in 3 of 8 fits.
+corner can be up to ~0.3 ns worse.
 
 ## The tools
 
-- `tools/timing/census.tcl` runs as `QUARTUS_POST_STA_TCL` in a `tools/build.py` or
-  `tools/seed_sweep.py` fit (set the variable to the script's absolute path). It loads the SDC and
-  writes `output_files/census/` beside the fit: one worst setup path per endpoint for the 4,000 worst
-  clk_sys endpoints at the worst corner (`ends_sys.rpt`), the worst hold endpoints, every SDRAM I/O
-  path at all four corners, a per-corner summary (`corners.txt`), and `keepdb.tar` (the fitted
-  database, so later queries need no re-fit).
-- `tools/timing/census.py table|ladder|skew|show|families ENDS_RPT...` classifies every endpoint into
-  the cones below, prints each cone's gap to WNS per fit, the WNS "ladder" as cone groups are deleted,
-  and clock skew by launch/latch domain. `tools/timing/p0.py ENDS_RPT...` measures the shared
-  memory-map prefix (P0). `tools/timing/pathchain.py RPT` parses a `report_timing` file into node
-  chains.
+All of them run as `QUARTUS_POST_STA_TCL` (the script's absolute path) in a `tools/build.py` or
+`tools/seed_sweep.py` fit, against the fitted database, so their output lands in each seed's
+`output_files/`.
+
+- `tools/timing/census.tcl` writes `output_files/census/`: one worst setup path per endpoint for the
+  4,000 worst clk_sys endpoints at the worst corner (`ends_sys.rpt`), the worst hold endpoints
+  (`ends_sys_hold.rpt`), every SDRAM I/O path at all four corners, a per-corner summary
+  (`corners.txt`), and `keepdb.tar` (the fitted database, so later queries need no re-fit).
+- `tools/timing/census.py table|ladder|skew|show|families|md ENDS_RPT...` classifies every endpoint
+  into the cones below. `table` prints each cone's worst slack, its gap to WNS and its endpoint
+  counts within 0.3 and 1.0 ns per fit; `ladder` the WNS as cone groups are removed in order;
+  `skew` the clock skew by launch/latch domain (the gated CPU clock against the platform);
+  `show ENDS_RPT CONE K` the K worst paths of one cone with their node chains.
+- `tools/timing/p0.py ENDS_RPT...` measures the shared memory-map prefix P0 and the slack of
+  `ext_addr_r`'s own D input. `tools/timing/pathchain.py RPT` parses a `report_timing` file into
+  node chains (the census's parser).
+- `tools/timing/hdmi_place.tcl` writes `output_files/hplace/` (the worst `pll_hdmi` paths with
+  cell locations, every cell's location, the keepers of `pll_hdmi` and the video clock), and
+  `tools/timing/hdmi_place.py` prints where the framework HDMI cone and the video cluster sit.
+- `tools/fit_metrics.py` (the `metrics.json` every sweep seed carries: `clk_sys_setup`,
+  `other_setup`, `hdmi_setup`, their TNS) and `tools/fit_area.py compare` (the ALM split into the
+  A&S estimate and the fitter's physical synthesis, per entity) are the numbers a sweep ranks by.
+
+## The cones
+
+`census.py`'s names, by where the worst path of an endpoint runs:
+
+| cone | what |
+|---|---|
+| other CPU | the CPU's datapath not named below; in practice a GPR read -> `gpr_merge`'s EX view -> the byte format -> the shifter's operand muxes -> the barrel -> `result` -> the deferred shift datum (`data_unit.recipe_shift_data`) or `sigma` |
+| ucode ROM / decoder | the microcode ROM address and the decoder |
+| C1, C2, C3 | segment limit -> request; fetch limit -> prefetch; shifter size -> GPR read |
+| C4, C4x | the flag/EA/ALU forward; the load-op result forwarded into the EX view |
+| D2, D2s | the VIPT TLB M10K -> hit -> issue; the issue/stall decision into the segment unit |
+| SP | the speculative-fetch attribute check |
+| TB | the throttle bridge, the clock gate and the GVRAM response route into `z_din` |
+| P0 | a label, not a cone: the path starts at `bus_unit`'s `ext_addr_r` and crosses the memory map |
+| R1 | `ext_addr_r` -> the memory map -> `z_ready` -> the CPU's fill/response |
+| C5 | the PEGC store buffer (`u_storebuf`) |
+| C7, C7b | the GVRAM M10K write port; the GVRAM arbiter and GRCG registers that are not the M10K |
+| C6, V1, FD | the GDC line base; the CRTC raster from the guest's SYNC block; the FDD media seek offset |
+| S2 | the SDRAM controller on clk_sys (its arbiter, row/bank arithmetic and pin registers) |
+| CD | the ATAPI drive |
 
 ## Where the paths are
 
-**The limiter is the platform's memory-map decode, not the CPU.** In most draws the worst slack is set
-by one shared prefix, P0: the CPU's `bus_unit.ext_addr_r` -> `peg_high` / `bios_top` /
-`sys16m_mirror` (`pc9821_memory_subsystem.sv`) -> `eff_addr` -> `win0_moved` -> `pc9821_memory_map`'s
-`d_addr` -> `mem_addr` (a wide mux of base + offset adders) and then one of three consumers:
+**The tree is CPU-bound and flat.** In a 12-seed census at 90 MHz the "other CPU" family set WNS in
+10 of 12 seeds (mean gap +0.06 ns), C4 and C7 in one seed each (+0.33, +0.68); the microcode ROM sits
++0.41, C7b +0.70, D2 +0.85, TB +0.87, and every other platform cone +1.1 ns or more behind. Two
+thirds of each critical CPU path is routing (10-12 ns of 15-16 ns).
 
-- **C5**, the PEGC store buffer's address match (`match_idx`, fan-out ~85) -> `ent_data`/`ent_be`
-  (the limiter in 4 of 8 fits);
-- **C7**, `gvram_window` -> GRCG -> the GVRAM arbiter -> the GVRAM M10K write decode (1 of 8);
-- **S2**, the SDRAM controller's arbiter (`arb_pick`/`take_id`) -> `rc_of`'s next-row increment ->
-  `rc_chip_buf`, a new rung since the controller moved onto clk_sys (+0.7..+1.6 ns behind WNS, never
-  the limiter).
+A family ladder (removing each family's paths cumulatively; mean WNS gained): shifter +0.12, ALU
++0.15, EA +0.17, VIPT +0.23, TLB -> `ext_addr_r` +0.29, prefetch +0.34, D-cache +0.41, GVRAM
++0.49 ns. No one family is worth more than about 0.12 ns of the mean, and the shifter's share is
+mostly one bad draw. **Only a set of cuts could move WNS**, and every member of that set is a CPU
+cut.
 
-P0 carries 30-356 of the endpoints within 1 ns of WNS in every fit, and the decode from the
-`ext_addr_r` launch to the last memory-map node takes 5.7-11.0 ns of a ~19 ns data path, mostly
-routing. `ext_addr_r`'s own D cone has +0.8..+1.7 ns of margin over WNS.
+P0, the memory-map decode that once set WNS, is no longer a rung: `ext_addr_r -> the memory map`
+has no endpoint within 0.3 ns of WNS. V1, FD and S2 are 1.5-2 ns behind.
 
-Two platform arithmetic cones are occasional limiters, both long carry-chain series: **V1**, the CRTC
-raster roots computed combinationally from the guest's SYNC block every cycle (`v_sync` -> `HTOTAL` /
-`HACTIVE` / `HFP` adders -> `in_hsync`/`in_vsync`, `pc9821_crtc.sv`), and **FD**, the FDD media seek
-offset (`req_u` -> the `raw_ts` shift-add product -> `raw_off` -> `seek_off` -> the image-size compare
--> `foff`, `pc9821_fdd_media.sv`).
+## The zero-cycle verdict
 
-**The CPU cones sit behind the platform** by +0.5..+2 ns: C1 (segment limit -> request), C2 (fetch
-limit -> prefetch), C4/C4x (the flag/EA/ALU forward and the load-op result forwarded into the EX
-view), D2/D2s (the VIPT TLB hit -> issue/stall -> segment unit). The speculative-fetch attribute check
-(+1.7..+3.3), the throttle bridge (+1.0..+2.2) and the ATAPI drive (+2.3 or further) are not limiters.
-The gated CPU clock costs ~0.1 ns of extra skew on CPU -> platform paths. clk_sys hold and the SDRAM
-pin I/O group are positive at every corner (the read-capture window shrinks with the clock: DQ
-in-hold +0.70 ns at 80 MHz, +0.46 ns at 85 MHz).
+**No zero-cycle cut beats seed noise at 90 MHz.** Measured with 12 seeds per side on the CPU's
+critical family: capturing `recipe_shift_data` every edge (it removes its endpoint from the critical
+set, and WNS moves to the next family within 0.1-0.3 ns), picking SIGMA's next state last, and both
+together moved the mean by -0.10, -0.07 and +0.18 ns, against a per-seed spread of 0.3-0.4 ns, and
+each failed the `pll_hdmi` non-inferiority rule; the pair also cost +410 ALMs in the fit. Area does
+not buy slack either: turning the whole physical-synthesis stack off frees ~1,490 ALMs and loses
+0.5 ns; turning register retiming alone off is neutral. Quartus 17.0.2 Lite ignores
+`OPTIMIZATION_TECHNIQUE SPEED` as an instance assignment on the CPU, and the global setting is
+trade T40.
 
-**The ladder is flat.** In a typical draw no single cone is worth more than ~0.1-0.2 ns (C5 and C7 sit
-within a few tenths of each other); removing the whole platform group (C5, C7, R1, V1, FD, S2) is worth
-an upper bound of about +0.4-0.6 ns at 80-85 MHz, after which the CPU tier sets WNS. A draw can also
-put ONE P0 family far ahead (+1.3 ns in one 80 MHz seed), which is what a P0 cut protects against. So
-only a SET of cuts moves WNS, and the set that is free in cycles is the platform one.
+The remaining candidates that do move WNS cost cycles: registering the branch decision (T64), the
+D1 direct launch (T65), the VIPT hit verdict (T66), re-opening a D2 pipeline stage (T30), the GRCG
+presentation register (T28, T68). They are priced in [`trade-candidates.md`](trade-candidates.md),
+together with the zero-cycle CPU cuts measured as fit-neutral or negative (T69-T74).
 
-## Zero-cycle cut candidates, ranked
+## Landed zero-cycle cuts
 
-None of these changes a cycle on any path; all must be measured with a seed sweep per side (one fit
-cannot resolve them) and fit-checked for LABs, since the device is full.
+Each is cycle-identical (or, where stated, value-identical in every legal execution) and carries its
+proof. The RTL comments cite them by these names.
 
-1. **P0-c - splice, don't add, in `pc9821_memory_map`'s `mem_addr`.** The window bases are aligned
-   (`pack_base` is one of the 1/2/4/.../96 MiB size constants, so `peg_base = pack_base + PACK_BYTES +
-   0x80000` has bits [18:0] zero, and the pack-window arms add a short constant above the 1 MiB
-   alignment), so `peg_base + (d_addr - 0xF00000)` is `peg_base | d_addr[18:0]` and the other arms are
-   ORs too. Removes the `Add13`/`Add14`/`Add16` adders (2-3 ns on the worst P0 paths). ~0 area;
-   provable by SAT over every address under the pack-size constraint (`tools/check_decode_equiv.py`).
-2. **S2-a - form `rc_next_buf`/`rc_chip_buf` one cycle after the accept** from `addr_buf`, in
-   `src/memory/sdram.v`. Their first reader is the row-crossing second ACTIVE, at least tRCD later.
-   ~0 area; needs a proof that nothing reads them in accept+1. Worth doing only together with P0-c.
-3. **V1-a - register the CRTC's SYNC-block roots** (`HACTIVE`, `HACTIVE+HFP`, `+HSYNC_W`,
-   `VACTIVE+VFP`, `+VSYNC_W`, `HTOTAL`) on the same edge as the `v_sync` copy, as the existing
-   `s_y_r`/`s_lf_r` seam already does. Equal at every cycle; ~60 flops (~6-7 LABs).
-4. **FD-a - latch `raw_off` at the request accept** from the live request fields, as `track_q` already
-   is for D88 images (`seek_off` is read only in the state after the accept). ~32 flops (~4 LABs).
-5. **P0-b (a CPU change, fork first)** - predecode the address-only window classes (`peg_high`,
-   `bios_top`, the `sys16m` range, `win0_in_window`) beside `ext_addr_r` from its D input in
-   `bus_unit`, and AND the configuration bits on the platform side. Removes 2-3 LUT levels from every
-   P0 path and spends ~1 level of `ext_addr_r`'s +0.8..+1.7 ns D-side margin; ~8 flops.
+- **P0.** The memory map decodes every window flag on both candidate addresses and lets
+  `win0_moved` pick the finished flag; window bases are spliced (`peg_base | d_addr[18:0]`), not
+  added; the RAM-bound compare is a 12-bit slice over `[31:20]` (every OSD guest size is a whole
+  MiB). `pc9821_memory_map` exports the window-0 pair (`d_addr`, `win0_moved`) and the subsystem
+  reads it, so the window-0 front end exists once. Proofs: `tools/check_decode_equiv.py`,
+  `tools/check_memmap_addr_equiv.py`, `tools/check_cpu_addr_front_equiv.py`. **R1** is the same
+  decode seen from the response side.
+- **C7-head.** `pc9821_iobus` registers `win0_sel != 8'h08` (`win0_sel_moved`) on the edges that
+  write `win0_sel` (`tools/check_win0_moved_inv.py`).
+- **C7-tail.** `pc9821_grcg` exports both arms of its presentation mux and `pc9821_gvram_arb`
+  elaborates its port-A presentation on each, with the capture select last (a Shannon expansion on
+  `cl_cap`); the burst and owner routes are expanded the same way, and `pc9821_gvram_share` forms the
+  datum's per-byte 0x00/0xFF flags before its owner select (`tools/check_seq_equiv.py --pair`,
+  `tools/check_arb_resp_inv.py`).
+- **TB.** The GVRAM arbiter's CPU response is routed by the response strobes themselves, not by the
+  live owner mux, so every term into `z_din` is a register. The one state where this differs from
+  the old mux (an EGC strobe after the owner has left the EGC) is unreachable under the bus
+  handshake: z486 holds its request through the ready edge and the throttle bridge's hold is
+  registered (`tools/check_arb_resp_inv.py`; `tools/equiv/arb_resp_route.sv`;
+  `tb_pc9821_egc_resp_owner`).
+- **C5-head, C5-free, C5-A.** The PEGC store buffer registers the facts about each held pair
+  (e, e+1) when e+1 is allocated (a held entry's address never changes); writes the allocation slot
+  on every post (nothing reads a free slot); and forms the `count`/`wp` candidates first, with the
+  combine decision selecting last (`tools/check_storebuf_head_inv.py`, `tools/check_seq_equiv.py`).
+- **The I/O FSM lane select.** `pc9821_iobus`'s device-bus lane is `first_lane(pending_be)` in every
+  state: S_BYTE enters S_DEVWAIT without clearing its lane's enable, so the held `dev_lane` always
+  equalled it (`tools/check_iobus_lane_inv.py`).
+- **VID-1, the EGC memory gate.** `mode2_egc && grcg mode[7]` is a register
+  (`pc9821_egc_mem_gate`) loaded from both sources' next state, so its value is bit-identical every
+  cycle and the only `u_crtc`-launched GVRAM cone is cut (`tools/check_gdc_egc_gate_inv.py`).
+- **V1, FD.** The CRTC registers its SYNC-block roots on the frame-boundary edge and every other
+  compare operand from them one clk_sys behind (harmless at the one dot it lags,
+  `tools/equiv/crtc_geom_lag.sv`); the FDD media latches `raw_off` at the request accept
+  (`tools/equiv/fdd_raw_off.sv`).
+- **S2.** The SDRAM controller forms the next-row field and the gather session's slot maps one
+  cycle after the accept, from the accept's own latches; no reader can run in that cycle, and the
+  RTL asserts both facts in simulation against the accept-time form.
+- **The download gate.** `cpu_run` is a register of `pc9821_rom_loader` (`rom_ready &&
+  !load_error`, written from the two flags' next state), and `loader_owns` is
+  `load_valid || !rom_ready`; neither reads the live `ioctl_download` any more. The one cycle that
+  changes: a reload started while the guest runs stops the machine one clk_sys after
+  `ioctl_download` rises instead of in that cycle, which is the machine's answer to a download the
+  host started one clk_sys later (the start is the HPS's, asynchronous to the guest). The first
+  load, the end edge (`cpu_run` rises in the second cycle after the download falls), an OSD reset
+  and `load_error` are cycle-identical (`tools/check_cpu_run_inv.py`;
+  `tb_pc9821_memory_subsystem`, `tb_pc9821_rom_loader`).
 
-**Measured after P0-c (3b134fe4, seeds 2-7, census):** C7 (`ext_addr_r` -> the GVRAM M10K write
-port, 2,231 endpoints within 1 ns of WNS) set WNS in 5 of 6 seeds; C5 had fallen to +1.8 ns behind.
-Two cycle-identical cuts landed on that cone (lane timing-cones): `pc9821_memory_map` decodes every
-window flag on both candidate addresses and lets `win0_moved` pick the finished flag
-(`region_dec`, proven by `tools/check_memmap_addr_equiv.py`), and `pc9821_gvram_arb` forms the
-first live lane, the any-live test and the merge class on each `lane_live` arm with `cap_arm` as
-the last select (proven by `tools/check_seq_equiv.py`). Over seeds 2-7 against bf1b6650: C7 limiter
-5/6 -> 2/6, mean gap +0.19 -> +0.82 ns, endpoints within 1 ns 2,231 -> 220; WNS mean -7.41 ->
--7.25, worst -7.96 -> -7.55 ns. The next tier is the CPU's (C4/C4x, D2/D2s, TB) and V1.
+## The `pll_hdmi` margin
 
-**Measured after V1-a + FD-a + P0-d (lane plat-timing, on ad9ed84c, seeds 2-7, census).** V1-a
-landed in two halves: the roots (8*x, y, HACTIVE, VACTIVE, the block copy) registered on the
-frame-boundary edge from the block as it arrives, and every other compare operand registered
-each clk_sys from them, one clk_sys behind (harmless at the one dot it lags, proven by
-`tools/equiv/crtc_geom_lag.sv`). A first form that registered the whole field map on the edge
-moved the 16-level chain to `sync_live -> geom_r` and made V1 worse (-8.3..-9.4 ns): register the
-roots, not the function. FD-a latches `raw_off` at the accept. P0-d gives the map the raw address
-and eff_addr's arm, so the region flags and the RAM-bound compare select the translation last.
-Against 895fb31c (RTL-identical base, census): V1 limiter 4/6 (worst -7.1..-8.4 ns) -> absent
-from the 4,000 worst endpoints in every seed; FD -4.4..-4.8 ns -> absent; C7's worst paths no
-longer start at `ext_addr_r -> eff_addr` (they start at `win0_sel != 8'h08` or the GRCG's
-CPU-datum compare). C4 (CPU) now sets WNS in 6/6 seeds; with it gone (cpu-c4) the platform
-tier is C7 and TB, ~0.3-1.3 ns behind.
+The framework's HDMI scaler and OSD (`sys/`, frozen) run on `pll_hdmi` and sit pinned to one
+quadrant beside the HPS, so the core's placement pressure shows up in their slack. Its seed-to-seed
+spread is about 0.1-0.4 ns. A badly negative draw can wedge the scaler when the core loads, and the
+card then cannot take a screenshot of any core until it reboots.
 
-**Measured after TB + C7-head (lane tb-c7, on b9c0cb06, 80 MHz, seeds 2-7, census).** TB: the
-GVRAM arbiter's CPU response (`cpu_resp_valid`, `cpu_dout`, the line strobe) is routed by the
-strobes themselves instead of the live owner mux, so the dispatch decode (`gvr_write`/`gdc_own_q`
--> `cc_owns_grcg_comb` -> `own_grcg` -> `cc_owns_plain`) left `z_din`; every term is now a register.
-The plain and GRCG strobes imply their owner and the EGC strobe is never beside them
-(`tools/check_arb_resp_inv.py`, induction over the real share/arbiter/GRCG/EGC; the routing's
-identity under those facts is `tools/equiv/arb_resp_route.sv`). The one state where it differs
-from the old mux (an EGC strobe while the live owner has left the EGC) is unreachable under the
-bus handshake: z486 holds its request through the ready edge (src/z486/bus_unit.sv
-`if (ready) begin`) and the throttle bridge's hold is registered (pc9821_cpu_bus_bridge.sv
-`assign p_valid = c_valid && !acc_pend;`), so pc9821_gvram_share cannot grant a GDC visit before
-the strobe's cycle. The cut is therefore cycle-identical to the old mux in every legal execution;
-`tb_pc9821_egc_resp_owner` guards the routing with a visit granted behind the EGC read. C7-head: pc9821_iobus registers
-`win0_sel != 8'h08` (`win0_sel_moved`) on the edges `win0_sel` is written (proven equal every cycle
-by `tools/check_win0_moved_inv.py`; the map's outputs by `tools/check_memmap_addr_equiv.py`).
-Boot golden unchanged (930544). Against b9c0cb06 (same seeds): WNS mean -5.43 -> -5.27, worst
--5.82 -> -5.66 ns (inside the placer's noise); TB gap to WNS mean +0.65 -> +1.07 ns (absent from
-the 4,000 worst endpoints in one seed), endpoints within 1 ns 41 -> 4, and its worst path now
-starts at `u_egc|cpu_resp_valid` (a flop) with only the `z_din` mux before the bridge; C7 limiter
-1/6 -> 0/6, gap unchanged (+0.48 -> +0.46), its head moved from `win0_sel` to the arbiter's live
-dispatch (`line_read -> cc_owns_egc_comb -> own_grcg`, the request side, which cannot be registered
-without a cycle) and the GRCG's CPU-datum compare (`bus_unit dout -> gvr_din -> u_grcg Equal1`). No
-platform cone sets WNS in any seed (limiters: C4 x2, C4x, D2s, S2, other CPU). ALMs needed 36,377
--> 36,353, LABs mean 4,127 -> 4,133 (worst 4,148 -> 4,152). The datum compare's cut is a CPU
-change (register the byte-is-00/FF flags beside `ext_*_dout_r` in `bus_unit`, fork first).
+- The deploy floor is `other_setup >= -0.35 ns` (the worst framework clock in `metrics.json`,
+  `pll_hdmi` in every fit of this tree); the target is `>= 0` with TNS 0. Every hardware-verified
+  good placement reaches -0.33 ns, and every known wedge is far below the floor.
+- `pll_hdmi` TNS below -5 ns is a caution, not a proven mechanism.
+- The wedge is also a per-bitstream fault that no STA corner predicts, so a deployed RBF also passes
+  the load screen (`tools/mister_load_loop.py`, 10 loads per card on two cards).
+- A change is judged on six seeds per side: mean and worst `other_setup` within 0.2 ns of the
+  baseline, and the count of seeds above the floor not lower.
 
-Recommended order: P0-c + S2-a together, then V1-a + FD-a if LABs allow, then P0-b if the P0 rung
-remains. Beyond about +0.4 ns the next tier is the CPU's, and its cuts cost cycles: the trades
-(registering the store buffer's drain decision, registering `z_ready`, the EX-view forward interlock,
-the issue/stall stage, the GRCG presentation register, T28) are in
-[`trade-candidates.md`](trade-candidates.md).
+The tools that enforce this (`tools/seed_sweep.py --min-other-setup`, `tools/remote_fit.py`,
+`tools/fit_matrix.py report --baseline`, `tools/mister_load.sh`) are described in
+[`fitting.md`](fitting.md), "Timing and area facts".

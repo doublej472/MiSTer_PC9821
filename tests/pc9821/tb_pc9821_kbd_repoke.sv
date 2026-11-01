@@ -1,4 +1,4 @@
-// tb_pc9821_kbd_repoke — the unread byte's IRQ request: held level, re-poked.
+// tb_pc9821_kbd_repoke - the unread byte's IRQ request: held level, re-poked.
 //
 // ==== WHAT THIS PROVES ====
 // While a delivered byte waits unread the IRQ line holds (RXRDY's own level - qemu pc98-kbd.c raises it from KST_RXRDY and tb_pc9821_kbd_reset pins the hold) but re-strokes once per keyboard transfer tick (NP2kai io/serial.c keyboard_callback pokes pic_setirq(1) at every xferclock tick; keyboard_changeclock: realclock/1920 -> 1280 byte-times/s), so an acknowledge that is NOT followed by a 0x41 read is re-requested within one tick by the edge-latched PIC and the re-strokes stop the moment the byte is read; and the receive status has ONE next-state, so a same-clk data read + overflow cannot resurrect RXRDY after the guest's read (the old last-wins chain handed the guest its already-read byte again) while the overflow flag still lands.
@@ -13,7 +13,7 @@
 // EMM386 trace's 13-delivered/12-reads residue). qemu holds the level and has
 // no re-poke (pc98-kbd.c:470/514); NP2kai wins per the evidence hierarchy.
 //
-// The read side is the fold's proof (review-keyboard F8): with a full receive
+// The read side is the fold's proof: with a full receive
 // side (byte in flight + 16 queued), a data read landing on the same clk as an
 // overflowing event must leave RXRDY CLEAR (the read's clear wins over the
 // overflow's stale-value write) with the OVERRUN flag set - before the fold the
@@ -38,11 +38,15 @@ module tb_pc9821_kbd_repoke;
   reg [10:0] ps2_key = 0;
 
   // ==== DUT ====
-  // No parameter override: the bench must run against the pre-fix tree to fail
-  // first, so it uses the device-rate default - one transfer tick =
-  // SYS_CLOCK_HZ / 1280 clk = 39,062 at the bench's 50 MHz - and its waits are
-  // three of those ticks.
-  pc9821_kbd dut (
+  // The transfer tick is SHRUNK from the device default (SYS_CLOCK_HZ / 1280 =
+  // 39,062 clk at this bench's 50 MHz) so the re-poke and the presentation pace are
+  // both observable in a few microseconds; the RATE it models and the tick's use as
+  // the re-stroke period are unchanged (tb_pc9821_kbd_pace pins the presentation
+  // interval; this bench pins the re-poke contract).
+  localparam integer XFER = 32;
+  pc9821_kbd #(
+      .XFER_TICK_CYCLES(26'(XFER))
+  ) dut (
       .clk(clk),
       .rst_n(rst_n),
       .cs(cs),
@@ -190,7 +194,7 @@ module tb_pc9821_kbd_repoke;
     // edge-latched PIC sees a NEW rising edge and IRQ1 fires again - the guest
     // gets another chance at the byte instead of it sitting forever.
     timeout_count = 0;
-    while (!pic_latch && timeout_count < 3 * 39062) begin
+    while (!pic_latch && timeout_count < 3 * XFER) begin
       @(posedge clk);
       timeout_count = timeout_count + 1;
     end
@@ -201,7 +205,7 @@ module tb_pc9821_kbd_repoke;
     if (dut.status_reg[1]) fail("RXRDY survived the 0x41 read (NP2kai serial.c status &= ~2)");
     if (irq)                fail("the IRQ line is still asserted after the read");
     pic_dispatch();                        // consume whatever the read left pending
-    repeat (3 * 39062 + 4) @(posedge clk); // three transfer ticks
+    repeat (3 * XFER + 4) @(posedge clk); // three transfer ticks
     if (pic_latch) fail("a read byte still re-fires IRQ1: the re-strokes did not stop");
     if (irq)       fail("the IRQ line re-asserted after the byte was read");
 
@@ -218,7 +222,9 @@ module tb_pc9821_kbd_repoke;
 
     // ---- 4. The status fold: a same-clk read + overflow cannot resurrect RXRDY. ----
     // Fill the receive side: one byte in flight (unread) and 16 queued behind
-    // it, then one more event that can only overflow.
+    // it, then one more event that can only overflow. The pacing timer is drained
+    // first so Q's own delivery is the immediate first-after-idle case.
+    repeat (XFER + 4) @(posedge clk);
     send_key(1'b1, 1'b0, 8'h15);           // Q make -> 0x10, delivered
     repeat (4) @(posedge clk);
     if (!dut.status_reg[1]) fail("the in-flight byte for the overflow collision never set RXRDY");
@@ -241,7 +247,7 @@ module tb_pc9821_kbd_repoke;
     @(negedge clk);
     cs = 0; rd = 0;
     #1;
-    if (dut.status_reg[1]) fail("same-clk read + overflow resurrected RXRDY (review F8): the guest would re-read its stale byte");
+    if (dut.status_reg[1]) fail("same-clk read + overflow resurrected RXRDY: the guest would re-read its stale byte");
     if (!dut.status_reg[4]) fail("the overflow flag did not land alongside the read's clear");
     // And the guest's next byte is the NEXT queued key, not the stale duplicate.
     read_byte(8'h01);                      // the first queued make's NEC code

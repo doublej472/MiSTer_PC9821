@@ -4,7 +4,7 @@
 // The CG window's unused low page answers the machine's measured dummy byte 0x8F in the writable user-CG class rather than zero, pinned by the capture that also fixes the class (its odd page holds the zeroed store and its even writes are dropped, so 0x8F cannot be memory) and without disturbing the odd page's write round-trip; and the two GDC status bytes are shown not to be the same byte, since a 2M-sample histogram has 0xA0's bit 0 never moving where 0x60's toggles.
 //
 // ---- the bench's own account of where each expectation comes from ----
-// BOTH EXPECTATIONS ARE MACHINE PROPERTIES, from the owner's captures, not from the RTL.
+// BOTH EXPECTATIONS ARE MACHINE PROPERTIES, from the Xe10 captures, not from the RTL.
 //
 // THE 0x8F DUMMY. docs/probes/VRAM.TXT records, in the writable class:
 //     A4000..A400F (CG window, across the TRAM boundary):
@@ -42,7 +42,7 @@
 // WHAT IT IS BLIND TO, stated rather than implied: it does not cover the other three classes that
 // leave the low page unused (cg_ank, cg_ver078, cg_wide), which no capture has measured - they now
 // answer the SAME class-independent dummy 0x8F (NP2kai has one dummy page shared by every class,
-// io/cgrom.c:18,43-48; review-cg F2), and tb_pc9821_cg_read_path asserts that per class. It does not check the ROM glyph classes
+// io/cgrom.c:18,43-48), and tb_pc9821_cg_read_path asserts that per class. It does not check the ROM glyph classes
 // (tb_pc9821_cg_read_path owns those) or the raster (tb_pc9821_gdc_raster owns that).
 //
 // AND IT CANNOT TELL A CONSTANT FROM A PAGE. It asserts 0x8F for the gaiji low page because that is
@@ -72,8 +72,6 @@ module tb_pc9821_gdc_cg_dummy;
   reg        cg_win_we       = 1'b0;
   reg  [7:0] cg_win_din      = 8'h00;
   wire [7:0] cg_win_dout;
-  wire [15:0] cg_code_win;
-  wire        cg_lr_win;
 
   // ---- outputs the bench does not drive; declared so the named list is complete ----
   wire [7:0]  tram_cpu_dout;
@@ -84,7 +82,7 @@ module tb_pc9821_gdc_cg_dummy;
   wire        dbg_col40, dbg_disp, text_opaque, text_cell;
   wire [9:0]  pix_dot;         wire pix_h_active, pix_v_active, gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's RAM, r13/227).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's RAM).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -102,7 +100,6 @@ module tb_pc9821_gdc_cg_dummy;
       .tram_cpu_addr(14'd0), .tram_cpu_din(8'h00), .tram_cpu_we(1'b0),
       .tram_cpu_dout(tram_cpu_dout),
       .font_ld_addr(11'd0), .font_ld_data(16'd0), .font_ld_we(1'b0),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .font_req_addr(font_req_addr), .font_req(font_req),
@@ -184,7 +181,7 @@ module tb_pc9821_gdc_cg_dummy;
     write_port(8'hA3, MACHINE_A3);
     repeat (2) @(negedge clk);
 
-    if (cg_code_win !== 16'h2F57)
+    if (dut.u_cg.cg_code !== 16'h2F57)
       fail("the CG code registers did not pack as A1 high / A3 low to the machine's 0x2F57");
 
     // ---------------------------------------------------------------

@@ -1,4 +1,5 @@
 // SPAN: src/pc9821/video/pc9821_crtc.sv | localparam [9:0] CLK_MINX | // The roots (registered on the frame-boundary edge
+// PLANT: hfp_f   = {1'b0, b3[7:2]} + 7'd1; => hfp_f   = {1'b0, b3[7:2]} + {1'b0, b4[5:0]};
 // PLANT: hs_on_n = g[G_HS_ON +: 10] => hs_on_n = g[G_HS_OFF +: 10]
 // PLANT: vactive + vfp + vsync_w, vactive + vfp, => vactive + vfp + vsync_w, vactive + vsync_w,
 // PLANT: lfmax     = y - 10'd1; => lfmax     = y - 10'd2;
@@ -11,7 +12,8 @@
 // pre-change module made against its combinational field map of the frame-boundary copy of the
 // same block (the old text below, from pc9821_crtc.sv at ad9ed84c, v_sync[k] -> bk and the old
 // seam's s_lf_r/s_y_r -> their arriving-block decode, which they equalled at every cycle).
-module m(input [7:0] b0, b1, b2, b3, b4, b5, b6, b7, input [9:0] hdot, vline, output mismatch);
+module m(input [7:0] b0, b1, b2, b3, b4, b5, b6, b7, input [9:0] hdot, vline, input c31,
+         output mismatch);
   // SPAN-HERE
   // ---- the pre-change wiring (ad9ed84c), verbatim but for the renames above ----
   wire [15:0] s_tmp    = {b3, b2};
@@ -28,8 +30,11 @@ module m(input [7:0] b0, b1, b2, b3, b4, b5, b6, b7, input [9:0] hdot, vline, ou
   wire [10:0] s_n_lf   = {1'b0, s_n_lfm1} + 11'd1;
   wire [8:0]  s_hfbs  = {4'b0000, s_hs_f} + {2'b00, s_hfp_f} + HBP_CH;
   wire [9:0]  s_x_raw = s_cr + {1'b0, s_hfbs};
-  wire [7:0]  s_x     = (s_x_raw < CLK_MINX) ? CLK_MINX[7:0]
-                      : (s_x_raw > CLK_MAXX) ? CLK_MAXX[7:0] : s_x_raw[7:0];
+  // (the 31 kHz range: the pre-change clamp with the monitor range's two x limits selected)
+  wire [9:0]  s_minx  = c31 ? CLK31_MINX : CLK_MINX;
+  wire [9:0]  s_maxx  = c31 ? CLK31_MAXX : CLK_MAXX;
+  wire [7:0]  s_x     = (s_x_raw < s_minx) ? s_minx[7:0]
+                      : (s_x_raw > s_maxx) ? s_maxx[7:0] : s_x_raw[7:0];
   wire [7:0]  s_n_vfbs0 = {3'b000, s_n_vs_f} + {2'b00, s_n_vfp_f} + {2'b00, s_n_vbp_f};
   wire [7:0]  s_n_vfbs  = (s_n_vfbs0 == 8'd0) ? 8'd1 : s_n_vfbs0;
   wire [11:0] s_n_y_raw = {1'b0, s_n_lf} + {4'b0000, s_n_vfbs};
@@ -43,8 +48,14 @@ module m(input [7:0] b0, b1, b2, b3, b4, b5, b6, b7, input [9:0] hdot, vline, ou
   wire [9:0]  s_hactmax= HTOTAL - 10'd8;
   wire [9:0]  HACTIVE  = (s_hact8 > {3'b000, s_hactmax}) ? s_hactmax : s_hact8[9:0];
   wire [9:0]  s_hblank = HTOTAL - HACTIVE;
-  wire [9:0]  s_hfp8   = {s_hfp_f, 3'b000};
-  wire [9:0]  s_hs8    = {2'b00, s_hs_f, 3'b000};
+  // The horizontal PORCHES follow the uPD7220 field map since 2026-10-15 (3a86167e: MAME
+  // upd7220.cpp:1243-1246 `m_hs = (m_pr[3] & 0x1f) + 1`, `m_hfp = (m_pr[4] >> 2) + 1`): the front
+  // porch is hfp2 + 1 characters and the sync hs + 1 (the line total above still sums NP2kai's
+  // fields). Only these two operands of the pre-change text are re-specified; every compare stays.
+  wire [6:0]  s_hfp_p  = {1'b0, s_tmp[15:10]} + 7'd1;
+  wire [5:0]  s_hs_p   = {1'b0, s_hs_f} + 6'd1;
+  wire [9:0]  s_hfp8   = {s_hfp_p, 3'b000};
+  wire [9:0]  s_hs8    = {1'b0, s_hs_p, 3'b000};
   wire [9:0]  HFP      = (s_hfp8 <= (s_hblank - 10'd8)) ? s_hfp8 : (s_hblank - 10'd8);
   wire [9:0]  HSYNC_W  = (s_hs8 == 10'd0) ? HSYNC_MIN
                        : (s_hs8 <= (s_hblank - HFP)) ? s_hs8 : (s_hblank - HFP);
@@ -72,7 +83,7 @@ module m(input [7:0] b0, b1, b2, b3, b4, b5, b6, b7, input [9:0] hdot, vline, ou
   wire [5:0] o_vbp = b7[7:2];
 
   // ---- the registered form: the same consumers against the REAL functions of the block ----
-  wire [7:0]  n_x  = crtc_x(b1, b2, b3, b4);
+  wire [7:0]  n_x  = crtc_x(c31, b1, b2, b3, b4);
   wire [9:0]  n_vtotal = crtc_y(b2, b3, b5, b6, b7);
   wire [10:0] n_lf = crtc_lf(b6, b7);
   wire [9:0]  n_hact = crtc_hact(n_x, b1);

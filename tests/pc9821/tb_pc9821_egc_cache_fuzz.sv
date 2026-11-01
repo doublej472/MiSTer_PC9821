@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_EGC_CACHE_FUZZ: a seeded, reproducible fuzz of the GVRAM write-combining buffer (8 word slots), the posted EGC write and the GVRAM's per-word fallback walk. It drives many randomized sequences of EGC, GRCG and plain reads and writes over random page-0/page-1 addresses with random byte enables, widths, posted-write-then-read-own-word shapes, dirty evictions and flush interleavings, checks every read against a byte-exact golden image as it returns, and after EVERY sequence flushes the WCB and compares the WHOLE 256 KiB SDRAM image against that golden, so a lost write-back or a stale read cannot hide behind a buffer hit.
 //
-// WHY THIS EXISTS. r13/183 probed the same buffer with 17 hand-named cases and found
+// WHY THIS EXISTS. An earlier review probed the same buffer with 17 hand-named cases and found
 // zero mismatches. This bench is the adversarial half of that result: it does not name the hazard,
 // it generates a seeded random stream that mixes the clients and the widths and lets the buffer's
 // own hazards collide. Reproducibility is the contract - the seed is printed, the RNG is xorshift32,
@@ -14,7 +14,7 @@
 // store is checked by READER AGREEMENT - the EGC reader (the SDRAM burst) and
 // the plain (buffer) reader must return the same byte, and the plain value becomes the golden the
 // later SDRAM compare is held to. A wire that served a stale copy separates the
-// two. See r13/183 section 0 for the same argument.
+// two.
 
 `default_nettype none
 
@@ -42,8 +42,8 @@ module tb_pc9821_egc_cache_fuzz;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -68,9 +68,9 @@ module tb_pc9821_egc_cache_fuzz;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -173,7 +173,7 @@ module tb_pc9821_egc_cache_fuzz;
       cpu_write   = wr;
       cpu_valid   = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // `egc_gate` is the machine's EGC arming level (0x6A num 2 AND 0x7C bit 7), not a per-access
@@ -191,7 +191,7 @@ module tb_pc9821_egc_cache_fuzz;
       // AND the GVRAM's own acceptance period spent. pc9821_gvram_arb's GVRAM_PERIODS prices a
       // GVRAM access at the machine's own per-operation TIME, so a step that returned while the
       // period was still running would leave that operation's array work to land in the NEXT
-      // step's window - which is exactly what the sequence-end image check saw (the r13/322
+      // step's window - which is exactly what the sequence-end image check saw (the
       // accept-and-decouple is unaffected: the store's ready still pulses at its accept).
       while ((dut.u_egc.state != pc9821_egc_pkg::EGC_IDLE) || (dut.u_arb.gstate != 3'd0) ||
              dut.u_arb.m_mode || (dut.u_arb.cs != 4'd0) || (dut.u_grcg.gstate != 4'd0) ||
@@ -257,7 +257,8 @@ module tb_pc9821_egc_cache_fuzz;
     end
   endtask
 
-  // A 128-bit line load: 16 consecutive plane offsets of ONE plane, assembled in cpu_line_dout.
+  // A line load: 16 consecutive plane offsets of ONE plane, gathered from the route's four
+  // word beats in order (beat N = line word N).
   task automatic line_read(input integer pg, input [1:0] pl, input [14:0] base,
                            input [8*70-1:0] tag);
     integer k;
@@ -275,8 +276,14 @@ module tb_pc9821_egc_cache_fuzz;
       @(negedge clk);
       cpu_valid = 1'b0; cpu_line_read = 1'b0;
       #1;
-      while (!cpu_line_resp_valid) begin @(posedge clk); #1; end
-      d = cpu_line_dout;
+      // The four word beats stream through the walk (P3): gather them in order, beat N into
+      // line word N exactly as the L1 does.
+      d = 128'd0;
+      for (k = 0; k < 4; k = k + 1) begin
+        while (!cpu_line_word_valid) begin @(posedge clk); #1; end
+        d[{k[1:0], 5'b00000} +: 32] = cpu_line_word;
+        @(posedge clk); #1;
+      end
       repeat (2) @(posedge clk);
       for (k = 0; k < 16; k = k + 1)
         chk_byte(pg, pl, base + k, d[{k[3:0], 3'b000} +: 8], tag);
@@ -487,7 +494,7 @@ module tb_pc9821_egc_cache_fuzz;
   endtask
 
   // The whole SDRAM image against the golden model. Only meaningful after a flush.
-  // The GVRAM array is four byte-lane M10K arrays (r13/283's synthesis decision), so a word's
+  // The GVRAM array is four byte-lane M10K arrays (a synthesis decision), so a word's
   // byte `pl` is lane `pl` of the word at `w`.
   function [7:0] gvmem_byte(input [15:0] w, input [1:0] pl);
     case (pl)

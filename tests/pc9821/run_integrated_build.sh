@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. `boot`, `portharness` and `userdisk` are declared to
 # tools/check_tests.py but are deliberately NOT in `tools/bench.py --all`: they are slow
-# and the disk tier needs the owner's own image. So they are the only testbenches in
+# and the disk tier needs a user-supplied disk image. So they are the only testbenches in
 # `tests/pc9821/` that no gate builds - and that is not a hypothetical: `userdisk` did not
 # compile for days after a hierarchy rename (`dut.memory.gvram` -> `u_gvram_arb`,
 # `grcg` -> `u_grcg`, `gdc_text` -> `u_cg`, `dut.block_io` -> `block_share.a_req_done`)
@@ -25,7 +25,7 @@ cd "$(dirname "$0")/../.."
 ROOT=$PWD
 
 FAILED=()
-echo "==> compile-only: the four integrated tiers, which tools/bench.py --all cannot build"
+echo "==> compile-only: the integrated tiers, which tools/bench.py --all cannot build"
 
 build_tier() {
   local name=$1 runner=$2 log start
@@ -42,7 +42,7 @@ build_tier() {
 }
 
 for pair in "boot run_boot.sh" "portharness run_portharness.sh" "userdisk run_userdisk.sh" \
-            "throttle run_throttle.sh"; do
+            "throttle run_throttle.sh" "dma_snoop_throttle run_dma_snoop_throttle.sh"; do
   # shellcheck disable=SC2086 # the pair is the point: a tier name and its runner
   set -- $pair
   if [[ ! -f "tests/pc9821/$2" ]]; then
@@ -54,7 +54,7 @@ done
 
 echo
 if [[ ${#FAILED[@]} -gt 0 ]]; then
-  echo "INTEGRATED BUILD: FAIL (${#FAILED[@]} of 4 tiers did not elaborate: ${FAILED[*]})"
+  echo "INTEGRATED BUILD: FAIL (${#FAILED[@]} of 5 tiers did not elaborate: ${FAILED[*]})"
   exit 1
 fi
-echo "INTEGRATED BUILD: PASS (4 of 4 tiers elaborated: boot, portharness, userdisk, throttle)"
+echo "INTEGRATED BUILD: PASS (5 of 5 tiers elaborated: boot, portharness, userdisk, throttle, dma_snoop_throttle)"

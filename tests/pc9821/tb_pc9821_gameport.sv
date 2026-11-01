@@ -35,6 +35,7 @@ module tb_pc9821_gameport;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   // pc9821_iobus's ports, named because it is instantiated with (.*).
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   reg [3:0] cpu_be = 0;
@@ -69,6 +70,7 @@ module tb_pc9821_gameport;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -89,7 +91,7 @@ module tb_pc9821_gameport;
   wire [1:0] ems_state;
   wire top_shadow_en;
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
-  // port (r13/57) and the `.*` DUT instantiation matches by name, so it must
+  // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
@@ -115,8 +117,14 @@ module tb_pc9821_gameport;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -135,13 +143,11 @@ module tb_pc9821_gameport;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(0)) dut (
       .ide_unit0_present(1'b0),.*);
 
-  // pc9821_system's device glue, reproduced: the card's select, the game port behind it, and
-  // the game port's byte as the only thing on that bus (0xFF otherwise).
-  wire gameport_cs;
-  pc9821_device_select select (
-    .addr(device_io_addr),
-    .gameport_cs(gameport_cs)
-  );
+  // pc9821_system's device glue: the card's select (P5 made the ONE pc9821_device_select
+  // instance live inside pc9821_iobus, so `.*` above binds gameport_cs to it), the game port
+  // behind it, and the game port's byte as the only thing on that bus (0xFF otherwise).
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
 
   // The port's own strobes, off the OR above. They are registered on the NEGEDGE rather than
   // assigned by the sequence: Verilator evaluates a combinational chain out of a same-delta

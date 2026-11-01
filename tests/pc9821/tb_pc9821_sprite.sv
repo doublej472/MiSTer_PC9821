@@ -1,8 +1,8 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SPRITE: TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:47) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:422,626), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1121 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the owner's two symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
-// TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:47) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:422,626), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1121 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the owner's two symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
+// TB_PC9821_SPRITE: TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:647,1061), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1169 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the two observed symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
+// TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:647,1061), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1169 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the two observed symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
 
 module tb_pc9821_sprite;
   reg clk = 0;
@@ -65,12 +65,11 @@ module tb_pc9821_sprite;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire       cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire       cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg [31:0] pack_base = PACK_BASE;
   reg [31:0] guest_ram_bytes = GUEST_RAM;
@@ -108,7 +107,7 @@ module tb_pc9821_sprite;
   wire [7:0]  mem_burstcount;
   wire        mem_line_read, mem_valid, mem_write;
   reg         mem_ready = 1, mem_resp_valid = 0, mem_line_resp_valid = 0;
-  // The GVRAM scanout's SDRAM requester (r13/35). The wildcard instantiation needs every port
+  // The GVRAM scanout's SDRAM requester. The wildcard instantiation needs every port
   // named; nothing here drives the scanout, so it accepts and never answers.
   wire [31:0] mem3_addr, mem3_din;
   wire  [3:0] mem3_be;
@@ -118,12 +117,14 @@ module tb_pc9821_sprite;
   reg         mem3_ready = 1, mem3_resp_valid = 0;
 
   // ==== DUT ====
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the wildcard instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   wire       grcg_expand;   // the GRCG's CG-mode bit 7, fed back from the subsystem
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
   reg        scan_enable = 0;
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
@@ -137,18 +138,18 @@ module tb_pc9821_sprite;
 
   wire [1:0] ems_state;
 
-  // The GVRAM write client's two-word payload (r13/137); this bench's backend ignores it.
+  // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
   wire [31:0] mem_din_hi;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -159,6 +160,7 @@ module tb_pc9821_sprite;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -225,7 +227,7 @@ module tb_pc9821_sprite;
   integer    backend_reads = 0, backend_writes = 0;
 
   // Plane p's byte at column `off` on page `page`. The planes are byte-interleaved
-  // in SDRAM (r12/33 D2): the column word at gvram_base + page*0x20000 + 4*off
+  // in SDRAM: the column word at gvram_base + page*0x20000 + 4*off
   // carries {E,G,R,B}, so plane p is lane p of it. A planar address here would
   // make every expectation below describe the old layout.
   // NOTE the interleaved layout changes what "plane p's byte n" means: the page's
@@ -238,12 +240,12 @@ module tb_pc9821_sprite;
     end
   endfunction
 
-  // The GVRAM is SDRAM storage again (r13/35): a CPU plane store becomes one transaction on the
+  // The GVRAM is SDRAM storage again: a CPU plane store becomes one transaction on the
   // mem_* requester, so the backend[] mirror observes it exactly as it observes guest RAM. Plane p
   // of the column word is byte lane p, which is what plane_addr already encodes.
   function automatic [7:0] gv_byte(input page, input [1:0] plane, input [14:0] off);
     begin
-      // The GVRAM is M10K inside pc9821_gvram_dut now (r13/283): read the array directly. The word
+      // The GVRAM is M10K inside pc9821_gvram_dut now: read the array directly. The word
       // index is {page, off} and plane p is byte lane p of it.
       case (plane)
         2'd0: gv_byte = dut.u_gmem.mem0[{page, off}];
@@ -274,7 +276,7 @@ module tb_pc9821_sprite;
   wire [31:0] mem_dword = {mem_addr[31:2], 2'b00};
 
   // A READ IS ANSWERED ONE BEAT PER WORD, `mem_burstcount` of them, exactly as src/memory/sdram.v
-  // answers a burst (sdram.v:21). The GVRAM's write-combining buffer prefetches a short run of
+  // answers a burst (sdram.v:7). The GVRAM's write-combining buffer prefetches a short run of
   // consecutive words on a miss, so a model that answered ONE beat per REQUEST - which is all any
   // bench needed while cb_burstcount was hard-wired to 1 - would wedge the buffer mid-fill.
   reg [3:0]  rd_left = 4'd0;
@@ -372,10 +374,10 @@ module tb_pc9821_sprite;
 
   // ==== CPU ACCESS, in the shape z486 actually puts on the bus ====
   // THE ADDRESS'S LOW TWO BITS ARE NOT ON THE BUS. z486's address output is 30 bits
-  // ("Physical address [31:2]", z486.sv:47) and pc9821_system forms the guest address
-  // as {z_addr, 2'b00} (pc9821_system.sv:422,626), so every access arrives
+  // ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address
+  // as {z_addr, 2'b00} (pc9821_system.sv:647,1061), so every access arrives
   // dword-aligned with the operand's byte lane carried ONLY by cpu_be -- z486's
-  // calc_be(op_size, addr_low) (z486_pkg.sv:1121) and shift_write_data() (:1144).
+  // calc_be(op_size, addr_low) (z486_pkg.sv:1169) and shift_write_data() (:1193).
   // This is the shape the subsystem and pc9821_gvram see on the machine; it is the
   // shape the existing benches did NOT drive, which is why the EGC's lane bug was
   // invisible to them.
@@ -407,7 +409,7 @@ module tb_pc9821_sprite;
       cpu_write = 0;
       cpu_valid = 1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       cpu_valid = 0;
@@ -471,7 +473,7 @@ module tb_pc9821_sprite;
     end
   endtask
 
-  // The GVRAM's plane stores are COALESCED in a small write-back buffer now (r13/82): a store to a
+  // The GVRAM's plane stores are COALESCED in a small write-back buffer now: a store to a
   // word that is already held completes with no SDRAM access, and the held word goes back as ONE
   // full-word write on eviction or on a flush. The backend[] mirror this bench observes is the
   // SDRAM content, so it is current only once the buffer has drained. Pulse the coalescer's own
@@ -630,7 +632,7 @@ module tb_pc9821_sprite;
       gvram_access_page = 1'b0;
 
       // ============================================================
-      // 1. THE INTRO'S WHITE LINES (owner symptom 1). whitelines_animate()
+      // 1. THE INTRO'S WHITE LINES (symptom 1). whitelines_animate()
       //    clears the two rows it drew last frame with
       //    egc_copy_rect_1_to_0_16(0, y, RES_X, 1) and then draws two new rows
       //    with whiteline_put(). The clear must put the BACKGROUND back.
@@ -668,7 +670,7 @@ module tb_pc9821_sprite;
         fail("a lane-2:3 chunk of the EGC row restore did not come back");
 
       // ============================================================
-      // 2. THE TALISMANS (owner symptom 2). ptn_put_quarter_8() erases the
+      // 2. THE TALISMANS (symptom 2). ptn_put_quarter_8() erases the
       //    sprite's footprint with the GRCG RMW and zero tiles, draws the
       //    sprite, and the next frame restores it with
       //    ptn_sloppy_unput_quarter_16() = egc_copy_rect_1_to_0_16(left, top,

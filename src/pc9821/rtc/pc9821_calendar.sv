@@ -154,7 +154,7 @@ module pc9821_calendar #(
   // date change. Writing the ripple as nested branches gave every field its own
   // bcd_next adder (eight sites, ~60 ALMs measured with tools/res_exp_map.py);
   // selecting the incrementing field's VALUE first shares one adder between the
-  // six clock fields. The roll signals are exactly the old nesting: each implies
+  // six clock fields. The roll signals are exactly the nested form's conditions: each implies
   // the one above it.
   wire sec_roll  = (c_sec == 8'h59);
   wire min_roll  = sec_roll  && (c_min  == 8'h59);
@@ -170,7 +170,12 @@ module pc9821_calendar #(
                        !day_roll  ? c_day   :
                        !mon_roll  ? c_month : c_year;
   wire [7:0] bcd_inc  = bcd_next(bcd_src);
-  wire [7:0] wday_inc = bcd_next(c_wday);
+  // The weekday is a plain increment here, not bcd_next: its only consumer takes it
+  // only while `c_wday < 6` (see the always block below), where c_wday[7:4]==0 and
+  // c_wday[3:0]!=9, so bcd_next(c_wday) == c_wday + 1 with no carry. Every value
+  // 6..15 is discarded by that consumer's `>= 8'h06 -> 0` arm, so this is equal at
+  // every cycle the value is observed and saves a second 8-bit BCD adder.
+  wire [7:0] wday_inc = c_wday + 8'd1;
 
   always @(posedge clk) begin
     if (!rst_n) begin
@@ -224,7 +229,8 @@ module pc9821_calendar #(
         tick_pending <= 1'b0;   // a write drops any pending request
       end else if (tick_rate == 2'd2) begin
         tick_div <= 23'd0;
-      end else if (tick_div >= tick_period) begin
+      // tick_div never passes tick_period: the rate moves only on tick_we, which zeroes it.
+      end else if (tick_div == tick_period) begin
         tick_div     <= 23'd0;
         tick_pending <= 1'b1;
       end else tick_div <= tick_div + 23'd1;

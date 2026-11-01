@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: BSD-2-Clause
+// Copyright (c) 2014, Aleksander Osman, and the ao486_MiSTer contributors.
+// From ao486_MiSTer rtl/common/cdc_vector_handshake_continuous.sv
+// (https://github.com/MiSTer-devel/ao486_MiSTer). Licence text: NOTICE, part 4.
+
 /*
 Can be used in place of asynchronous FIFO for applications with infrequent transitions
 to pass vector across CDC. Continuously passes value across but holds current value for
@@ -28,13 +33,16 @@ module cdc_vector_handshake_continuous #(
             data_hold_clk_in <= data_in;
         end
 
-    synchronizer new_value_sync (
+    // The two handshake flags are one bit each, so both synchronizers are pinned to width 1
+    // rather than inheriting this module's DATA_WIDTH (the data word crosses through
+    // data_hold_clk_in, not through a synchronizer).
+    synchronizer #(.DATA_WIDTH(1)) new_value_sync (
         .clk(clk_out),
         .in(new_value_clk_in),
         .out(new_value_clk_out)
     );
 
-    synchronizer ack_sync (
+    synchronizer #(.DATA_WIDTH(1)) ack_sync (
         .clk(clk_in),
         .in(new_value_clk_out),
         .out(ack_clk_in)

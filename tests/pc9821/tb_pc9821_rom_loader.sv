@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ROM_LOADER:
-// The ROM loader: it holds the first word, accepts the write sequence, and signals completion.
+// The ROM loader: it holds the first word, accepts the write sequence, and signals completion; its registered cpu_run equals rom_ready && !load_error in every cycle.
 
 
 module tb_pc9821_rom_loader;
@@ -25,12 +25,19 @@ module tb_pc9821_rom_loader;
   wire [31:0] mem_addr, mem_din;
   wire [3:0] mem_be;
   wire [7:0] mem_burstcount;
-  wire mem_write, rom_ready, load_error, saw_download;
+  wire mem_write, rom_ready, load_error, saw_download, cpu_run;
 
   // ==== DUT ====
   pc9821_rom_loader dut (.*);
 
   integer errors = 0;
+
+  // The registered gate (docs/timing.md, the download gate): cpu_run is the loader's own register
+  // and must equal rom_ready && !load_error in EVERY cycle, the downloads and resets included.
+  integer run_mismatch = 0;
+  always @(posedge clk) begin
+    if (cpu_run !== (rom_ready && !load_error)) run_mismatch = run_mismatch + 1;
+  end
   integer accepted = 0;
   reg [31:0] got_addr[0:7];
   reg [31:0] got_data[0:7];
@@ -45,7 +52,7 @@ module tb_pc9821_rom_loader;
     end
   end
 
-  // The shadow tee (r13/23). Counted separately because it is a second write of a word
+  // The shadow tee. Counted separately because it is a second write of a word
   // the loader has already staged, addressed in the shadow store rather than the pack.
   integer    tee_writes = 0;
   reg [31:0] last_tee_addr;
@@ -243,6 +250,10 @@ module tb_pc9821_rom_loader;
     repeat (4) @(posedge clk);
     $display("ROM LOADER short download: ready=%b error=%b (no size check exists)",
              rom_ready, load_error);
+    if (run_mismatch != 0) begin
+      $display("FAIL cpu_run differed from rom_ready && !load_error in %0d cycles", run_mismatch);
+      errors = errors + 1;
+    end
   // ==== VERDICT ====
 
     if (errors == 0) begin

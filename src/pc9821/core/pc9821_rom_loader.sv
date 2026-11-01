@@ -42,7 +42,10 @@ module pc9821_rom_loader #(
 
     output reg         rom_ready,
     output reg         load_error,
-    output reg         saw_download
+    output wire        saw_download,
+    // rom_ready && !load_error, as its own register (written from the two flags' next state, so
+    // equal to their AND in every cycle). The subsystem's cpu_run; see the next-state block below.
+    output reg         cpu_run
 );
 
   reg download_d;
@@ -54,12 +57,20 @@ module pc9821_rom_loader #(
   // clocked block - which leaves them undriven until the first download in a 4-state
   // simulation, where they power up as X and propagate it to cpu_run/cpu_reset_n
   // Power-on determinism comes from here instead, matching the
-  // persistent registers in pc9821_block_io.sv:103-107 and pc9821_iobus.sv:905-912.
+  // persistent registers' `initial` blocks in pc9821_block_io.sv:341 and pc9821_iobus.sv:1318.
   initial begin
     rom_ready    = 1'b0;
     load_error   = 1'b0;
-    saw_download = 1'b0;
+    cpu_run      = 1'b0;
   end
+  // saw_download is a set-only flag, so its power-up 0 must sit on an internal register: on an
+  // output port Quartus ignores the value, and ALLOW_POWER_UP_DONT_CARE then ties a register
+  // whose data input is the constant 1 to VCC (docs/policies.md, the power-up rule), which would
+  // raise rom_ready before any download.
+  /* verilator lint_off PROCASSINIT */  // the power-up value, kept by Quartus on an internal register
+  reg saw_download_r = 1'b0;
+  /* verilator lint_on PROCASSINIT */
+  assign saw_download = saw_download_r;
 
   // THE BIOS-TOP BANK IS TEED INTO THE TOP-WINDOW SHADOW. The shadow is a
   // 32 KiB store in the SDRAM reserve above the pack; the map reads it as the window's
@@ -87,6 +98,23 @@ module pc9821_rom_loader #(
   reg  [31:0] tee_addr;
   wire        busy = (state != S_IDLE);
 
+  // THE TWO PERSISTENT FLAGS' NEXT STATE, one expression each (R2), so `cpu_run` can be
+  // registered from them and equal `rom_ready && !load_error` in every cycle (proven by
+  // tools/check_cpu_run_inv.py, induction over this module).
+  //   * The download's first selected cycle (`sel_edge`, the loader's own edge: download_d is
+  //     reset, so the first selected cycle after a platform reset is one too) clears both.
+  //   * An out-of-range word (`bad_word`, only while selected) raises load_error. In the edge
+  //     cycle itself the two meet and the raise wins: the word is this download's.
+  //   * rom_ready falls on the deselect cycle and rises once the request sequence is idle with
+  //     no error; both arms need !selected, so they never meet the edge's clear.
+  wire sel_edge = selected && !download_d;
+  wire bad_word = (state == S_IDLE) && incoming && !address_ok;
+  wire load_error_nx = bad_word ? 1'b1 : (sel_edge ? 1'b0 : load_error);
+  wire rom_ready_nx  = sel_edge ? 1'b0 :
+                       (download_d && !selected) ? 1'b0 :
+                       (saw_download && !selected && !busy && !load_error) ? 1'b1 :
+                       rom_ready;
+
   // One internal word buffer decouples ioctl from SDRAM. A word presented while
   // wait is low is captured even if the backend is stalled; wait then remains
   // high until its whole request sequence is accepted.
@@ -104,17 +132,16 @@ module pc9821_rom_loader #(
       state <= S_IDLE;
       tee_needed <= 1'b0;
       tee_addr <= 32'd0;
-      // Keep saw_download/load_error/rom_ready across a core (OSD) reset: the
+      // Keep saw_download/load_error/rom_ready (and cpu_run, their AND) across a core (OSD) reset: the
       // pack data lives in SDRAM, whose JEDEC re-initialization does not
       // disturb stored data, so a reset must not force a full re-download.
     end else begin
       download_d <= selected;
 
-      if (selected && !download_d) begin
-        rom_ready <= 1'b0;
-        load_error <= 1'b0;
-        saw_download <= 1'b1;
-      end
+      rom_ready  <= rom_ready_nx;
+      load_error <= load_error_nx;
+      cpu_run    <= rom_ready_nx && !load_error_nx;
+      if (sel_edge) saw_download_r <= 1'b1;
 
       case (state)
       S_IDLE: begin
@@ -132,9 +159,8 @@ module pc9821_rom_loader #(
             tee_needed <= stage_in_top;
             mem_valid  <= 1'b1;
             state      <= S_PACK;
-          end else begin
-            load_error <= 1'b1;
           end
+          // else: an out-of-range word - load_error_nx (bad_word) raises the error.
         end
       end
       S_PACK: begin
@@ -156,12 +182,8 @@ module pc9821_rom_loader #(
       end
       endcase
 
-      // ioctl_download may drop on the cycle the final request is
-      // accepted. Wait until the sequence is idle before publishing ready.
-      if (download_d && !selected)
-        rom_ready <= 1'b0;
-      else if (saw_download && !selected && !busy && !load_error)
-        rom_ready <= 1'b1;
+      // (ioctl_download may drop on the cycle the final request is accepted: rom_ready_nx waits
+      // until the sequence is idle before publishing ready.)
     end
   end
 

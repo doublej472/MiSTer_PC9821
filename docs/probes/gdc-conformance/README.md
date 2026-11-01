@@ -1,11 +1,11 @@
 # GDC characterization / conformance suite v1.0-rc6 — real-hardware captures
 
 These are **real PC-9821 hardware** captures, so they sit at the TOP of this
-repo's evidence hierarchy (AGENTS.md, "Evidence hierarchy": real hardware beats
+repo's evidence hierarchy (AGENTS.md, "Evidence": real hardware beats
 NP2kai, qemu-pc98, MAME and our own RTL). They are the oracle for the graphics
 GDC (the uPD7220-compatible *slave* on ports `0xA0`/`0xA2`) command/drawing
-work — the GDC2 drawing gap listed in README.md's known issues ("the graphics GDC's line, arc,
-rectangle and character drawing").
+work, including the figure drawing (FIGD/GCHRD) whose GDCDRAW/GDCGCHR/GDCROP rows
+`tools/gen_gdc_draw_vectors.py` turns into `tb_pc9821_gdc2_figure_xe10`'s replay.
 
 ## What ran, on what
 
@@ -32,8 +32,8 @@ differs** and this core does not reproduce the machine's 0x054D. Bit 2 (the
 "display address increment time" flag) and bit 5 agree, so the GDC-clock flag is
 right. Every gap count below is therefore an **upper bound**, and a case whose
 expectation looks mode-dependent is not evidence against this core on its own.
-A separate lane (`gdc-clock`) owns port-0x31/0x054D; this capture records the
-divergence and nothing here chases it.
+Port 0x31/0x054D is a separate question; this capture records the divergence and
+nothing here chases it.
 
 `MACHINE.TXT` is the suite's template (the run did not fill it in);
 `README.TXT` is the suite's own packaging note.

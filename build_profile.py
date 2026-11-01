@@ -7,7 +7,7 @@ decides it:
   clk_sys_hz          the core clock (PLL output 0) and z486_mister.sv's CLOCK_RATE_HZ. The SDRAM
                       controller and its PHY run on it too: there is no separate SDRAM clock (the
                       split-clock configuration - sdram_hz, sdram_sync, --sdram-mhz,
-                      --no-sdram-sync - was removed on 2026-10-09, owner decision)
+                      --no-sdram-sync - was removed)
   sdram_phase_ps      output 1's phase (the SDRAM_CLK pin clock, clk_sys's frequency). DERIVED by
                       default from the SDC's SDRAM I/O model for clk_sys
                       (tools/profile_gen.py, derive_sdram_phase); an explicit value overrides
@@ -15,19 +15,43 @@ decides it:
   perf_log_en         PERF_LOG_EN (the serial console's performance-log telemetry)
   io_latency_profile  IO_LATENCY_PROFILE (0 = min bus, 1/2 = the faithful class table)
   mpu_en              MPU_EN, and with it CONF_STR_HEADER (the UART/MIDI OSD declaration)
-  cdrom_en            CDROM_EN, and with it CONF_STR_DISKS + CONF_STR_EJECTS + HPS_VDNUM (the
-                      CD-ROM's OSD slot 4 and its Eject on status[11]); ON in every preset
+  cdrom_en            CDROM_EN, and with it CONF_STR_CD + HPS_VDNUM (the CD-ROM's OSD
+                      slot 4 and its Eject on status[11]); ON in every preset
                       since 2026-10-10, --no-cdrom the opt-out
-  cdrom_audio_en      CDROM_AUDIO_EN: the CD drive's CD-DA player (meaningful only with cdrom_en)
+  cdrom_audio_en      CDROM_AUDIO_EN: the CD drive's CD-DA player (needs cdrom_en; --no-cdrom
+                      drops it unless --cdrom-audio asks for it, which is then refused)
   cdrom_log_en        CDROM_LOG_EN: the CD drive's command log on the debug UART (a debug instrument;
-                      meaningful only with cdrom_en and without perf_log_en, which owns that UART source)
+                      needs cdrom_en, and is refused with trace_en or perf_log_en, which share that
+                      UART arm)
   dbg                 the DEBUG-UART INSTRUMENT FRAMEWORK, every part off in every preset (see the
                       "debug instruments" block below): cpu (the sampler), snoop LO:HI (the
                       memory window), gdc (the display log), the trace's trigger (trig, trig2,
                       arm_s, post) and sample_ms; the CD log is cdrom_log_en (--dbg-cd). All are
                       compile-time parameters; nothing is built unless asked for
+  sdram_phase_dyn     SDRAM_PHASE_DYN: the run-time SDRAM_CLK phase instrument, a MEASUREMENT build
+                      (--dbg-sdram-phase; off in every preset): the main PLL generated with its
+                      dynamic-phase-shift ports in use and a guest stepper at 0x5FF0/0x5FF2
+                      (src/pc9821/core/pc9821_sdram_phase_ctl.sv, tools/hwprobe/sdshmoo). Refused with
+                      the DDIO SDRAM_CLK (clk_sys >= 100 MHz), whose clock is not PLL output 1
+  dbg_sdram_cl2       SDRAM_DBG_CL = 2: a MEASUREMENT build that keeps CL2 and the phase-shifted
+                      SDRAM_CLK (PLL output 1) at any clock, including >= 100 MHz where the derived
+                      structure is CL3 through the DDIO cell (--dbg-sdram-cl2; off in every preset)
+  dbg_sdram_trcd      SDRAM_DBG_TRCD_TRP: tRCD/tRP forced to N cycles (--dbg-sdram-trcd-cycles N;
+                      0 = derived from clk_sys, every preset). With dbg_sdram_cl2 these are the
+                      100 MHz CL2 test point that separates a tRCD/tRP cause from an I/O window one
   alsa_en             the framework's HPS (Linux) audio input; off = VERILOG_MACRO MISTER_DISABLE_ALSA
-  yc_en               the framework's composite/S-Video encoder; off = VERILOG_MACRO MISTER_DISABLE_YC
+  vga_dbl_en          VIDEO_DBL_EN: the analog line doubler (24.8 -> 49.7 kHz, OSD "Analog video")
+  sdram_dq_ddio       SDRAM_DQ_DDIO: the SDRAM read capture as an instantiated IOE input DDIO cell
+                      (on in every preset); off = a fabric register the fitter packs there, which
+                      crashes Quartus 17.0.2's physical synthesis on some netlists (DTM, io_ibuf)
+  sdram_out_ddio      SDRAM_OUT_DDIO: every SDRAM output and DQ output-enable register as an
+                      instantiated IOE cell (on in every preset); off = fabric registers the fitter
+                      packs there, which crashes the same physical synthesis (DTM, io_obuf)
+  hdmi_rclk           the framework's HDMI scaler clock (pll_hdmi) on a REGIONAL clock network
+                      instead of the fitter's choice: one fit-side GLOBAL_SIGNAL assignment that
+                      keeps sys/ascal.vhd's output stage and the HDMI OSD in one quadrant
+  hdmi_rclk_q2        with hdmi_rclk: that quadrant is the bottom-right one beside the HDMI pins
+                      (its clock control block CLKCTRL_R29), not the fitter's choice
   fit_technique       the qsf's OPTIMIZATION_TECHNIQUE
   qsf_set             further fitter/synthesis qsf assignments, NAME -> VALUE: each replaces the
                       SPEED stack's row of that name (the value @default drops the row, so
@@ -35,27 +59,28 @@ decides it:
                       name/value pair is checked by Quartus itself (quartus_sh's
                       set_global_assignment, in the container) when the configuration is applied
 
-The seven named PROFILES below are presets of that value. Any field of a preset can be
+The five named PROFILES below are presets of that value. Any field of a preset can be
 overridden on the command line or from a profile file (JSON, or TOML), and --custom starts
 from base's values under the name 'custom'. Applying a configuration:
 
-  * rewrites the top level's localparams (CLOCK_RATE_HZ, TRACE_EN,
-    PERF_LOG_EN, IO_LATENCY_PROFILE, MPU_EN, CONF_STR_HEADER, CDROM_EN,
-    CONF_STR_DISKS, CONF_STR_EJECTS, HPS_VDNUM);
+  * rewrites the top level's localparams, every one top_localparams() lists: CLOCK_RATE_HZ,
+    TRACE_EN, PERF_LOG_EN, IO_LATENCY_PROFILE, MPU_EN, CONF_STR_HEADER, SDRAM_CLK_DDIO,
+    SDRAM_DQ_DDIO, SDRAM_OUT_DDIO, SDRAM_PHASE_DYN, SDRAM_DBG_CL, SDRAM_DBG_TRCD_TRP, CDROM_EN,
+    CONF_STR_CD, HPS_VDNUM, CDROM_AUDIO_EN, CDROM_LOG_EN, VIDEO_DBL_EN, CONF_STR_VIDEO and every
+    DBG_* instrument parameter;
   * rewrites the qsf's managed block: the production SPEED fit stack with the configured
-    technique, the framework feature macros (MISTER_DISABLE_ALSA / MISTER_DISABLE_YC for a
-    feature that is off), and the configuration itself as a machine-readable '# Active config:' JSON
+    technique, the framework feature macros (MISTER_DISABLE_ALSA for a feature that is off;
+    MISTER_DISABLE_YC is always set - the composite/S-Video encoder is TV-only and the TV converter
+    was removed), and the configuration itself as a machine-readable '# Active config:' JSON
     record (the qsf is hashed into every fit's attribution, so the record travels with it);
   * GENERATES the main PLL into rtl/ (qmegawiz in the Quartus container, cached under
     .build/pll-cache/, read back and verified) and the constraints into z486_mister.sdc
     (tools/profile/z486_mister.sdc.in with its computed block for the configured clock). Both
     outputs are git-ignored; the templates are the source.
 
-    ./build_profile.py base                       # 80 MHz clk_sys, SDRAM on clk_sys - the default, shipping build
+    ./build_profile.py base                       # 90 MHz clk_sys, SDRAM on clk_sys - the default, shipping build
     ./build_profile.py trace                      # base + trace ring + perf log, AREA fit (debug)
     ./build_profile.py iofaithful                 # base + the FAITHFUL I/O class table
-    ./build_profile.py midilink                   # base + the MPU-PC98II MIDI card
-    ./build_profile.py lightoc                    # an ALIAS of base (the old shipping preset's name)
     ./build_profile.py mediumoc                   # 100 MHz clk_sys and SDRAM (past timing closure)
     ./build_profile.py heavyoc                    # 120 MHz clk_sys and SDRAM (at the SDRAM's limit)
     ./build_profile.py base --trace
@@ -95,18 +120,174 @@ SDC_NAME = "z486_mister.sdc"
 
 PROFILE_BLOCK_BEGIN = "# BEGIN build_profile.py settings"
 PROFILE_BLOCK_END = "# END build_profile.py settings"
+# The SDRAM DQ output enable of the cell build (sdram_out_ddio) stays a FABRIC register: no I/O-cell
+# OE register at all. sys/sys.tcl (sourced after the managed block) and the qsf's own pin section set
+# FAST_OUTPUT_ENABLE_REGISTER ON for SDRAM_DQ[*], and in Quartus the LAST assignment to a target
+# wins, so this line is kept as the qsf's final line (the crash lab's override position). Packed -
+# even one register per pin - the OE registers still hit the DTM io_obuf crash (dob-lane2 seed 11);
+# driven by a cyclonev_ddio_oe atom the build was black on hardware.
+OE_FABRIC_COMMENT = ("# build_profile.py (sdram_out_ddio): the SDRAM DQ output enable is a fabric register "
+                     "- keep this the LAST FAST_OUTPUT_ENABLE_REGISTER line")
+OE_FABRIC_LINE = "set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER OFF -to SDRAM_DQ[*]"
+OE_ASSIGN_RE = re.compile(r"^\s*set_instance_assignment\s+-name\s+FAST_OUTPUT_ENABLE_REGISTER\s+(\w+)\s+-to\s+SDRAM_DQ\[\*\]\s*$")
 CONFIG_RECORD_PREFIX = "# Active config: "
 
 FIT_TECHNIQUES = ("SPEED", "AREA", "BALANCED")
 # clk_sys IS the SDRAM controller's clock, so its range is the controller's: sdram.v derives its
-# timing up to 133 MHz, and the board's SDRAM part has a hard limit at about 120 MHz (owner,
-# 2026-10-09), which heavyoc sits at.
+# timing up to 133 MHz, and the board's SDRAM part has a hard limit at about 120 MHz, which
+# heavyoc sits at.
 CLK_SYS_MIN_HZ = 25_000_000
+# The PC-98 dot rate, 400/19 MHz (pc9821_dot_ce): clk_sys must exceed it (the dot enable's guard).
+PIXEL_HZ = 21_052_632
 CLK_SYS_MAX_HZ = 133_000_000
 SDRAM_PART_LIMIT_HZ = 120_000_000
 # The split-clock configuration's fields, removed on 2026-10-09.
+# The OSD's "CD audio volume" field, which CONF_STR_CD carries in a build with the CD drive's
+# audio player. Position 0 is 0 dB, the unity level shipped before the field existed (the owner's
+# choice, 2026-10-31: the clipping that had prompted a -6 dB default was a wrong-rail clamp in the
+# output FIR, tb_pc9821_audio_out_sat, not a level problem); NP2kai's default CD-DA level,
+# davolume 128/255 = -6 dB, stays a step. The list descends in 2 dB steps and ends at Off (the
+# owner's order, 2026-10-31). pc9821_osd maps each position to pc9821_audio_volume's
+# gain code, and tools/check_osd_contract.py holds the two together.
+CD_VOLUME_FIELD = "O[66:64],CD audio volume,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"
 RETIRED_FIELDS = ("sdram_hz", "sdram_mhz", "sdram_sync")
 RETIRED_LOCALPARAMS = ("SDRAM_RATE_HZ", "SDRAM_SYNC")
+# SDRAM_DQ_DDIO's path from the top level to the cell it selects (sdram.v DQ_IN_DDIO): each file
+# must carry its hop, or the controller builds its default (the packed register) whatever the
+# record says, and the SDC then names a register the netlist does not have. sdram.v's DDIO arm must
+# instantiate the cell under the name the SDC's capture collection uses (pg.DQ_DDIO_INSTANCE).
+DQ_DDIO_WIRING = (
+    (TOP_NAME, ".DQ_IN_DDIO(SDRAM_DQ_DDIO)"),
+    ("src/memory/split_sdram_backend.sv", ".DQ_IN_DDIO(DQ_IN_DDIO)"),
+    ("src/memory/sdram_sync_bridge.sv", ".DQ_IN_DDIO(DQ_IN_DDIO)"),
+)
+SDRAM_V = "src/memory/sdram.v"
+# The timing-table overrides' path to sdram.v (DBG_CL / DBG_TRCD_TRP): the same three hops.
+DBG_TIMING_WIRING = (
+    (TOP_NAME, ".DBG_CL(SDRAM_DBG_CL)"), (TOP_NAME, ".DBG_TRCD_TRP(SDRAM_DBG_TRCD_TRP)"),
+    ("src/memory/split_sdram_backend.sv", ".DBG_CL(DBG_CL)"),
+    ("src/memory/split_sdram_backend.sv", ".DBG_TRCD_TRP(DBG_TRCD_TRP)"),
+    ("src/memory/sdram_sync_bridge.sv", ".DBG_CL(DBG_CL)"),
+    ("src/memory/sdram_sync_bridge.sv", ".DBG_TRCD_TRP(DBG_TRCD_TRP)"),
+)
+
+
+# sdram.v's timing table and its elaboration checks, at the grade z486_mister.sv builds (-7,
+# FAST_GRADE 0): a model, so validate() can refuse a clock or a measurement override the RTL
+# would refuse (Quartus may not stop on an `initial $error`), and so --selftest can sweep the
+# whole legal clock range. --selftest also elaborates sdram.v with Verilator at every MHz of that
+# range (and every override at the preset clocks) and requires the RTL's values and its fired
+# checks to equal this model's, so the model cannot drift from the file it describes.
+SDRAM_NS_7 = {"rcd": 21, "rp": 21, "rc": 68, "wr": 15, "ras": 42, "wr_ds": 14}
+
+
+def sdram_table(clk_hz: int, dbg_cl: int = 0, dbg_trcd: int = 0) -> dict:
+    """sdram.v's localparams at FREQ = clk_hz, FAST_GRADE 0 (its ns_to_cycles, CAS_I, EXIT_TRIM)."""
+    def cyc(ns: int) -> int:
+        return max((ns * ((clk_hz + 999) // 1000) + 999_999) // 1_000_000, 1)
+    ns = SDRAM_NS_7
+    t = {"CAS_I": dbg_cl or (2 if clk_hz < 100_000_000 else 3),
+         "T_RCD_I": dbg_trcd or cyc(ns["rcd"]), "T_RP_I": dbg_trcd or cyc(ns["rp"]),
+         "T_RC_I": cyc(ns["rc"]), "T_WR_I": cyc(ns["wr"]), "T_RAS_I": cyc(ns["ras"]),
+         "T_RAS_WR_I": cyc(ns["ras"] - ns["wr_ds"])}
+    t["T_DAL_I"] = t["T_WR_I"] + t["T_RP_I"]
+    t["EXIT_TRIM"] = int(t["T_DAL_I"] >= 3 and t["T_RCD_I"] + t["T_DAL_I"] + 1 >= t["T_RC_I"])
+    return t
+
+
+def sdram_table_problems(clk_hz: int, dbg_cl: int = 0, dbg_trcd: int = 0) -> dict[str, str]:
+    """The sdram.v elaboration checks (generate-block name -> what it guards) this table fires."""
+    t = sdram_table(clk_hz, dbg_cl, dbg_trcd)
+    fired = {}
+    if clk_hz > 133_000_000:
+        fired["gen_freq_check"] = "the timing table is characterized only up to 133 MHz"
+    if t["T_RAS_WR_I"] > t["T_RCD_I"] + 1 or t["T_RAS_I"] > t["T_RCD_I"] + 4:
+        fired["gen_tras_check"] = (f"tRAS ({t['T_RAS_I']} clocks) is not met by a two-half write or a "
+                                   f"four-half read at tRCD {t['T_RCD_I']}")
+    if t["T_RCD_I"] + t["T_DAL_I"] + 2 - t["EXIT_TRIM"] < t["T_RC_I"]:
+        fired["gen_trc_check"] = (f"a store's next ACT, tRCD + tDAL + {2 - t['EXIT_TRIM']} = "
+                                  f"{t['T_RCD_I'] + t['T_DAL_I'] + 2 - t['EXIT_TRIM']} clocks after its "
+                                  f"own, is short of tRC ({t['T_RC_I']})")
+    if t["T_RP_I"] > t["CAS_I"] + 2:
+        fired["gen_rp_check"] = (f"tRP {t['T_RP_I']} exceeds CAS {t['CAS_I']} + 2 clocks, which a "
+                                 "read's exit assumes")
+    return fired
+
+
+def sdram_rtl_table(clk_hz: int, dbg_cl: int, dbg_trcd: int, scratch: Path) -> tuple[dict, set]:
+    """sdram.v elaborated by Verilator (--json-only) at FREQ = clk_hz, FAST_GRADE 0: the localparams
+    sdram_table models and the names of the elaboration-check generate blocks that exist."""
+    with tempfile.TemporaryDirectory(dir=scratch) as mdir:
+        run = subprocess.run(
+            ["verilator", "--json-only", "-Wno-fatal", "-Wno-lint", "-Wno-style",
+             f"-GFREQ={clk_hz}", "-GFAST_GRADE=0", "-GADQM=1", f"-GDBG_CL={dbg_cl}",
+             f"-GDBG_TRCD_TRP={dbg_trcd}", "--top-module", "sdram", "--Mdir", mdir,
+             str(PROJECT_DIR / SDRAM_V)], capture_output=True, text=True)
+        if run.returncode:
+            raise RuntimeError(f"verilator --json-only failed: {run.stderr.strip()[-400:]}")
+        tree = json.loads((Path(mdir) / "Vsdram.tree.json").read_text())
+    want = set(sdram_table(clk_hz))
+    vals, checks, todo = {}, set(), [tree]
+    while todo:
+        node = todo.pop()
+        if isinstance(node, list):
+            todo.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        if (node.get("type") == "VAR" and node.get("name") in want and node.get("valuep")
+                and node["valuep"][0].get("type") == "CONST"):
+            vals[node["name"]] = int(node["valuep"][0]["name"].split("h")[-1], 16)
+        if node.get("type") == "GENBLOCK" and re.fullmatch(r"gen_\w+_check", node.get("name", "")):
+            checks.add(node["name"])
+        todo.extend(v for v in node.values() if isinstance(v, (list, dict)))
+    return vals, checks
+
+
+def sdram_table_selftest() -> int:
+    """The derived table builds at every MHz of the legal clock range, and the model equals the RTL."""
+    failures = 0
+    mhz = list(range(-(-CLK_SYS_MIN_HZ // 10**6), CLK_SYS_MAX_HZ // 10**6 + 1))
+    bad = {m: sorted(sdram_table_problems(m * 10**6)) for m in mhz if sdram_table_problems(m * 10**6)}
+    if bad:
+        print(f"SELFTEST FAIL: sdram.v's derived timing table fails its own checks at {bad} (MHz)")
+        failures += 1
+    else:
+        print(f"selftest: sdram.v's derived table passes its checks at every MHz {mhz[0]}..{mhz[-1]}")
+    if shutil.which("verilator") is None:
+        print("SELFTEST FAIL: verilator is not on PATH, so the sdram.v table model is unchecked")
+        return failures + 1
+    points = [(m * 10**6, 0, 0) for m in mhz]
+    points += [(p.clk_sys_hz, cl, n) for p in {c.clk_sys_hz: c for c in PROFILES.values()}.values()
+               for cl in (0, 2) for n in range(16)]
+    scratch = Path(tempfile.mkdtemp(prefix="build-profile-sdram-"))
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            rtl = list(pool.map(lambda pt: sdram_rtl_table(*pt, scratch), points))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    wrong = []
+    for (hz, cl, n), (vals, checks) in zip(points, rtl):
+        model = sdram_table(hz, cl, n)
+        if vals != model or checks != set(sdram_table_problems(hz, cl, n)):
+            wrong.append(f"{hz / 1e6:g} MHz CL{cl or '-'} tRCD{n or '-'}: RTL {vals} {sorted(checks)}, "
+                         f"model {model} {sorted(sdram_table_problems(hz, cl, n))}")
+    if wrong:
+        print("SELFTEST FAIL: sdram.v's elaborated table differs from build_profile's model:\n  "
+              + "\n  ".join(wrong[:8]))
+        failures += 1
+    else:
+        print(f"selftest: sdram.v elaborated at {len(points)} points (every MHz, every tRCD/tRP "
+              "override at the preset clocks) equals the model, values and fired checks")
+    return failures
+# SDRAM_OUT_DDIO's path to sdram.v OUT_DDIO, the same three hops; sdram.v's g_out_ddio arm must
+# instantiate the cells under the names the SDC's output-cell guard counts (pg.OUT_DDIO_INSTANCES).
+OUT_DDIO_WIRING = (
+    (TOP_NAME, ".OUT_DDIO(SDRAM_OUT_DDIO)"),
+    ("src/memory/split_sdram_backend.sv", ".OUT_DDIO(OUT_DDIO)"),
+    ("src/memory/sdram_sync_bridge.sv", ".OUT_DDIO(OUT_DDIO)"),
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,16 +306,18 @@ class Config:
     # Rewrites IO_LATENCY_PROFILE, which pc9821_system forwards into pc9821_iobus. 0 is the min
     # profile (the shipped fast bus); 1/2 the faithful bus. The unselected table const-folds.
     io_latency_profile: int = 0
-    # Rewrites MPU_EN (and CONF_STR_HEADER, which follows it). Off except 'midilink': the
-    # MPU-PC98II costs 26-50 LABs against the measured ~40 free.
-    mpu_en: bool = False
+    # Rewrites MPU_EN (and CONF_STR_HEADER, which follows it). ON in every preset except 'trace'
+    # (MIDI by default once it fits). Measured on 11a1e82c, seeds 2-5: base
+    # + MPU + ALSA 4,105 LABs mean / clk_sys -4.85 ns vs base 4,105 / -5.09; base + MPU alone
+    # 4,140 / -5.10 (LAB packing noise is ~40 per variant). --no-mpu is the opt-out.
+    mpu_en: bool = True
     # (`ide_disk2_en`, the second IDE hard disk, was RETIRED on 2026-10-08 with the disk itself:
     # a record that still carries the key parses, the key is ignored, and `--check` then reports
     # the block as not the one its record renders until the configuration is re-applied.)
-    # Rewrites CDROM_EN, and with it the disk OSD entries (CONF_STR_DISKS) and hps_io's slot
+    # Rewrites CDROM_EN, and with it the CD's OSD entries (CONF_STR_CD) and hps_io's slot
     # count (HPS_VDNUM): the CD-ROM's "S4" slot and its ATAPI drive (pc9821_atapi, bank 1's
-    # master; the hard disk is bank 0's master with or without it). ON in every preset (owner, 2026-10-10: "default to
-    # enabling the CD across the board"); --no-cdrom is the opt-out.
+    # master; the hard disk is bank 0's master with or without it). ON in every preset;
+    # --no-cdrom is the opt-out.
     cdrom_en: bool = True
     # Rewrites CDROM_AUDIO_EN: the CD drive's CD-DA player and the cdda ring behind it. It only
     # means something with cdrom_en (the line is written as cdrom_en AND this), so the default
@@ -144,14 +327,58 @@ class Config:
     # debug UART (pc9821_atapi LOG_EN). Off in every preset; the
     # line is written as cdrom_en AND this AND NOT perf_log_en (the telemetry owns that source).
     cdrom_log_en: bool = False
-    # The two framework features sys/sys_top.v compiles out under a VERILOG_MACRO. OFF in every
-    # preset (owner, 2026-10-08): MidiLink's synths are physical hardware, so the HPS Linux audio
-    # path (alsa.sv + its DDR reader + the audio_out mix input) has nothing to carry, and the
-    # composite/S-Video encoder (yc_out) is not used. Measured in a fit: alsa -265 ALMs, yc_out
-    # -230, their sys_top glue -53 = -548 ALMs. On = the macro
-    # line is absent and the framework builds the feature as upstream ships it.
-    alsa_en: bool = False
-    yc_en: bool = False
+    # The framework feature sys/sys_top.v compiles out under a VERILOG_MACRO. ALSA (the HPS
+    # Linux audio path: alsa.sv + its DDR reader + the audio_out mix input) is ON with the MIDI card
+    # (it fits), so MidiLink's software synths are
+    # audible; it was off from 2026-10-08 (docs/trade-candidates.md T31) when the design had no
+    # room. Measured in a fit: alsa -265 ALMs, plus its sys_top glue. The composite/S-Video
+    # encoder (yc_out) is TV-only and is ALWAYS off: MISTER_DISABLE_YC is set in every build (the
+    # 15 kHz TV converter that fed it was removed).
+    alsa_en: bool = True
+    # Rewrites VIDEO_DBL_EN (and CONF_STR_VIDEO, the OSD "Analog video" field that turns it on at run
+    # time). The line doubler (pc9821_line_doubler: 6 M10K) puts a 49.7 kHz, every-line-twice picture
+    # on the analog port for VGA monitors that cannot sync to the machine's 24.8 kHz. It needs clk_sys
+    # above 2 x 21.0526 MHz (validate()).
+    vga_dbl_en: bool = True
+    # Rewrites SDRAM_DQ_DDIO (sdram.v DQ_IN_DDIO) and the SDC's DQ capture collection. On: the DQ
+    # read-capture register is the rising-edge half of an INSTANTIATED IOE input DDIO cell
+    # (altddio_in). Off: a fabric register the fitter packs into that cell (FAST_INPUT_REGISTER).
+    # The same register in the same cell on the same cycle; but the packed form crashes Quartus
+    # 17.0.2 at the start of physical synthesis on some netlists (`Internal Error: Sub-system: DTM,
+    # File: /quartus/ddb/dtm/dtm_node.cpp, Line: 772`, visit_atom_stratixv_style_io_ibuf), and which
+    # seeds crash moves with unrelated netlist changes. Off stays selectable for A/Bs.
+    sdram_dq_ddio: bool = True
+    # Rewrites SDRAM_OUT_DDIO (sdram.v OUT_DDIO) and the SDC's output-cell exception. On: every SDRAM
+    # output register (command, address, BA, DQM, DQ data) and the DQ output enable is an
+    # in its pin's I/O cell without a packed fabric register: instantiated altddio_out cells (both
+    # halves equal), and the DQ output enable one dont_merge FABRIC register per pin, never in the
+    # I/O cell (OE_FABRIC_LINE; a cyclonev_ddio_oe there was black on hardware, a packed one per pin
+    # still crashed the fitter), loaded with the
+    # FSM's next value. Off: the FSM's fabric registers, packed into those cells by the qsf's
+    # FAST_OUTPUT_REGISTER / FAST_OUTPUT_ENABLE_REGISTER. The same register on the same clk edge;
+    # but the packed form crashes Quartus 17.0.2 at the start of physical synthesis on some netlists
+    # (`Internal Error: Sub-system: DTM, File: /quartus/ddb/dtm/dtm_node.cpp, Line: 772`,
+    # visit_atom_stratixv_style_io_obuf). Off stays selectable for A/Bs.
+    sdram_out_ddio: bool = True
+    # The framework's pll_hdmi clock (sys/ascal.vhd's output stage, the HDMI OSD) on a REGIONAL
+    # clock network (HDMI_RCLK_LINE). A fit-side PLACEMENT knob, not a feature: no RTL and no
+    # constant changes. See HDMI_RCLK_LINE for why; recorded in the '# Active config' JSON only
+    # when set.
+    hdmi_rclk: bool = False
+    # With hdmi_rclk: the regional clock's control block is CLKCTRL_R29, whose region is the
+    # bottom-right quadrant (HDMI_RCLK_Q2_LINE), not the fitter's pick.
+    hdmi_rclk_q2: bool = False
+    # Rewrites SDRAM_PHASE_DYN and generates the main PLL with its dynamic-phase-shift ports in use
+    # (tools/profile_gen.py PllRequest.dps): the run-time SDRAM_CLK phase instrument, a measurement
+    # build for the SDRAM window shmoo. OFF in every preset; recorded in the '# Active config' JSON
+    # only when set, so every record written before it existed means exactly what it meant.
+    sdram_phase_dyn: bool = False
+    # Rewrite SDRAM_DBG_CL / SDRAM_DBG_TRCD_TRP (sdram.v DBG_CL / DBG_TRCD_TRP): MEASUREMENT
+    # overrides of the controller's timing table, off/0 in every preset and recorded only when set.
+    # dbg_sdram_cl2 also keeps the phase-shifted SDRAM_CLK structure (sdram_clk_ddio False) and the
+    # SDC's CL2 tAC at any clock, so a 100 MHz CL2 build is the pre-cutover structure.
+    dbg_sdram_cl2: bool = False
+    dbg_sdram_trcd: int = 0
     # The managed qsf block's OPTIMIZATION_TECHNIQUE. AREA in every preset since 2026-10-12
     # (docs/trade-candidates.md T40): on the storage-pass tree, seeds 2-7 per side, AREA placed
     # 38,947 ALMs / 4,170 LABs mean vs SPEED's 39,337 / 4,181, clk_sys slack mean -7.23 /
@@ -164,8 +391,8 @@ class Config:
     # entry says otherwise; recorded in the '# Active config' JSON only when non-empty, so a
     # record written before the field existed means exactly what it meant then.
     qsf_set: tuple[tuple[str, str], ...] = ()
-    # The debug-UART instrument framework (pc9821_dbg_cpu / pc9821_gdc_log / pc9821_dbg_mux; AGENTS.md
-    # "Testing on a real MiSTer"), as sorted (KEY, VALUE)
+    # The debug-UART instrument framework (pc9821_dbg_cpu / pc9821_gdc_log / pc9821_dbg_mux;
+    # docs/debug-instruments.md, docs/mister-testing.md "The debug UART"), as sorted (KEY, VALUE)
     # pairs of normalize_dbg's keys. EMPTY for every preset: each part is a compile-time parameter
     # that builds nothing when absent. Recorded in the '# Active config' JSON only when non-empty.
     dbg: tuple[tuple[str, object], ...] = ()
@@ -199,30 +426,55 @@ class Config:
         return "PC9821;UART115200(Turbo 115200),MIDI;" if self.mpu_en else "PC9821;;"
 
     @property
-    def conf_str_disks(self) -> str:
-        """z486_mister.sv's CONF_STR_DISKS: the OSD's FDD2 mount entry, plus the CD-ROM's.
+    def conf_str_cd(self) -> str:
+        """z486_mister.sv's CONF_STR_CD: the HDD's Eject, plus the CD-ROM's Mount and Eject.
 
-        A profile-rewritten LINE for the same reason as conf_str_header: a string ternary on
+        The OSD lists each drive's Mount directly followed by its Eject, HDD, CD-ROM, FDD1,
+        FDD2, so the CD's pair sits between "S0,IMGHDIVHD,Mount HDD;" and "S1,...,Mount FDD1;". A
+        profile-rewritten LINE for the same reason as conf_str_header: a string ternary on
         CDROM_EN would be NUL-padded on the high side. Never empty (an empty Verilog string is a
-        NUL byte), so the always-present FDD2 entry leads it.
+        NUL byte), so the HDD's always-present Eject leads it. status[11] was only ever a T
+        trigger (the removed second disk's Eject), so reusing it cannot meet a saved option value.
+        With the CD drive's audio player (cdrom_audio_en) the line also carries the "CD audio
+        volume" field (status[66:64], decoded by pc9821_osd; bits no field has ever used), so a
+        build without CD-DA does not offer a control with nothing to act on.
         """
-        return "S2,D88FDDHDM,Mount FDD2;" + ("S4,ISOPCD,Mount CD-ROM;" if self.cdrom_en else "")
+        line = "T[8],Eject HDD;"
+        if self.cdrom_en:
+            line += "S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;"
+            if self.cdrom_audio_en:
+                line += CD_VOLUME_FIELD
+        return line
 
     @property
-    def conf_str_ejects(self) -> str:
-        """z486_mister.sv's CONF_STR_EJECTS: FDD2's Eject, plus the CD-ROM's (status[11]).
+    def conf_str_video(self) -> str:
+        """z486_mister.sv's CONF_STR_VIDEO: the analog converters' fields.
 
-        The ejects are a group after the mounts (the owner's OSD layout), so the CD's needs its
-        own rewritten line beside CONF_STR_DISKS. FDD2's always-present entry leads it so the
-        string is never empty. status[11] was only ever a T trigger (the removed second disk's
-        Eject), so reusing it cannot meet a saved option value.
+        "Analog video" (status[81:80]) lists Native first and then the BUILT converter in the order
+        z486_mister.sv's VIDEO_SEL_* constants number it (the doubler); the doubler adds "Scanlines"
+        (status[83:82]). A rewritten line for the same reason as CONF_STR_CD. It ENDS WITH the
+        separator that closes the video section, so it is never empty (an empty Verilog string is
+        a NUL byte), and a build with no converter on the analog port gets that one separator
+        rather than a filler separator beside it.
         """
-        return "T[10],Eject FDD2;" + ("T[11],Eject CD-ROM;" if self.cdrom_en else "")
+        modes = ["Doubled 49kHz"] if self.vga_dbl_en else []
+        line = ""
+        if modes:
+            line += "O[81:80],Analog video,Native 24kHz," + ",".join(modes) + ";"
+        if self.vga_dbl_en:
+            line += "O[83:82],Scanlines (doubled),None,25%,50%,75%;"
+        return line + "-;"
 
     @property
     def hps_vdnum(self) -> int:
         """hps_io's VDNUM: 0 HDD, 1-2 FDD; with the CD, 4 CD and slot 3 an unused, tied-off index."""
         return 5 if self.cdrom_en else 3
+
+    @property
+    def sdram_clk_ddio(self) -> bool:
+        """SDRAM_CLK through a clk_sys output DDIO (clk_sys >= 100 MHz, the CL3 builds); derived
+        in one place (pg.sdram_clk_ddio) and written to SDRAM_CLK_DDIO and the SDC from it."""
+        return pg.sdram_clk_ddio(self.clk_sys_hz) and not self.dbg_sdram_cl2
 
     def phase(self) -> tuple[int, str]:
         if self.sdram_phase_ps is not None:
@@ -230,7 +482,15 @@ class Config:
         return pg.derive_sdram_phase(self.clk_sys_hz)["phase_ps"], "derived"
 
     def pll_request(self) -> pg.PllRequest:
-        return pg.PllRequest(self.clk_sys_hz, self.phase()[0])
+        return pg.PllRequest(self.clk_sys_hz, self.phase()[0], dps=self.sdram_phase_dyn)
+
+    def vpll_request(self) -> pg.VpllRequest:
+        """The video PLL: FRACTIONAL and RECONFIGURABLE in every build, GENERATED at its fastest
+        run-time setting, the 31 kHz clock (50.336 MHz), so the fitter times the video domain at
+        19.87 ns (tools/profile_gen.py, the video PLL section). pc9821_vpll_ctl moves it to the
+        24 kHz clock after lock and back on 0x09A8 bit 0. The TV converter is gone, so the
+        TV-rate proxy generation is never asked for."""
+        return pg.VpllRequest(False)
 
     def record(self) -> dict:
         """The machine-readable configuration: every field a fit depends on, phase resolved."""
@@ -249,9 +509,21 @@ class Config:
             "cdrom_audio_en": self.cdrom_audio_en,
             "cdrom_log_en": self.cdrom_log_en,
             "alsa_en": self.alsa_en,
-            "yc_en": self.yc_en,
+            "vga_dbl_en": self.vga_dbl_en,
+            "sdram_dq_ddio": self.sdram_dq_ddio,
+            "sdram_out_ddio": self.sdram_out_ddio,
             "fit_technique": self.fit_technique,
         }
+        if self.hdmi_rclk:
+            rec["hdmi_rclk"] = True
+        if self.hdmi_rclk_q2:
+            rec["hdmi_rclk_q2"] = True
+        if self.sdram_phase_dyn:
+            rec["sdram_phase_dyn"] = True
+        if self.dbg_sdram_cl2:
+            rec["dbg_sdram_cl2"] = True
+        if self.dbg_sdram_trcd:
+            rec["dbg_sdram_trcd"] = self.dbg_sdram_trcd
         if self.qsf_set:
             rec["qsf_set"] = dict(self.qsf_set)
         if self.dbg:
@@ -265,8 +537,10 @@ class Config:
         """Everything that reaches the build, for comparing configurations."""
         return (self.clk_sys_hz, self.phase(), self.trace_en,
                 self.perf_log_en, self.io_latency_profile, self.mpu_en, self.cdrom_en,
-                self.cdrom_audio_en, self.cdrom_log_en, self.alsa_en, self.yc_en, self.fit_technique,
-                self.qsf_set, self.dbg)
+                self.cdrom_audio_en, self.cdrom_log_en, self.alsa_en, self.fit_technique,
+                self.qsf_set, self.dbg, self.vga_dbl_en, self.hdmi_rclk, self.hdmi_rclk_q2,
+                self.sdram_dq_ddio, self.sdram_out_ddio, self.sdram_phase_dyn,
+                self.dbg_sdram_cl2, self.dbg_sdram_trcd)
 
     def validate(self) -> list[str]:
         problems = []
@@ -279,8 +553,38 @@ class Config:
                             "at 133 MHz")
         if self.io_latency_profile not in (0, 1, 2):
             problems.append(f"io_latency_profile {self.io_latency_profile} is not 0, 1 or 2")
+        if self.clk_sys_hz <= PIXEL_HZ:
+            problems.append(f"clk_sys {self.clk_sys_hz:_} Hz cannot carry the {PIXEL_HZ:_} Hz dot "
+                            "enable (pc9821_dot_ce); the analog converters run on the video PLL's "
+                            "clock and no longer constrain clk_sys")
+        if self.hdmi_rclk_q2 and not self.hdmi_rclk:
+            problems.append("hdmi_rclk_q2 places pll_hdmi's REGIONAL clock control block; it needs "
+                            "hdmi_rclk")
+        if self.sdram_phase_dyn and self.sdram_clk_ddio:
+            problems.append("sdram_phase_dyn shifts PLL output 1, but at clk_sys >= 100 MHz "
+                            "SDRAM_CLK is clk_sys through an output DDIO cell (SDRAM_CLK_DDIO): "
+                            "there is no phase to shift")
+        if not 0 <= self.dbg_sdram_trcd <= 15:
+            problems.append(f"dbg_sdram_trcd {self.dbg_sdram_trcd} is not 0 (derived) or 1..15 cycles")
+        elif CLK_SYS_MIN_HZ <= self.clk_sys_hz <= CLK_SYS_MAX_HZ:
+            for why in sdram_table_problems(self.clk_sys_hz, 2 if self.dbg_sdram_cl2 else 0,
+                                            self.dbg_sdram_trcd).values():
+                problems.append(f"sdram.v refuses this timing table at {self.clk_sys_hz:_} Hz"
+                                + (f" with tRCD/tRP forced to {self.dbg_sdram_trcd}"
+                                   if self.dbg_sdram_trcd else "") + f": {why}")
         if self.fit_technique not in FIT_TECHNIQUES:
             problems.append(f"fit_technique {self.fit_technique!r} is not one of {FIT_TECHNIQUES}")
+        # The CD drive's two options are folded into CDROM_AUDIO_EN / CDROM_LOG_EN as ANDs (see
+        # top_localparams), so a request the fold would drop is refused here, not built silently.
+        if self.cdrom_audio_en and not self.cdrom_en:
+            problems.append("cdrom_audio_en is the CD drive's CD-DA player; it needs cdrom_en")
+        if self.cdrom_log_en and not self.cdrom_en:
+            problems.append("cdrom_log_en logs the CD drive's commands; it needs cdrom_en")
+        if self.cdrom_log_en and (self.trace_en or self.perf_log_en):
+            problems.append("cdrom_log_en: the CD log shares the debug UART arm with the trace/"
+                            f"telemetry (trace_en {self.trace_en}, perf_log_en {self.perf_log_en}), "
+                            "whose bytes would cut a record in two (and perf_log_en owns that source, "
+                            "so CDROM_LOG_EN would be written 0): build the CD log without them")
         problems += qsf_set_problems(self.qsf_set)
         problems += dbg_problems(self)
         if self.sdram_phase_ps is not None:
@@ -316,8 +620,8 @@ SPEED_FIT_ASSIGNMENTS: tuple[tuple[str, str], ...] = (
     ("ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP", "ON"),
     ("SYNTH_GATED_CLOCK_CONVERSION", "ON"),
     # OFF since 2026-10-09: ON crashed Quartus 17.0.2 (DTM
-    # dtm_node.cpp:772) on the CD, trace (AREA) and 80/100 lightoc netlists, and OFF reads
-    # ~40 fewer LABs on base and 80/80 lightoc with clk_sys no worse, over 5-8 seeds a side.
+    # dtm_node.cpp:772) on the CD, trace (AREA) and 80/100 split-clock netlists, and OFF reads
+    # ~40 fewer LABs on base and the 80/80 build with clk_sys no worse, over 5-8 seeds a side.
     ("PRE_MAPPING_RESYNTHESIS", "OFF"),
     ("ROUTER_CLOCKING_TOPOLOGY_ANALYSIS", "ON"),
     ("ECO_OPTIMIZE_TIMING", "ON"),
@@ -330,6 +634,35 @@ SPEED_FIT_ASSIGNMENTS: tuple[tuple[str, str], ...] = (
 )
 CONTROLLED_ASSIGNMENTS = frozenset(name for name, _ in SPEED_FIT_ASSIGNMENTS)
 FIT_TECHNIQUE_ASSIGNMENT = "OPTIMIZATION_TECHNIQUE"
+
+# ---- the framework HDMI scaler clock's network (pll_hdmi on a REGIONAL clock) ----------------
+# sys/ascal.vhd's output stage and the HDMI OSD run on pll_hdmi (148.5 MHz); their setup margin is
+# thin framework logic whose outcome is placement-limited (docs/fitting.md, the pll_hdmi deploy gate).
+# The fitter picks the clock's network per seed. On a GLOBAL net it is free to place the 3.3k
+# registers anywhere, and in the bad draws it exiles them (to the top left of the die, or across
+# the HPS edge, 2.8k-5.8k LAB sites for the p5-p95 box); on a REGIONAL net they stay in one
+# quadrant (~600-900 sites). Over 304 archived fits the fitter's regional draws averaged
+# +0.018 ns (106/111 at or above -0.35) and its global ones -0.226 (129/193), +0.258 ns
+# within the 50 sweeps that drew both (2026-10-20). Forcing REGIONAL makes the
+# choice instead of the draw. LogicLock regions would be the general form, but the project's
+# Quartus 17.0.2 Lite strips them (Critical Warning 140003: "Current license file does not
+# support LogicLock regions"); GLOBAL_SIGNAL is honoured. The node is the PLL output counter,
+# the atom fit.rpt's clock-network table names.
+PLL_HDMI_NODE = ("pll_hdmi:pll_hdmi|pll_hdmi_0002:pll_hdmi_inst|altera_pll:altera_pll_i|"
+                 "altera_cyclonev_pll:cyclonev_pll|divclk[0]")
+HDMI_RCLK_LINE = ('set_instance_assignment -name GLOBAL_SIGNAL "REGIONAL CLOCK" '
+                  f'-to "{PLL_HDMI_NODE}"')
+# A clock-network assignment belongs to the configuration: a re-apply strips every one, and
+# --check refuses a copy outside the managed block (it would decide a network whatever the record
+# says).
+# The forced regional clock may land in either bottom quadrant (the fit log's "Regional Clock
+# Region 1 from (0, 0) to (44, 36)" via CLKCTRL_R39, "Region 2 from (45, 0) to (89, 36)" via
+# CLKCTRL_R29). Region 1 is the CPU's area; Region 2 holds the HDMI pins and the DSP columns
+# sys/ascal.vhd uses. The location names the fitter-inserted clock buffer (~CLKENA0), as fit.rpt
+# prints it.
+HDMI_RCLK_Q2_LINE = f'set_location_assignment CLKCTRL_R29 -to "{PLL_HDMI_NODE}~CLKENA0"'
+CLKCTRL_LOCATION_LINE_RE = re.compile(r"^\s*set_location_assignment\s+CLKCTRL_")
+GLOBAL_SIGNAL_LINE_RE = re.compile(r"^\s*set_instance_assignment\s+-name\s+GLOBAL_SIGNAL\b")
 
 # ---- debug instruments: the debug-UART framework -------------------------------------------
 # Every part is a compile-time parameter of pc9821_system (z486_mister.sv's DBG_* localparams),
@@ -500,7 +833,7 @@ QSF_SET_VALUE_RE = re.compile(r"[A-Za-z0-9_.+\-]+(?: [A-Za-z0-9_.+\-]+)*")
 QSF_SET_FORBIDDEN = {
     "OPTIMIZATION_TECHNIQUE": "set it with fit_technique (--fit-technique)",
     "SEED": "the seed belongs to tools/build.py --seed and the sweeps",
-    "VERILOG_MACRO": "the framework macros belong to alsa_en / yc_en",
+    "VERILOG_MACRO": "the framework macros belong to alsa_en (MISTER_DISABLE_YC is always set)",
     "NUM_PARALLEL_PROCESSORS": "execution, not configuration (it does not change the result)",
     "FAMILY": "project structure", "DEVICE": "project structure",
     "TOP_LEVEL_ENTITY": "project structure", "ORIGINAL_QUARTUS_VERSION": "project structure",
@@ -626,26 +959,31 @@ def quartus_check_qsf_set(pairs, *, project_dir: Path = PROJECT_DIR) -> list[str
 # out whatever the record says.
 FRAMEWORK_MACROS: tuple[tuple[str, str], ...] = (
     ("alsa_en", "MISTER_DISABLE_ALSA"),
-    ("yc_en", "MISTER_DISABLE_YC"),
 )
+# The composite/S-Video encoder is TV-only and ALWAYS off now: the 15 kHz TV converter that fed it
+# was removed, so its macro is written unconditionally rather than
+# following a knob.
+YC_MACRO = "MISTER_DISABLE_YC"
 MACRO_LINE_RE = re.compile(r'^\s*set_global_assignment\s+-name\s+VERILOG_MACRO\s+"?([A-Za-z0-9_]+)')
 
 
 def framework_macro_lines(config: "Config") -> list[str]:
-    return [f'set_global_assignment -name VERILOG_MACRO "{macro}=1"'
-            for field, macro in FRAMEWORK_MACROS if not getattr(config, field)]
+    lines = [f'set_global_assignment -name VERILOG_MACRO "{macro}=1"'
+             for field, macro in FRAMEWORK_MACROS if not getattr(config, field)]
+    lines.append(f'set_global_assignment -name VERILOG_MACRO "{YC_MACRO}=1"')
+    return lines
 
 
-# EVERY preset runs the SDRAM on clk_sys (owner, 2026-10-09: "We should always default to the
-# 80/80 matched clock build, the default will always match the sdram and sys_clk clocks. In fact,
-# we should remove the split clock config."). The 80/80
+# EVERY preset runs the SDRAM on clk_sys: the split-clock configuration was removed. The 80/80
 # build was hardware-verified as the shipping build: DOOM, PCM, Touhou 5,
 # Rusty and Flame Zapper with the Xe10 firmware pack.
 # 80 MHz is PAST timing closure (the ao486/MiSTer convention: the tools' Fmax is a worst-case-PVT
-# number and real boards at room temperature run faster); AGENTS.md's Build profiles section
+# number and real boards at room temperature run faster); docs/fitting.md ("Timing and area facts")
 # holds the measured slack band and the hardware bound.
-_BASE_HZ = 80_000_000
-_BASE_DESCRIPTION = ("80 MHz clk_sys, SDRAM on clk_sys (80/80), production AREA fit (no seed) - "
+# 90 MHz since 2026-10-19, for margin across boards (95 MHz was close to marginal): CL2 (the CL3
+# cutover is at 100 MHz).
+_BASE_HZ = 90_000_000
+_BASE_DESCRIPTION = ("90 MHz clk_sys, SDRAM on clk_sys (90/90, CL2), production AREA fit (no seed) - "
                      "the default and shipping build (past timing closure)")
 PROFILES: dict[str, Config] = {
     "base": Config(
@@ -653,20 +991,12 @@ PROFILES: dict[str, Config] = {
         description=_BASE_DESCRIPTION,
         clk_sys_hz=_BASE_HZ,
     ),
-    # lightoc was the shipping preset's name until base became the same build (2026-10-09). It is
-    # kept as an ALIAS - knob for knob base's, only the recorded name differs - so existing
-    # commands, sweeps and deploy notes that say `lightoc` keep building the shipping design.
-    "lightoc": Config(
-        name="lightoc",
-        description="ALIAS of base: " + _BASE_DESCRIPTION,
-        clk_sys_hz=_BASE_HZ,
-    ),
     "mediumoc": Config(
         name="mediumoc",
         description="100 MHz clk_sys, SDRAM on clk_sys (100/100) - NORMAL overclock (past timing closure)",
         clk_sys_hz=100_000_000,
     ),
-    # 120 MHz is AT the board SDRAM part's hard limit (about 120 MHz, owner 2026-10-09).
+    # 120 MHz is AT the board SDRAM part's hard limit (about 120 MHz).
     "heavyoc": Config(
         name="heavyoc",
         description="120 MHz clk_sys, SDRAM on clk_sys (120/120, AT the SDRAM part's ~120 MHz limit) - HEAVY overclock (past timing closure)",
@@ -677,10 +1007,13 @@ PROFILES: dict[str, Config] = {
     # first (2026-09-27); every preset has used AREA since 2026-10-12 (see Config.fit_technique).
     "trace": Config(
         name="trace",
-        description="80 MHz clk_sys, SDRAM on clk_sys (clock/PLL identical to base) + the instruction trace ring and perf log, fit with OPTIMIZATION_TECHNIQUE AREA (the debug build)",
+        description="90 MHz clk_sys, SDRAM on clk_sys (clock/PLL identical to base) + the instruction trace ring and perf log, fit with OPTIMIZATION_TECHNIQUE AREA (the debug build)",
         clk_sys_hz=_BASE_HZ,
         trace_en=True,
         perf_log_en=True,
+        # The debug build keeps its room for the trace ring: no MIDI card, no HPS audio.
+        mpu_en=False,
+        alsa_en=False,
         fit_technique="AREA",
     ),
     # The I/O-latency profile: IDENTICAL to base in clock, PLL and fit settings, so the only
@@ -688,17 +1021,9 @@ PROFILES: dict[str, Config] = {
     # machine's measured time, docs/probes/IO.TXT; 1 holds back the EGC even-read class).
     "iofaithful": Config(
         name="iofaithful",
-        description="80 MHz clk_sys, SDRAM on clk_sys (identical to base) + the FAITHFUL I/O class table",
+        description="90 MHz clk_sys, SDRAM on clk_sys (identical to base) + the FAITHFUL I/O class table",
         clk_sys_hz=_BASE_HZ,
         io_latency_profile=2,
-    ),
-    # The MIDI profile: IDENTICAL to base in clock, PLL and fit settings, so the only difference
-    # is the MPU-PC98II card and the OSD header that offers UART Mode -> MIDI.
-    "midilink": Config(
-        name="midilink",
-        description="80 MHz clk_sys, SDRAM on clk_sys (identical to base) + the MPU-PC98II MIDI card over the framework UART",
-        clk_sys_hz=_BASE_HZ,
-        mpu_en=True,
     ),
 }
 
@@ -710,8 +1035,9 @@ PROFILES: dict[str, Config] = {
 PROFILE_FILE_KEYS = {
     "name", "description", "preset", "clk_sys_hz", "clk_sys_mhz",
     "sdram_phase_ps", "trace_en", "perf_log_en", "io_latency_profile", "mpu_en",
-    "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "yc_en", "fit_technique", "qsf_set",
-    "dbg",
+    "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "fit_technique", "qsf_set",
+    "dbg", "vga_dbl_en", "hdmi_rclk", "hdmi_rclk_q2", "sdram_dq_ddio", "sdram_out_ddio",
+    "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd",
 }
 
 
@@ -761,9 +1087,33 @@ def add_override_args(parser: argparse.ArgumentParser) -> None:
     g.add_argument("--dbg-post", dest="dbg_post", type=int, metavar="N",
                    help="debug: issues recorded after the final trigger (default 32)")
     g.add_argument("--alsa", dest="alsa_en", action=argparse.BooleanOptionalAction, default=None,
-                   help="the framework's HPS audio input (off = MISTER_DISABLE_ALSA)")
-    g.add_argument("--yc", dest="yc_en", action=argparse.BooleanOptionalAction, default=None,
-                   help="the framework's composite/S-Video output (off = MISTER_DISABLE_YC)")
+                   help="the framework's HPS audio input (off = MISTER_DISABLE_ALSA; the "
+                        "composite/S-Video encoder is always off - it is TV-only)")
+    g.add_argument("--vga-dbl", dest="vga_dbl_en", action=argparse.BooleanOptionalAction,
+                   default=None, help="VIDEO_DBL_EN (the analog line doubler, 49.7 kHz)")
+    g.add_argument("--sdram-dq-ddio", dest="sdram_dq_ddio", action=argparse.BooleanOptionalAction,
+                   default=None, help="SDRAM_DQ_DDIO: the SDRAM read capture as an instantiated "
+                        "IOE input DDIO cell (off = a packed fabric register, the A/B side)")
+    g.add_argument("--sdram-out-ddio", dest="sdram_out_ddio", action=argparse.BooleanOptionalAction,
+                   default=None, help="SDRAM_OUT_DDIO: every SDRAM output and DQ output-enable "
+                        "register as an instantiated IOE cell (off = packed fabric registers, the "
+                        "A/B side)")
+    g.add_argument("--hdmi-rclk", dest="hdmi_rclk", action=argparse.BooleanOptionalAction,
+                   default=None, help="the framework pll_hdmi clock on a REGIONAL clock network "
+                        "(a fit-side placement knob for the pll_hdmi margin)")
+    g.add_argument("--hdmi-rclk-q2", dest="hdmi_rclk_q2", action=argparse.BooleanOptionalAction,
+                   default=None, help="with --hdmi-rclk: that regional clock in the bottom-right "
+                        "quadrant (CLKCTRL_R29), beside the HDMI pins")
+    g.add_argument("--dbg-sdram-phase", dest="sdram_phase_dyn",
+                   action=argparse.BooleanOptionalAction, default=None,
+                   help="debug: SDRAM_PHASE_DYN, the run-time SDRAM_CLK phase instrument (the PLL's "
+                        "phase-shift ports and a guest stepper at 0x5FF0/0x5FF2); a measurement "
+                        "build, never shipped")
+    g.add_argument("--dbg-sdram-cl2", dest="dbg_sdram_cl2", action=argparse.BooleanOptionalAction,
+                   default=None, help="debug: SDRAM_DBG_CL 2 and the phase-shifted SDRAM_CLK at any "
+                        "clock (the pre-cutover 100 MHz CL2 structure); a measurement build")
+    g.add_argument("--dbg-sdram-trcd-cycles", dest="dbg_sdram_trcd", type=int, metavar="N",
+                   help="debug: SDRAM_DBG_TRCD_TRP, tRCD and tRP forced to N cycles (0 = derived)")
     g.add_argument("--fit-technique", choices=FIT_TECHNIQUES, help="OPTIMIZATION_TECHNIQUE")
     g.add_argument("--qsf-set", action="append", metavar="NAME=VALUE",
                    help="a fitter/synthesis qsf assignment over the SPEED stack (repeatable; "
@@ -780,13 +1130,18 @@ def override_argv(ns: argparse.Namespace) -> list[str]:
                        ("--clk-sys-mhz", "clk_sys_mhz"), ("--clk-sys-hz", "clk_sys_hz"),
                        ("--sdram-phase-ps", "sdram_phase_ps"),
                        ("--io-latency", "io_latency_profile"),
-                       ("--fit-technique", "fit_technique")):
+                       ("--fit-technique", "fit_technique"),
+                       ("--dbg-sdram-trcd-cycles", "dbg_sdram_trcd")):
         value = getattr(ns, attr, None)
         if value is not None:
             out += [flag, str(Path(value).resolve()) if attr == "profile_file" else str(value)]
     for flag, attr in (("trace", "trace_en"),
                        ("perf-log", "perf_log_en"), ("mpu", "mpu_en"), ("cdrom", "cdrom_en"),
-                       ("cdrom-audio", "cdrom_audio_en"), ("cdrom-log", "cdrom_log_en"), ("alsa", "alsa_en"), ("yc", "yc_en")):
+                       ("cdrom-audio", "cdrom_audio_en"), ("cdrom-log", "cdrom_log_en"), ("alsa", "alsa_en"),
+                       ("vga-dbl", "vga_dbl_en"), ("hdmi-rclk", "hdmi_rclk"),
+                       ("hdmi-rclk-q2", "hdmi_rclk_q2"), ("sdram-dq-ddio", "sdram_dq_ddio"),
+                       ("sdram-out-ddio", "sdram_out_ddio"), ("dbg-sdram-phase", "sdram_phase_dyn"),
+                       ("dbg-sdram-cl2", "dbg_sdram_cl2")):
         value = getattr(ns, attr, None)
         if value is not None:
             out.append(f"--{flag}" if value else f"--no-{flag}")
@@ -856,7 +1211,9 @@ def resolve_config(preset_name: str | None, ns: argparse.Namespace) -> Config:
     if "sdram_phase_ps" in data:
         fields["sdram_phase_ps"] = _phase_value(data["sdram_phase_ps"])
     for key in ("trace_en", "perf_log_en", "io_latency_profile", "mpu_en",
-                "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "yc_en", "fit_technique"):
+                "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "fit_technique",
+                "vga_dbl_en", "hdmi_rclk", "hdmi_rclk_q2", "sdram_dq_ddio", "sdram_out_ddio",
+                "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd"):
         take(key, data.get(key))
     # qsf_set merges name by name: the preset's, then the file's table, then each --qsf-set.
     qsf_set = dict(preset.qsf_set)
@@ -871,7 +1228,9 @@ def resolve_config(preset_name: str | None, ns: argparse.Namespace) -> Config:
     if getattr(ns, "sdram_phase_ps", None) is not None:
         fields["sdram_phase_ps"] = _phase_value(ns.sdram_phase_ps)
     for key in ("trace_en", "perf_log_en", "io_latency_profile", "mpu_en",
-                "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "yc_en", "fit_technique"):
+                "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "fit_technique",
+                "vga_dbl_en", "hdmi_rclk", "hdmi_rclk_q2", "sdram_dq_ddio", "sdram_out_ddio",
+                "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd"):
         take(key, getattr(ns, key, None))
     qsf_set.update(parse_qsf_set_args(getattr(ns, "qsf_set", None)))
     fields["qsf_set"] = normalize_qsf_set(qsf_set)
@@ -886,6 +1245,12 @@ def resolve_config(preset_name: str | None, ns: argparse.Namespace) -> Config:
         if value is not None:
             dbg[key] = value
     fields["dbg"] = normalize_dbg(dbg)
+
+    # The CD-DA player is part of the drive: --no-cdrom takes it too unless the player was asked for
+    # by name (then validate() refuses the pair rather than folding the request away).
+    if not fields["cdrom_en"] and data.get("cdrom_audio_en") is None \
+            and getattr(ns, "cdrom_audio_en", None) is None:
+        fields["cdrom_audio_en"] = False
 
     candidate = Config(**fields)
     changed = custom or candidate.knobs() != preset.knobs()
@@ -912,12 +1277,29 @@ def config_from_record(record: dict, description: str = "") -> Config:
         mpu_en=record["mpu_en"], fit_technique=record["fit_technique"],
         # Records written before these fields existed mean the defaults they had then.
         cdrom_en=record.get("cdrom_en", False),
-        cdrom_audio_en=record.get("cdrom_audio_en", True),
+        # CDROM_AUDIO_EN was always written as cdrom_en AND cdrom_audio_en, so a no-CD record's
+        # player flag means nothing and reads as off (validate() refuses the pair otherwise).
+        cdrom_audio_en=record.get("cdrom_audio_en", True) and record.get("cdrom_en", False),
         cdrom_log_en=record.get("cdrom_log_en", False),
-        # A record written before these fields existed was a build with both features ON (the
-        # macros were not set), so that is what it means; --check then flags its block, which
-        # lacks nothing, as agreeing - and a re-apply moves it to the new default.
-        alsa_en=record.get("alsa_en", True), yc_en=record.get("yc_en", True),
+        # A record written before this field existed was a build with ALSA ON (the macro was not
+        # set), so that is what it means; --check then flags its block, which lacks nothing, as
+        # agreeing - and a re-apply moves it to the new default. yc_en / tv15k_en are retired
+        # fields: a record carrying them is read for everything else, and its YC choice is moot
+        # (YC is always off now).
+        alsa_en=record.get("alsa_en", True),
+        # A record written before the analog converters existed was a build without them.
+        vga_dbl_en=record.get("vga_dbl_en", False),
+        # A record without this key is a build whose pll_hdmi network was the fitter's choice.
+        hdmi_rclk=record.get("hdmi_rclk", False),
+        hdmi_rclk_q2=record.get("hdmi_rclk_q2", False),
+        # A record without this key is a build without the run-time phase instrument.
+        sdram_phase_dyn=record.get("sdram_phase_dyn", False),
+        dbg_sdram_cl2=record.get("dbg_sdram_cl2", False),
+        dbg_sdram_trcd=record.get("dbg_sdram_trcd", 0),
+        # A record written before this field existed was a build whose DQ capture was packed.
+        sdram_dq_ddio=record.get("sdram_dq_ddio", False),
+        # Likewise its output registers.
+        sdram_out_ddio=record.get("sdram_out_ddio", False),
         # A record written before qsf_set existed carries none, which is what it meant.
         qsf_set=normalize_qsf_set(record.get("qsf_set", {})),
         dbg=normalize_dbg(record.get("dbg", {})),
@@ -971,6 +1353,10 @@ def render_qsf_block(config: Config) -> str:
         lines.append("# qsf_set: " + ", ".join(f"{n}={v}" for n, v in config.qsf_set))
     lines += [f"set_global_assignment -name {n} {v}" for n, v in fit_assignments(config)]
     lines += framework_macro_lines(config)
+    if config.hdmi_rclk:
+        lines.append(HDMI_RCLK_LINE)
+    if config.hdmi_rclk_q2:
+        lines.append(HDMI_RCLK_Q2_LINE)
     lines.append(PROFILE_BLOCK_END)
     return "\n".join(lines)
 
@@ -979,11 +1365,15 @@ def remove_managed_qsf_content(text: str) -> str:
     block_re = re.compile(
         rf"\n?{re.escape(PROFILE_BLOCK_BEGIN)}.*?{re.escape(PROFILE_BLOCK_END)}\n?", re.DOTALL)
     text = block_re.sub("\n", text)
+    text = "\n".join(line for line in text.splitlines()
+                     if line.strip() not in (OE_FABRIC_COMMENT, OE_FABRIC_LINE))
     assignment_re = re.compile(r"^\s*set_global_assignment\s+-name\s+([A-Z0-9_]+)\b")
-    owned_macros = {macro for _, macro in FRAMEWORK_MACROS}
+    owned_macros = {macro for _, macro in FRAMEWORK_MACROS} | {YC_MACRO}
     kept = [line for line in text.splitlines()
             if not ((m := assignment_re.match(line)) and m.group(1) in CONTROLLED_ASSIGNMENTS)
-            and not ((m := MACRO_LINE_RE.match(line)) and m.group(1) in owned_macros)]
+            and not ((m := MACRO_LINE_RE.match(line)) and m.group(1) in owned_macros)
+            and not GLOBAL_SIGNAL_LINE_RE.match(line)
+            and not CLKCTRL_LOCATION_LINE_RE.match(line)]
     return "\n".join(kept).rstrip() + "\n"
 
 
@@ -991,8 +1381,29 @@ def insert_qsf_block(text: str, config: Config) -> str:
     block = render_qsf_block(config)
     marker = "set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS OFF"
     if marker in text:
-        return text.replace(marker, marker + "\n" + block, 1)
-    return text.rstrip() + "\n\n" + block + "\n"
+        text = text.replace(marker, marker + "\n" + block, 1)
+    else:
+        text = text.rstrip() + "\n\n" + block + "\n"
+    if config.sdram_out_ddio:
+        text = text.rstrip() + "\n\n" + OE_FABRIC_COMMENT + "\n" + OE_FABRIC_LINE + "\n"
+    return text
+
+
+def dq_oe_register_problems(text: str, config: Config, qsf) -> list[str]:
+    """The last FAST_OUTPUT_ENABLE_REGISTER assignment to SDRAM_DQ[*] decides (OE_FABRIC_LINE)."""
+    lines = text.splitlines()
+    values = [m.group(1) for line in lines if (m := OE_ASSIGN_RE.match(line))]
+    last = values[-1] if values else None
+    # sys/sys.tcl sets it ON when it is sourced, so the OFF must also come after that line.
+    sys_at = max((i for i, line in enumerate(lines) if line.strip() == "source sys/sys.tcl"), default=-1)
+    off_at = max((i for i, line in enumerate(lines) if line.strip() == OE_FABRIC_LINE), default=-1)
+    if config.sdram_out_ddio and (last != "OFF" or off_at < sys_at):
+        return [f"{qsf}: the cell build's SDRAM DQ output enable must stay in the fabric - "
+                f"`{OE_FABRIC_LINE}` must be the last FAST_OUTPUT_ENABLE_REGISTER assignment to "
+                "SDRAM_DQ[*], after `source sys/sys.tcl` (re-apply the profile)"]
+    if not config.sdram_out_ddio and "OFF" in values:
+        return [f"{qsf}: the packed build (sdram_out_ddio off) carries `{OE_FABRIC_LINE}`"]
+    return []
 
 
 def qsf_block_text(text: str) -> str | None:
@@ -1036,6 +1447,19 @@ def top_localparams(config: Config) -> list[tuple[str, str, str]]:
          f"localparam [1:0] IO_LATENCY_PROFILE = 2'd{config.io_latency_profile};"),
         ("MPU_EN", r"^localparam[ \t]+MPU_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
          f"localparam MPU_EN = 1'b{int(config.mpu_en)};"),
+        ("SDRAM_CLK_DDIO", r"^localparam[ \t]+SDRAM_CLK_DDIO[ \t]*=[ \t]*1'b[01];[ \t]*$",
+         f"localparam SDRAM_CLK_DDIO = 1'b{int(config.sdram_clk_ddio)};"),
+        ("SDRAM_DQ_DDIO", r"^localparam[ \t]+SDRAM_DQ_DDIO[ \t]*=[ \t]*1'b[01];[ \t]*$",
+         f"localparam SDRAM_DQ_DDIO = 1'b{int(config.sdram_dq_ddio)};"),
+        ("SDRAM_OUT_DDIO", r"^localparam[ \t]+SDRAM_OUT_DDIO[ \t]*=[ \t]*1'b[01];[ \t]*$",
+         f"localparam SDRAM_OUT_DDIO = 1'b{int(config.sdram_out_ddio)};"),
+        ("SDRAM_PHASE_DYN", r"^localparam[ \t]+SDRAM_PHASE_DYN[ \t]*=[ \t]*1'b[01];[ \t]*$",
+         f"localparam SDRAM_PHASE_DYN = 1'b{int(config.sdram_phase_dyn)};"),
+        ("SDRAM_DBG_CL", r"^localparam[ \t]+integer[ \t]+SDRAM_DBG_CL[ \t]*=[ \t]*[0-9]+;[ \t]*$",
+         f"localparam integer SDRAM_DBG_CL = {2 if config.dbg_sdram_cl2 else 0};"),
+        ("SDRAM_DBG_TRCD_TRP",
+         r"^localparam[ \t]+integer[ \t]+SDRAM_DBG_TRCD_TRP[ \t]*=[ \t]*[0-9]+;[ \t]*$",
+         f"localparam integer SDRAM_DBG_TRCD_TRP = {config.dbg_sdram_trcd};"),
         ("CONF_STR_HEADER", r'^localparam[ \t]+CONF_STR_HEADER[ \t]*=[ \t]*"[^"]*";[ \t]*$',
          f'localparam CONF_STR_HEADER = "{config.conf_str_header}";'),
         ("CDROM_EN", r"^localparam[ \t]+CDROM_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
@@ -1044,12 +1468,14 @@ def top_localparams(config: Config) -> list[tuple[str, str, str]]:
          f"localparam CDROM_AUDIO_EN = 1'b{int(config.cdrom_en and config.cdrom_audio_en)};"),
         ("CDROM_LOG_EN", r"^localparam[ \t]+CDROM_LOG_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
          f"localparam CDROM_LOG_EN = 1'b{int(config.cdrom_en and config.cdrom_log_en and not config.perf_log_en)};"),
-        ("CONF_STR_DISKS", r'^localparam[ \t]+CONF_STR_DISKS[ \t]*=[ \t]*"[^"]*";[ \t]*$',
-         f'localparam CONF_STR_DISKS = "{config.conf_str_disks}";'),
-        ("CONF_STR_EJECTS", r'^localparam[ \t]+CONF_STR_EJECTS[ \t]*=[ \t]*"[^"]*";[ \t]*$',
-         f'localparam CONF_STR_EJECTS = "{config.conf_str_ejects}";'),
+        ("CONF_STR_CD", r'^localparam[ \t]+CONF_STR_CD[ \t]*=[ \t]*"[^"]*";[ \t]*$',
+         f'localparam CONF_STR_CD = "{config.conf_str_cd}";'),
         ("HPS_VDNUM", r"^localparam[ \t]+HPS_VDNUM[ \t]*=[ \t]*[0-9]+;[ \t]*$",
          f"localparam HPS_VDNUM = {config.hps_vdnum};"),
+        ("VIDEO_DBL_EN", r"^localparam[ \t]+VIDEO_DBL_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
+         f"localparam VIDEO_DBL_EN = 1'b{int(config.vga_dbl_en)};"),
+        ("CONF_STR_VIDEO", r'^localparam[ \t]+CONF_STR_VIDEO[ \t]*=[ \t]*"[^"]*";[ \t]*$',
+         f'localparam CONF_STR_VIDEO = "{config.conf_str_video}";'),
         *dbg_localparams(config),
     ]
 
@@ -1068,9 +1494,10 @@ def rewrite_top(text: str, config: Config) -> str:
 # ---------------------------------------------------------------------------------------
 
 def generate_outputs(config: Config, root: Path, log=print) -> dict:
-    """The PLL into root/rtl and the SDC into root/z486_mister.sdc."""
+    """The PLLs (core and video) into root/rtl and the SDC into root/z486_mister.sdc."""
     try:
         rb = pg.generate_pll(config.pll_request(), root / "rtl", project_dir=PROJECT_DIR, log=log)
+        pg.generate_vpll(config.vpll_request(), root / "rtl", project_dir=PROJECT_DIR, log=log)
     except pg.GenerationError as exc:
         raise SystemExit(f"PLL generation failed: {exc}")
     (root / SDC_NAME).write_text(render_config_sdc(config))
@@ -1078,7 +1505,11 @@ def generate_outputs(config: Config, root: Path, log=print) -> dict:
 
 
 def render_config_sdc(config: Config) -> str:
-    return pg.render_sdc(config.name, config.clk_sys_hz)
+    # The video PLL is the reconfigurable fractional variant, generated at its fastest run-time
+    # setting (the 31 kHz clock, 50.336 MHz), so the crossing bound is that period.
+    return pg.render_sdc(config.name, config.clk_sys_hz, tv=False, dq_ddio=config.sdram_dq_ddio,
+                         clk_ddio=config.sdram_clk_ddio, dps=config.sdram_phase_dyn,
+                         out_ddio=config.sdram_out_ddio)
 
 
 def describe(config: Config, rb: dict | None = None) -> str:
@@ -1092,11 +1523,18 @@ def describe(config: Config, rb: dict | None = None) -> str:
             f"SDRAM_CLK phase {phase} ps ({source}; PLL actual {actual} ps), "
             f"I/O model worst {worst[0]:+.3f} ns ({worst[2]} @ {worst[1]}), "
             f"TRACE_EN {int(config.trace_en)} PERF_LOG_EN {int(config.perf_log_en)} "
-            f"IO_LATENCY_PROFILE {config.io_latency_profile} MPU_EN {int(config.mpu_en)} "
+            f"IO_LATENCY_PROFILE {config.io_latency_profile} MPU_EN {int(config.mpu_en)} SDRAM_CLK_DDIO {int(config.sdram_clk_ddio)} "
+            f"SDRAM_DQ_DDIO {int(config.sdram_dq_ddio)} SDRAM_OUT_DDIO {int(config.sdram_out_ddio)} "
             f"CDROM_EN {int(config.cdrom_en)} "
             f"CDROM_AUDIO_EN {int(config.cdrom_en and config.cdrom_audio_en)} "
             + ("CDROM_LOG_EN 1 " if (config.cdrom_en and config.cdrom_log_en and not config.perf_log_en) else "") +
-            f"ALSA {int(config.alsa_en)} YC {int(config.yc_en)} fit {config.fit_technique}"
+            f"ALSA {int(config.alsa_en)} YC 0 "
+            f"VIDEO_DBL_EN {int(config.vga_dbl_en)} fit {config.fit_technique}"
+            + (" pll_hdmi regional" if config.hdmi_rclk else "")
+            + (" (CLKCTRL_R29)" if config.hdmi_rclk_q2 else "")
+            + (" SDRAM_PHASE_DYN 1 (measurement build)" if config.sdram_phase_dyn else "")
+            + (" SDRAM_DBG_CL 2" if config.dbg_sdram_cl2 else "")
+            + (f" SDRAM_DBG_TRCD_TRP {config.dbg_sdram_trcd}" if config.dbg_sdram_trcd else "")
             + (" qsf_set " + ",".join(f"{n}={v}" for n, v in config.qsf_set)
                if config.qsf_set else "")
             + (" dbg " + ",".join(f"{n}={v}" for n, v in config.dbg) if config.dbg else ""))
@@ -1168,6 +1606,7 @@ def agreement(root: Path, *, require_generated: bool = False) -> list[str]:
             diff.append(f"    ({len(got)} lines in the qsf block, {len(want)} expected)")
         problems.append(f"{qsf}'s managed block is not the one its own record renders "
                         "(edited by hand?):\n" + "\n".join(diff[:6]))
+    problems += dq_oe_register_problems(qsf.read_text(), config, qsf)
     # An override must be the only line that sets its name, or the qsf's order would decide.
     for line in outside_block_lines(qsf.read_text(), {n for n, _ in config.qsf_set}):
         problems.append(f"{qsf} sets a qsf_set name outside the managed block ({line!r}), so the "
@@ -1182,6 +1621,12 @@ def agreement(root: Path, *, require_generated: bool = False) -> list[str]:
             problems.append(f"{qsf} sets {macro} outside the managed block ({stray[0]!r}), so the "
                             f"record's {field}={getattr(config, field)} cannot hold: the macro "
                             "belongs to build_profile.py (re-apply the profile)")
+    stray = [line.strip() for line in outside.splitlines()
+             if GLOBAL_SIGNAL_LINE_RE.match(line) or CLKCTRL_LOCATION_LINE_RE.match(line)]
+    if stray:
+        problems.append(f"{qsf} sets a clock network outside the managed block ({stray[0]!r}): "
+                        f"clock networks belong to the record (hdmi_rclk={config.hdmi_rclk}) - "
+                        "re-apply the profile")
     if record.get("sdram_phase_source") == "derived":
         derived = pg.derive_sdram_phase(config.clk_sys_hz)["phase_ps"]
         if record["sdram_phase_ps"] != derived:
@@ -1202,6 +1647,14 @@ def agreement(root: Path, *, require_generated: bool = False) -> list[str]:
         elif m.group(0).strip() != line:
             problems.append(f"{top} declares `{m.group(0).strip()}` but the active configuration "
                             f"'{config.name}' means `{line}`")
+
+    problems += dq_ddio_wiring_problems(root)
+    problems += out_ddio_wiring_problems(root)
+    for name, hop in DBG_TIMING_WIRING:
+        text = (root / name).read_text()
+        if len(re.findall(re.escape(hop).replace(r"\(", r"\(\s*").replace(r"\)", r"\s*\)"), text)) != 1:
+            problems.append(f"{root / name} does not pass `{hop}` down exactly once: a "
+                            "measurement override would silently build the derived timing")
 
     sdc = root / SDC_NAME
     if sdc.exists():
@@ -1227,6 +1680,63 @@ def agreement(root: Path, *, require_generated: bool = False) -> list[str]:
             problems.append(f"rtl/pll cannot be read back: {exc}")
     elif require_generated:
         problems.append(f"{root / 'rtl'} has no generated PLL (pll.v + pll/pll_0002.v)")
+
+    if (root / pg.VCLK_PKG).exists():
+        problems += pg.vclk_pkg_problems((root / pg.VCLK_PKG).read_text())
+    elif require_generated:
+        problems.append(f"{root / pg.VCLK_PKG} is missing: the video PLL settings cannot be checked")
+
+    vpll2 = root / "rtl" / "vpll" / "vpll_0002.v"
+    if vpll2.exists() and (root / "rtl" / "vpll.v").exists():
+        try:
+            problems += [f"rtl/vpll: {p}" for p in
+                         pg.verify_readback_vpll(config.vpll_request(), pg.read_back_vpll(root / "rtl"))]
+        except pg.GenerationError as exc:
+            problems.append(f"rtl/vpll cannot be read back: {exc}")
+    elif require_generated:
+        problems.append(f"{root / 'rtl'} has no generated video PLL (vpll.v + vpll/vpll_0002.v)")
+    return problems
+
+
+def dq_ddio_wiring_problems(root: Path) -> list[str]:
+    """SDRAM_DQ_DDIO reaches sdram.v, whose DDIO arm holds the cell the SDC names."""
+    problems = []
+    for name, hop in DQ_DDIO_WIRING:
+        text = (root / name).read_text()
+        if len(re.findall(re.escape(hop).replace(r"\(", r"\(\s*").replace(r"\)", r"\s*\)"), text)) != 1:
+            problems.append(f"{root / name} does not pass the DQ capture choice down exactly once "
+                            f"(`{hop}`): the controller would build its default cell")
+    text = (root / SDRAM_V).read_text()
+    arm = re.search(r"generate if \(DQ_IN_DDIO\) begin : g_dq_ddio(.*?)end else begin : g_dq_ff",
+                    text, re.S)
+    inst = pg.DQ_DDIO_INSTANCE.split(":")
+    if not arm or not re.search(rf"\b{inst[0]}\b[^;]*?\)\s*{inst[1]}\s*\(", arm.group(1), re.S):
+        problems.append(f"{root / SDRAM_V}'s DQ_IN_DDIO arm does not instantiate `{inst[0]}` as "
+                        f"`{inst[1]}`, the cell the generated SDC's capture collection names")
+    return problems
+
+
+def out_ddio_wiring_problems(root: Path) -> list[str]:
+    """SDRAM_OUT_DDIO reaches sdram.v, whose cell arm holds the cells the SDC counts."""
+    problems = []
+    for name, hop in OUT_DDIO_WIRING:
+        text = (root / name).read_text()
+        if len(re.findall(re.escape(hop).replace(r"\(", r"\(\s*").replace(r"\)", r"\s*\)"), text)) != 1:
+            problems.append(f"{root / name} does not pass the output-cell choice down exactly once "
+                            f"(`{hop}`): the controller would build its default (packed) registers")
+    text = (root / SDRAM_V).read_text()
+    arm = re.search(r"generate if \(OUT_DDIO\) begin : g_out_ddio(.*?)end else begin : g_out_ff",
+                    text, re.S)
+    # The DQ output enable must be the per-pin register, not a cyclonev_ddio_oe atom: a build that
+    # drove the SDRAM DQ OE from that atom simulated and timed clean and was black on hardware.
+    if re.search(r"^[^/]*\bcyclonev_ddio_oe\b", text, re.M):
+        problems.append(f"{root / SDRAM_V} instantiates cyclonev_ddio_oe: the DQ output enable must "
+                        "be the per-pin dq_oe_q register (a DDIO_OE-driven build was black on hardware)")
+    for cell in pg.OUT_DDIO_INSTANCES:
+        kind, inst = cell.split(":")
+        if not arm or not re.search(rf"\b{kind}\b[^;]*?\)\s*{inst}\s*\(", arm.group(1), re.S):
+            problems.append(f"{root / SDRAM_V}'s OUT_DDIO arm does not instantiate `{kind}` as "
+                            f"`{inst}`, a cell the generated SDC's output-cell guard counts")
     return problems
 
 
@@ -1240,19 +1750,45 @@ def _fake_pll(root: Path, config: Config, *, freq1_hz: int | None = None,
     req = config.pll_request()
     rtl = root / "rtl"
     (rtl / "pll").mkdir(parents=True, exist_ok=True)
-    (rtl / "pll.v").write_text(pg.render_pll_v(req))
+    text = pg.add_tied_dps_ports(pg.render_pll_v(req))
+    if req.dps:   # what the wizard writes with the ports: declared AND passed to pll_0002
+        text = text.replace("\tassign phase_done = 1'b0;\n", "").replace(
+            ".locked   (locked)", ".locked   (locked), .phase_en (phase_en), .scanclk (scanclk), "
+            ".updn (updn), .cntsel (cntsel), .phase_done (phase_done)")
+    (rtl / "pll.v").write_text(text)
     # What the wizard would report: the request rounded onto the finest VCO's step grid
     # (displaced by off_steps steps), truncated to whole ps.
     vco = max(v for v in range(300_000_000, 1_600_000_001, 1_000_000) if v % req.clk_sys_hz == 0)
     step = 1e12 / (8 * vco)
     phase_ps = int((round(req.phase_ps / step) + off_steps) * step)
     f1 = req.clk_sys_hz if freq1_hz is None else freq1_hz
+    _fake_vpll(root, config)
     (rtl / "pll" / "pll_0002.v").write_text(
         f"\t\t.number_of_clocks({pg.PLL_OUTPUTS}),\n"
+        f'\t\t.pll_subtype("{"DPS" if req.dps else "General"}"),\n'
         f'\t\t.output_clock_frequency0("{req.clk_sys_hz / 1e6:.6f} MHz"),\n'
         '\t\t.phase_shift0("0 ps"),\n'
         f'\t\t.output_clock_frequency1("{f1 / 1e6:.6f} MHz"),\n'
         f'\t\t.phase_shift1("{phase_ps} ps"),\n')
+
+
+def _fake_vpll(root: Path, config: Config) -> None:
+    """A video PLL directory that reads back like a generated one (no container needed)."""
+    req = config.vpll_request()
+    _, freq_text, (mh, ml), k, vco = pg.VPLL_CONFIGS[req.tv]
+    rtl = root / "rtl"
+    (rtl / "vpll").mkdir(parents=True, exist_ok=True)
+    (rtl / "vpll.v").write_text(pg.render_vpll_v(req) + "// reconfig_to_pll\n")
+    (rtl / "vpll" / "vpll_0002.v").write_text(
+        "\t\t.number_of_clocks(1),\n"
+        '\t\t.fractional_vco_multiplier("true"),\n'
+        f'\t\t.output_clock_frequency0("{freq_text}"),\n'
+        '\t\t.pll_subtype("Reconfigurable"),\n'
+        f"\t\t.m_cnt_hi_div({mh}),\n\t\t.m_cnt_lo_div({ml}),\n"
+        '\t\t.n_cnt_bypass_en("true"),\n'
+        f"\t\t.c_cnt_hi_div0({pg.VPLL_C0[0]}),\n\t\t.c_cnt_lo_div0({pg.VPLL_C0[1]}),\n"
+        f'\t\t.pll_output_clk_frequency("{vco}"),\n'
+        f'\t\t.pll_fractional_division("{k}"),\n')
 
 
 def selftest() -> int:
@@ -1298,7 +1834,111 @@ def selftest() -> int:
 
     @plant("top level: MPU_EN flipped without its header")
     def _(root, cfg):
-        sub(root / TOP_NAME, "MPU_EN = 1'b0;", "MPU_EN = 1'b1;")
+        sub(root / TOP_NAME, "MPU_EN = 1'b1;", "MPU_EN = 1'b0;")
+
+    @plant("top level: SDRAM_CLK_DDIO on at 80 MHz (the DDIO clock cannot hold below 100 MHz)")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_CLK_DDIO = 1'b0;", "SDRAM_CLK_DDIO = 1'b1;")
+
+    @plant("top level: SDRAM_CLK_DDIO dropped (off) in a 100 MHz+ build", tree="mediumoc")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_CLK_DDIO = 1'b1;", "SDRAM_CLK_DDIO = 1'b0;")
+
+    @plant("top level: SDRAM_DQ_DDIO flipped against the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_DQ_DDIO = 1'b1;", "SDRAM_DQ_DDIO = 1'b0;")
+
+    @plant("top level: the packed-capture build's SDRAM_DQ_DDIO left on", tree="packed")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_DQ_DDIO = 1'b0;", "SDRAM_DQ_DDIO = 1'b1;")
+
+    @plant("top level: SDRAM_DQ_DDIO no longer reaches the backend")
+    def _(root, cfg):
+        sub(root / TOP_NAME, ".DQ_IN_DDIO(SDRAM_DQ_DDIO),", "")
+
+    @plant("bridge: DQ_IN_DDIO not passed on to sdram.v")
+    def _(root, cfg):
+        sub(root / "src/memory/sdram_sync_bridge.sv", ",\n    .DQ_IN_DDIO(DQ_IN_DDIO)", "")
+
+    @plant("top level: SDRAM_OUT_DDIO flipped against the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_OUT_DDIO = 1'b1;", "SDRAM_OUT_DDIO = 1'b0;")
+
+    @plant("top level: the packed-output build's SDRAM_OUT_DDIO left on", tree="packedout")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_OUT_DDIO = 1'b0;", "SDRAM_OUT_DDIO = 1'b1;")
+
+    @plant("top level: SDRAM_OUT_DDIO no longer reaches the backend")
+    def _(root, cfg):
+        sub(root / TOP_NAME, ".OUT_DDIO(SDRAM_OUT_DDIO),", "")
+
+    @plant("backend: OUT_DDIO not passed on to the bridge")
+    def _(root, cfg):
+        sub(root / "src/memory/split_sdram_backend.sv", ",\n    .OUT_DDIO(OUT_DDIO)", "")
+
+    @plant("bridge: OUT_DDIO not passed on to sdram.v")
+    def _(root, cfg):
+        sub(root / "src/memory/sdram_sync_bridge.sv", ",\n    .OUT_DDIO(OUT_DDIO)", "")
+
+    @plant("qsf: the cell build's fabric-OE line dropped (the OE would be packed again)")
+    def _(root, cfg):
+        sub(root / QSF_NAME, OE_FABRIC_LINE + "\n", "")
+
+    @plant("qsf: an ON line after the cell build's fabric-OE line (the last assignment wins)")
+    def _(root, cfg):
+        q = root / QSF_NAME
+        q.write_text(q.read_text() + OE_FABRIC_LINE.replace(" OFF ", " ON ") + "\n")
+
+    @plant("qsf: the packed build carrying the fabric-OE line", tree="packedout")
+    def _(root, cfg):
+        q = root / QSF_NAME
+        q.write_text(q.read_text() + OE_FABRIC_LINE + "\n")
+
+    @plant("sdram.v: the address cell renamed (the SDC's output-cell guard would miscount)")
+    def _(root, cfg):
+        sub(root / SDRAM_V, ") ca_out (", ") ca_out2 (")
+
+    @plant("sdram.v: the DQ output enable from a cyclonev_ddio_oe atom (black on hardware)")
+    def _(root, cfg):
+        sub(root / SDRAM_V, "    assign oen_pins = dq_oe_q;\n",
+            "    cyclonev_ddio_oe oe_x (.oe(dq_oen_n), .clk(clk), .dataout(oen_pins[0]));\n")
+
+    @plant("SDC: an output-cell build without the cut on the cells' falling-edge mux path")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "set_false_path -fall_from $pc9821_clk_sys -to $pc9821_sdram_out\n", "")
+
+    @plant("SDC: the packed-output build carrying the output-cell exception", tree="packedout")
+    def _(root, cfg):
+        sub(root / SDC_NAME, pg.render_out_cut(False), pg.render_out_cut(True))
+
+    @plant("sdram.v: the DDIO cell renamed (the SDC's capture collection would match nothing)")
+    def _(root, cfg):
+        sub(root / SDRAM_V, ") dq_cap (", ") dq_cap2 (")
+
+    @plant("SDC: a DDIO build's capture collection names the packed register")
+    def _(root, cfg):
+        sub(root / SDC_NAME, pg.DQ_CAPTURE_REGS[True], pg.DQ_CAPTURE_REGS[False])
+
+    @plant("SDC: a DDIO build without the cut on the cell's unused low half")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "    set_false_path -from [get_ports SDRAM_DQ[*]] -to $pc9821_sdram_dq_lo\n", "")
+
+    @plant("SDC: the DDIO build's generated clock lost its -invert", tree="mediumoc")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "-divide_by 1 -invert", "-divide_by 1")
+
+    @plant("SDC: the DDIO build forwards PLL output 1 (the DDIO is clocked by clk_sys)", tree="mediumoc")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "[get_pins {emu|pll|pll_inst|altera_pll_i|general[0]*|divclk}]",
+            "[get_pins {emu|pll|pll_inst|altera_pll_i|general[1]*|divclk}]")
+
+    @plant("SDC: the CL3 build keeps the CL2 tAC", tree="mediumoc")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "-max 5.4 [get_ports SDRAM_DQ", "-max 6.0 [get_ports SDRAM_DQ")
+
+    @plant("SDC: the CL2 build takes the CL3 tAC (hold at 80 MHz is not modelled with it)")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "-max 6.0 [get_ports SDRAM_DQ", "-max 5.4 [get_ports SDRAM_DQ")
 
     @plant("top level: CDROM_EN flipped without its OSD slot", tree="nocd")
     def _(root, cfg):
@@ -1336,6 +1976,14 @@ def selftest() -> int:
     def _(root, cfg):
         sub(root / TOP_NAME, "CDROM_AUDIO_EN = 1'b1;", "CDROM_AUDIO_EN = 1'b0;")
 
+    @plant("top level: a doubler build whose VIDEO_DBL_EN dropped the line doubler")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "VIDEO_DBL_EN = 1'b1;", "VIDEO_DBL_EN = 1'b0;")
+
+    @plant("top level: CONF_STR_VIDEO offers a TV mode the build does not have")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "Native 24kHz,Doubled 49kHz;", "Native 24kHz,Doubled 49kHz,TV 15kHz;")
+
     @plant("top level: HPS_VDNUM disagrees with CDROM_EN", tree="nocd")
     def _(root, cfg):
         sub(root / TOP_NAME, "HPS_VDNUM = 3;", "HPS_VDNUM = 5;")
@@ -1344,22 +1992,30 @@ def selftest() -> int:
     def _(root, cfg):
         sub(root / TOP_NAME, "HPS_VDNUM = 5;", "HPS_VDNUM = 3;")
 
-    @plant("top level: CONF_STR_DISKS back to the retired second disk's entry", tree="nocd")
+    @plant("top level: CONF_STR_CD gains the retired second disk's entry", tree="nocd")
     def _(root, cfg):
-        sub(root / TOP_NAME, '"S2,D88FDDHDM,Mount FDD2;";', '"S3,IMG,Mount HDD1;";')
+        sub(root / TOP_NAME, '"T[8],Eject HDD;";', '"T[8],Eject HDD;S3,IMGHDIVHD,Mount HDD1;";')
 
     @plant("top level: the CD-ROM's Eject offered in a build without the CD", tree="nocd")
     def _(root, cfg):
-        sub(root / TOP_NAME, '"T[10],Eject FDD2;";', '"T[10],Eject FDD2;T[11],Eject CD-ROM;";')
+        sub(root / TOP_NAME, '"T[8],Eject HDD;";', '"T[8],Eject HDD;T[11],Eject CD-ROM;";')
 
-    @plant("top level: a CD build whose Eject line lost the CD-ROM's entry")
-    def _(root, cfg):
-        sub(root / TOP_NAME, '"T[10],Eject FDD2;T[11],Eject CD-ROM;";', '"T[10],Eject FDD2;";')
+    cd_line = '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;' + CD_VOLUME_FIELD + '";'
 
-    @plant("top level: a CD build whose mount line lost the CD-ROM's slot")
+    @plant("top level: a CD build whose CD line lost the CD-ROM's Eject")
     def _(root, cfg):
-        sub(root / TOP_NAME, '"S2,D88FDDHDM,Mount FDD2;S4,ISOPCD,Mount CD-ROM;";',
-            '"S2,D88FDDHDM,Mount FDD2;";')
+        sub(root / TOP_NAME, cd_line,
+            '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;' + CD_VOLUME_FIELD + '";')
+
+    @plant("top level: a CD build whose CD line lost the CD-ROM's slot")
+    def _(root, cfg):
+        sub(root / TOP_NAME, cd_line,
+            '"T[8],Eject HDD;T[11],Eject CD-ROM;' + CD_VOLUME_FIELD + '";')
+
+    @plant("top level: a CD-audio build whose CD line lost the CD audio volume field")
+    def _(root, cfg):
+        sub(root / TOP_NAME, cd_line,
+            '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;";')
 
     @plant("qsf: the technique row edited by hand")
     def _(root, cfg):
@@ -1368,7 +2024,7 @@ def selftest() -> int:
 
     @plant("qsf: the record's clk_sys changed (top level, PLL and SDC still the old one)")
     def _(root, cfg):
-        sub(root / QSF_NAME, f'"clk_sys_hz":{cfg.clk_sys_hz}', '"clk_sys_hz":90000000')
+        sub(root / QSF_NAME, f'"clk_sys_hz":{cfg.clk_sys_hz}', '"clk_sys_hz":85000000')
 
     @plant("qsf: the record's derived phase is not what the I/O model derives")
     def _(root, cfg):
@@ -1378,18 +2034,13 @@ def selftest() -> int:
     def _(root, cfg):
         sub(root / QSF_NAME, '"sdram_phase_ps":', f'"sdram_hz":100000000,"sdram_sync":false,"sdram_phase_ps":')
 
-    @plant("qsf: the ALSA macro dropped from the block (record still says off)")
+    @plant("qsf: the YC macro dropped from the block (record still says off)")
     def _(root, cfg):
-        sub(root / QSF_NAME, 'set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"\n', "")
+        sub(root / QSF_NAME, 'set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"\n', "")
 
-    @plant("qsf: the record says YC on while the block still disables it")
+    @plant("qsf: the record says ALSA off while the block builds it")
     def _(root, cfg):
-        sub(root / QSF_NAME, '"yc_en":false', '"yc_en":true')
-
-    @plant("qsf: a stray MISTER_DISABLE_YC outside the managed block")
-    def _(root, cfg):
-        sub(root / QSF_NAME, "source sys/sys.tcl",
-            'set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"\nsource sys/sys.tcl')
+        sub(root / QSF_NAME, '"alsa_en":true', '"alsa_en":false')
 
     @plant("SDC: the computed block's clock line edited")
     def _(root, cfg):
@@ -1428,6 +2079,50 @@ def selftest() -> int:
         sub(root / "rtl" / "pll" / "pll_0002.v", f".number_of_clocks({pg.PLL_OUTPUTS})",
             ".number_of_clocks(3)")
 
+    @plant("video PLL: its output is not 50 MHz x (M + K/2^32) / 19 (another C0)")
+    def _(root, cfg):
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", "c_cnt_hi_div0(10)", "c_cnt_hi_div0(9)")
+
+    @plant("video PLL: another M (the ratio to the 31 kHz dot rate is no longer the generated one)")
+    def _(root, cfg):
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", "m_cnt_hi_div(10)", "m_cnt_hi_div(9)")
+
+    @plant("video PLL: another fraction K")
+    def _(root, cfg):
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", 'pll_fractional_division("548405248")',
+            'pll_fractional_division("548405249")')
+
+    @plant("video PLL: an integer-N PLL (pc9821_vpll_ctl's K writes do nothing)")
+    def _(root, cfg):
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", 'fractional_vco_multiplier("true")',
+            'fractional_vco_multiplier("false")')
+
+    @plant("video PLL: not reconfigurable (pc9821_vpll_ctl cannot reach the 24 kHz clock)")
+    def _(root, cfg):
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", 'pll_subtype("Reconfigurable")', 'pll_subtype("General")')
+
+    @plant("video PLL: the RTL's 31 kHz fraction is not the generator's (pc9821_vclk_pkg)")
+    def _(root, cfg):
+        sub(root / pg.VCLK_PKG, "VPLL_K31   = 32'h20B0_0000", "VPLL_K31   = 32'h20B1_0000")
+
+    @plant("video PLL: the RTL's 24 kHz M is not the generator's (pc9821_vclk_pkg)")
+    def _(root, cfg):
+        sub(root / pg.VCLK_PKG, "VPLL_M24   = 16", "VPLL_M24   = 17")
+
+    @plant("video PLL: missing while generation is required")
+    def _(root, cfg):
+        (root / "rtl" / "vpll" / "vpll_0002.v").unlink()
+
+    @plant("SDC: the video clock's crossing bound is the 24 kHz period, not the generated 31 kHz one")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid 19.866",
+            "set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid 23.750")
+
+    @plant("SDC: the video clock lost its asynchronous group")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "set_clock_groups -asynchronous -group $pc9821_clk_vid",
+            "# set_clock_groups -asynchronous -group $pc9821_clk_vid")
+
     @plant("SDC missing while generation is required")
     def _(root, cfg):
         (root / SDC_NAME).unlink()
@@ -1458,12 +2153,93 @@ def selftest() -> int:
     def _(root, cfg):
         sub(root / QSF_NAME, '"qsf_set":{', '"qsf_set":{"SEED":"3",')
 
+    # sdram_phase_dyn: the top level's parameter and the generated PLL's ports follow the record.
+    @plant("top level: SDRAM_PHASE_DYN flipped against the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_PHASE_DYN = 1'b0;", "SDRAM_PHASE_DYN = 1'b1;")
+
+    @plant("top level: a phase-instrument build whose SDRAM_PHASE_DYN dropped it", tree="sdph")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "SDRAM_PHASE_DYN = 1'b1;", "SDRAM_PHASE_DYN = 1'b0;")
+
+    @plant("PLL: a phase-instrument build whose PLL has no DPS ports (pll_subtype General)", tree="sdph")
+    def _(root, cfg):
+        sub(root / "rtl" / "pll" / "pll_0002.v", 'pll_subtype("DPS")', 'pll_subtype("General")')
+
+    @plant("PLL: a base build whose PLL was generated with the DPS ports")
+    def _(root, cfg):
+        sub(root / "rtl" / "pll" / "pll_0002.v", 'pll_subtype("General")', 'pll_subtype("DPS")')
+
+    @plant("PLL: the wrapper lost a tied DPS port the top level connects")
+    def _(root, cfg):
+        sub(root / "rtl" / "pll.v", "input  wire       updn,\n", "")
+
+    @plant("PLL: a phase-instrument build whose wrapper does not pass the ports on", tree="sdph")
+    def _(root, cfg):
+        sub(root / "rtl" / "pll.v", ".phase_en (phase_en), ", "")
+
+    @plant("top level: SDRAM_DBG_CL set without the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "localparam integer SDRAM_DBG_CL = 0;", "localparam integer SDRAM_DBG_CL = 2;")
+
+    @plant("top level: SDRAM_DBG_TRCD_TRP set without the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "localparam integer SDRAM_DBG_TRCD_TRP = 0;",
+            "localparam integer SDRAM_DBG_TRCD_TRP = 3;")
+
+    @plant("wiring: the tRCD/tRP override dropped at the bridge (sdram.v would build the derived value)")
+    def _(root, cfg):
+        sub(root / "src/memory/sdram_sync_bridge.sv", ".DBG_TRCD_TRP(DBG_TRCD_TRP)", "")
+
+    @plant("qsf: the record gains dbg_sdram_cl2 the top level does not carry")
+    def _(root, cfg):
+        sub(root / QSF_NAME, '"name":"base"', '"dbg_sdram_cl2":true,"name":"base"')
+
+    @plant("qsf: the record gains sdram_phase_dyn the top level does not carry")
+    def _(root, cfg):
+        sub(root / QSF_NAME, '"name":"base"', '"name":"base","sdram_phase_dyn":true')
+
+    # hdmi_rclk: the clock-network line is part of the record, so the block must carry exactly it,
+    # and no GLOBAL_SIGNAL line may exist outside the block.
+    @plant("qsf: the record gains hdmi_rclk the block does not carry")
+    def _(root, cfg):
+        sub(root / QSF_NAME, '"name":"base"', '"hdmi_rclk":true,"name":"base"')
+
+    @plant("qsf: the pll_hdmi REGIONAL line dropped from the block by hand", tree="rclk")
+    def _(root, cfg):
+        sub(root / QSF_NAME, HDMI_RCLK_LINE + "\n", "")
+
+    @plant("qsf: the pll_hdmi line edited to GLOBAL CLOCK by hand", tree="rclk")
+    def _(root, cfg):
+        sub(root / QSF_NAME, '"REGIONAL CLOCK"', '"GLOBAL CLOCK"')
+
+    @plant("qsf: the record gains hdmi_rclk_q2 the block does not carry", tree="rclk")
+    def _(root, cfg):
+        sub(root / QSF_NAME, '"hdmi_rclk":true', '"hdmi_rclk":true,"hdmi_rclk_q2":true')
+
+    @plant("qsf: the record asks hdmi_rclk_q2 without hdmi_rclk")
+    def _(root, cfg):
+        sub(root / QSF_NAME, '"name":"base"', '"hdmi_rclk_q2":true,"name":"base"')
+
+    @plant("qsf: a CLKCTRL location assignment outside the managed block")
+    def _(root, cfg):
+        sub(root / QSF_NAME, "source sys/sys.tcl", HDMI_RCLK_Q2_LINE + "\nsource sys/sys.tcl")
+
+    @plant("qsf: a GLOBAL_SIGNAL assignment outside the managed block (no hdmi_rclk recorded)")
+    def _(root, cfg):
+        sub(root / QSF_NAME, "source sys/sys.tcl", HDMI_RCLK_LINE + "\nsource sys/sys.tcl")
+
+    @plant("qsf: a second GLOBAL_SIGNAL outside the block beside a recorded hdmi_rclk", tree="rclk")
+    def _(root, cfg):
+        sub(root / QSF_NAME, "source sys/sys.tcl",
+            HDMI_RCLK_LINE.replace("REGIONAL", "GLOBAL") + "\nsource sys/sys.tcl")
+
     configs = {
         "base": PROFILES["base"],
-        "lightoc": PROFILES["lightoc"],
         "mediumoc": PROFILES["mediumoc"],
         # base itself is a CD build since 2026-10-10; the --no-cdrom opt-out is its own tree.
-        "nocd": dataclasses.replace(PROFILES["base"], name="custom", preset="base", cdrom_en=False),
+        "nocd": dataclasses.replace(PROFILES["base"], name="custom", preset="base", cdrom_en=False,
+                                    cdrom_audio_en=False),
         "dbg": dataclasses.replace(PROFILES["base"], name="custom", preset="base", dbg=(
             ("cpu", True), ("snoop", "0x2fa00:0x2fc00"), ("trig", "reload:0x2fb20"),
             ("trig2", "0x3d900:0x3da00"), ("gdc", True))),
@@ -1471,16 +2247,22 @@ def selftest() -> int:
             ("PHYSICAL_SYNTHESIS_REGISTER_RETIMING", QSF_SET_DEFAULT),
             ("ROUTER_TIMING_OPTIMIZATION_LEVEL", "MAXIMUM"),
             ("OPTIMIZATION_MODE", "AGGRESSIVE PERFORMANCE"))),
+        "rclk": dataclasses.replace(PROFILES["base"], name="custom", preset="base", hdmi_rclk=True),
+        "sdph": dataclasses.replace(PROFILES["base"], name="custom", preset="base",
+                                    sdram_phase_dyn=True),
+        "packed": dataclasses.replace(PROFILES["base"], name="custom", preset="base",
+                                      sdram_dq_ddio=False),
+        "packedout": dataclasses.replace(PROFILES["base"], name="custom", preset="base",
+                                         sdram_out_ddio=False),
     }
     failures = 0
 
-    # The preset contract (owner, 2026-10-09): every preset runs the SDRAM on clk_sys, base is
-    # 80 MHz, lightoc is base under another name, and a custom clock moves the SDRAM with it.
+    # The preset contract: every preset runs the SDRAM on clk_sys, base is 90 MHz, and a custom
+    # clock moves the SDRAM with it.
     contract_parser = argparse.ArgumentParser(add_help=False)
     add_override_args(contract_parser)
-    want_hz = {"base": 80_000_000, "lightoc": 80_000_000, "trace": 80_000_000,
-               "iofaithful": 80_000_000, "midilink": 80_000_000, "mediumoc": 100_000_000,
-               "heavyoc": 120_000_000}
+    want_hz = {"base": 90_000_000, "trace": 90_000_000, "iofaithful": 90_000_000,
+               "mediumoc": 100_000_000, "heavyoc": 120_000_000}
     if set(want_hz) != set(PROFILES):
         print(f"SELFTEST FAIL: preset contract names {sorted(want_hz)}, PROFILES has "
               f"{sorted(PROFILES)}")
@@ -1497,9 +2279,8 @@ def selftest() -> int:
             failures += 1
         else:
             print(f"selftest: preset contract {' '.join(argv)} -> {want // 10**6} MHz clk_sys = SDRAM")
-    # The CD contract (owner, 2026-10-10: "default to enabling the CD across the board"): every
-    # preset builds the drive with its CD-DA player, none carries the debug command log, and
-    # --no-cdrom / --no-cdrom-audio still opt out.
+    # The CD contract: every preset builds the drive with its CD-DA player, none carries the debug
+    # command log, and --no-cdrom / --no-cdrom-audio still opt out.
     for name, preset in PROFILES.items():
         if preset.dbg:
             print(f"SELFTEST FAIL: preset {name} builds a debug instrument ({dict(preset.dbg)}): "
@@ -1511,6 +2292,94 @@ def selftest() -> int:
                   f"cdrom_log_en {preset.cdrom_log_en})")
             failures += 1
     print(f"selftest: CD contract - all {len(PROFILES)} presets build the CD drive + CD-DA, no log")
+    # The phase-instrument contract: off in every preset; --dbg-sdram-phase turns it on below
+    # 100 MHz and is refused with the DDIO SDRAM_CLK; the RTL's on-arms hold the instances, so
+    # the non-default value reaches them (a dropped branch cannot fall back silently).
+    for name, preset in PROFILES.items():
+        if preset.sdram_phase_dyn or preset.pll_request().dps:
+            print(f"SELFTEST FAIL: preset {name} builds the SDRAM phase instrument")
+            failures += 1
+    got_cfg = resolve_config("base", contract_parser.parse_args(["--dbg-sdram-phase"]))
+    if not (got_cfg.sdram_phase_dyn and got_cfg.pll_request().dps
+            and got_cfg.record().get("sdram_phase_dyn") is True):
+        print("SELFTEST FAIL: base --dbg-sdram-phase does not build the instrument")
+        failures += 1
+    if "sdram_phase_dyn" in PROFILES["base"].record():
+        print("SELFTEST FAIL: the base record names sdram_phase_dyn (it must appear only when set)")
+        failures += 1
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            resolve_config("mediumoc", contract_parser.parse_args(["--dbg-sdram-phase"]))
+    except SystemExit:
+        print("selftest: mediumoc --dbg-sdram-phase is refused (DDIO SDRAM_CLK)")
+    else:
+        print("SELFTEST FAIL: mediumoc --dbg-sdram-phase is accepted")
+        failures += 1
+    for name, preset in PROFILES.items():
+        if preset.dbg_sdram_cl2 or preset.dbg_sdram_trcd:
+            print(f"SELFTEST FAIL: preset {name} overrides the SDRAM timing table")
+            failures += 1
+    got_cfg = resolve_config(None, contract_parser.parse_args(
+        ["--custom", "--clk-sys-mhz", "100", "--dbg-sdram-cl2", "--dbg-sdram-trcd-cycles", "3",
+         "--dbg-sdram-phase"]))
+    lines = {n: l for n, _, l in top_localparams(got_cfg)}
+    if (got_cfg.sdram_clk_ddio or lines["SDRAM_DBG_CL"] != "localparam integer SDRAM_DBG_CL = 2;"
+            or lines["SDRAM_DBG_TRCD_TRP"] != "localparam integer SDRAM_DBG_TRCD_TRP = 3;"
+            or "-invert" in render_config_sdc(got_cfg).split("create_generated_clock", 1)[1][:200]
+            or not got_cfg.pll_request().dps
+            or "cyclonev_pll|counter[1].output_counter*|divclk" not in render_config_sdc(got_cfg)):
+        print("SELFTEST FAIL: the 100 MHz CL2 test point is not CL2 + phase-shifted SDRAM_CLK + tRCD 3")
+        failures += 1
+    else:
+        print("selftest: 100 MHz --dbg-sdram-cl2 --dbg-sdram-trcd-cycles 3 --dbg-sdram-phase resolves")
+    # A tRCD/tRP override sdram.v refuses: tRP above CAS + 2 (a read's exits start the next row
+    # command CAS + 3 clocks after the last READ), and one short of the write exit's tRC.
+    for argv in (["--custom", "--clk-sys-mhz", "100", "--dbg-sdram-cl2", "--dbg-sdram-trcd-cycles", "5"],
+                 ["--custom", "--clk-sys-mhz", "90", "--dbg-sdram-trcd-cycles", "5"],
+                 ["--custom", "--clk-sys-mhz", "120", "--dbg-sdram-trcd-cycles", "6"],
+                 ["--custom", "--clk-sys-mhz", "90", "--dbg-sdram-trcd-cycles", "1"]):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                resolve_config(None, contract_parser.parse_args(argv))
+        except SystemExit:
+            print(f"selftest: {' '.join(argv)} is refused (sdram.v's table checks)")
+        else:
+            print(f"SELFTEST FAIL: {' '.join(argv)} is accepted, but sdram.v refuses its table")
+            failures += 1
+    for argv in (["--custom", "--clk-sys-mhz", "100", "--dbg-sdram-cl2", "--dbg-sdram-trcd-cycles", "4"],
+                 ["--custom", "--clk-sys-mhz", "100", "--dbg-sdram-cl2", "--dbg-sdram-trcd-cycles", "2"],
+                 ["--custom", "--clk-sys-mhz", "133"]):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                resolve_config(None, contract_parser.parse_args(argv))
+        except SystemExit:
+            print(f"SELFTEST FAIL: {' '.join(argv)} is refused, but sdram.v builds its table")
+            failures += 1
+        else:
+            print(f"selftest: {' '.join(argv)} resolves")
+    failures += sdram_table_selftest()
+    sys_text = (PROJECT_DIR / "src/pc9821/core/pc9821_system.sv").read_text()
+    top_arm = re.search(r"generate if \(SDRAM_PHASE_DYN\) begin : g_sdph_dps(.*?)end else begin",
+                        (PROJECT_DIR / TOP_NAME).read_text(), re.S)
+    sys_arm = re.search(r"if \(SDRAM_PHASE_DYN\) begin : g_sdph(.*?)end else begin", sys_text, re.S)
+    if (not top_arm or "pc9821_sdram_dps" not in top_arm.group(1) or not sys_arm
+            or "pc9821_sdram_phase_ctl" not in sys_arm.group(1)
+            or ".SDRAM_PHASE_DYN(SDRAM_PHASE_DYN)" not in sys_text):
+        print("SELFTEST FAIL: the SDRAM_PHASE_DYN on-arms do not hold the instrument's instances")
+        failures += 1
+    else:
+        print("selftest: SDRAM phase instrument off in every preset; its on-arms hold the instances")
+    # The hdmi_rclk contract: the block carries the line exactly when the field is set, and a
+    # re-apply without it strips the line.
+    for on in (False, True):
+        blk = render_qsf_block(dataclasses.replace(PROFILES["base"], hdmi_rclk=on))
+        left = [line for line in remove_managed_qsf_content(blk + "\n").splitlines()
+                if GLOBAL_SIGNAL_LINE_RE.match(line)]
+        if (HDMI_RCLK_LINE in blk.splitlines()) != on or left:
+            print(f"SELFTEST FAIL: hdmi_rclk={on}: block line present "
+                  f"{HDMI_RCLK_LINE in blk.splitlines()}, {len(left)} line(s) survive a re-apply")
+            failures += 1
+    print("selftest: hdmi_rclk contract - the REGIONAL line follows the field and is stripped on re-apply")
     # The debug-framework contract: the options resolve to the localparams the RTL takes, a bad
     # combination is refused, and a spec that cannot mean what it says never reaches the top level.
     for argv, want in ((["base", "--dbg-snoop", "2fa00:2fc00"], {"snoop_en": 1, "snoop_lo": 0x2fa00, "snoop_hi": 0x2fc00}),
@@ -1526,6 +2395,8 @@ def selftest() -> int:
         else:
             print(f"selftest: {' '.join(argv)} -> {want}")
     for argv in (["base", "--trace", "--dbg-cpu"], ["base", "--dbg-trig2", "1000:2000"],
+                 ["base", "--perf-log", "--dbg-cd"], ["base", "--trace", "--dbg-cd"],
+                 ["base", "--no-cdrom", "--cdrom-audio"], ["base", "--no-cdrom", "--dbg-cd"],
                  ["base", "--dbg-snoop", "2000:1000"], ["base", "--dbg-trig", "jump:1"],
                  ["base", "--dbg-sample-ms", "5"], ["base", "--dbg-post", "9"]):
         try:
@@ -1544,8 +2415,8 @@ def selftest() -> int:
             failures += 1
         else:
             print(f"selftest: {' '.join(argv)} opts out ({field} off)")
-    if PROFILES["lightoc"].knobs() != PROFILES["base"].knobs():
-        print("SELFTEST FAIL: lightoc is no longer an alias of base (their knobs differ)")
+    if not (PROFILES["base"].mpu_en and PROFILES["base"].alsa_en):
+        print("SELFTEST FAIL: base must carry the MIDI card and the HPS audio")
         failures += 1
     for retired in ("--sdram-mhz", "--sdram-sync", "--no-sdram-sync"):
         try:
@@ -1556,13 +2427,30 @@ def selftest() -> int:
         else:
             print(f"SELFTEST FAIL: the retired {retired} is still accepted")
             failures += 1
+    # The SDRAM_CLK structure knob: derived from clk_sys in one place, off in every shipped
+    # <100 MHz preset, on from 100 MHz, and the RTL's generate-if holds the DDIO cell in its on arm
+    # (so the non-default value reaches the instance; a dropped branch cannot fall back silently).
+    for pname, want in (("base", False), ("trace", False), ("mediumoc", True), ("heavyoc", True)):
+        if PROFILES[pname].sdram_clk_ddio != want:
+            print(f"SELFTEST FAIL: {pname} sdram_clk_ddio is {not want}, want {want}")
+            failures += 1
+    top_text = (PROJECT_DIR / TOP_NAME).read_text()
+    arm = re.search(r"generate if \(SDRAM_CLK_DDIO\) begin : sdram_clk_ddio(.*?)end else begin", top_text, re.S)
+    if not arm or "altddio_out" not in arm.group(1) or "assign SDRAM_CLK" in arm.group(1):
+        print("SELFTEST FAIL: the top level's SDRAM_CLK_DDIO arm does not hold the altddio_out cell")
+        failures += 1
+    else:
+        print("selftest: SDRAM_CLK_DDIO on-arm holds the DDIO cell; mediumoc/heavyoc on, base/trace off")
     with tempfile.TemporaryDirectory(prefix="build-profile-selftest-") as tmp:
         def fresh(cfg: Config) -> Path:
             root = Path(tmp) / "tree"
             shutil.rmtree(root, ignore_errors=True)
             root.mkdir()
-            for name in (TOP_NAME, QSF_NAME):
+            for name in (TOP_NAME, QSF_NAME, SDRAM_V, *(n for n, _ in DQ_DDIO_WIRING)):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(PROJECT_DIR / name, root / name)
+            (root / pg.VCLK_PKG).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(PROJECT_DIR / pg.VCLK_PKG, root / pg.VCLK_PKG)
             apply_config(cfg, root, dry_run=False, generate=False)
             (root / SDC_NAME).write_text(render_config_sdc(cfg))
             _fake_pll(root, cfg)
@@ -1684,7 +2572,7 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"no '# Active config' record in {dest / QSF_NAME}; run "
                              "./build_profile.py <profile> first")
         rb = generate_outputs(config, dest)
-        print(f"Generated {dest}/rtl/pll* and {dest}/{SDC_NAME}: {describe(config, rb)}")
+        print(f"Generated {dest}/rtl/pll*, {dest}/rtl/vpll* and {dest}/{SDC_NAME}: {describe(config, rb)}")
         return 0
 
     if not has_config_args:

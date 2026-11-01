@@ -1,11 +1,11 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The 0x0433 aux status is the SOURCE-IDENTIFICATION port, not an IRQ-pending flag: it answers bit 1 (0x02) = "the selected bank has a connected device" and 0x00 otherwise, exactly as NP2kai's ideio_i433 (review readbacks.md P5). The old arm answered QEMU's irq_levels form (bit 0 = pending IRQ), which had both the bit position and the meaning wrong: a driver identifying the interface read an IRQ sample as a connection answer.
+// The 0x0433 aux status is the SOURCE-IDENTIFICATION port, not an IRQ-pending flag: it answers bit 1 (0x02) = "the selected bank has a connected device" and 0x00 otherwise, exactly as NP2kai's ideio_i433. The old arm answered QEMU's irq_levels form (bit 0 = pending IRQ), which had both the bit position and the meaning wrong: a driver identifying the interface read an IRQ sample as a connection answer.
 //
 // The 0x0433 aux status is the SOURCE-IDENTIFICATION port, not an IRQ-pending
 // flag: it answers bit 1 (0x02) = "the selected bank has a connected device" and
-// 0x00 otherwise, exactly as NP2kai's ideio_i433 (review readbacks.md P5). The
+// 0x00 otherwise, exactly as NP2kai's ideio_i433. The
 // old arm answered QEMU's irq_levels form (bit 0 = pending IRQ), which had both
 // the bit position and the meaning wrong: a driver identifying the interface
 // read an IRQ sample as a connection answer.
@@ -22,7 +22,7 @@
 //  `device_present ? 0x02 : 0x00`. The machine's idle capture (probes/PROBE.TXT
 //  `0432=00 0433=00`, at its EMPTY bank 0 - its CF card is in the CD connector)
 //  pins the 0x00 at an empty bank; this core's empty bank is bank 1 (the fixed layout,
-//  the hard disk on bank 0, owner 2026-10-11); the report's P5 confirm-method
+//  the hard disk on bank 0); the P5 confirm-method
 //  (probe with an IRQ pending AND with/without a drive) is still owed on real
 //  hardware, but the reference settles the SEMANTICS this bench pins: the
 //  answer must not move with the IRQ line at all.

@@ -6,18 +6,18 @@
 // Every integrated tier in this tree drives the backend from its testbench as an
 // immediate stub: `tb_pc9821_userdisk.sv` raises `ext_mem0_resp_valid` the cycle
 // AFTER the accept, and `tb_pc9821_memory_subsystem.sv` holds `mem_ready` at 1.
-// The real controller is not like that. `src/memory/sdram.v:21` states its own
+// The real controller is not like that. `src/memory/sdram.v:7` states its own
 // read latency -- "T_RCD + CAS + 2*burst_cnt - 1 cycles from ACT to last data" --
 // and it serves ONE request at a time, accepting only in IDLE
-// (`sdram.v:359-379`). So a responder defect that depends on the response
+// (`sdram.v:1169`, `IDLE: if (~nce) begin`). So a responder defect that depends on the response
 // arriving several cycles after the accept is INVISIBLE to every bench built on
 // a stub, which is not the same thing as absent. This module is the stub's
 // replacement: swap it in and the bench sees the timing the FPGA has.
 //
 // The shape it reproduces, all of it from sdram.v:
 //
-//   * `ready` is a ONE-CYCLE pulse at the ACCEPT (`sdram.v:377` assigns
-//     `ready_pulse[req_id] <= 1'b1` when the request is latched), and it is
+//   * `ready` is a ONE-CYCLE pulse at the ACCEPT (`sdram.v:1333` assigns
+//     `ready_pulse_n[req_id] = 1'b1` when the request is latched), and it is
 //     REGISTERED, so it appears the cycle after the request is taken.
 //   * The controller is then BUSY and accepts nothing until the transaction
 //     completes, so `ready` cannot pulse twice for one request even though the
@@ -39,8 +39,8 @@
 //
 // LINE_RESP is the one deliberate deviation, and it is a switch so a bench can
 // put the model on either side of a real disagreement: 1 makes this model
-// assemble the 128-bit line form; 0 makes it behave like `z486_mister.sv:775`,
-// which ties `ext_mem0_line_resp_valid` to 1'b0 and `ext_mem0_line_dout` to
+// assemble the 128-bit line form; 0 makes it behave like the top level once did,
+// which tied `ext_mem0_line_resp_valid` to 1'b0 and `ext_mem0_line_dout` to
 // 128'd0. The built design has NO producer for that port at all; the integrated
 // tiers supply one. A bench that wants to know which world it is testing
 // chooses here.
@@ -75,7 +75,7 @@ module sdram_backend_model #(
     // The GVRAM's opt-in TWO-WORD write, which sdram.v models as
     // `burstcount == 2`: word 0 on `din`, word 1 on `din_hi`, both at consecutive dwords from
     // `addr`. This model stored only `din` and so lost the second word of every pair the GVRAM's
-    // write-combining buffer issues (r13/271); the bench that binds it supplies the DUT's own
+    // write-combining buffer issues; the bench that binds it supplies the DUT's own
     // `mem_din_hi` where it has one.
     input  wire [31:0] din_hi,
     // The G3 gather-RMW session (sdram.v's header): gath qualifies a write of
@@ -174,7 +174,7 @@ module sdram_backend_model #(
             if (be[1]) mem[widx][15:8]  <= din[15:8];
             if (be[2]) mem[widx][23:16] <= din[23:16];
             if (be[3]) mem[widx][31:24] <= din[31:24];
-            // The pair's second dword, at the next column (sdram.v's WRITE_BURST, r13/137).
+            // The pair's second dword, at the next column (sdram.v's WRITE_BURST).
             // A gather is NOT a pair whatever its count says: its extra entries carry
             // their own addresses.
             if (gath) begin : gath_apply

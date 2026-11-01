@@ -2,17 +2,16 @@
 """Decode a PC-9821 core watchdog telemetry capture.
 
 The core emits one record per stall over /dev/ttyS1 at 115200. The stall record is
-ONE line of 351 characters, ended by a single LF (r13/119: it used to be four lines
-ended CR LF, and a serial tty's ICRNL maps CR to LF on the way into a capture, so
-every CR LF arrived as two newlines - the blank line between records the owner
-reported). Several field names are counter-intuitive, so this decoder exists to make
+ONE line of 351 characters, ended by a single LF (a record ended CR LF would arrive as
+two newlines: a serial tty's ICRNL maps CR to LF on the way into a capture, which shows
+up as a blank line between records). Several field names are counter-intuitive, so this decoder exists to make
 misreading harder: N is vid_lit_cnt (a video counter), not an unmapped-port
 count, and the unmapped read/write counts are not in the message at all.
 
-A PRF record follows the stall record: one line of 160 bytes, the interval itself and the
+A PRF record follows the stall record: one line of 256 bytes, the interval itself and the
 per-interval subsystem counters (the CPU's memory-wait cycles, the SDRAM controller's accepted
-read and write transactions, the two L1 caches' lookups and fill-causing misses, the GVRAM's
-array walk, and the EGC/GRCG operation counts). Its module is
+transactions on each port, the GVRAM's array walk, the EGC/GRCG operation counts, the visible-line
+graphics cycles, the page-coincidence probe and the CPU's last page fault). Its module is
 src/pc9821/core/pc9821_perf_msg.sv. A GFX
 record follows the PRF record: one line of 100 bytes, the graphics and stall-split
 counters (the GRCG's RMW and TDW walks, the EGC, the plain plane-window write, the CPU's
@@ -27,9 +26,8 @@ Usage:
 
 The PRF line's derived block turns its deltas into percentages and rates against the interval the
 record itself carries (CY), so nothing is divided by an assumed period: memory wait MW/CY, the
-miss rates DM/DL and IM/IL, the mean fill cost MW/(IM+DM), the mean GVRAM walk GC/GW, the EGC and
-GRCG costs per operation (EG/ET, EG/EU, (GR+GT)/GS from the GFX record), and the
-cross-check IM+DM <= RD. CY is
+mean GVRAM walk GC/GW, and the EGC and GRCG costs per operation (EG/ET, EG/EU, (GR+GT)/GS from the
+GFX record). CY is
 in CYCLES, so the seconds and the per-second rates need the clk_sys frequency the capture was taken
 at and assume 83.333 MHz (the production profile) unless --clk-mhz says otherwise; the assumption
 is printed with the block rather than applied silently.
@@ -78,7 +76,7 @@ W_FIELDS = [
     ("ATA", 8, "the ATA diagnostic word, HIGH HALF FIRST: {abort count, last command, "
                "command count, {4'h0, abort reason}}. One field, because it is one register: "
                "the labels K, X, Z and Q it used to spend all read parts of this value "
-               "(r13/119)"),
+               ""),
     ("G", 1, "io_dbg_gate {window enabled, 0x053D bit4, 0x063C[1:0]}"),
     ("M", 1, "mounted_at_run"),
     ("SAD", 4, "GDC start address"),
@@ -99,8 +97,8 @@ W_FIELDS = [
     ("IRR", 2, "PIC request"),
     ("ISR", 2, "PIC in-service"),
     ("VEC", 2, "last INTA vector"),
-    ("CPU", 2, "cpu_irq_state {IF, uc_is_wio, stall_wio, intr_pending, "
-              "interrupt_pending, inhibit_interrupts, intr, halted}"),
+    ("CPU", 2, "CPU interrupt state: bit 7 EFLAGS.IF, bit 1 the CPU's INTR input; the other "
+              "bits read 0 (the CPU exports no other interrupt state)"),
     ("INTA", 2, "interrupt acknowledge count"),
     ("U", 4, "the ARTIC timestamp counter's upper half, the value `in ax,0x5E` returns"),
     ("IO", 4, "the port of the most recent I/O access (the freeze loop's polled port)"),
@@ -112,7 +110,7 @@ W_FIELDS = [
               "during a load shows the per-512-byte-block latency the guest waits behind; "
               "with the disk idle it holds the last value and R (the request count) says "
               "whether any happened. Saturating at FFFFFFFF; a rejected request never "
-              "touches it (r13/316)"),
+              "touches it"),
     ("FST", 2, "the FDC's state byte {IRQ, DRQ, st[2:0], x_st[2:0]}: b7 the level IRQ (a "
               "result is waiting), b6 dma_drq (a sector byte is waiting on the DMA engine), "
               "b5:3 the command FSM (0 idle, 1 collecting parameters, 2 executing, 3 result "
@@ -155,26 +153,17 @@ PRF_FIELDS = [
               "window + emission and NOT the nominal WDG_PERIOD; dividing by the nominal period "
               "is ~2 % low on a 2 s heartbeat and ~20 % low on a 200 ms stall"),
     ("MW", 8, "clk_sys cycles a CPU memory request was OUTSTANDING and not accepted: the CPU's "
-              "wait on the memory system, and the number r13/119 adds to answer WHERE the time "
+              "wait on the memory system, and the number added to answer WHERE the time "
               "goes when the guest is not wedged"),
     ("RD", 8, "read transactions the SDRAM controller ACCEPTED on the main backend port. It "
               "carries the mapper's CPU RAM and the firmware loader and NOT the GVRAM, which is "
-              "on-chip M10K and emits no SDRAM traffic at all (r13/283); the font fetch has its "
+              "on-chip M10K and emits no SDRAM traffic at all; the font fetch has its "
               "own port and is not counted here either. One per valid/ready handshake, so a "
               "4-dword fill burst counts once"),
     ("WR", 8, "write transactions accepted on that port, on exactly the same rule: the mapper's "
               "CPU RAM and the loader, never a GVRAM store"),
-    ("IL", 8, "instruction-cache LOOKUPS: cacheable instruction fetches that consulted the tags, "
-              "counted from the cache's own S_LOOKUP state"),
-    ("IM", 8, "instruction-cache FILL-CAUSING MISSES: the lookups that left S_LOOKUP for "
-              "S_FILL, including a snoop-conflict refetch, which does cost a fill"),
-    ("DL", 8, "data-cache READ lookups: cacheable, non-protected data reads that consulted the "
-              "tags. Stores and protected writes are not counted - a store's cost is a queue "
-              "drain whether or not the tag matched (r13/302 section 3.3)"),
-    ("DM", 8, "data-cache READ misses that entered S_FILL. IM+DM is the fill count, so "
-              "MW/(IM+DM) is the mean fill cost and DM/DL the read miss rate"),
     ("GW", 8, "GVRAM ARRAY WALKS started: the one-visit per-lane walk the plain plane-window "
-              "access, the GRCG store and the EGC burst's fallback all enter (r13/310). Read as a "
+              "access, the GRCG store and the EGC burst's fallback all enter. Read as a "
               "DELTA it is the number of client accesses that walked, and GC/GW is the mean walk in "
               "clk_sys - the number fix 1a moves"),
     ("GC", 8, "clk_sys the GVRAM's array walk was in flight, from the accept cycle (where its "
@@ -182,31 +171,31 @@ PRF_FIELDS = [
               "the client's request, so these cycles are inside MW exactly as GR/EG/GT/PW are"),
     ("ET", 8, "EGC TRANSACTIONS begun: one per EGC command the sequencer accepts (one CPU access - "
               "an I/O-visible 0x3100-style blit). With the graphics record's EG, EG/ET is the mean "
-              "cycles a whole EGC transaction holds the CPU (r13/315)"),
+              "cycles a whole EGC transaction holds the CPU"),
     ("EU", 8, "EGC UNITS processed: one per byte/word unit the EGC commits within a transaction. A "
               "unit is one lane group of the CPU access (NP2kai's wr16/rd16 split), so EU/ET is the "
               "mean units per transaction and EG/EU the mean cycles per unit - the pair that "
-              "separates 'many EGC operations' from 'long EGC operations' (r13/315)"),
+              "separates 'many EGC operations' from 'long EGC operations'"),
     ("GS", 8, "GRCG STORES begun: one per RMW/TDW store the GRCG accepts. With the graphics "
               "record's GR+GT it gives (GR+GT)/GS, the mean cycles a GRCG store holds the CPU "
-              "(r13/315)"),
+              ""),
     ("GV", 8, "Graphics-owned cycles on VISIBLE scanlines: every clk_sys the GRCG OWNED the GVRAM "
               "while v_active was high, the same ownership the graphics record's GR+GT total "
-              "accumulates, gated by the raster (r13/321). This is the sprite pass's VISIBLE "
+              "accumulates, gated by the raster. This is the sprite pass's VISIBLE "
               "SPILL: section 5.1.2's decisive counter, since a sprite store that lands on a "
               "visible line is a sprite the beam can catch erased"),
     ("EV", 8, "EGC-owned cycles on VISIBLE scanlines: the same gate for the graphics record's EG. "
               "The EGC is the tile layer and redraws in place, so a nonzero EV is expected and "
-              "harmless; GV is the one the blacking rides on (r13/321)"),
+              "harmless; GV is the one the blacking rides on"),
     ("PD", 8, "A GAUGE, not a counter: clk_sys from the vblank edge (the VSYNC pulse's rise, the "
               "edge INT 0Ah rises on) to the LAST GRCG store of the most recent frame - the sprite "
               "pass's wall-clock against the 66,462 clk_sys the guest has from vline 407 to the "
-              "next active line (r13/321). Read it as a VALUE; its delta between records is the "
+              "next active line. Read it as a VALUE; its delta between records is the "
               "difference between two frames' passes, not an interval cost"),
     ("PC", 8, "PAGE-COINCIDENCE cycles: every clk_sys a GVRAM STORE was IN FLIGHT (the array was "
               "owned by the GRCG, by the EGC, or by the plain plane-window client - all three "
               "write owners) while the CPU's access page EQUALLED the page "
-              "the scanout's line fetch was latched on (r13/325). CORRECT DOUBLE-BUFFERING keeps "
+              "the scanout's line fetch was latched on. CORRECT DOUBLE-BUFFERING keeps "
               "the two pages OPPOSITE every clk_sys, so this is ZERO; a NONZERO PC is the "
               "decisive measurement - the sprite stores are landing on the DISPLAYED page, which "
               "is the page-scanout leak the blackout rides on. Read it as a DELTA across records. "
@@ -218,11 +207,11 @@ PRF_FIELDS = [
     ("SP", 8, "STATUS, not a counter: the page the scanout's line fetch is LATCHED on - the "
               "display page (port 0xA4), which pc9821_gdc_text carries out on gfx_line_addr[15] "
               "(its v_page). 0 or 1 as read into the record, so a capture shows the page the beam "
-              "is reading; read it WITH AP and PC (r13/325)"),
+              "is reading; read it WITH AP and PC"),
     ("AP", 8, "STATUS, not a counter: the CPU's access page (port 0xA6), the page a GRCG/EGC "
               "write lands on. 0 or 1 as read into the record; correct double-buffering keeps "
               "AP = !SP while the engines run, so SP == AP alongside a nonzero PC is the leak, "
-              "and SP == AP with PC zero is the instant of a software page flip (r13/325)"),
+              "and SP == AP with PC zero is the instant of a software page flip"),
     ("S1", 8, "the font/glyph port's (SDRAM requester 1) ACCEPTED read transactions this "
               "interval, one per valid/ready handshake like RD/WR. RD/WR count port 0 only, so "
               "the font, PCM and scanout loads were invisible; S1/S2/S3 make every requester's "
@@ -276,40 +265,12 @@ GFX_FIELDS = [
               "per-frame cost"),
     ("IR", 8, "interrupt acknowledges (INTA pulses) in the interval"),
     ("WK", 8, "JIS row-cache walk slots whose walk was skipped because the previous walk was "
-              "still in flight (r13/305, issue I4). A SATURATING counter, not free-running: it "
+              "still in flight (issue I4). A SATURATING counter, not free-running: it "
               "stops at 0xFFFF rather than wrapping, so a capture reading a non-zero but "
               "unchanging WK shows the walker overran once and the row it owned was never "
               "filled"),
 ]
 GFX_START = "GFX "
-
-# (field, width, meaning) for the INT21 record, in emission order. The record is TWO lines per
-# completed call - "21 IN ..." then "21 OUT ..." - and is emitted BETWEEN W/PRF/GFX reports, never
-# inside one (pc9821_dbg_record's INT21 arm). The labels/widths are one half of a contract with
-# src/pc9821/core/pc9821_int21_msg.sv; tools/check_telemetry_contract.py holds the two together.
-# Widths are the hex-digit count of the value, so AH is 2 digits, CY is 1, and the 16-bit BX/CS/IP
-# and AX are 4. NOTE the two tables share the AH and BX labels - they are two different snapshots
-# of the same registers (entry vs return), which is exactly the §1.4 row pair.
-INT21_FIELDS = [
-    ("AH", 2, "entry AH: the INT 21h function number (EAX[15:8]); only 48h/49h/4Ah are captured"),
-    ("BX", 4, "entry BX: the request size in paragraphs (EBX[15:0])"),
-    ("CS", 4, "caller CS"),
-    ("IP", 4, "caller IP (EIP[15:0])"),
-]
-INT21_OUT_FIELDS = [
-    ("AH", 2, "return AH (EAX[15:8])"),
-    ("CY", 1, "return carry flag (EFLAGS[0]); the jc at the call site consumes this"),
-    ("AX", 4, "return AX (EAX[15:0]): 0008 insufficient memory, 0007 arena trashed"),
-    ("BX", 4, "return BX (EBX[15:0]): DOS's largest free block on CY=1, unchanged on CY=0"),
-]
-INT21_IN_START = "21 IN"
-INT21_OUT_START = "21 OUT"
-# One completed call = one IN line then one OUT line. After the capture's whitespace is flattened
-# the LF that ends the IN line becomes a single space, so the pair reads "...IP=xxxx 21 OUT ...".
-INT21_PAIR_RE = re.compile(
-    r"21 IN\s+AH=([0-9A-Fa-f]{2})\s+BX=([0-9A-Fa-f]{4})\s+CS=([0-9A-Fa-f]{4})\s+IP=([0-9A-Fa-f]{4})"
-    r"\s+21 OUT\s+AH=([0-9A-Fa-f]{2})\s+CY=([0-9A-Fa-f])\s+AX=([0-9A-Fa-f]{4})\s+BX=([0-9A-Fa-f]{4})"
-)
 
 ABORT_REASONS = {0x1: "block engine error", 0x2: "read-path validation",
                  0x3: "IDP (geometry mismatch)", 0x4: "READ MULTIPLE unsupported",
@@ -351,7 +312,7 @@ PATH_MEANING = {
 # The trigger is the record's SECOND-TO-LAST byte, index 349; index 348's field ends in the '='
 # and two digits of T=, so the wire carries "T=1B", then the trigger, then the LF that ends the
 # line. THAT ORDER IS WHY A REGEX DEMANDING THE BYTE IMMEDIATELY AFTER T=<2hex> FINDS IT: the
-# trigger is emitted before the newline, not after it. (Before r13/119 the trigger REPLACED the
+# trigger is emitted before the newline, not after it. (In an earlier format the trigger REPLACED the
 # record's last byte, so the byte after the trigger was the next record's 'W' and a capture read
 # through a tty - ICRNL maps CR to LF - showed the trigger glued to the next record's start.)
 # The byte is found by position rather than by a NAME=token because it has no name; the ROM's own
@@ -413,19 +374,12 @@ def rate(num, seconds):
 
 
 def print_prf_derived(cur, prev, gfx, prev_gfx, clk_mhz):
-    """THE POINT OF THE TWO ADDITIONS (r13/302): the arithmetic, per interval, with the record's
+    """THE POINT OF THE TWO ADDITIONS: the arithmetic, per interval, with the record's
     OWN measured denominator.
 
     Every field here is a delta over CY, so a percentage is a measurement rather than a number
-    divided by an assumed interval - and every ratio says which of the two things it separates:
-    MW/CY is how much of the time is spent waiting, DM/DL and IM/IL are how OFTEN the cache misses,
-    and MW/(IM+DM) is what each fill COSTS. A program that misses constantly on fast memory and one
-    that misses rarely on slow memory read the same in MW and differ in exactly that pair.
-
-    The cross-check is what keeps the halves honest: every fill is a READ on the main port, so
-    IM+DM <= RD must hold, and the gap is the direct and uncacheable traffic. A capture where it
-    does not hold means one of the two counters is wrong, which is the failure a single-number
-    telemetry cannot self-detect.
+    divided by an assumed interval: MW/CY is how much of the time is spent waiting, and the
+    per-operation costs say what each GVRAM walk, EGC operation and GRCG store holds the CPU for.
     """
     cy = delta(cur, prev, "CY")
     print(f"  CY delta {cy:,} cycles ({cy / (clk_mhz * 1e6):.3f} s at {clk_mhz:.3f} MHz)")
@@ -451,22 +405,13 @@ def print_prf_derived(cur, prev, gfx, prev_gfx, clk_mhz):
           f"     (write:read {ratio})")
     print(f"    other ports    font {rate(s1, seconds)}  pcm {rate(s2, seconds)}"
           f"  scan {rate(s3, seconds)}     scanout bus wait W3/CY = {pct(w3, cy)}")
-    il, im = delta(cur, prev, "IL") or 0, delta(cur, prev, "IM") or 0
-    dl, dm = delta(cur, prev, "DL") or 0, delta(cur, prev, "DM") or 0
-    print(f"    L1             I {pct(il - im, il)} hit (IL {il:,}, IM {im:,})"
-          f"   D {pct(dl - dm, dl)} hit (DL {dl:,}, DM {dm:,})")
-    fills = im + dm
-    if fills:
-        print(f"    fill cost      MW/(IM+DM) = {mw / fills:.1f} clk_sys per fill")
-    else:
-        print("    fill cost      no fills in the interval")
     gw, gc = delta(cur, prev, "GW") or 0, delta(cur, prev, "GC") or 0
     if gw:
         print(f"    GVRAM walk     GW {gw:,} walks, GC {gc:,} cycles = {gc / gw:.1f} clk_sys per "
               f"walk; GC/CY = {pct(gc, cy)} of the interval, and it is charged to the CPU")
     else:
         print("    GVRAM walk     no walks in the interval")
-    # The EGC/GRCG operation counts (r13/315): paired with the graphics record's EG/GR/GT they give
+    # The EGC/GRCG operation counts: paired with the graphics record's EG/GR/GT they give
     # cycles-per-transaction and cycles-per-unit, the split between "many operations" and "long
     # operations" that graphics-hold.md section 8 asks for before section 7.1 vs 7.2.
     et, eu, gs = (delta(cur, prev, n) or 0 for n in ("ET", "EU", "GS"))
@@ -483,13 +428,7 @@ def print_prf_derived(cur, prev, gfx, prev_gfx, clk_mhz):
                   f"EG/EU = {eg / eu:.1f} clk_sys per unit")
         if gs:
             print(f"    GRCG cost      (GR+GT)/GS = {(gr + gt) / gs:.1f} clk_sys per store")
-    if fills > rd:
-        print(f"    cross-check    IM+DM = {fills:,} EXCEEDS RD {rd:,}, which cannot happen: every "
-              f"fill is a read on the main port. One of the two counters is wrong.")
-    else:
-        print(f"    cross-check    IM+DM = {fills:,} vs RD {rd:,}"
-              f"   ({pct(fills, rd)} of reads are fills; the rest direct/uncacheable)")
-    # The visible-region pair and the pass gauge (r13/321, report section 5.1.2). GV/EV are the
+    # The visible-region pair and the pass gauge. GV/EV are the
     # graphics record's GR+GT / EG restricted to VISIBLE lines: a visible sprite-store cycle is a
     # store the beam can overtake, which is the blackout's own definition. PD is a GAUGE - the most
     # recent frame's sprite pass - and is compared against the 66,462 clk_sys the guest has between
@@ -503,7 +442,7 @@ def print_prf_derived(cur, prev, gfx, prev_gfx, clk_mhz):
     if cur.get("PD") is not None:
         print(f"    sprite pass    PD = {cur['PD']:,} clk_sys from the vblank edge to the last GRCG "
               f"store (window from vline 407 = 66,462 clk_sys)")
-    # The page-coincidence probe (r13/325). PC is the DECISIVE counter: ZERO means every GRCG store
+    # The page-coincidence probe. PC is the DECISIVE counter: ZERO means every GRCG store
     # was on the hidden page (correct double-buffering, and the vanish is then on the displayed
     # page's own read - instrument the GRCG RMW read-vs-write ordering next); NONZERO means the
     # stores landed on the page the scanout is reading. SP/AP are the two page bits themselves.
@@ -526,7 +465,7 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
     text = text.replace("\x00", "?")  # an unassigned character index shows up as NUL
     # FLATTEN THE WHITESPACE, THEN SPLIT ON THE RECORD START MARKER. The stall record is one
     # line, so the line breaks could frame it - except that the records that follow it (PRF here,
-    # GFX from r13/267) are lines too, and a terminal-wrapped capture breaks the line at 80
+    # GFX) are lines too, and a terminal-wrapped capture breaks the line at 80
     # columns wherever it likes. Flattening every whitespace run to one space and splitting on the
     # start marker makes the framing independent of where the breaks fall: every chunk then holds
     # one stall record, the records emitted after it, and its own "T=<2hex><trigger>".
@@ -647,8 +586,8 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
                       "machine reads P if the capture predates the W path, so check the stage "
                       "and EIP stillness before reading this as health.")
         # The PRF record follows the stall record on its own line. The counters are free-running,
-        # so the DELTA since the previous record is the interval's cost - which is the number the
-        # owner is after - and it is printed beside the raw value when there is a previous record.
+        # so the DELTA since the previous record is the interval's cost - which is the number a
+        # reader is after - and it is printed beside the raw value when there is a previous record.
         if PRF_START in joined:
             p = parse_line(" " + joined.split(PRF_START, 1)[1], PRF_FIELDS)
             # The GFX record is parsed here rather than below because the PRF derived block
@@ -661,8 +600,7 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
                 if name in p:
                     # PD is a per-frame GAUGE (the last sprite pass's wall-clock) and SP/AP are
                     # live status bits (the two page levels), not free-running counters, so a
-                    # delta across records is not an interval cost and is not printed for them
-                    # (r13/321, r13/325).
+                    # delta across records is not an interval cost and is not printed for them.
                     dtxt = (f"  delta {((p[name] - prev_prf[name]) & 0xFFFF_FFFF)}"
                             if name in prev_prf and name not in ("PD", "SP", "AP") else "")
                     print(f"  {name:<5} = 0x{p[name]:08X} ({p[name]}){dtxt}  {meaning}")
@@ -682,27 +620,6 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
                             if name in prev_gfx else "")
                     print(f"  {name:<5} = 0x{g[name]:08X} ({g[name]}){dtxt}  {meaning}")
             prev_gfx = g
-        # The INT21 record: two lines per completed call, emitted BETWEEN reports (they never
-        # split a W/PRF/GFX report). Parse every IN/OUT pair in the chunk and print the §1.4
-        # rows with their meaning. The trigger is the z486 vector-fetch pulse
-        # (dbg_vec_fetch && dbg_vec_num == 8'h21), so a capture shows pairs whenever the guest
-        # runs an AH in {48h,49h,4Ah} soft INT 21h.
-        for m in INT21_PAIR_RE.finditer(joined):
-            in_vals = {"AH": int(m.group(1), 16), "BX": int(m.group(2), 16),
-                       "CS": int(m.group(3), 16), "IP": int(m.group(4), 16)}
-            out_vals = {"AH": int(m.group(5), 16), "CY": int(m.group(6), 16),
-                        "AX": int(m.group(7), 16), "BX": int(m.group(8), 16)}
-            print("  -- INT21 call:")
-            for name, width, meaning in INT21_FIELDS:
-                print(f"    {name:<4} = {in_vals[name]:0{width}X}  {meaning}")
-            for name, width, meaning in INT21_OUT_FIELDS:
-                print(f"    {name:<4} = {out_vals[name]:0{width}X}  {meaning}")
-            if out_vals["CY"] and out_vals["AX"] == 0x0008:
-                print("      >>> CY=1 AX=0008: DOS refused; BX is the kernel's largest free block")
-            elif out_vals["CY"] and out_vals["AX"] == 0x0007:
-                print("      >>> CY=1 AX=0007: arena trashed (chain corruption proven)")
-            elif not out_vals["CY"]:
-                print("      >>> CY=0: the call succeeded; BX is the unchanged request, not a size")
     return 0
 
 

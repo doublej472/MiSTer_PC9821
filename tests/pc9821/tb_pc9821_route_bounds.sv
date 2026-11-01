@@ -34,7 +34,7 @@
 //
 // ---------------------------------------------------------------------------
 // WHAT IS DELIBERATELY NOT ASSERTED, so the next reader does not think it was forgotten:
-//   * A line WRITE cannot occur. z486 memory.sv:313 makes line_read exclusive with write (line_read
+//   * A line WRITE cannot occur. z486 bus_unit.sv:301 (`assign line_read  = ext_valid_r && !ext_write_r`) makes line_read exclusive with write (line_read
 //     requires !ext_write_r; write requires ext_write_r), so the bridges' shared write path can never
 //     see a 16-byte request. It is NOT defended in the RTL -- the write path indexes its data with
 //     byte_index[1:0], which wraps every four bytes -- so if the CPU's contract ever changed, bytes
@@ -54,7 +54,8 @@ module tb_pc9821_route_bounds;
   reg  [3:0]  tb_be = 0;
   reg         tb_valid = 0, tb_write = 0, tb_line = 0;
   wire [31:0]  tb_dout;
-  wire [127:0] tb_line_dout;
+  wire [31:0]  tb_line_dout;   // the current word beat (P3)
+  reg  [127:0] tb_line_cap;    // the four beats of the last line read, as the L1 gathers them
   wire         tb_ready, tb_resp, tb_line_resp;
   wire [13:0] tram_addr;
   wire [7:0]  tram_din;
@@ -68,7 +69,8 @@ module tb_pc9821_route_bounds;
   reg  [3:0]  cg_be = 0;
   reg         cg_valid = 0, cg_write = 0, cg_line = 0;
   wire [31:0]  cg_dout;
-  wire [127:0] cg_line_dout;
+  wire [31:0]  cg_line_dout;   // the current word beat (P3)
+  reg  [127:0] cg_line_cap;
   wire         cg_ready, cg_resp, cg_line_resp;
   wire [4:0]  cg_byte_sel;
   wire        cg_byte_rd;
@@ -92,12 +94,17 @@ module tb_pc9821_route_bounds;
   // region's EDGE behaviour, not the subsystem's routing; the shared-instance routing is
   // covered by tb_pc9821_cg_window and tb_pc9821_memory_subsystem.
 
+  // The DMA ports are idle: this bench is about the CPU routes' edges.
+  wire       tram_dma_ready, tram_dma_resp, cgw_dma_ready, cgw_dma_resp;
+  wire [7:0] tram_dma_dout, cgw_dma_dout;
   pc9821_window_responder tram (
       .clk(clk), .reset(reset), .route_cg(1'b0),
       .cpu_addr(tb_addr), .cpu_din(tb_din), .cpu_be(tb_be),
       .cpu_line_read(tb_line), .cpu_valid(tb_valid), .cpu_write(tb_write),
-      .cpu_dout(tb_dout), .cpu_line_dout(tb_line_dout),
-      .cpu_ready(tb_ready), .cpu_resp_valid(tb_resp), .cpu_line_resp_valid(tb_line_resp),
+      .cpu_dout(tb_dout), .cpu_line_word(tb_line_dout),
+      .cpu_ready(tb_ready), .cpu_resp_valid(tb_resp), .cpu_line_word_valid(tb_line_resp),
+      .dma_valid(1'b0), .dma_write(1'b0), .dma_addr(14'd0), .dma_din(8'h00),
+      .dma_ready(tram_dma_ready), .dma_resp_valid(tram_dma_resp), .dma_dout(tram_dma_dout),
       .tram_addr(tram_addr), .tram_din(tram_din), .tram_we(tram_we), .tram_dout(tram_dout),
       .byte_sel(tram_byte_sel), .byte_rd(tram_byte_rd),
       .byte_dout(8'h00), .byte_hold(1'b0),
@@ -107,8 +114,10 @@ module tb_pc9821_route_bounds;
       .clk(clk), .reset(reset), .route_cg(1'b1),
       .cpu_addr({2'b0, cg_addr}), .cpu_din(cg_din), .cpu_be(cg_be),
       .cpu_line_read(cg_line), .cpu_valid(cg_valid), .cpu_write(cg_write),
-      .cpu_dout(cg_dout), .cpu_line_dout(cg_line_dout),
-      .cpu_ready(cg_ready), .cpu_resp_valid(cg_resp), .cpu_line_resp_valid(cg_line_resp),
+      .cpu_dout(cg_dout), .cpu_line_word(cg_line_dout),
+      .cpu_ready(cg_ready), .cpu_resp_valid(cg_resp), .cpu_line_word_valid(cg_line_resp),
+      .dma_valid(1'b0), .dma_write(1'b0), .dma_addr(14'd0), .dma_din(8'h00),
+      .dma_ready(cgw_dma_ready), .dma_resp_valid(cgw_dma_resp), .dma_dout(cgw_dma_dout),
       .tram_addr(cgw_tram_addr), .tram_din(cgw_tram_din), .tram_we(cgw_tram_we),
       .tram_dout(8'h00),
       .byte_sel(cg_byte_sel), .byte_rd(cg_byte_rd),
@@ -147,11 +156,21 @@ module tb_pc9821_route_bounds;
 
   // ==== STIMULUS ====
   task automatic tram_req(input [13:0] a, input wr, input line, input [3:0] be, input [31:0] d);
+    integer n;
     begin
       @(negedge clk);
       tb_addr = a; tb_din = d; tb_be = be; tb_write = wr; tb_line = line; tb_valid = 1;
       while (!tb_ready) @(negedge clk);
-      if (!wr) while (!tb_resp && !tb_line_resp) @(negedge clk);
+      // A line read is accepted at the walk's start (P3) and its four word beats stream through
+      // it; gather them in order, beat N into line word N as the L1 does.
+      if (!wr && line) begin
+        n = 0; tb_line_cap = 128'd0;
+        while (n < 4) begin
+          @(negedge clk);
+          if (tb_line_resp) begin tb_line_cap[{n[1:0], 5'b00000} +: 32] = tb_line_dout; n = n + 1; end
+        end
+      end
+      else if (!wr) while (!tb_resp) @(negedge clk);
       #1;
     end
   endtask
@@ -162,11 +181,19 @@ module tb_pc9821_route_bounds;
     end
   endtask
   task automatic cg_req(input [11:0] a, input wr, input line, input [3:0] be, input [31:0] d);
+    integer n;
     begin
       @(negedge clk);
       cg_addr = a; cg_din = d; cg_be = be; cg_write = wr; cg_line = line; cg_valid = 1;
       while (!cg_ready) @(negedge clk);
-      if (!wr) while (!cg_resp && !cg_line_resp) @(negedge clk);
+      if (!wr && line) begin
+        n = 0; cg_line_cap = 128'd0;
+        while (n < 4) begin
+          @(negedge clk);
+          if (cg_line_resp) begin cg_line_cap[{n[1:0], 5'b00000} +: 32] = cg_line_dout; n = n + 1; end
+        end
+      end
+      else if (!wr) while (!cg_resp) @(negedge clk);
       #1;
     end
   endtask
@@ -206,9 +233,8 @@ module tb_pc9821_route_bounds;
     // ending at 0x3FFF, with no wrap back to 0x3F00. The attribute half's odd lanes read 0xFF
     // (case 1), so the ramp shows in the even lanes only.
     tram_req(14'h3FFF, 1'b0, 1'b1, 4'hF, 32'd0);
-    if (!tb_line_resp || tb_resp ||
-        tb_line_dout !== 128'hFF_FE_FF_FC_FF_FA_FF_F8_FF_F6_FF_F4_FF_F2_FF_F0) begin
-      $display("FAIL tram last line: got %032x", tb_line_dout);
+    if (tb_line_cap !== 128'hFF_FE_FF_FC_FF_FA_FF_F8_FF_F6_FF_F4_FF_F2_FF_F0) begin
+      $display("FAIL tram last line: got %032x", tb_line_cap);
       errors = errors + 1;
     end
     tram_end();
@@ -218,7 +244,7 @@ module tb_pc9821_route_bounds;
     // odd store lands: be[3] selects lane 3, which is data[31:24], so 0xDE is the byte that must
     // land -- not 0xEF -- and 0x1FFC must be untouched. The same lane-3 write at 0x3FFF must be
     // a NO-OP: 0x3FFF is an ODD ATTRIBUTE byte and the attribute half is even-only (NP2kai
-    // mem/memtram.c:82-99, the machine A2000 probe row, review iobus-tram F3), so the byte
+    // mem/memtram.c:82-99, the machine A2000 probe row), so the byte
     // keeps its 0xFF and 0x3FFC stays 0xFC. FAIL-FIRST on the old store-it-anyway bridge.
     tram_req(14'h1FFF, 1'b1, 1'b0, 4'b1000, 32'hDE_AD_BE_EF);
     if (ram[14'h1FFF] !== 8'hDE || ram[14'h1FFC] !== 8'hFC) begin
@@ -306,9 +332,8 @@ module tb_pc9821_route_bounds;
     // row-0 page-0 byte, 0xB0 the row-0 page-1 byte, and so on up to row 7. A raw-base line would
     // start at offset 0x00A and return rows 5,6,7 of both pages then wrap.
     cg_req(12'h00A, 1'b0, 1'b1, 4'hF, 32'd0);
-    if (!cg_line_resp || cg_resp ||
-        cg_line_dout !== 128'hB7_A7_B6_A6_B5_A5_B4_A4_B3_A3_B2_A2_B1_A1_B0_A0) begin
-      $display("FAIL cg unaligned line at 0x00A wants the view from 0x000, got %032x", cg_line_dout);
+    if (cg_line_cap !== 128'hB7_A7_B6_A6_B5_A5_B4_A4_B3_A3_B2_A2_B1_A1_B0_A0) begin
+      $display("FAIL cg unaligned line at 0x00A wants the view from 0x000, got %032x", cg_line_cap);
       errors = errors + 1;
     end
     cg_end();

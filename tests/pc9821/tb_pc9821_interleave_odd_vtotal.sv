@@ -95,7 +95,6 @@ module tb_pc9821_interleave_odd_vtotal;
   reg  io_wr = 0, io_rd = 0;
   reg  [7:0] io_addr = 0, io_din = 0;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;
   wire gfx_access_page;
   wire [15:0] gfx_line_addr;
   wire        gfx_walk_page;   // the packed walk's page bit; parked here so (.*) stays complete
@@ -106,8 +105,6 @@ module tb_pc9821_interleave_odd_vtotal;
   reg  [17:0] font_ld_addr = 0;
   reg  [15:0] font_ld_data = 0;
   reg         font_ld_we = 0;
-  wire cg_code_win;
-  wire cg_lr_win;
   wire  [4:0] cg_win_byte_sel = 5'd0;
   wire        cg_win_rd = 1'b0;
   wire  [7:0] cg_win_dout;
@@ -184,8 +181,8 @@ module tb_pc9821_interleave_odd_vtotal;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg          grcg_we = 1'b0;
   reg  [7:0]   grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -199,9 +196,9 @@ module tb_pc9821_interleave_odd_vtotal;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),

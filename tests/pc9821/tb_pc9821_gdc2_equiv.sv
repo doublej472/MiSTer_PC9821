@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The graphics GDC's area rewrite (the draw engine's unit count held as leng-1 in 16 bits, the cursor advance summed in one adder) is cycle-for-cycle identical to the pre-rewrite module (pc9821_gdc2_ref.sv, the module as of 3b134fe4): over several hundred thousand clk_sys cycles of random well-formed and cut-short command streams on the 0xA0/0xA2 ports (SCROLL/TEXTW, SYNC, CSRW, CSRFORM, VECTW in all eight directions, MASK, every WRITE width and ROP, START/STOP, CSRR/LPEN read-back) against a randomly-stalling GVRAM visit port, with a raster that wraps and snapshots, and one 65,536-unit draw, every output (io_dout, the scanout address and enables, the draw engine's visit port) matches on every cycle.
+// The graphics GDC's area rewrite (the draw engine's unit count held as leng-1 in 16 bits, the cursor advance summed in one adder) is cycle-for-cycle identical to the pre-rewrite module (pc9821_gdc2_ref.sv, the module as of 3b134fe4, with the two changes the figure engine makes to what the WRITE slice shows mirrored into it: CSRW's third byte loads the mask with its dAD one-hot, and 0xA0 status bit 3 reads DRAWING): over several hundred thousand clk_sys cycles of random well-formed and cut-short command streams on the 0xA0/0xA2 ports (SCROLL/TEXTW, SYNC, CSRW, CSRFORM, VECTW in all eight directions, MASK, every WRITE width and ROP, START/STOP, CSRR/LPEN read-back, and random command bytes except the figure engine's ZOOM/GCHRD/FIGD, which the pre-rewrite module never had) against a randomly-stalling GVRAM visit port, with a raster that wraps and snapshots, and one 65,536-unit draw, on streams that leave each WRITE job to finish before their next byte (the shipped module queues a byte written during a walk in its command FIFO, which the pre-rewrite module did not have; tb_pc9821_gdc2_write CHECK 8 pins that order), every output (io_dout, the scanout address and enables, the draw engine's visit port) matches on every cycle.
 
 // ==== DUT ====
 // pc9821_gdc2 vs pc9821_gdc2_ref, same inputs. The reference is the pre-change text, not a model of
@@ -20,7 +20,7 @@ module tb_pc9821_gdc2_equiv;
   reg  [9:0] vline = 0;
   reg  [9:0] vtotal = 10'd440;
   reg  [5:0] m_vbp = 6'd25;
-  reg        display_page = 0, pegc_256 = 0, stat_blank = 0, stat_vsync = 0;
+  reg        display_page = 0, pegc_256 = 0, stat_blank = 0, stat_vsync = 0, gdc_5m = 0;
   reg        egc_mem_gate = 0, grcg_cg_gate = 0, access_page = 0;
   reg        mem_ready = 0, mem_resp = 0;
   reg [31:0] mem_rdata = 0;
@@ -36,7 +36,7 @@ module tb_pc9821_gdc2_equiv;
     .clk_sys(clk), .rst_n_sys(rst_n), .pixel_ce(pixel_ce),
     .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .io_dout(d_io_dout),
     .frame_end(frame_end), .cfg_snap(cfg_snap), .cfg_pending(cfg_pending), .vline(vline),
-    .vtotal(vtotal), .m_vbp(m_vbp), .display_page(display_page), .pegc_256(pegc_256),
+    .vtotal(vtotal), .m_vbp(m_vbp), .display_page(display_page), .pegc_256(pegc_256), .gdc_5m(gdc_5m),
     .stat_blank(stat_blank), .stat_vsync(stat_vsync),
     .gfx_line_addr(d_line), .gfx_walk_page(d_walk_page), .gfx_disp(d_disp),
     .gfx_win_off(d_win_off), .gfx_grph_on(d_grph_on),
@@ -48,7 +48,7 @@ module tb_pc9821_gdc2_equiv;
     .clk_sys(clk), .rst_n_sys(rst_n), .pixel_ce(pixel_ce),
     .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .io_dout(r_io_dout),
     .frame_end(frame_end), .cfg_snap(cfg_snap), .cfg_pending(cfg_pending), .vline(vline),
-    .vtotal(vtotal), .m_vbp(m_vbp), .display_page(display_page), .pegc_256(pegc_256),
+    .vtotal(vtotal), .m_vbp(m_vbp), .display_page(display_page), .pegc_256(pegc_256), .gdc_5m(gdc_5m),
     .stat_blank(stat_blank), .stat_vsync(stat_vsync),
     .gfx_line_addr(r_line), .gfx_walk_page(r_walk_page), .gfx_disp(r_disp),
     .gfx_win_off(r_win_off), .gfx_grph_on(r_grph_on),
@@ -96,7 +96,12 @@ module tb_pc9821_gdc2_equiv;
         4'd11: push(1, 8'hE0);
         4'd12: push(1, 8'hC0);
         4'd13: begin push(1, 8'h6B); end
-        4'd14: begin push(1, r8(0)); push(0, r8(0)); end   // anything at all
+        4'd14: begin   // anything at all - but the figure engine's commands (ZOOM 0x46, GCHRD
+          // 0x68, FIGD 0x6C), which the pre-rewrite module never had, become their no-op neighbours
+          k = r8(0);
+          if ((k == 8'h46) || (k == 8'h68) || (k == 8'h6C)) k = k ^ 1;
+          push(1, k[7:0]); push(0, r8(0));
+        end
         default: begin push(0, r8(0)); end
       endcase
     end
@@ -139,7 +144,7 @@ module tb_pc9821_gdc2_equiv;
       end
     end
     if (cycles % 20000 == 0) begin
-      cfg_pending <= rnd[0]; pegc_256 <= rnd[1]; display_page <= rnd[2];
+      cfg_pending <= rnd[0]; pegc_256 <= rnd[1]; display_page <= rnd[2]; gdc_5m <= rnd[3];
       m_vbp <= 6'd20 + rnd[8:5]; vtotal <= 10'd400 + {1'b0, rnd[17:9]} % 10'd100;
       stat_blank <= rnd[18]; stat_vsync <= rnd[19];
     end
@@ -148,10 +153,16 @@ module tb_pc9821_gdc2_equiv;
     access_page <= rnd[17];
     // the command port
     io_wr <= 0; io_rd <= 0;
+    // No byte while the shipped module's WRITE engine holds a job: the shipped module queues
+    // such bytes behind the draw in its command FIFO (the uPD7220's in-order execution), the
+    // pre-rewrite module parsed them at once, so the two are compared on streams that leave
+    // each WRITE to finish first; the in-order queueing itself is tb_pc9821_gdc2_write's CHECK 8.
     if (wait_n > 0) wait_n = wait_n - 1;
     else if (q_i < q_n) begin
-      io_wr <= 1; io_addr <= q_cmd[q_i] ? 8'hA2 : 8'hA0; io_din <= q_val[q_i];
-      q_i = q_i + 1; wait_n = rnd[22:20] % 4;
+      if ((dut.pend_valid === 1'b0) && (dut.d_state === 3'd0)) begin
+        io_wr <= 1; io_addr <= q_cmd[q_i] ? 8'hA2 : 8'hA0; io_din <= q_val[q_i];
+        q_i = q_i + 1; wait_n = rnd[22:20] % 4;
+      end
     end else begin
       if (rnd[25:23] == 0) begin io_rd <= 1; io_addr <= rnd[26] ? 8'hA2 : 8'hA0; end
       else if (rnd[25:23] < 3) begin io_addr <= rnd[26] ? 8'hA2 : 8'hA0; end

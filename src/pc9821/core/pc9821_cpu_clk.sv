@@ -11,7 +11,13 @@
 //     responder's one-cycle ready in a non-enabled cycle is HELD until the next enabled edge
 //     and the responder does not see `valid` again meanwhile (the accept latch below);
 //   - every pulse input held until the next enabled edge: resp_valid with its data (a FIFO,
-//     because the SDRAM burst cannot be back-pressured), and cache_flush;
+//     because the SDRAM burst cannot be back-pressured), cache_flush, and the DMA-side
+//     snoop_valid with its address (one-deep, back-pressured: the platform will not present
+//     a second DMA write while one waits - pc9821_system's dma_snoop_busy gate);
+//     the two pulse inputs this platform ties off are nmi (0 - a bare one-cycle pulse WOULD
+//     need a hold before it is connected, the CPU edge-detects it) and line_resp_valid (0 -
+//     beats are the response form here, and the 128-bit line_din would need its own
+//     registered hold, not the beat FIFO);
 //   - every one-CPU-cycle output pulse sampled under cpu_ce.
 // With cpu_ce constant 1 (setting 0, "Full") no latch is ever set and the FIFO is never
 // written, so every output equals its input: the bridge is a wire and the full-speed core is

@@ -53,6 +53,8 @@ module data_unit
     input  dec_entry_t  instr,
     input  dec_entry_t  next_instr,              // D2 instruction for setup lookahead
     input  logic [1:0]  op_size,
+    input  logic        op_size_is0,             // op_size == 0, registered beside it
+    input  logic        op_size_is1,             // op_size == 1, registered beside it
     input  logic [1:0]  srcreg_size,
     input  logic [1:0]  op_size_src,             // Source-mux operand size
     input  logic [1:0]  srcreg_size_src,          // Source-mux register size
@@ -77,6 +79,9 @@ module data_unit
     input  logic        load_pipe_flush,           // In-flight direct loads are dropped
     input  logic [2:0]  load_wb_dst,
     input  logic [1:0]  load_wb_size,
+    input  logic [7:0]  load_wb_wmask,             // load_wb_valid ? 8'h01 << load_wb_widx : 0, registered
+    input  logic [31:0] load_wb_view_hit,          // its forwarding-view hits per GPR byte, registered
+    input  logic        load_wb_ah,                 // its AH lane select (producer-3 pv3f), registered
     input  logic [31:0] load_wb_data,
     input  logic        load_wb_is_alu,          // Registered memory operand feeds shared ALU
     input  logic [4:0]  load_wb_alu_op,
@@ -88,6 +93,8 @@ module data_unit
 
     // Shorters (US5142635): bypasses around the register file
     input  gpr_forward_t dly_gpr_forward,        // RNI-delay GPR bypass
+    input  logic [31:0] dly_gpr_lanes,           // its GPR byte lanes [r*4 + b], registered
+    input  logic [7:0]  dly_gpr_onehot,          // 8'h01 << its dst, registered
     output logic [31:0] eflags_fwd,               // Current-cycle flag forwarding
     output logic        branch_condition_true,    // Selected forwarded Jcc condition
 
@@ -158,6 +165,7 @@ module data_unit
     output logic [31:0] shift_result,
     output logic [31:0] muldiv_result,
     output logic        div_overflow,
+    output logic        div_overflow_cond,
     output logic [31:0] alu_src,
     output logic [31:0] alu_src_hold,             // Registered ALU source operand
     output logic [31:0] source_value_live,        // Selected microcode source value
@@ -193,6 +201,10 @@ logic [1:0] recipe_memory_mode;      // Byte-low/high, word, or dword merge
 // forwarding stop. Suppressing such a write is safe by construction: a younger
 // write to the same bytes already made the older value architecturally dead.
 logic       recipe_memory_killed;
+logic [31:0] recipe_memory_hit_r;       // producer 1's merge hits, see mem_hit_of
+logic [31:0] recipe_shift_hit_r;        // producer 0's merge hits, see shift_hit_of
+logic [7:0]  recipe_shift_wmask_r;      // its pend_write_mask one-hot
+logic        recipe_shift_ah_r;         // its AH lane select, see shift_ah_of
 logic       recipe_shift_killed;
 assign dbg_recipe_mem_killed   = recipe_memory_killed;
 assign dbg_recipe_shift_killed = recipe_shift_killed;
@@ -209,6 +221,7 @@ end
 
 logic [31:0] shift_setup_result;
 logic [1:0]  shift_data_size;
+logic [1:0]  shift1_size;            // the shifter's captured SHIFT1 size
 logic        shift_count_nonzero;
 logic        shift_bit_test_cf;
 
@@ -313,9 +326,17 @@ wire [2:0] load_wb_widx = (load_wb_size == 2'd0)
 //                             commits land on
 // A plain load's WB value is already merged with its destination's prior
 // value; an M3 ALU result is not forwarded (its readers are interlocked).
-wire [7:0] pend_shift_mask = (recipe_shift_write.valid && !recipe_shift_killed)
-                           ? (8'h01 << recipe_shift_widx) : 8'h00;
-wire [7:0] pend_dly_mask   = dly_gpr_forward.valid ? (8'h01 << dly_gpr_forward.dst) : 8'h00;
+wire [7:0] pend_shift_mask = recipe_shift_wmask_r;   // registered, see shift_hit_of
+wire [7:0] pend_dly_mask   = dly_gpr_forward.valid ? dly_gpr_onehot : 8'h00;
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && dly_gpr_forward.valid &&
+        ((dly_gpr_onehot !== (8'h01 << dly_gpr_forward.dst)) ||
+         (dly_gpr_lanes !== ({28'h0, gpr_lanes_of_mode(dly_gpr_forward.mode)} <<
+                             {(dly_gpr_forward.mode <= EA_FWD_BHI) ? {1'b0, dly_gpr_forward.dst[1:0]}
+                                                                    : dly_gpr_forward.dst, 2'b00}))))
+        $fatal(1, "data_unit: the delay-slot lanes/one-hot disagree with its descriptor");
+// synthesis translate_on
 
 // Producer arbitration.  Every deferred or in-flight register producer is
 // merged once, in architectural age order, by gpr_write_merge, and both the
@@ -332,7 +353,7 @@ wire [7:0] pend_dly_mask   = dly_gpr_forward.valid ? (8'h01 << dly_gpr_forward.d
 //                             memory token's stale OPR_R
 //   capture view (direct-load base) the EX set plus the shift token and bypass
 wire [31:0] gpr_ex_view [0:7];
-wire [31:0] gpr_ea_view [0:7];
+wire [31:0] gpr_ea_view [0:7];       // the full EA view, left to the benches (see ea_sel_a/b)
 wire [31:0] gpr_capture_view [0:7];
 
 wire        pr_shift_valid = recipe_shift_write.valid && !recipe_shift_killed;
@@ -380,16 +401,34 @@ logic [255:0] pr_pulse_value, pr_pulse_wmask;
 wire [2:0]  load_capture_widx;
 wire [31:0] load_capture_base;
 wire [31:0] cap_src_value;
+wire [31:0] ea_base_sel_value;
+wire [31:0] ea_index_sel_value;
+// The EX view of the dynamically selected registers (gpr_merge ex_*): the
+// DSTREG and SRCREG registers and their byte-pair registers ({0, sel[1:0]},
+// whose bytes 0/1 are AL..BL / AH..BH), and the IRF register countr[2:0].
+wire [31:0] ex_dst_full, ex_dst_byte, ex_src_full, ex_src_byte, ex_irf_full;
+
+// gpr_write_merge's producer-2 (ROM slot) AH lane select: op_size_is0 is the
+// registered op_size == 0 decode (z486 op_size_dec_reg.v) and dst_reg_sel_r is
+// the registered destination, so pv2's size compare is already off the merge
+// cone.  A dedicated flop for the single AND
+// was rejected: op_size_du and dst_reg_sel_r are written on independent edges
+// (z486's i_issue/uc_exec and this module's instr_start), so one flop cannot
+// track both without a new port, and the remaining AND is one LUT.
+wire ah_rom = op_size_is0 && dst_reg_sel_r[2];
 
 gpr_write_merge gpr_merge (
     .cur({edi, esi, ebp, esp, ebx, edx, ecx, eax}),
 
     .v_shift(pr_shift_valid),
+    .hit_shift(recipe_shift_hit_r),
+    .ah_shift(recipe_shift_ah_r),
     .dst_shift(recipe_shift_write.dst),
     .size_shift(recipe_shift_write.size),
     .data_shift(recipe_shift_data),
 
     .v_mem(pr_mem_valid),
+    .hit_mem(recipe_memory_hit_r),
     .dst_mem(recipe_memory_write.dst),
     .mode_mem(recipe_memory_mode),
     .data_mem(opr_r),
@@ -397,6 +436,7 @@ gpr_write_merge gpr_merge (
     .v_rom(pr_rom_valid),
     .dst_rom(dst_reg_sel_r),
     .size_rom(op_size),
+    .ah_rom(ah_rom),
     .data_rom(opr_r),
 
     .v_wb(load_wb_valid),
@@ -407,8 +447,11 @@ gpr_write_merge gpr_merge (
     // The views forward producer 3 only when !load_wb_is_alu, where
     // load_wb_commit_data is load_wb_data: the M3 ALU stays off the views.
     .fwd_wb(load_wb_data),
+    .hitv3_wb(load_wb_view_hit),
+    .ah_wb(load_wb_ah),
 
     .v_dly(dly_gpr_forward.valid),
+    .lanes_dly(dly_gpr_lanes),
     .dst_dly(dly_gpr_forward.dst),
     .mode_dly(dly_gpr_forward.mode),
     .data_dly(dly_gpr_forward.data),
@@ -447,7 +490,25 @@ gpr_write_merge gpr_merge (
     .cap_sel_a(op_size == 2'd0 ? {1'b0, src_reg_sel_r[1:0]} : src_reg_sel_r),
     .cap_sel_b(load_capture_widx),
     .cap_a_value(cap_src_value),
-    .cap_b_value(load_capture_base)
+    .cap_b_value(load_capture_base),
+    // The D2 base and index reads each select ONE register first, so the
+    // full EA view (pr_ea_value) is left to the bench and synthesis drops it.
+    .ea_sel_a(ea_base.index),
+    .ea_sel_b(ea_index.index),
+    .ea_a_value(ea_base_sel_value),
+    .ea_b_value(ea_index_sel_value),
+    // The dynamic EX operand reads each select their register first (see
+    // read_gpr_fmt below): DSTREG full/byte-pair, SRCREG full/byte-pair, IRF.
+    .ex_sel_a(dst_reg_sel_r),
+    .ex_sel_b({1'b0, dst_reg_sel_r[1:0]}),
+    .ex_sel_c(src_reg_sel_r),
+    .ex_sel_d({1'b0, src_reg_sel_r[1:0]}),
+    .ex_sel_e(countr[2:0]),
+    .ex_a_value(ex_dst_full),
+    .ex_b_value(ex_dst_byte),
+    .ex_c_value(ex_src_full),
+    .ex_d_value(ex_src_byte),
+    .ex_e_value(ex_irf_full)
 );
 
 // synthesis translate_off
@@ -479,24 +540,6 @@ for (gv = 0; gv < 8; gv++) begin : g_view
 end
 endgenerate
 
-// An EX operand read, formatted to its size.
-function automatic logic [31:0] read_gpr_load_forwarded(
-    input logic [2:0] reg_sel,
-    input logic [1:0] size
-);
-    logic [31:0] merged;
-    begin
-        merged = gpr_ex_view[(size == 2'd0) ? {1'b0, reg_sel[1:0]} : reg_sel];
-        if (size == 2'd0)
-            read_gpr_load_forwarded = reg_sel[2] ? {24'd0, merged[15:8]}
-                                                 : {24'd0, merged[7:0]};
-        else if (size == 2'd1)
-            read_gpr_load_forwarded = {16'd0, merged[15:0]};
-        else
-            read_gpr_load_forwarded = merged;
-    end
-endfunction
-
 // The same read with the SIZE applied last: both register views are indexed by
 // reg_sel alone and the size only picks among the formatted results.  For the
 // shifter's operand the size is shift_data_size, a late, high-fan-out select
@@ -520,9 +563,92 @@ function automatic logic [31:0] read_gpr_load_forwarded_late(
     end
 endfunction
 
+// read_gpr_load_forwarded_late at op_size, with the size compares taken from
+// z486's registered decode (op_size_is0/is1 == op_size == 0/1 in every cycle):
+// the fitted op_size_du (fo ~400) -> Equal -> the shifter/ALU operand mux
+// paths lose the compare LUT and its routing hop. tests/equiv/
+// op_size_dec_reg.v proves the registered decode equal to the compare by
+// induction over z486's load edges; a translate_off fuse checks it every cycle.
+function automatic logic [31:0] read_gpr_load_forwarded_op(input logic [2:0] reg_sel);
+    logic [31:0] byte_src, full_src;
+    logic [7:0]  byte_val;
+    begin
+        byte_src = gpr_ex_view[{1'b0, reg_sel[1:0]}];
+        full_src = gpr_ex_view[reg_sel];
+        byte_val = reg_sel[2] ? byte_src[15:8] : byte_src[7:0];
+        read_gpr_load_forwarded_op = op_size_is0 ? {24'd0, byte_val} :
+                                     op_size_is1 ? {16'd0, full_src[15:0]} :
+                                                   full_src;
+    end
+endfunction
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && ((op_size_is0 !== (op_size == 2'd0)) || (op_size_is1 !== (op_size == 2'd1))))
+        $fatal(1, "data_unit: op_size decode %b%b disagrees with op_size %0d",
+               op_size_is0, op_size_is1, op_size);
+// synthesis translate_on
+
+// An EX operand read, formatted to its size: the read with the size applied
+// last (read_gpr_load_forwarded_late), for every caller. The sizes the callers
+// pass (op_size, op_size_src, srcreg_size_src, shift_data_size) are
+// high-fan-out registers and the shifter's size select; indexing the 8:1 view
+// by the size put them in FRONT of the view mux (the fitted op_size_du /
+// q_shift_use_captured_r -> data_size -> view index -> shifter ->
+// flags_value_r / sigma cone). tests/equiv/shift_src_late.v proves the
+// late form equal to the size-indexed one for every input.
+function automatic logic [31:0] read_gpr_load_forwarded(
+    input logic [2:0] reg_sel,
+    input logic [1:0] size
+);
+    read_gpr_load_forwarded = read_gpr_load_forwarded_late(reg_sel, size);
+endfunction
+
+// read_gpr_load_forwarded_late / _op for a register whose EX view was selected
+// first (gpr_merge ex_*): full = view[reg_sel], bsrc = view[{0, reg_sel[1:0]}],
+// hi = reg_sel[2].  The same format, so read_gpr_fmt(view[sel],
+// view[{0,sel[1:0]}], sel[2], size) == read_gpr_load_forwarded_late(sel, size)
+// (tests/equiv/ex_select_fmt.v; the selected values are fused against the view).
+function automatic logic [31:0] read_gpr_fmt(input logic [31:0] full, input logic [31:0] bsrc,
+                                             input logic hi, input logic [1:0] size);
+    logic [7:0] byte_val;
+    begin
+        byte_val = hi ? bsrc[15:8] : bsrc[7:0];
+        read_gpr_fmt = (size == 2'd0) ? {24'd0, byte_val} :
+                       (size == 2'd1) ? {16'd0, full[15:0]} :
+                                        full;
+    end
+endfunction
+function automatic logic [31:0] read_gpr_fmt_op(input logic [31:0] full, input logic [31:0] bsrc,
+                                                input logic hi);
+    logic [7:0] byte_val;
+    begin
+        byte_val = hi ? bsrc[15:8] : bsrc[7:0];
+        read_gpr_fmt_op = op_size_is0 ? {24'd0, byte_val} :
+                          op_size_is1 ? {16'd0, full[15:0]} :
+                                        full;
+    end
+endfunction
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && ((ex_dst_full !== gpr_ex_view[dst_reg_sel_r]) ||
+                    (ex_dst_byte !== gpr_ex_view[{1'b0, dst_reg_sel_r[1:0]}]) ||
+                    (ex_src_full !== gpr_ex_view[src_reg_sel_r]) ||
+                    (ex_src_byte !== gpr_ex_view[{1'b0, src_reg_sel_r[1:0]}]) ||
+                    (ex_irf_full !== gpr_ex_view[countr[2:0]])))
+        $fatal(1, "data_unit: a selected EX read disagrees with the EX view");
+// synthesis translate_on
+
+
 // Every late GPR write landing on this edge (any direct-load WB included).
-assign pend_write_mask = pend_dly_mask | pend_shift_mask |
-                         (load_wb_valid ? (8'h01 << load_wb_widx) : 8'h00);
+// The write-back's term is data_access's registered one-hot (loaded on the
+// edges load_wb_valid/dst/size are), so the size compare and the index decode
+// are not in front of the D2 split-EA wait and the issue decision.
+assign pend_write_mask = pend_dly_mask | pend_shift_mask | load_wb_wmask;
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && (load_wb_wmask !== (load_wb_valid ? (8'h01 << load_wb_widx) : 8'h00)))
+        $fatal(1, "data_unit: load_wb_wmask %b is not the write-back's one-hot", load_wb_wmask);
+// synthesis translate_on
 
 // A shift operand captured one cycle ahead (SHIFT2 SRCREG): a deferred shift
 // or delay-slot write landing on the capture edge must be seen, as for a
@@ -544,14 +670,6 @@ function automatic logic [31:0] read_gpr_capture(
         else
             read_gpr_capture = merged;
     end
-endfunction
-
-// A D2 base/index read.
-function automatic logic [31:0] read_ea_gpr(
-    input logic       valid,
-    input logic [2:0] idx
-);
-    read_ea_gpr = valid ? gpr_ea_view[idx] : 32'd0;
 endfunction
 
 // Every direct load captures its destination's prior value before cache data
@@ -641,8 +759,8 @@ function automatic logic [31:0] read_alu_source(input logic [5:0] field);
             (op_size == 2'd0 ? 32'd1 : op_size == 2'd1 ? 32'd2 : 32'd4);
         ALUSRC_BITS_V: read_alu_source = op_size == 2'd0 ? 32'd7 :
                                           op_size == 2'd2 ? 32'd31 : 32'd15;
-        ALUSRC_DSTREG: read_alu_source = read_gpr_load_forwarded(dst_reg_sel_r, op_size);
-        ALUSRC_SRCREG: read_alu_source = read_gpr_load_forwarded(src_reg_sel_r, op_size);
+        ALUSRC_DSTREG: read_alu_source = read_gpr_fmt_op(ex_dst_full, ex_dst_byte, dst_reg_sel_r[2]);
+        ALUSRC_SRCREG: read_alu_source = read_gpr_fmt_op(ex_src_full, ex_src_byte, src_reg_sel_r[2]);
         ALUSRC_ZERO: read_alu_source = 32'd0;
         default: read_alu_source = 32'd0;
     endcase
@@ -741,12 +859,14 @@ function automatic logic [31:0] read_factored_gpr_source(
             3'd0, op_size_src);
         SRC_eDX_AH: read_factored_gpr_source = read_gpr_load_forwarded(
             op_size_src == 2'd0 ? 3'd4 : 3'd2, op_size_src);
-        SRC_IRF: read_factored_gpr_source = read_gpr_load_forwarded(
-            countr[2:0], op_size_src == 2'd2 ? 2'd2 : 2'd1);
-        SRC_DSTREG: read_factored_gpr_source = read_gpr_load_forwarded(
-            dst_reg_sel_r, srcreg_size_src);
-        SRC_SRCREG: read_factored_gpr_source = read_gpr_load_forwarded(
-            src_reg_sel_r, op_size_src);
+        // The IRF read is a word or dword (never the byte arm), so the full
+        // register stands in for the byte-pair source.
+        SRC_IRF: read_factored_gpr_source = read_gpr_fmt(
+            ex_irf_full, ex_irf_full, countr[2], op_size_src == 2'd2 ? 2'd2 : 2'd1);
+        SRC_DSTREG: read_factored_gpr_source = read_gpr_fmt(
+            ex_dst_full, ex_dst_byte, dst_reg_sel_r[2], srcreg_size_src);
+        SRC_SRCREG: read_factored_gpr_source = read_gpr_fmt(
+            ex_src_full, ex_src_byte, src_reg_sel_r[2], op_size_src);
         default: read_factored_gpr_source = 32'd0;
     endcase
 endfunction
@@ -820,8 +940,8 @@ function automatic logic [31:0] read_memory_write_source(input logic [5:0] field
                 default: read_memory_write_source = 32'd0;
             endcase
         end
-        SRC_IRF: read_memory_write_source = read_gpr_load_forwarded(
-            countr[2:0], op_size_src == 2'd2 ? 2'd2 : 2'd1);
+        SRC_IRF: read_memory_write_source = read_gpr_fmt(
+            ex_irf_full, ex_irf_full, countr[2], op_size_src == 2'd2 ? 2'd2 : 2'd1);
         default: read_memory_write_source = 32'd0;
     endcase
 endfunction
@@ -844,8 +964,8 @@ always_comb begin
                                                      source_value_live);
     protection_source_low16_nonzero = |protection_source_value[15:0];
     cs_source_value = read_cs_source(source_live, source_value_live);
-    ea_base_value = read_ea_gpr(ea_base.valid, ea_base.index);
-    ea_index_value = read_ea_gpr(ea_index.valid, ea_index.index);
+    ea_base_value = ea_base.valid ? ea_base_sel_value : 32'd0;
+    ea_index_value = ea_index.valid ? ea_index_sel_value : 32'd0;
 end
 
 // synthesis translate_off
@@ -983,6 +1103,102 @@ endtask
 
 // A younger producer writing the same bytes as a still-valid deferred token
 // retires the token's commit (and its forwarding) for the rest of the stall.
+function automatic [3:0] gpr_lanes_of_mode(input [1:0] mode);
+    gpr_lanes_of_mode = (mode == EA_FWD_BLO) ? 4'h1 : (mode == EA_FWD_BHI) ? 4'h2 :
+                        (mode == EA_FWD_W)   ? 4'h3 : 4'hF;
+endfunction
+// The memory token's (producer 1's) merge hit per GPR byte [r*4 + b]:
+// (recipe_memory_write.valid && !recipe_memory_killed) ? its lanes at register
+// dst_norm(1) : 0, registered on the edges those registers change so the
+// valid/killed AND and the register/lane decode are not in front of the
+// views (C4x: recipe_memory_killed -> hit1 -> ex_value). Loaded with the
+// token at pipeline_advance, cleared by the kill events below, held
+// otherwise; tests/equiv/mem_hit_reg.v proves it equal every cycle.
+function automatic [31:0] mem_hit_of(input [2:0] dst, input [1:0] mode);
+    logic [2:0] r;
+    logic [3:0] be;
+    begin
+        r  = ((mode == EA_FWD_BLO) || (mode == EA_FWD_BHI)) ? {1'b0, dst[1:0]} : dst;
+        be = (mode == EA_FWD_BLO) ? 4'h1 : (mode == EA_FWD_BHI) ? 4'h2 :
+             (mode == EA_FWD_W)   ? 4'h3 : 4'hF;
+        mem_hit_of = {28'h0, be} << {r, 2'b00};
+    end
+endfunction
+wire [1:0] recipe_memory_mode_next = (op_size == 2'd0)
+                                   ? (dst_reg_sel_r[2] ? EA_FWD_BHI : EA_FWD_BLO)
+                                   : (op_size == 2'd1 ? EA_FWD_W : EA_FWD_D);
+wire       recipe_memory_kill = (load_wb_valid && !recipe_commit_cancel &&
+                                 recipe_memory_dst_onehot[load_wb_widx]) || opr_fast_commit;
+always_ff @(posedge clk) begin
+    if (!reset_n)
+        recipe_memory_hit_r <= 32'h0;
+    else if (pipeline_advance)
+        recipe_memory_hit_r <= (recipe_rni && exec && instr_start && !recipe_commit_cancel &&
+                                (recipe_state.commit_sel == RECIPE_COMMIT_MEM))
+                             ? mem_hit_of(dst_reg_sel_r, recipe_memory_mode_next) : 32'h0;
+    else if (recipe_memory_kill)
+        recipe_memory_hit_r <= 32'h0;
+end
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && (recipe_memory_hit_r !==
+                    (pr_mem_valid ? mem_hit_of(recipe_memory_write.dst, recipe_memory_mode) : 32'h0)))
+        $fatal(1, "data_unit: memory-token hits %h disagree with the token", recipe_memory_hit_r);
+// synthesis translate_on
+
+// The same for the deferred shift (producer 0): its merge hits per GPR byte
+// and its pend_write_mask one-hot, (recipe_shift_write.valid &&
+// !recipe_shift_killed) ? ... : 0, registered on the edges those registers
+// change (tests/equiv/shift_hit_reg.v).
+function automatic [31:0] shift_hit_of(input [2:0] dst, input [1:0] size);
+    logic [2:0] r;
+    logic [3:0] be;
+    begin
+        r  = (size == 2'd0) ? {1'b0, dst[1:0]} : dst;
+        be = (size == 2'd0) ? (dst[2] ? 4'h2 : 4'h1) : (size == 2'd1) ? 4'h3 : 4'hF;
+        shift_hit_of = {28'h0, be} << {r, 2'b00};
+    end
+endfunction
+// Producer 0's AH lane select (gpr_write_merge lane_of's `ah`): the shift
+// token's lane 1 is data[7:0] for a byte write to AH.
+function automatic logic shift_ah_of(input logic [2:0] dst, input logic [1:0] size);
+    shift_ah_of = (size == 2'd0) && dst[2];
+endfunction
+wire       recipe_shift_kill = load_wb_valid && !recipe_commit_cancel &&
+                               (recipe_shift_widx == load_wb_widx);
+wire       recipe_shift_load = recipe_rni && exec && !recipe_commit_cancel &&
+                               (recipe_state.commit_sel == RECIPE_COMMIT_SHIFT);
+always_ff @(posedge clk) begin
+    if (!reset_n) begin
+        recipe_shift_hit_r   <= 32'h0;
+        recipe_shift_wmask_r <= 8'h0;
+        recipe_shift_ah_r    <= 1'b0;
+    end else if (pipeline_advance) begin
+        recipe_shift_hit_r   <= recipe_shift_load ? shift_hit_of(dst_reg_sel_r, op_size) : 32'h0;
+        recipe_shift_wmask_r <= recipe_shift_load
+                              ? (8'h01 << ((op_size == 2'd0) ? {1'b0, dst_reg_sel_r[1:0]}
+                                                             : dst_reg_sel_r))
+                              : 8'h0;
+        recipe_shift_ah_r    <= recipe_shift_load ? shift_ah_of(dst_reg_sel_r, op_size) : 1'b0;
+    end else if (recipe_shift_kill) begin
+        recipe_shift_hit_r   <= 32'h0;
+        recipe_shift_wmask_r <= 8'h0;
+        recipe_shift_ah_r    <= 1'b0;
+    end
+end
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && ((recipe_shift_hit_r !==
+                     (pr_shift_valid ? shift_hit_of(recipe_shift_write.dst, recipe_shift_write.size) : 32'h0)) ||
+                    (recipe_shift_wmask_r !==
+                     (pr_shift_valid ? (8'h01 << recipe_shift_widx) : 8'h00)) ||
+                    (recipe_shift_ah_r !==
+                     (pr_shift_valid
+                      ? shift_ah_of(recipe_shift_write.dst, recipe_shift_write.size) : 1'b0))))
+        $fatal(1, "data_unit: shift-token hits %h / mask %b / AH %b disagree with the token",
+               recipe_shift_hit_r, recipe_shift_wmask_r, recipe_shift_ah_r);
+// synthesis translate_on
+
 // opr_fast_commit needs no destination: once OPR_R is replaced, the token's
 // only data source is gone, so any later recommit would write foreign data.
 always_ff @(posedge clk) begin
@@ -990,11 +1206,9 @@ always_ff @(posedge clk) begin
         recipe_memory_killed <= 1'b0;
         recipe_shift_killed <= 1'b0;
     end else if (!pipeline_advance) begin
-        if ((load_wb_valid && !recipe_commit_cancel &&
-             recipe_memory_dst_onehot[load_wb_widx]) || opr_fast_commit)
+        if (recipe_memory_kill)
             recipe_memory_killed <= 1'b1;
-        if (load_wb_valid && !recipe_commit_cancel &&
-            (recipe_shift_widx == load_wb_widx))
+        if (recipe_shift_kill)
             recipe_shift_killed <= 1'b1;
     end else begin
         recipe_memory_killed <= 1'b0;
@@ -1081,13 +1295,10 @@ always_ff @(posedge clk) begin
             recipe_memory_dst_onehot <= 8'b1 << ((op_size == 2'd0)
                                                ? {1'b0, dst_reg_sel_r[1:0]}
                                                : dst_reg_sel_r);
-            recipe_memory_mode <= (op_size == 2'd0)
-                                ? (dst_reg_sel_r[2] ? EA_FWD_BHI : EA_FWD_BLO)
-                                : (op_size == 2'd1 ? EA_FWD_W : EA_FWD_D);
+            recipe_memory_mode <= recipe_memory_mode_next;
         end
 
-        recipe_shift_write.valid <= recipe_rni && exec && !recipe_commit_cancel &&
-                                  (recipe_state.commit_sel == RECIPE_COMMIT_SHIFT);
+        recipe_shift_write.valid <= recipe_shift_load;
         if (recipe_rni && exec &&
             (recipe_state.commit_sel == RECIPE_COMMIT_SHIFT)) begin
             recipe_shift_write.dst <= dst_reg_sel_r;
@@ -1161,6 +1372,63 @@ always_ff @(posedge clk) begin
 end
 // synthesis translate_on
 
+// The microcode destination's architectural register write, decoded once into
+// one register selector, size and value so the register file has a single
+// write port to merge (a destination names at most one register).
+logic        gpr_wr_en;
+logic [2:0]  gpr_wr_sel;
+logic [1:0]  gpr_wr_size;
+logic [31:0] gpr_wr_data;
+always_comb begin
+    gpr_wr_en   = 1'b1;
+    gpr_wr_sel  = 3'd0;
+    gpr_wr_size = 2'd2;
+    gpr_wr_data = dest_value;
+    case (dest)
+        DEST_EAX:    gpr_wr_sel = 3'd0;
+        DEST_EDX:    gpr_wr_sel = 3'd2;
+        DEST_ESP:    gpr_wr_sel = 3'd4;
+        DEST_eSP: begin
+            gpr_wr_sel = 3'd4;
+            if (!(pe && stack32))
+                gpr_wr_size = 2'd1;
+        end
+        DEST_EBP:    gpr_wr_sel = 3'd5;
+        DEST_DSTREG: begin gpr_wr_sel = dst_reg_sel_r; gpr_wr_size = op_size; end
+        DEST_SRCREG: begin gpr_wr_sel = src_reg_sel_r; gpr_wr_size = op_size; end
+        DEST_AX:     begin gpr_wr_sel = 3'd0; gpr_wr_size = 2'd1; end
+        DEST_BP:     begin gpr_wr_sel = 3'd5; gpr_wr_size = 2'd1; end
+        DEST_eAX_AL: begin gpr_wr_sel = 3'd0; gpr_wr_size = op_size; end
+        DEST_eDX_AH: begin gpr_wr_sel = (op_size == 2'd0) ? 3'd4 : 3'd2;
+                           gpr_wr_size = op_size; end
+        DEST_eCX:    begin gpr_wr_sel = 3'd1; gpr_wr_size = instr.addr32 ? 2'd2 : 2'd1; end
+        DEST_eSI:    begin gpr_wr_sel = 3'd6; gpr_wr_size = instr.addr32 ? 2'd2 : 2'd1; end
+        DEST_eDI:    begin gpr_wr_sel = 3'd7; gpr_wr_size = instr.addr32 ? 2'd2 : 2'd1; end
+        DEST_AL:     begin gpr_wr_sel = 3'd0; gpr_wr_size = 2'd0; end
+        DEST_AH:     begin gpr_wr_sel = 3'd4; gpr_wr_size = 2'd0; end
+        DEST_USTEP_BSWAP: begin
+            gpr_wr_sel  = src_reg_sel_r;
+            gpr_wr_data = {dest_value[7:0], dest_value[15:8],
+                           dest_value[23:16], dest_value[31:24]};
+        end
+        // The ALU result lands in the recipe's destination register.
+        DEST_USTEP_ALU: begin
+            gpr_wr_en   = recipe_state.hardwired && !recipe_commit_cancel;
+            gpr_wr_sel  = dst_reg_sel_r;
+            gpr_wr_size = op_size;
+            gpr_wr_data = alu_result;
+        end
+        // POPA/POPAD discard the popped ESP slot (their eSP words set the
+        // pointer); a task switch's IRF loads do write ESP.
+        DEST_IRF: begin
+            gpr_wr_en   = irf_writes_gpr(countr, instr.has_0f, instr.opcode);
+            gpr_wr_sel  = countr[2:0];
+            gpr_wr_size = is_dword ? 2'd2 : 2'd1;
+        end
+        default:     gpr_wr_en = 1'b0;
+    endcase
+end
+
 // All GPR producers retain their original ordering. Later assignments are
 // younger and therefore win when two producers target the same register.
 always_ff @(posedge clk) begin
@@ -1182,48 +1450,8 @@ always_ff @(posedge clk) begin
             commit_merged(pr_commit_value, pr_commit_wmask);
 
         if (exec) begin
-            case (dest)
-                DEST_EAX: eax <= dest_value;
-                DEST_EDX: edx <= dest_value;
-                DEST_ESP: esp <= dest_value;
-                DEST_eSP:
-                    if (pe && stack32)
-                        esp <= dest_value;
-                    else
-                        esp[15:0] <= dest_value[15:0];
-                DEST_EBP: ebp <= dest_value;
-
-                DEST_DSTREG: write_gpr(dst_reg_sel_r, dest_value, op_size);
-                DEST_SRCREG: write_gpr(src_reg_sel_r, dest_value, op_size);
-                DEST_AX:     write_gpr(3'd0, dest_value, 2'd1);
-                DEST_BP:     write_gpr(3'd5, dest_value, 2'd1);
-                DEST_eAX_AL: write_gpr(3'd0, dest_value, op_size);
-                DEST_eDX_AH: write_gpr(op_size == 2'd0 ? 3'd4 : 3'd2,
-                                       dest_value, op_size);
-                DEST_eCX: write_gpr(3'd1, dest_value, instr.addr32 ? 2'd2 : 2'd1);
-                DEST_eSI: write_gpr(3'd6, dest_value, instr.addr32 ? 2'd2 : 2'd1);
-                DEST_eDI: write_gpr(3'd7, dest_value, instr.addr32 ? 2'd2 : 2'd1);
-                DEST_AL:  write_gpr(3'd0, dest_value, 2'd0);
-                DEST_AH:  write_gpr(3'd4, dest_value, 2'd0);
-
-                DEST_USTEP_BSWAP:
-                    write_gpr(src_reg_sel_r,
-                              {dest_value[7:0], dest_value[15:8],
-                               dest_value[23:16], dest_value[31:24]}, 2'd2);
-
-                DEST_USTEP_ALU:
-                    if (recipe_state.hardwired &&
-                        !recipe_commit_cancel)
-                        write_gpr(dst_reg_sel_r, alu_result, op_size);
-
-                // POPA/POPAD discard the popped ESP slot (their eSP words set
-                // the pointer); a task switch's IRF loads do write ESP.
-                DEST_IRF:
-                    if (irf_writes_gpr(countr, instr.has_0f, instr.opcode))
-                        write_gpr(countr[2:0], dest_value,
-                                  is_dword ? 2'd2 : 2'd1);
-                default: ;
-            endcase
+            if (gpr_wr_en)
+                write_gpr(gpr_wr_sel, gpr_wr_data, gpr_wr_size);
 
             // REP STOS records its restartable count only after the element
             // store has cleared DLY. The loop can then bypass its redundant
@@ -1263,23 +1491,20 @@ wire flag2_sf = flag2_size_r == 2'd0 ? flag2_result_r[7] :
                                             flag2_result_r[31];
 wire flag2_pf = ~^flag2_result_r[7:0];
 
+// A push or pop moves ESP by the operand size, down or up.
+wire [31:0] stack_step = stack_dir ? {29'd0, stack_data32, ~stack_data32, 1'b0}
+                                   : {29'h1FFF_FFFF, stack_data32 ? 2'b10 : 2'b11, 1'b0};
+wire [31:0] stack_sum = forwarded_esp + stack_step;
+
 always_ff @(posedge clk) begin
     if (!reset_n) begin
         sigma <= 32'd0;
     end else begin
         if (instr_start && stack_op) begin
-            logic [31:0] stack_delta;
-            logic [15:0] new_sp;
-
-            stack_delta = stack_data32 ? 32'd4 : 32'd2;
-            if (stack32) begin
-                sigma <= stack_dir ? forwarded_esp + stack_delta
-                                   : forwarded_esp - stack_delta;
-            end else begin
-                new_sp = stack_dir ? forwarded_esp[15:0] + stack_delta[15:0]
-                                   : forwarded_esp[15:0] - stack_delta[15:0];
-                sigma <= {forwarded_esp[31:16], new_sp};
-            end
+            // ESP +/- the operand size as one signed add: the low 16 bits of the
+            // 32-bit sum are the 16-bit stack pointer's wrapped result, so a
+            // 16-bit stack only keeps the upper half of ESP.
+            sigma <= stack32 ? stack_sum : {forwarded_esp[31:16], stack_sum[15:0]};
         end else if (gate_detect) begin
             sigma <= {16'd0, tmpc[31:16]};
         end else if (exec) begin
@@ -1530,6 +1755,7 @@ always_ff @(posedge clk) begin
                 ALUJMP_SHIFT: ;
                 ALUJMP_USTEP_AAD_SHIFT: eflags[0] <= 1'b0;
                 ALUJMP_SZ_EX2,
+                ALUJMP_USTEP_IMUL_FLAGS,
                 ALUJMP_IMCS: begin
                     eflags[0]  <= muldiv_flag_overflow;
                     eflags[11] <= muldiv_flag_overflow;
@@ -1828,9 +2054,11 @@ shifter shifter_inst (
     .op_size(op_size),
     .alu_dst(alu_dst),
     .alu_src(alu_src),
-    .gpr_src_op_size(read_gpr_load_forwarded(src_reg_sel_r, op_size)),
-    .gpr_dst_shift_size(read_gpr_load_forwarded_late(dst_reg_sel_r, shift_data_size)),
-    .gpr_src_shift_size(read_gpr_load_forwarded(src_reg_sel_r, shift_data_size)),
+    .gpr_src_op_size(read_gpr_fmt_op(ex_src_full, ex_src_byte, src_reg_sel_r[2])),
+    .gpr_dst_op_size(read_gpr_fmt_op(ex_dst_full, ex_dst_byte, dst_reg_sel_r[2])),
+    .gpr_dst_s1_size(read_gpr_fmt(ex_dst_full, ex_dst_byte, dst_reg_sel_r[2], shift1_size)),
+    .gpr_src_s1_size(read_gpr_fmt(ex_src_full, ex_src_byte, src_reg_sel_r[2], shift1_size)),
+    .shift1_size_o(shift1_size),
     .immediate(instr.immediate),
     .ecx(read_gpr_load_forwarded(3'd1, 2'd2)),
     .sigma(sigma),
@@ -1869,6 +2097,8 @@ mul_div mul_div_inst (
     .tmpb(tmpb),
     .tmpd(tmpd),
     .dest_value(dest_value),
+    .gate_detect(gate_detect),
+    .desc_raw_hi(desc_raw_hi),
     .result(muldiv_result),
     .sigma_write(muldiv_sigma_write),
     .sigma_value(muldiv_sigma_value),
@@ -1876,6 +2106,7 @@ mul_div mul_div_inst (
     .tmpb_value(muldiv_tmpb_value),
     .counter_early_exit(muldiv_counter_early_exit),
     .div_overflow(div_overflow),
+    .div_overflow_cond(div_overflow_cond),
     .div_quotient_zero(muldiv_quotient_zero),
     .div_flags(muldiv_div_flags),
     .mul_flag_overflow(muldiv_flag_overflow)

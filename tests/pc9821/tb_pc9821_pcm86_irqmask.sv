@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The 86-PCM block's irq WIRE is NP2kai's interrupt QUERY, not the raw latched flag: with the IRQ enable (0xA468 bit 5) clear the wire is LOW even while the pending flag is latched, because pcm86gen_intrq returns FALSE the moment !(fifo & 0x20) (sound/pcm86c.c:472-475) and 0xA468 bit 4's read is that same query (cbus/pcm86io.c:299-308). The reported defect sequence is asserted exactly: a pending interrupt, then a 0xA468 write of 0x90 (bit 5 clear, bit 4 SET so the latch survives, cbus/pcm86io.c:114-121), drops the wire low for the whole masked window while bit 4 reads 0 as before; and the re-enable (0xB0) brings the query TRUE again off the still-latched flag (sound/pcm86c.c:476-479), so the wire produces ONE FRESH RISING EDGE - which is what the core's edge-latched PIC needs (ir_set = ir_in & ~ir_prev, pc9821_pic.sv:121) and what a wire driven by the latched flag alone cannot do (it stays high through the mask and eats the re-enable's edge). The enable-gate AND (latched flag OR live fifo level) shape is NP2kai's query exactly (pcm86gen_intrq, sound/pcm86c.c:465-490). FAIL-FIRST: IRQMASK_WIRE_FOLLOWS_QUERY_WHILE_MASKED and the IRQMASK_REENABLE_* checks fail against the pre-fix wire. When the query is genuinely FALSE on both sides (flag cleared above the threshold, cbus/pcm86io.c:114-126) a mask/unmask pair must produce NO edge (IRQMASK_NO_EDGE_WHEN_QUERY_FALSE). And the live-level half must raise the wire with NO arming write: with irq_arm consumed by one fire and the flag cleared, a threshold raise (not a data write) must raise the wire EXACTLY once off the live level alone (IRQMASK_NOARM_LIVE_LEVEL_*; FAIL-FIRST: the pre-fix flag-only wire has no source for that edge and produces zero), while the latched flag alone holds the wire when the level goes false again (sound/pcm86c.c:476-479).
+// The 86-PCM block's irq WIRE is NP2kai's interrupt QUERY, not the raw latched flag: with the IRQ enable (0xA468 bit 5) clear the wire is LOW even while the pending flag is latched, because pcm86gen_intrq returns FALSE the moment !(fifo & 0x20) (sound/pcm86c.c:472-475) and 0xA468 bit 4's read is that same query (cbus/pcm86io.c:299-308). The reported defect sequence is asserted exactly: a pending interrupt, then a 0xA468 write of 0x90 (bit 5 clear, bit 4 SET so the latch survives, cbus/pcm86io.c:114-121), drops the wire low for the whole masked window while bit 4 reads 0 as before; and the re-enable (0xB0) brings the query TRUE again off the still-latched flag (sound/pcm86c.c:476-479), so the wire produces ONE FRESH RISING EDGE - which is what the core's edge-latched PIC needs (ir_set = ir_in & ~ir_prev, pc9821_pic.sv:168) and what a wire driven by the latched flag alone cannot do (it stays high through the mask and eats the re-enable's edge). The enable-gate AND (latched flag OR live fifo level) shape is NP2kai's query exactly (pcm86gen_intrq, sound/pcm86c.c:465-490). FAIL-FIRST: IRQMASK_WIRE_FOLLOWS_QUERY_WHILE_MASKED and the IRQMASK_REENABLE_* checks fail against the pre-fix wire. When the query is genuinely FALSE on both sides (flag cleared above the threshold, cbus/pcm86io.c:114-126) a mask/unmask pair must produce NO edge (IRQMASK_NO_EDGE_WHEN_QUERY_FALSE). And the live-level half must raise the wire with NO arming write: with irq_arm consumed by one fire and the flag cleared, a threshold raise (not a data write) must raise the wire EXACTLY once off the live level alone (IRQMASK_NOARM_LIVE_LEVEL_*; FAIL-FIRST: the pre-fix flag-only wire has no source for that edge and produces zero), while the latched flag alone holds the wire when the level goes false again (sound/pcm86c.c:476-479).
 //
 // The 86-PCM block's irq WIRE is NP2kai's interrupt QUERY, not the raw latched
 // flag: with the IRQ enable (0xA468 bit 5) clear the wire is LOW even while the
@@ -14,7 +14,7 @@
 // (0xB0) brings the query TRUE again off the still-latched flag
 // (sound/pcm86c.c:476-479), so the wire produces ONE FRESH RISING EDGE - which
 // is what the core's edge-latched PIC needs (ir_set = ir_in & ~ir_prev,
-// pc9821_pic.sv:121) and what a wire driven by the latched flag alone cannot
+// pc9821_pic.sv:168) and what a wire driven by the latched flag alone cannot
 // do (it stays high through the mask and eats the re-enable's edge). The
 // enable-gate AND (latched flag OR live fifo level) shape is NP2kai's query
 // exactly (pcm86gen_intrq, sound/pcm86c.c:465-490). FAIL-FIRST:
@@ -111,7 +111,7 @@ module tb_pc9821_pcm86_irqmask;
   endtask
 
   // ---- the IRQ wire monitor -----------------------------------------------
-  // The wire is the interrupt the edge-latched PIC consumes (pc9821_pic.sv:121
+  // The wire is the interrupt the edge-latched PIC consumes (pc9821_pic.sv:168
   // ir_set = ir_in & ~ir_prev), so the bench counts RISING EDGES, falling
   // edges, and high cycles inside a stimulus-opened mask window. The
   // discipline that keeps both sides race-free: this monitor acts ONLY at
@@ -203,7 +203,7 @@ module tb_pc9821_pcm86_irqmask;
     // holds (sound/pcm86c.c:476-479 answers TRUE off pcm86->irqflag), so the
     // query goes TRUE AGAIN - the wire must produce exactly ONE fresh rising
     // edge. The edge-latched PIC needs that edge (ir_set = ir_in & ~ir_prev,
-    // pc9821_pic.sv:121): a wire stuck high through the mask makes the
+    // pc9821_pic.sv:168): a wire stuck high through the mask makes the
     // re-enable invisible to the interrupt controller.
     wr(P_FIFO, 8'hB0);                     // re-enable, latch kept
     if (irq !== 1'b1)

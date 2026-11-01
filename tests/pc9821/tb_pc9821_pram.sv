@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PRAM:
-// The PC-9821's battery-backed BIOS settings store -- the two-bank software-DIP switch at 0x841E-0x8F1E with its 0x8F1F address/control latch -- against NP2kai's io/dipsw.c and qemu-pc98, with the machine's own captures deciding where they disagree (docs/probes/PORTS.TXT's read-only sweep and docs/probes/RDBACK.TXT:162, the one write-then-read round): the power-up image is the measured bank A, the latch selects bank A (the twelve data ports 0x841E-0x8F1E) or bank B (12..23, off by +12 and not +16), a write stores the guest byte verbatim except 0x84's bit 1 (the one unmeasured strap) - the bench used to MASK each register's PARITY bit too and was inverted here on the machine's evidence, because the firmware writes those bits (BANK3@0xFA219's parity idiom; the ITF's `or al,0x80 / out 0x8E1E`) and the ITF's repair installs its factory tables BANK4@0x480C/0x4818 through these ports, so a frozen parity bit composed its 0x7F over the machine image 0xBF into an EVEN 0xFF - the SET THE SOFTWARE DIP-SWITCH loop (the Xa7C9W capture holds the factory 0x7F at that cell; NP2kai's write mask is OVERRULED by the machine, same adjudication as the read side; the falsifier is probe2 /RDBACK at 0x8B1E/0x881E on the machine), a READ RETURNS THE STORED BYTE VERBATIM (the machine reads back the EVEN-parity 0x0C it wrote at 0x871E, `port=871E before=3E wrote=0C after=0C back=3E`, and qemu-pc98's pc98_sdip_read/pc98_sdip_write store and return it verbatim too, so the capture and qemu agree against NP2kai's odd-parity recompute on read), the authentic ITF's own read-back verifier passes, the MACHINE-RESET strobe RE-SEEDS the store to the power-up image (lane dip-reset-seed: before the change there was no reset path at all and a platform reset left whatever the previous run had written, which is the state the owner reported as the software-DIP message coming back; a guest SETUP change therefore does not survive a platform reset any more, where the machine's own battery-backed store would keep it - the deliberate divergence item 94 records), and the ports outside 0x841E-0x8F1E answer open bus. NP2kai's FOUR divergent behaviours on this store -- it treats 0x871E/0x8E1E as PC-9801 control ports, it recomputes an odd-parity bit on every read, it refuses a write whose byte is not already odd-parity, and it masks each register's parity bit on write -- are printed as WAIVED lines rather than asserted, because the machine's own capture reads 0x871E=0x3E and 0x8E1E=0x49 as stored bytes and returns an even-parity write verbatim, which resolves all four for this RTL. And the ITF's own REPAIR is replayed byte for byte (BANK4@0xFC7B2-0xFC8DE: the factory tables out the ports, 0x8B's bit 6 saved and ORed back) and must leave an image the ITF's own predicate accepts and that a second repair cannot move - FAIL-FIRST, because with the old frozen parity bits the install composed EVEN 0x5C/0xFF at 0x881E/0x8B1E over the machine image and the message loop formed.
+// The PC-9821's battery-backed BIOS settings store -- the two-bank software-DIP switch at 0x841E-0x8F1E with its 0x8F1F address/control latch -- against NP2kai's io/dipsw.c and qemu-pc98, with the machine's own captures deciding where they disagree (docs/probes/PORTS.TXT's read-only sweep and docs/probes/RDBACK.TXT:162, the one write-then-read round): the power-up image is the measured bank A, the latch selects bank A (the twelve data ports 0x841E-0x8F1E) or bank B (12..23, off by +12 and not +16), a write stores the guest byte verbatim except 0x84's bit 1 (the one unmeasured strap) - the bench used to MASK each register's PARITY bit too and was inverted here on the machine's evidence, because the firmware writes those bits (BANK3@0xFA219's parity idiom; the ITF's `or al,0x80 / out 0x8E1E`) and the ITF's repair installs its factory tables BANK4@0x480C/0x4818 through these ports, so a frozen parity bit composed its 0x7F over the machine image 0xBF into an EVEN 0xFF - the SET THE SOFTWARE DIP-SWITCH loop (the Xa7C9W capture holds the factory 0x7F at that cell; NP2kai's write mask is OVERRULED by the machine, same adjudication as the read side; the falsifier is probe2 /RDBACK at 0x8B1E/0x881E on the machine), a READ RETURNS THE STORED BYTE VERBATIM (the machine reads back the EVEN-parity 0x0C it wrote at 0x871E, `port=871E before=3E wrote=0C after=0C back=3E`, and qemu-pc98's pc98_sdip_read/pc98_sdip_write store and return it verbatim too, so the capture and qemu agree against NP2kai's odd-parity recompute on read), the authentic ITF's own read-back verifier passes, the MACHINE-RESET strobe RE-SEEDS the store to the power-up image (without a reset path a platform reset leaves whatever the previous run had written, which brings the software-DIP message back; a guest SETUP change therefore does not survive a platform reset any more, where the machine's own battery-backed store would keep it - the deliberate divergence item 94 records), and the ports outside 0x841E-0x8F1E answer open bus. NP2kai's FOUR divergent behaviours on this store -- it treats 0x871E/0x8E1E as PC-9801 control ports, it recomputes an odd-parity bit on every read, it refuses a write whose byte is not already odd-parity, and it masks each register's parity bit on write -- are printed as WAIVED lines rather than asserted, because the machine's own capture reads 0x871E=0x3E and 0x8E1E=0x49 as stored bytes and returns an even-parity write verbatim, which resolves all four for this RTL. And the ITF's own REPAIR is replayed byte for byte (BANK4@0xFC7B2-0xFC8DE: the factory tables out the ports, 0x8B's bit 6 saved and ORed back) and must leave an image the ITF's own predicate accepts and that a second repair cannot move - FAIL-FIRST, because with the old frozen parity bits the install composed EVEN 0x5C/0xFF at 0x881E/0x8B1E over the machine image and the message loop formed.
 
 module tb_pc9821_pram;
   reg clk = 0;
@@ -41,6 +41,7 @@ module tb_pc9821_pram;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -74,6 +75,7 @@ module tb_pc9821_pram;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -94,8 +96,14 @@ module tb_pc9821_pram;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -111,6 +119,11 @@ module tb_pc9821_pram;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -362,7 +375,7 @@ module tb_pc9821_pram;
     // ---- 3. read/write and the VERBATIM read -------------------------------
     // For each of the twelve bank A ports, drive a value into the writable bits
     // and require the read to be the STORED byte: the straps keep their power-up
-    // values and nothing is recomputed on the way out (audit-iobus F4, the
+    // values and nothing is recomputed on the way out (the
     // machine's 0x871E round trip in docs/probes/RDBACK.TXT:162). NP2kai's
     // odd-parity recompute, which this bench used to expect, is refuted there.
     begin
@@ -538,10 +551,10 @@ module tb_pc9821_pram;
 
     // ---- 6. TWO BOOTS: the machine-reset strobe re-seeds the store, so what boot N writes is
     //         never what boot N+1's own verifier reads --------------------------------
-    // THIS SECTION WAS INVERTED BY THE OWNER'S INSTRUCTION. The store is battery-backed on the
+    // THIS SECTION WAS INVERTED BY A DESIGN DECISION. The store is battery-backed on the
     // machine, but this core's power-up image is an `initial` (one copy in the RTL) and there was
     // NO reset path at all, so a platform reset used to leave whatever the previous boot had
-    // written. The owner's report - "resetting the machine causes a software dip switch reset
+    // written. The reported symptom - "resetting the machine causes a software dip switch reset
     // message to show back up", and, decisive: "if I manually reset the dip switches in the menu
     // it fixes the message for that particular boot, until the reset again" - says the failing
     // state is (a) store CONTENT and (b) PRODUCED BY A BOOT, not merely inherited. So this section
@@ -656,7 +669,7 @@ module tb_pc9821_pram;
       for (n = 1; n < 12; n = n + 1) fact_b[n] = 8'h80;
 
       // The machine image first (the reset seed), so the repair starts from the state the
-      // owner's Xe10 reports: bank A idx 7 = 0xBF (docs/probes/PORTS.TXT:258), whose bit 7
+      // measured Xe10 reports: bank A idx 7 = 0xBF (docs/probes/PORTS.TXT:258), whose bit 7
       // differs from the factory byte's - the case the write composition must survive.
       reset = 1;
       repeat (2) @(posedge clk);

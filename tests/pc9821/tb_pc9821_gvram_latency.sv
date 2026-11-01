@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_LATENCY: the GVRAM's per-OPERATION cost is BOUNDED BY the real Xe10's, as a TIME floor, at MORE THAN ONE clk_sys. The real pc9821_gvram is instantiated TWICE in one simulation - 50 MHz and 100 MHz - and each of the machine's own benchmark shapes (docs/probes/GFX2.TXT gfxbenc2 and docs/probes/GFXB.TXT gfxbench, decoded by tools/hwprobe/gfxbenc2/gfxbenc2_decode.py) is driven as the capture drove it: the next CPU access presented the cycle the previous one's ready is seen, z486's own shape, so what is measured is the device's per-operation cost in NANOSECONDS, and the contract is a FLOOR: no operation may be SLOWER than the capture by more than the allowance, while being FASTER is legal (owner, 2026-10-02), so the two clocks need NOT read the same and a divergence is REPORTED rather than failed. The expectations are the captures': the plain plane-window word write 0.1420 us (GFXB GVRAM0 WRITE=13753 KB/s, the plain GRCG-off fill), the plain word read 0.4784 us (GFX2's NET OF CONTROL: PW4RW's 300.0 ns/access and PLANE_COPY's 320.4 are two measurements of one plane word's read PLUS write, mean 310.2, minus GFXB's 142 write half), PW4RW 300.0 ns/access, PLANE_COPY 320.4 per access and 640.9 per word, the GRCG's own read-merge-write store 103.9 ns (it is FAST - a CPU-driven four-plane RMW is eight plane accesses, and the two shapes are never given one cost), and the busy-scene sprite at 3743 clk_sys (the decoder's GRCG_RMW 230.7 + PW4RW 2732.5 + EGC3100SP 780.3, the three rows net of the 0xA6 page switch, which is an I/O cost this seam does not own and which the bench REPORTS as the decoder's 5118 figure instead of asserting). Every access COUNT is a floor guard asserted exactly at both clocks - the one-visit walk's array accesses may not move - and every store shape is read back byte-exact. FAIL-FIRST: with the three periods in pc9821_gvram_arb's GVRAM_PERIODS set to zero (bit-identical to the pre-change tree, where a GVRAM access was priced as its walk plus nothing) every ns assertion fails and PRINTS the pre-fix value, while every access count stays exactly what it is here.
+// TB_PC9821_GVRAM_LATENCY: the GVRAM's per-OPERATION cost is BOUNDED BY the real Xe10's, as a TIME floor, at MORE THAN ONE clk_sys. The real pc9821_gvram is instantiated TWICE in one simulation - 50 MHz and 100 MHz - and each of the machine's own benchmark shapes (docs/probes/GFX2.TXT gfxbenc2 and docs/probes/GFXB.TXT gfxbench, decoded by tools/hwprobe/gfxbenc2/gfxbenc2_decode.py) is driven as the capture drove it: the next CPU access presented the cycle the previous one's ready is seen, z486's own shape, so what is measured is the device's per-operation cost in NANOSECONDS, and the contract is a FLOOR: no operation may be SLOWER than the capture by more than the allowance, while being FASTER is legal, so the two clocks need NOT read the same and a divergence is REPORTED rather than failed. The expectations are the captures': the plain plane-window word write 0.1420 us (GFXB GVRAM0 WRITE=13753 KB/s, the plain GRCG-off fill), the plain word read 0.4784 us (GFX2's NET OF CONTROL: PW4RW's 300.0 ns/access and PLANE_COPY's 320.4 are two measurements of one plane word's read PLUS write, mean 310.2, minus GFXB's 142 write half), PW4RW 300.0 ns/access, PLANE_COPY 320.4 per access and 640.9 per word, the GRCG's own read-merge-write store 103.9 ns (it is FAST - a CPU-driven four-plane RMW is eight plane accesses, and the two shapes are never given one cost), and the busy-scene sprite at 3743 clk_sys (the decoder's GRCG_RMW 230.7 + PW4RW 2732.5 + EGC3100SP 780.3, the three rows net of the 0xA6 page switch, which is an I/O cost this seam does not own and which the bench REPORTS as the decoder's 5118 figure instead of asserting). Every access COUNT is a floor guard asserted exactly at both clocks - the one-visit walk's array accesses may not move - and every store shape is read back byte-exact. FAIL-FIRST: with the three periods in pc9821_gvram_arb's GVRAM_PERIODS set to zero (bit-identical to the pre-change tree, where a GVRAM access was priced as its walk plus nothing) every ns assertion fails and PRINTS the pre-fix value, while every access count stays exactly what it is here.
 //
 // TB_PC9821_GVRAM_LATENCY: the GVRAM's per-operation cost is the MACHINE'S, as a TIME, at more
 // than one clk_sys. The real pc9821_gvram (the real arbiter, GRCG and EGC) is instantiated TWICE,
@@ -63,7 +63,7 @@
 //                                                            cost, not a GVRAM plane access: it
 //                                                            belongs to pc9821_iobus's class
 //                                                            floors (a separate
-//                                                            owner decision) and is
+//                                                            decision) and is
 //                                                            NOT modelled by this seam. The ratio
 //                                                            to it is REPORTED, not asserted as
 //                                                            equality.
@@ -73,8 +73,8 @@
 //
 // WHY THIS IS FAIL-FIRST. On the tree before the latency model every one of these shapes costs
 // what the WALK costs - 2 to 16 clk_sys, i.e. 40-320 ns per operation - because a GVRAM access
-// was priced as "the walk plus nothing" (r13/322's rule, which the owner REVERSED for the GVRAM:
-// "the machine's drawing pace is the specification", lane gvram-latency-fix; the authorization is
+// was priced as "the walk plus nothing" (the store-hold rule, REVERSED for the GVRAM:
+// the machine's drawing pace is the specification; the decision is
 // recorded in pc9821_gvram_arb's GVRAM_PERIODS block). Reproduce the pre-change numbers by setting
 // the three periods to zero in that block, which is bit-identical to the pre-change tree (nothing
 // is ever held): every ns assertion below FAILS there and PRINTS the pre-fix value, with exactly
@@ -170,9 +170,8 @@ module tb_pc9821_gvram_latency;
 
   // The band a shape must land in: the capture (less this bench's tolerance) at the low end and
   // the capture plus the core's own alignment at the top.
-  // THE CONTRACT IS A FLOOR, NOT AN EQUALITY (owner, 2026-10-02). The machine's drawing pace is
-  // still the specification (owner-authorised 2026-09-25: "the machine's drawing pace IS the
-  // specification for this device"), so an operation may never be SLOWER than the machine's own
+  // THE CONTRACT IS A FLOOR, NOT AN EQUALITY. The machine's drawing pace is
+  // still the specification for this device, so an operation may never be SLOWER than the machine's own
   // capture by more than the allowance below - but it does not fail for being FASTER. A core that
   // answers a GVRAM access sooner cannot change what a guest sees: every guest waits on the
   // ready, and the access COUNTS below are still asserted EXACTLY at both clocks, which is what
@@ -209,7 +208,7 @@ module tb_pc9821_gvram_latency;
       d = (ns_a > ns_b) ? ns_a - ns_b : ns_b - ns_a;
       $display("NOTE gvram_latency: invariance %0s: %0d ps at 50 MHz, %0d ps at 100 MHz (%0d ps apart)",
                what, ns_a, ns_b, d);
-      // REPORTED, not failed (owner, 2026-10-02). The two clocks agreeing is the design's
+      // REPORTED, not failed. The two clocks agreeing is the design's
       // standing rate rule ("a time must be derived from a real frequency"), and a divergence
       // here is worth seeing - but the CONTRACT this bench enforces is the floor above, and a
       // value under it is legal at either clock. Trade T28's GRCG store is the instance:
@@ -284,7 +283,7 @@ module tb_pc9821_gvram_latency;
     invariant("PLANE_COPY word",  ns_cpyw_50 * 1000, ns_cpyw_100 * 1000);
     invariant("GRCG store",       ns_gr_50 * 1000,   ns_gr_100 * 1000);
     // The busy scene is REPORTED at both clocks but NOT asserted invariant: its EGC restore unit's
-    // produce pipeline is a fixed clk_sys COUNT in this core (r13/269's stage count, a separate
+    // produce pipeline is a fixed clk_sys COUNT in this core (its stage count, a separate
     // seam), so only the GVRAM access periods above are clock-invariant. That is the seam this
     // bench asserts.
 
@@ -373,8 +372,8 @@ module gvram_latency_probe #(
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
   wire       grcg_expand;
@@ -393,9 +392,9 @@ module gvram_latency_probe #(
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .grcg_expand(grcg_expand),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
@@ -439,7 +438,7 @@ module gvram_latency_probe #(
     begin
       present(plane, off, din, be, wr, egc);
       while (!cpu_ready) @(negedge clk);
-      // The request releases at the ready edge (z486's shape: src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`)
+      // The request releases at the ready edge (z486's shape: src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`)
       // and `egc_gate` - the machine's arming level (0x6A num 2 AND 0x7C
       // bit 7), not a per-access signal - stays through the response: the pipelined produce
       // registers the read response one cycle after the ready, and a request held

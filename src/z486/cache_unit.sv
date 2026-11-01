@@ -54,7 +54,13 @@ module cache_unit
 
     // Runtime cacheable-RAM top; with RAM_BOUND_ENABLE the effective bound is
     // min(ram_cache_top, NO_ALLOC_BOUND).
-    parameter        RAM_BOUND_ENABLE = 0
+    parameter        RAM_BOUND_ENABLE = 0,
+
+    // Classify the demand request on the paging unit's two mem_req arms and
+    // select the class last (dcache_req_split_sel). The class is the same
+    // function of the same address; a caller that does not drive the arms
+    // keeps the default (0) and classifies the request address directly.
+    parameter        CLASS_SPLIT = 0
 )
 (
     // Clock, reset and board configuration
@@ -73,6 +79,20 @@ module cache_unit
     // Paging unit: demand data request (physical address, before A20 masking)
     input  logic dcache_req_valid,
     input  logic [31:0] dcache_req_phys_addr_raw,
+    // The request address and I/O verdict on both mem_req arms (CLASS_SPLIT):
+    // dcache_req_phys_addr_raw = pre_sel ? pre_phys : (sel ? _m1 : _m0), likewise
+    // dcache_req_is_io (0 on the pretranslated arm).
+    input  logic [31:0] dcache_req_phys_addr_m1,
+    input  logic [31:0] dcache_req_phys_addr_m0,
+    input  logic dcache_req_is_io_m1,
+    input  logic dcache_req_is_io_m0,
+    input  logic dcache_req_split_sel,
+    input  logic dcache_req_pre_sel,
+    input  logic [31:0] dcache_req_pre_phys,
+    input  logic [4:0] dcache_req_route_m1,   // {valid, io, inta, vga, write} per mem_req arm
+    input  logic [4:0] dcache_req_route_m0,
+    output logic [1:0] dcache_req_cls_m1,     // {is_direct, is_uncached} per mem_req arm
+    output logic [1:0] dcache_req_cls_m0,
     input  logic [11:0] dcache_req_preread_offset,
     input  logic dcache_req_preread_priority,
     input  logic dcache_req_write,
@@ -99,6 +119,9 @@ module cache_unit
     output logic dcache_vipt_probe_direct_accepted,
     input  logic dcache_vipt_resolve_valid,
     input  logic [31:0] dcache_vipt_resolve_phys_addr_raw,
+    input  logic [31:0] dcache_vipt_resolve_tlb_phys_raw,
+    input  logic [31:0] dcache_vipt_resolve_alt_phys_raw,
+    input  logic dcache_vipt_resolve_use_tlb,
     output logic dcache_vipt_resolve_hit,
     output logic [31:0] dcache_vipt_resolve_data,
 
@@ -178,6 +201,11 @@ wire [31:0] dcache_req_a20_mask = (a20_enable || dcache_req_is_io)
 assign dcache_req_phys_addr = dcache_req_phys_addr_raw & dcache_req_a20_mask;
 wire [31:0] dcache_vipt_resolve_phys_addr = dcache_vipt_resolve_phys_addr_raw &
                                             (a20_enable ? A20_MASK_ON : A20_MASK_OFF);
+// The same mask on each arm (mask(sel ? t : a) = sel ? mask(t) : mask(a)).
+wire [31:0] dcache_vipt_resolve_tlb_phys = dcache_vipt_resolve_tlb_phys_raw &
+                                           (a20_enable ? A20_MASK_ON : A20_MASK_OFF);
+wire [31:0] dcache_vipt_resolve_alt_phys = dcache_vipt_resolve_alt_phys_raw &
+                                           (a20_enable ? A20_MASK_ON : A20_MASK_OFF);
 wire [31:0] fast_store_phys_addr = fast_store_phys_addr_raw &
                                    (a20_enable ? A20_MASK_ON : A20_MASK_OFF);
 wire [31:0] icache_req_phys_addr = icache_req_phys_addr_raw &
@@ -231,9 +259,10 @@ wire [31:0] no_alloc_bound_eff = (RAM_BOUND_ENABLE &&
 generate
 if (Z486_TEMPLATE_WINDOWS) begin : g_memmap_windows
     wire [1:0] dcache_req_class;
+    wire [1:0] dcache_req_class_whole;
     wire [31:0] dcache_vga_addr = VGA_PRE_WRAP ? dcache_req_phys_addr_raw
                                                : dcache_req_phys_addr;
-    assign dcache_req_class = z486_classify_phys(
+    assign dcache_req_class_whole = z486_classify_phys(
         dcache_req_phys_addr_raw, dcache_req_phys_addr, dcache_vga_addr,
         VGA_ENABLE, VGA_CLASS, VGA_BASE, VGA_TOP,
         APERTURE_ENABLE, APERTURE_CLASS, APERTURE_BASE, APERTURE_TOP,
@@ -241,6 +270,80 @@ if (Z486_TEMPLATE_WINDOWS) begin : g_memmap_windows
         ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
         WIN0_ENABLE && win0_unmapped, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
         NO_ALLOC_ENABLE, NO_ALLOC_CLASS, no_alloc_bound_eff);
+    if (CLASS_SPLIT) begin : g_class_split
+        // class(sel ? a1 : a0) = sel ? class(a1) : class(a0): each arm is
+        // A20-masked by its own I/O verdict and classified, and the late
+        // mem_req (the segment verdict) selects the finished class.
+        wire [31:0] m1_post = dcache_req_phys_addr_m1 &
+                              ((a20_enable || dcache_req_is_io_m1) ? A20_MASK_ON : A20_MASK_OFF);
+        wire [31:0] m0_post = dcache_req_phys_addr_m0 &
+                              ((a20_enable || dcache_req_is_io_m0) ? A20_MASK_ON : A20_MASK_OFF);
+        wire [1:0] class_m1 = z486_classify_phys(
+            dcache_req_phys_addr_m1, m1_post, VGA_PRE_WRAP ? dcache_req_phys_addr_m1 : m1_post,
+            VGA_ENABLE, VGA_CLASS, VGA_BASE, VGA_TOP,
+            APERTURE_ENABLE, APERTURE_CLASS, APERTURE_BASE, APERTURE_TOP,
+            ALIAS_ENABLE, ALIAS_CLASS,
+            ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
+            WIN0_ENABLE && win0_unmapped, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
+            NO_ALLOC_ENABLE, NO_ALLOC_CLASS, no_alloc_bound_eff);
+        wire [1:0] class_m0 = z486_classify_phys(
+            dcache_req_phys_addr_m0, m0_post, VGA_PRE_WRAP ? dcache_req_phys_addr_m0 : m0_post,
+            VGA_ENABLE, VGA_CLASS, VGA_BASE, VGA_TOP,
+            APERTURE_ENABLE, APERTURE_CLASS, APERTURE_BASE, APERTURE_TOP,
+            ALIAS_ENABLE, ALIAS_CLASS,
+            ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
+            WIN0_ENABLE && win0_unmapped, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
+            NO_ALLOC_ENABLE, NO_ALLOC_CLASS, no_alloc_bound_eff);
+        wire [31:0] pre_post = dcache_req_pre_phys & (a20_enable ? A20_MASK_ON : A20_MASK_OFF);
+        wire [1:0] class_pre = z486_classify_phys(
+            dcache_req_pre_phys, pre_post, VGA_PRE_WRAP ? dcache_req_pre_phys : pre_post,
+            VGA_ENABLE, VGA_CLASS, VGA_BASE, VGA_TOP,
+            APERTURE_ENABLE, APERTURE_CLASS, APERTURE_BASE, APERTURE_TOP,
+            ALIAS_ENABLE, ALIAS_CLASS,
+            ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
+            WIN0_ENABLE && win0_unmapped, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
+            NO_ALLOC_ENABLE, NO_ALLOC_CLASS, no_alloc_bound_eff);
+        assign dcache_req_class = dcache_req_pre_sel   ? class_pre :
+                                  dcache_req_split_sel ? class_m1 : class_m0;
+        // The routing class on each mem_req arm (the pretranslated arm folded
+        // in, as in the request), for the bus unit's split launch decision.
+        // The uncached bit is written as the OR of the class bits, which is
+        // `class_r != Z486_CACHE_CACHEABLE` (CACHEABLE is 2'd0): Quartus 17.0
+        // Analysis & Synthesis built the `!=` form here as `!= NO_ALLOC` (the
+        // two classes swapped, DIRECT right) while Verilator, and the same
+        // compare on dcache_req_class below, were right - the bus unit then
+        // launched cacheable RAM accesses as direct ones and cached NO_ALLOC
+        // windows, and the PC-9821 core never reached its BIOS screen.
+        // tests/equiv/cls_uncached_reduce.v proves the two forms equal.
+        wire [1:0] class_r1 = dcache_req_pre_sel ? class_pre : class_m1;
+        wire [1:0] class_r0 = dcache_req_pre_sel ? class_pre : class_m0;
+        assign dcache_req_cls_m1 = {class_r1 == Z486_CACHE_DIRECT,
+                                    dcache_req_route_m1[1] || (|class_r1)};
+        assign dcache_req_cls_m0 = {class_r0 == Z486_CACHE_DIRECT,
+                                    dcache_req_route_m0[1] || (|class_r0)};
+        // synthesis translate_off
+        // The split's premise (the arms recombine to the request) and its
+        // result (the class it replaced), on every cycle of every run.
+        always @(posedge clk)
+            if (reset_n &&
+                ((dcache_req_phys_addr_raw !== (dcache_req_pre_sel ? dcache_req_pre_phys :
+                                                dcache_req_split_sel ? dcache_req_phys_addr_m1
+                                                                     : dcache_req_phys_addr_m0)) ||
+                 (dcache_req_is_io !== (dcache_req_pre_sel ? 1'b0 :
+                                        dcache_req_split_sel ? dcache_req_is_io_m1
+                                                             : dcache_req_is_io_m0)) ||
+                 (dcache_req_class !== dcache_req_class_whole)))
+                $fatal(1, "cache_unit: CLASS_SPLIT arms %h/%h (io %b/%b, sel %b) disagree with the request %h (io %b): class %0d vs %0d",
+                       dcache_req_phys_addr_m1, dcache_req_phys_addr_m0,
+                       dcache_req_is_io_m1, dcache_req_is_io_m0, dcache_req_split_sel,
+                       dcache_req_phys_addr_raw, dcache_req_is_io,
+                       dcache_req_class, dcache_req_class_whole);
+        // synthesis translate_on
+    end else begin : g_class_whole
+        assign dcache_req_class = dcache_req_class_whole;
+        assign dcache_req_cls_m1 = 2'b00;   // unused without CLASS_SPLIT
+        assign dcache_req_cls_m0 = 2'b00;
+    end
     assign dcache_vipt_class = z486_classify_phys(
         dcache_vipt_resolve_phys_addr_raw, dcache_vipt_resolve_phys_addr,
         dcache_vipt_resolve_phys_addr,
@@ -250,6 +353,26 @@ if (Z486_TEMPLATE_WINDOWS) begin : g_memmap_windows
         ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
         WIN0_ENABLE && win0_unmapped, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
         NO_ALLOC_ENABLE, NO_ALLOC_CLASS, no_alloc_bound_eff);
+    // synthesis translate_off
+    // A store taken by the direct store port (a posted store, or the cached
+    // RMW's write) must be one the demand path would have sent into the L1:
+    // cacheable under the template with window 0 as it is now.  The runtime
+    // RAM top is left out on purpose (z486_page_post_bits): above it nothing
+    // is cached and a store reaches the platform alike either way.
+    always @(posedge clk)
+        if (reset_n && fast_store_valid &&
+            (z486_classify_phys(
+                fast_store_phys_addr_raw, fast_store_phys_addr,
+                VGA_PRE_WRAP ? fast_store_phys_addr_raw : fast_store_phys_addr,
+                VGA_ENABLE, VGA_CLASS, VGA_BASE, VGA_TOP,
+                APERTURE_ENABLE, APERTURE_CLASS, APERTURE_BASE, APERTURE_TOP,
+                ALIAS_ENABLE, ALIAS_CLASS,
+                ALIAS0_BASE, ALIAS0_TOP, ALIAS1_BASE, ALIAS1_TOP, ALIAS2_BASE, ALIAS2_TOP,
+                WIN0_ENABLE && win0_unmapped, WIN0_CLASS, WIN0_BASE, WIN0_TOP,
+                NO_ALLOC_ENABLE, NO_ALLOC_CLASS, NO_ALLOC_BOUND) != Z486_CACHE_CACHEABLE))
+            $fatal(1, "cache_unit: direct-port store to %h, which the template does not classify cacheable (win0_unmapped %b, a20 %b)",
+                   fast_store_phys_addr_raw, win0_unmapped, a20_enable);
+    // synthesis translate_on
     assign dcache_req_is_uncached = dcache_req_is_vga_mem ||
                                     (dcache_req_class != Z486_CACHE_CACHEABLE);
     assign dcache_req_is_direct = (dcache_req_class == Z486_CACHE_DIRECT);
@@ -274,6 +397,8 @@ end else begin : g_memmap_inert
     assign dcache_vipt_class = Z486_CACHE_CACHEABLE;
     assign dcache_req_is_uncached = dcache_req_is_vga_mem;
     assign dcache_req_is_direct = 1'b0;
+    assign dcache_req_cls_m1 = {1'b0, dcache_req_route_m1[1]};
+    assign dcache_req_cls_m0 = {1'b0, dcache_req_route_m0[1]};
     assign icache_req_is_no_alloc = 1'b0;
     assign icache_req_class_ram = 1'b1;
 end
@@ -639,6 +764,9 @@ l1_cache #(
     .vipt_probe_accepted(dcache_vipt_probe_accepted),
     .vipt_probe_direct_accepted(dcache_vipt_probe_direct_accepted),
     .vipt_resolve_phys_addr(dcache_vipt_resolve_phys_addr),
+    .vipt_resolve_tlb_phys(dcache_vipt_resolve_tlb_phys),
+    .vipt_resolve_alt_phys(dcache_vipt_resolve_alt_phys),
+    .vipt_resolve_use_tlb(dcache_vipt_resolve_use_tlb),
     .vipt_resolve_valid(dcache_vipt_resolve_valid),
     .vipt_resolve_data(dcache_vipt_resolve_data),
     .vipt_resolve_hit(dcache_vipt_resolve_hit_cache),

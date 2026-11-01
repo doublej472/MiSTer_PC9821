@@ -7,9 +7,7 @@
 // bank swap would lose the accumulated register state. The displayed read is ASYNCHRONOUS,
 // so no dot of the pixel path moves.
 //
-// MEASURED 2026-09-25 (module-alone Quartus probes): the
-// header used to say these two tables "are small RAMs, not the 384 flip-flops" - only ONE of
-// them is. `disp` is read ASYNCHRONOUSLY on the dot path and an asynchronous read is refused
+// MEASURED (module-alone Quartus probes): only ONE of these two tables can be a small RAM. `disp` is read ASYNCHRONOUSLY on the dot path and an asynchronous read is refused
 // by every block type on this device, MLAB included (`Info (276007) ... uninferred due to
 // asynchronous read logic` with no attribute, and a second, independent refusal - `276009 ...
 // unsupported read-during-write behavior` - with `ramstyle = "MLAB"`). A Cyclone V MLAB is
@@ -18,8 +16,7 @@
 //
 // `live` is the other case: its read IS registered (`cp_q <= live[cp_cnt[3:0]]`, inside the
 // frame-boundary copy, one cycle before the value is stored), so moving it to block memory
-// changes no address->q latency. LANDED 2026-09-25 (trade T13, `docs/trade-candidates.md`):
-// it is three 16x4 nibble lanes in M10K. The nibble split is what infers - a write into a
+// changes no address->q latency (trade T13, `docs/trade-candidates.md`): it is three 16x4 nibble lanes in M10K. The nibble split is what infers - a write into a
 // 16x12 word is nibble-granular, and a sub-word write refuses inference in every block type
 // (the same result as `pc9821_crtc`'s palette mirror and the CG glyph block). Both measured
 // with the shipped read shape, including the copy register's reset:
@@ -54,7 +51,7 @@ module pc9821_gfx_palette (
     // write G/R/B into it, so one write carries one channel. It lands in the LIVE table,
     // which the displayed table is copied from at the next frame boundary. widx is
     // palnum & 15 (NP2kai gdc_setanalogpal(gdc.palnum & 15), io/gdc.c:862): the 0xA8
-    // register is a FULL 8-bit palnum (review-cg F1); the read mirror in pc9821_crtc
+    // register is a FULL 8-bit palnum; the read mirror in pc9821_crtc
     // also takes the MASKED palnum & 15 (PEGC's 256-colour palette is out of scope, so
     // the mirror is 16 entries like this table).
     input  wire        we,
@@ -173,8 +170,8 @@ module pc9821_gfx_palette (
   // The CPU write port, into the LIVE table: one WHOLE nibble into the lane its channel
   // names, which is the shape that infers (a lane's write enable is its own channel's, so
   // the other two lanes see a write-enable-low port). wchan is 0/1/2 by construction
-  // (pc9821_crtc's pal_wr_chan: 22->G, 23->R, else B), and the `else` keeps the case this
-  // replaces: wchan == 3 wrote blue before this change too.
+  // (pc9821_crtc's pal_wr_chan: 22->G, 23->R, else B), and the `else` writes blue for
+  // wchan == 3.
   always @(posedge clk) begin
     if (we) begin
       if (wchan == 2'd0)      live_g[widx] <= wdata;   // 0xAA green, live[7:4]

@@ -6,7 +6,7 @@
 //
 // ---- the bench's own account of where the expectation comes from ----
 //
-// This exists because r13/247 finding 2 is reachable from the authentic ROM and is a
+// This exists because the defect below is reachable from the authentic ROM and is a
 // permanent wedge, not a timing figure. The path: a multi-sector READ issues a read-ahead
 // (prefetch_busy = 1) while the guest drains; if the guest reaches the sector's last word
 // before that fetch lands, the FSM waits in X_WAIT_BLOCK; if the adapter then reports the

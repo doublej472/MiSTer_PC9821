@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GFX_MSG:
-// The graphics telemetry record reports what its eight inputs mean and is one line: the four GVRAM path counters (the GRCG RMW walk, the GRCG TDW walk, the EGC, and the plain plane-window write) print the values pc9821_gvram computed, the DEVICE wait counts exactly the cycles an I/O request was outstanding and unaccepted and NOT a memory request, the frame and interrupt counters advance one per pulse, and the JIS row-cache walker's skipped-walk counter is printed as the value pc9821_gdc_text produced (it is a passthrough here, like the GVRAM counters) - all driven cycle by cycle and read back out of the record, so it cannot claim a split the handshake does not support. The record is also a SNAPSHOT: its digits are the fields' values at the report's accept (snap), held while the record is read, so moving every input after the snapshot and re-reading reprints the same bytes and a paced emission can never splice two counter values into one field (the telemetry tear the data-race review found); a NEW snapshot takes the new values.
+// The graphics telemetry record reports what its eight inputs mean and is one line: the four GVRAM path counters (the GRCG RMW walk, the GRCG TDW walk, the EGC, and the plain plane-window write) print the values pc9821_gvram computed, the DEVICE wait counts exactly the cycles an I/O request was outstanding and unaccepted and NOT a memory request, the frame and interrupt counters advance one per pulse, and the JIS row-cache walker's skipped-walk counter is printed as the value pc9821_gdc_text produced (it is a passthrough here, like the GVRAM counters) - all driven cycle by cycle and read back out of the record, so it cannot claim a split the handshake does not support. The record is also a SNAPSHOT: its digits are the fields' values at the report's accept (snap), held while the record is read, so moving every input after the snapshot and re-reading reprints the same bytes and a paced emission can never splice two counter values into one field (a telemetry tear); a NEW snapshot takes the new values.
 //
 // WHY THE COUNTERS ARE CHECKED HERE AND NOT ONLY THE BYTES. The record's whole claim is "this
 // interval spent N cycles in the GRCG RMW walk, M waiting on a device, and F frames passed"; every
@@ -10,7 +10,7 @@
 // accepted request counted, a memory request counted as a device wait, a held level counted once
 // instead of per cycle), so the bench drives each shape and asserts the delta it must produce.
 //
-// It also asserts the newline shape r13/119 requires: exactly one 0x0A, as the last byte, and no
+// It also asserts the newline shape the decoder requires: exactly one 0x0A, as the last byte, and no
 // 0x0D anywhere - a CR comes back as a second newline through a tty's ICRNL, which is the blank
 // line between records the record was rewritten to remove.
 
@@ -241,7 +241,7 @@ module tb_pc9821_gfx_msg;
     // 7. THE SNAPSHOT: a record's digits are the fields' values at the report's accept, HELD
     //    while the record is read. Eight live reads of a free-running counter sample eight
     //    different times, and a carry crossing between two of them splices two values into one
-    //    torn field (the data-race review's telemetry tear - this record is the report's paced
+    //    torn field (the telemetry tear - this record is the report's paced
     //    TAIL, so every digit byte lands ~87 us apart in a real capture). Snapshot once, move
     //    EVERY input, re-read with no new snapshot: every byte must reprint unchanged. On a
     //    formatter that reads live this fails deterministically (the digits follow the inputs);

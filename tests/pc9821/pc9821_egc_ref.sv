@@ -377,7 +377,7 @@ module pc9821_egc_ref;
   // NP2kai's egcsftb_*0 wrapper (mem/memegc.c:372-570), which shiftinput_byte calls in
   // place of the raw _sub: the byte produce's stack gate, its stack spend and the
   // bit-length re-arm. The gate's `(UINT)(8 - egc.dstbit)` wraps negative for
-  // dstbit 9..15 (review egc.md F7, a faithful NP2kai quirk), so a produce there is
+  // dstbit 9..15 (a faithful NP2kai quirk), so a produce there is
   // gated forever and only dstbit == 8 reaches the _sub's early return.
   task automatic sftb0(input integer ext);
     begin
@@ -851,7 +851,7 @@ module pc9821_egc_ref;
   // egc_writeword/readword, at an ODD address -> two byte ops, HIGH-byte-first when
   // egc.sft bit 12 is set (:1385-1404); memegc_wr32/rd32 -> wr16/rd16 at addr then
   // addr+2, in that order unconditionally (:1417-1424)), combined with the z486 beat
-  // split (src/z486/z486_pkg.sv:1121 `calc_be`, :1181 `calc_be_first`, :1196
+  // split (src/z486/z486_pkg.sv:1169 `calc_be`, :1226 `calc_be_first`, :1242
   // `calc_be_second`). Every byte-enable set a real x86 access generates maps to a
   // UNIQUE memegc dispatch of its bytes:
   //
@@ -879,7 +879,7 @@ module pc9821_egc_ref;
   // The hole sets (0101, 1001, 1010, 1011, 1101) have NO memegc counterpart and NO
   // generating x86 shape (calc_be* never emits them): they are a SELF-CONSISTENCY
   // PIN of the lane walk only (a set of enabled lanes is a set of bytes the CPU wrote,
-  // so a hole must not drop the lanes beyond it, r13/175) and are excluded from the
+  // so a hole must not drop the lanes beyond it) and are excluded from the
   // conformance count in tb_pc9821_egc_conformance section 1.
   task automatic op(input integer page, input integer plane, input [14:0] base,
                     input [31:0] din, input [3:0] be, input integer wr, output [31:0] dout);
@@ -932,7 +932,7 @@ module pc9821_egc_ref;
             nsteps = nsteps + 1;
             // The walk continues at the next ENABLED lane, not at the next lane: cpu_be's
             // enabled lanes are bytes the CPU wrote, so a hole must not drop the lanes
-            // beyond it (r13/175).
+            // beyond it.
             lane = 4;
             for (k = 3; k >= 0; k = k - 1)
               if (be[k] && (k >= nxt)) lane = k;
@@ -965,7 +965,7 @@ module pc9821_egc_ref;
   // bit 12 is set; memegc_wr32/rd32 -> wr16/rd16 at addr then addr+2, unconditionally).
   // tb_pc9821_egc_conformance section 1's pair cases drive the OCCURRING x86 shapes
   // through these entry points and split them into the z486 beats (calc_be_first/
-  // calc_be_second, src/z486/z486_pkg.sv:1181/:1196) only on the DUT side, so the
+  // calc_be_second, src/z486/z486_pkg.sv:1226/:1242) only on the DUT side, so the
   // gold carries no beat-level rule of its own at all.
   task automatic op8(input integer page, input integer plane, input [14:0] addr,
                      input [7:0] din, input integer wr, output [7:0] dout);

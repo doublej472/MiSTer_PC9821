@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The compile-time I/O-latency profile, measured end to end through the real pc9821_iobus: with IO_LATENCY_PROFILE 0 the bus is the min table - the smallest waits the firmware needs - where every class but 0x005F and the 8253 WRITE is the FSM floor IO_MIN_HOLD = 4, 0x005F takes the machine's item-41 1621 ns as ONE value in both directions (because a `wr`-dependent value at 0x005F trips a Quartus fitter internal error; see pc9821_iobus.sv) because the BIOS POST's timer-interrupt test (BANK4@0x487) polls with `out 0x5f`, and the 8253 READ is the floor too (audit-iobus F7) - and with IO_LATENCY_PROFILE 2 it prices the machine's own measured access TIMES from docs/probes/IO.TXT (its `abs_ns` column, the 2026-09-24 Xe10 capture) per DIRECTION - so the default class costs 823 ns on a read and 862 ns on a write, 0x005F costs 826 ns on a read and the item-41 1621 ns anchor on a write (the same 1621 ns the min profile charges, but min charges it to the read too where faithful prices the read at 826 ns), the EGC/GRCG write class is 356-359 ns, the text GDC is 444 ns, the graphics GDC is 676 ns, and the EGC register file 0x4A0-0x4AF splits by ADDRESS PARITY: 9290 ns on an even read (the capture's 8.6-9.4 us class), 823 ns on an odd read, 356 ns on a write; and the two measured-FAST ports the default arm used to over-charge are priced at the capture's own times (audit-iobus F6), 0x09A0 at 391 ns - 2.1x over the default - and 0x0FAA at 295.6 ns, 2.8x over it and the fastest port the capture prices. Because every class is derived from SYS_CLOCK_HZ with the ceil idiom the two firmware floors already use, one access is the same REAL TIME at every profile clock. FAIL-FIRST: profile 2's faithfulness contradicts profile 0's, so the same assertions cannot hold before the faithful table lands (profile 2 would measure profile 0's 4/30/82/21 cycles). The sub-knob is pinned too: IO_LATENCY_PROFILE 1 is profile 2 with the unresolved-mechanism EGC-file parity class held back, so its even 0x4A0 read is the default read class and not 9290 ns. The min profile's 0x005F is asserted at the machine's 1621 ns in BOTH directions (the POST timer test needs the write; the read pays the same because a `wr`-dependent value there trips a Quartus fitter internal error - see pc9821_iobus.sv; 0x5F reads are unused by the firmware, 0 `in 0x5F` against 391 `out 0x5F`), and the boot golden is unchanged because the diagnostic pack never touches 0x005F; the 8253's read direction IS the floor (audit-iobus F7), because its floor is the ITF self-test's write requirement and the capture reads 8253 count registers at the default class.
+// The compile-time I/O-latency profile, measured end to end through the real pc9821_iobus: with IO_LATENCY_PROFILE 0 the bus is the min table - the smallest waits the firmware needs - where every class but 0x005F and the 8253 WRITE is the FSM floor IO_MIN_HOLD = 4, 0x005F takes the machine's item-41 1621 ns as ONE value in both directions (because a `wr`-dependent value at 0x005F trips a Quartus fitter internal error; see pc9821_iobus.sv) because the BIOS POST's timer-interrupt test (BANK4@0x487) polls with `out 0x5f`, and the 8253 READ is the floor too - and with IO_LATENCY_PROFILE 2 it prices the machine's own measured access TIMES from docs/probes/IO.TXT (its `abs_ns` column, the 2026-09-24 Xe10 capture) per DIRECTION - so the default class costs 823 ns on a read and 862 ns on a write, 0x005F costs 826 ns on a read and the item-41 1621 ns anchor on a write (the same 1621 ns the min profile charges, but min charges it to the read too where faithful prices the read at 826 ns), the EGC/GRCG write class is 356-359 ns, the text GDC is 444 ns, the graphics GDC is 676 ns, and the EGC register file 0x4A0-0x4AF splits by ADDRESS PARITY: 9290 ns on an even read (the capture's 8.6-9.4 us class), 823 ns on an odd read, 356 ns on a write; and the two measured-FAST ports the default arm used to over-charge are priced at the capture's own times, 0x09A0 at 391 ns - 2.1x over the default - and 0x0FAA at 295.6 ns, 2.8x over it and the fastest port the capture prices. Because every class is derived from SYS_CLOCK_HZ with the ceil idiom the two firmware floors already use, one access is the same REAL TIME at every profile clock. FAIL-FIRST: profile 2's faithfulness contradicts profile 0's, so the same assertions cannot hold before the faithful table lands (profile 2 would measure profile 0's 4/30/82/21 cycles). The sub-knob is pinned too: IO_LATENCY_PROFILE 1 is profile 2 with the unresolved-mechanism EGC-file parity class held back, so its even 0x4A0 read is the default read class and not 9290 ns. The min profile's 0x005F is asserted at the machine's 1621 ns in BOTH directions (the POST timer test needs the write; the read pays the same because a `wr`-dependent value there trips a Quartus fitter internal error - see pc9821_iobus.sv; 0x5F reads are unused by the firmware, 0 `in 0x5F` against 391 `out 0x5F`), and the boot golden is unchanged because the diagnostic pack never touches 0x005F; the 8253's read direction IS the floor, because its floor is the ITF self-test's write requirement and the capture reads 8253 count registers at the default class.
 
 `default_nettype none
 
@@ -31,12 +31,12 @@ module tb_pc9821_io_latency_profile;
   localparam integer NS_9A0      = 391;   // 0x09A0 read 391.0 (PEGC9A0) - 2.1x under the default
   localparam integer NS_FAA      = 296;   // 0x0FAA read 295.6 (ACCFAA) - the fastest port priced
 
-  // The min profile's own values (r13/276/r13/322), which base must keep EXACTLY.
+  // The min profile's own values, which base must keep EXACTLY.
   localparam integer MIN_FLOOR = 4;
   localparam integer MIN_PIT   = 21;      // ceil(one 2.4576 MHz PIT tick)
   // ...and the one direction it does NOT apply to: the 8253 floor is the ITF self-test's WRITE
   // requirement, and the capture prices an 8253 READ at the default class (PITD0/PITD1), which
-  // in the min profile is the FSM floor (audit-iobus F7).
+  // in the min profile is the FSM floor.
   localparam integer MIN_PIT_R = MIN_FLOOR;
 
   // ==== DUT ====
@@ -148,7 +148,7 @@ module tb_pc9821_io_latency_profile;
              min_def_r, min_def_w, min_5f_r, min_5f_w, min_egc_r, min_egc_w, min_grcg_w,
              min_gdc1_r, min_gdc2_r, min_pit_r, min_pit_w, min_egcf_even_r);
 
-    // The min profile's OTHER direction defect is fixed instead of displayed (audit-iobus F7):
+    // The min profile's OTHER direction defect is fixed instead of displayed:
     // the 8253's floor is the ITF self-test's WRITE requirement, and the capture prices its READ
     // at the default class. FAIL-FIRST: this read was 21 clk before the fix.
 
@@ -175,7 +175,7 @@ module tb_pc9821_io_latency_profile;
     check_ns("faithful 8253 write",    fth_pit_w,  NS_PIT_W);
     check_ns("faithful EGC file even read", fth_egcf_even_r, NS_EGCF_HI);
     check_ns("faithful EGC file odd read",  fth_egcf_odd_r,  NS_EGCF_LO);
-    // The two measured-FAST ports the default arm used to over-charge (audit-iobus F6): 0x9A0
+    // The two measured-FAST ports the default arm used to over-charge: 0x9A0
     // at 391 ns was 2.1x over, 0xFAA at 295.6 ns was 2.8x over. FAIL-FIRST: both measured the
     // default class (823 ns) before the fix, which check_ns rejects as more than one clk above
     // the capture.
@@ -288,6 +288,7 @@ module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0]  dbg_gate;
@@ -319,6 +320,7 @@ module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   reg  [10:0] gdc_ff2_state = 11'd0;
   wire        mouse_irq;
   reg  [24:0] ps2_mouse = 25'd0;
@@ -330,8 +332,14 @@ module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -349,6 +357,11 @@ module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1), .SYS_CLOCK_HZ(HZ), .IO_LATENCY_PROFILE(PROF)) dut (
       .ide_unit0_present(1'b0),.*);
 

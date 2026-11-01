@@ -6,7 +6,7 @@
 // WHY IT EXISTS. The stall record already carried the ATA's state byte and its
 // command word (A and ATA: aborts, last command, commands, abort reason), but NOT the
 // question a failed transfer actually asks: WHICH sector, and WHAT the error register
-// says. The owner's capture of the wedged card could show "one abort, reason 2" and
+// says. A capture of a wedged card could show "one abort, reason 2" and
 // nothing about where. These two fields close that, pinned here from the task file to
 // the record bytes.
 //

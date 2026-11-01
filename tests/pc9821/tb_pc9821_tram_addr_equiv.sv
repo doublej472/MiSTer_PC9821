@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_TRAM_ADDR_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the text fetch address - the REFACTOR pin for the pc9821_crtc timing seam (the fitted lightoc build's worst path, v_sync[2][5] -> the text-RAM port-B address register), a CHARACTERIZATION against the documented semantics and not a hardware claim (the hardware behaviour stays in the reference-derived benches): tram_vid_addr is bit-identical EVERY clk_sys cycle to a golden address computed in the bench from the SYNC field map/clamp, the documented fetch schedule and the cfg_snap/cfg_pending snapshot semantics, every mux arm included (the walker arm is combinational and keeps its priority, so a registered walker address cannot hide behind an equal value), over frames with mid-frame register writes, writes straddling the frame_end snapshot edge (the epoch-defer window), frame-boundary SYNC swaps, 40/80-column swaps and irregular pixel_ce gaps; the arm selects and f_wordidx at its consuming dots are bit-identical, and the render captures (r_wordidx, r_raster) never move. It also pins the cross-lane odd-sync-parity premises by name (geom-shared-bit-identity: HTOTAL/VTOTAL/HACTIVE/VACTIVE and the o_htotal/o_vtotal/o_vline outputs are the documented field map at every cycle - the single shared source the fetch walker, pc9821_gdc2's wrapped display-line parity and the feed_odd/at_line_tick expression must all read together, never a mix of live and registered; linetick-dot-outside-active: HACTIVE <= HTOTAL-8 so the line-tick dot stays outside the mixer's active window).
+// TB_PC9821_TRAM_ADDR_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the text fetch address - the REFACTOR pin for the pc9821_crtc timing seam (an 80 MHz fit's worst path, v_sync[2][5] -> the text-RAM port-B address register), a CHARACTERIZATION against the documented semantics and not a hardware claim (the hardware behaviour stays in the reference-derived benches): tram_vid_addr is bit-identical EVERY clk_sys cycle to a golden address computed in the bench from the SYNC field map/clamp, the documented fetch schedule and the cfg_snap/cfg_pending snapshot semantics, every mux arm included (the walker arm is combinational and keeps its priority, so a registered walker address cannot hide behind an equal value), over frames with mid-frame register writes, writes straddling the frame_end snapshot edge (the epoch-defer window), frame-boundary SYNC swaps, 40/80-column swaps and irregular pixel_ce gaps; the arm selects and f_wordidx at its consuming dots are bit-identical, and the render captures (r_wordidx, r_raster) never move. It also pins the odd-sync-parity premises by name (geom-shared-bit-identity: HTOTAL/VTOTAL/HACTIVE/VACTIVE and the o_htotal/o_vtotal/o_vline outputs are the documented field map at every cycle - the single shared source the fetch walker, pc9821_gdc2's wrapped display-line parity and the feed_odd/at_line_tick expression must all read together, never a mix of live and registered; linetick-dot-outside-active: HACTIVE <= HTOTAL-8 so the line-tick dot stays outside the mixer's active window).
 //
 // TB_PC9821_TRAM_ADDR_EQUIV: a CYCLE-EXACT EQUIVALENCE bench for the text fetch address -
 // the REFACTOR CONTRACT for the pc9821_crtc timing seam (the fitted lightoc build's worst
@@ -36,7 +36,7 @@
 //  [geom-shared-bit-identity] HTOTAL/VTOTAL/HACTIVE/VACTIVE are bit-identical every cycle to
 //     the golden field map of the FRAME-BOUNDARY-SAMPLED v_sync image - and o_htotal /
 //     o_vtotal / o_vline are the SAME values (the same wires) the raster counts on. This is
-//     the reviewed odd-sync-parity contract's premise (cross-lane hard contract): feed_odd's
+//     the reviewed odd-sync-parity contract's premise: feed_odd's
 //     crtc expression and pc9821_gdc2's wrapped display-line parity v_oline[0] are equal as
 //     functions of (vline, VTOTAL), and both read these wires - so their bit-identity at
 //     every dot survives any restructure that keeps this assertion green and wires both
@@ -71,7 +71,6 @@ module tb_pc9821_tram_addr_equiv;
   reg [7:0]  io_din = 8'h00;
   wire [7:0] io_dout;
   wire [10:0] gdc_ff2_state;
-  reg  [7:0] grcg_mode_r = 8'h00;
 
   reg [13:0] tram_cpu_addr = 14'd0;
   reg [7:0]  tram_cpu_din = 8'h00;
@@ -116,9 +115,11 @@ module tb_pc9821_tram_addr_equiv;
 
   // ==== DUT ====
   pc9821_crtc dut (
-      .clk_sys(clk_sys), .rst_n_sys(rst_n), .pixel_ce(pixel_ce),
+      .crt31k(1'b0),   // 0x09A8 bit 0 clear: the 24 kHz monitor range
+      .gfx_win_on(1'b0),   // no slave window here
+      .clk_sys(clk_sys), .rst_n_sys(rst_n), .rst_n_vid(rst_n), .pixel_ce(pixel_ce),
       .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_din(io_din), .io_dout(io_dout),
-      .gdc_ff2_state(gdc_ff2_state), .grcg_mode_r(grcg_mode_r),
+      .gdc_ff2_state(gdc_ff2_state),
       .tram_cpu_addr(tram_cpu_addr), .tram_cpu_din(tram_cpu_din),
       .tram_cpu_we(tram_cpu_we), .tram_cpu_dout(tram_cpu_dout),
       .wk_tr_read(wk_tr_read), .wk_tr_addr(wk_tr_addr), .o_tram_vid_q(o_tram_vid_q),
@@ -511,7 +512,7 @@ module tb_pc9821_tram_addr_equiv;
     if (m_col40_x && (m_f_lo || m_f_hi || m_f_at)) cov_col40 = cov_col40 + 1;
     if (m_snap_copy) cov_snap = cov_snap + 1;
     if (m_frame_end) cov_frames = cov_frames + 1;
-    // the two stimulus classes the review asked for (P2-1): odd frame lengths (VTOTAL[0],
+    // the two stimulus classes P2-1 needs: odd frame lengths (VTOTAL[0],
     // the parity expression's input) and an early copy whose new pitch/sad surface on
     // ACTIVE consuming dots (the walk slot inside the display window).
     if (m_frame_end && g_vtotal[0]) cov_odd_vtotal = cov_odd_vtotal + 1;
@@ -677,7 +678,7 @@ module tb_pc9821_tram_addr_equiv;
     write_sync;
     run_clks(1_500_000);
 
-    // ---- phase G: odd-VTOTAL and VACTIVE = VTOTAL-1 blocks (review P2-1) ----
+    // ---- phase G: odd-VTOTAL and VACTIVE = VTOTAL-1 blocks (P2-1) ----
     // G1: defsyncm24 with vbp 26 (lf 400, vs 8, vfp 7, vbp 26 -> y 441): the frame
     // length is ODD, so VTOTAL[0] and the vline+2 >= VTOTAL wrap run with the parity
     // expression's own inputs. The equivalence proof is parity-independent; this closes

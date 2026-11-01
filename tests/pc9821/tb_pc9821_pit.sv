@@ -1,10 +1,10 @@
-// tb_pc9821_pit — focused PC-98 PIT source-clock and zero-divisor checks.
+// tb_pc9821_pit - focused PC-98 PIT source-clock and zero-divisor checks.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PIT:
-// The PIT's tick rate and zero-divisor behaviour, instantiated at the clock frequency the system ships (50 MHz) with the divider derived from the verified 2.4576 MHz input strap, so the counts here are the ones the hardware produces. The read side is pinned against the real 8253/8254 counting element too (review timers.md F1/F2/F3): a mode-3 read spans 0..N - the full divisor, down by 2 per source clock, QEMU hw/timer/i8254-pc98.c:100-103 `counter = count - ((2*d) % count)` - never the 0..N/2 half-count model; read-back STATUS bit 6 is the LIVE NULL COUNT (set by a control word, cleared by the count byte that COMPLETES the load, 8254 / NP2kai io/pit.c:244-254,307); and mode 0 keeps counting past terminal count, wrapping to 0xFFFF, instead of freezing at 0.
+// The PIT's tick rate and zero-divisor behaviour, instantiated at the clock frequency the system ships (50 MHz) with the divider derived from the verified 2.4576 MHz input strap, so the counts here are the ones the hardware produces. The read side is pinned against the real 8253/8254 counting element too: a mode-3 read spans 0..N - the full divisor, down by 2 per source clock, QEMU hw/timer/i8254-pc98.c:100-103 `counter = count - ((2*d) % count)` - never the 0..N/2 half-count model; read-back STATUS bit 6 is the LIVE NULL COUNT (set by a control word, cleared by the count byte that COMPLETES the load, 8254 / NP2kai io/pit.c:244-254,307); and mode 0 keeps counting past terminal count, wrapping to 0xFFFF, instead of freezing at 0.
 
 
 module tb_pc9821_pit;
@@ -213,7 +213,7 @@ module tb_pc9821_pit;
     // (NP2kai io/pit.c:168-230 returns 0..value for modes 2 and 3 alike; QEMU
     // hw/timer/i8254-pc98.c:100-103 converts
     // counter = count - ((2*d) % count)). The half-count model this bench used
-    // to assert ("the count tops out at 0x8000") is exactly review F1's defect.
+    // to assert ("the count tops out at 0x8000") is exactly the defect.
     // ------------------------------------------------------------------
     // Channel 0, LSB-then-MSB access, mode 3, a long reload so the count barely moves.
     write_pit(2'd3, 8'h36);

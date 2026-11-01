@@ -1,9 +1,8 @@
 # Contributing
 
-The entry point for contribution rules in this repository. It is deliberately
-short: this core has one design rule it treats as non-negotiable, stated below,
-plus the build/test gates and the Quartus workflow in
-[`AGENTS.md`](../AGENTS.md).
+The entry point for contributors. The full guide - evidence, gates, builds,
+hardware testing - starts at [`AGENTS.md`](../AGENTS.md); this page states the one
+design rule the core treats as non-negotiable.
 
 ## The project rule: Single-Cycle Event Discipline
 
@@ -35,8 +34,7 @@ R1–R8, an in-tree exemplar for each, and the 7-point audit checklist for a new
 pulse are in
 [`docs/single-cycle-event-discipline.md`](single-cycle-event-discipline.md).
 
-## Build and test gates
+## Everything else
 
-There are no other contribution rules here. The build, lint, bench, and boot
-gates you must run before declaring a change done — and the containerised
-Quartus workflow for any RTL change — are in [`AGENTS.md`](../AGENTS.md).
+The evidence rules, the build and test gates, and the containerised Quartus workflow are in
+[`AGENTS.md`](../AGENTS.md).

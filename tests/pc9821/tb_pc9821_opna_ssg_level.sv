@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The SSG joins the -86 card's mix AC-COUPLED (zero-mean), not DC-coupled: the real board takes the YM2608's SSG off pin 27 (a YM2149-style unipolar output carrying a ~2 V DC offset, which jt49 models), passes it through the series coupling capacitor C7C1, and only then sums it equally into the YM3016 FM/DAC L/R (the PC-9801-86 board design). A series cap is a 1-pole high-pass y[n]=x[n]-x[n-1]+a*y[n-1], a=1-2^-14, clocked at the SSG sample rate (499.2 kHz = cen/16). This bench is the fail-first for that DC block: BEFORE the DC block the unipolar term has mean ~= +1054 (one full-scale channel is a 0..2109 square at the join scale) and never goes negative; AFTER the DC block it is zero-mean and peaks near +-2109/2 = +-1054.5. The join scale is psg * 33/16 = (psg << 2) * 33/64 - the upstream PC-88 board mix BASELINE (PC88MiSTer.vhd:2505-2513) times the -86 board's SSG:FM summing ratio, MEASURED from the owner's paired SNDTEST captures on each segment's own steady-state plateau (the within-side SSG(max)/FM(max) is XE10+PMD -8.79 dB, XE10 no-PMD -8.79 dB and this core -3.03 dB before the trim; tb_pc9821_opna_sndtest_balance is that ratio's fail-first, and pc9821_opna.sv's SSG_JOIN_NUM/SSG_JOIN_SHIFT carry the derivation) - and the per-channel unit is jt49_exp.v's LUT peak 1023 (upstream-identical file); the coupling cap's analytic droop (2109/(1+a^640) ~= 1075, period register 0x140 -> half period 640 SSG samples) lands in the checks' band +-1040..+-1110 (analytic peak +-3%). ymfm's s_amplitudes and NP2kai's vol_ssg absolutes are deliberately unused (their FM operator units do not close; NP2kai's absolute SSG path is demoted per the owner).
+// The SSG joins the -86 card's mix AC-COUPLED (zero-mean), not DC-coupled: the real board takes the YM2608's SSG off pin 27 (a YM2149-style unipolar output carrying a ~2 V DC offset, which jt49 models), passes it through the series coupling capacitor C7C1, and only then sums it equally into the YM3016 FM/DAC L/R (the PC-9801-86 board design). A series cap is a 1-pole high-pass y[n]=x[n]-x[n-1]+a*y[n-1], a=1-2^-14, clocked at the SSG sample rate (499.2 kHz = cen/16). This bench is the fail-first for that DC block: BEFORE the DC block the unipolar term has mean ~= +1054 (one full-scale channel is a 0..2109 square at the join scale) and never goes negative; AFTER the DC block it is zero-mean and peaks near +-2109/2 = +-1054.5. The join scale is psg * 33/16 = (psg << 2) * 33/64 - the upstream PC-88 board mix BASELINE (PC88MiSTer.vhd:2505-2513) times the -86 board's SSG:FM summing ratio, MEASURED from the paired SNDTEST captures on each segment's own steady-state plateau (the within-side SSG(max)/FM(max) is XE10+PMD -8.79 dB, XE10 no-PMD -8.79 dB and this core -3.03 dB before the trim; tb_pc9821_opna_sndtest_balance is that ratio's fail-first, and pc9821_opna.sv's SSG_JOIN_NUM/SSG_JOIN_SHIFT carry the derivation) - and the per-channel unit is jt49_exp.v's LUT peak 1023 (upstream-identical file); the coupling cap's analytic droop (2109/(1+a^640) ~= 1075, period register 0x140 -> half period 640 SSG samples) lands in the checks' band +-1040..+-1110 (analytic peak +-3%). ymfm's s_amplitudes and NP2kai's vol_ssg absolutes are deliberately unused (their FM operator units do not close; NP2kai's absolute SSG path is demoted below the captures).
 //
 // The SSG joins the -86 card's mix AC-COUPLED (zero-mean), not DC-coupled: the
 // real board takes the YM2608's SSG off pin 27 - a YM2149-style unipolar output
@@ -24,7 +24,7 @@
 //     with :2509-2513 `sndPSG(15:14)<="00"; sndPSG(1:0)<="00"; sndL <= sndFML +
 //     sndPSG`; jt12_top.v's own combined output says << 3, but it is UNUSED
 //     upstream, wraps at 16 bits, and PC88's board mix overrides it) TIMES the
-//     -86 board's SSG:FM summing ratio, MEASURED from the owner's paired SNDTEST
+//     -86 board's SSG:FM summing ratio, MEASURED from the paired SNDTEST
 //     captures on each segment's own steady-state plateau. The within-side ratio
 //     SSG(max)/FM(max) is XE10+PMD -8.79 dB, XE10 no-PMD -8.79 dB and this core
 //     -3.03 dB (SEG 07 over SEG 01; tools/sndtest_balance.py, output
@@ -52,7 +52,7 @@
 // [what is deliberately NOT used] ymfm's s_amplitudes[31]=16382/ch absolute
 //     (its FM operator unit at the rshift=1 output does not close) and NP2kai's
 //     vol_ssg absolutes (48*vol_ssg = 6144 bipolar; its absolute SSG gain path
-//     is demoted per the owner's re-ranking).
+//     is demoted per the evidence ranking).
 //
 // ---- checks ----
 // CHK-1 the stimulus is not vacuous: with every level at 0 the board output is

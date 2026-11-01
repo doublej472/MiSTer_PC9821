@@ -723,6 +723,16 @@ module tb_protected_mode #(
     longint vipt_store_wait_issues = 0;
     longint vipt_store_replays = 0;
     reg vipt_store_replay_pending = 0;
+    // Stores posted through the direct store port (data_access st_take), and
+    // the share of them while paging was off.
+    longint posted_stores = 0;
+    longint posted_stores_unpaged = 0;
+    always @(posedge cclk)
+        if (reset_n && dut.st_take) begin
+            posted_stores <= posted_stores + 1;
+            if (!dut.CR0[31])
+                posted_stores_unpaged <= posted_stores_unpaged + 1;
+        end
 
     // A load-to-AGI regression must both exercise the dependency and prevent
     // the dependent instruction from issuing while its EA input is pending.
@@ -1259,6 +1269,10 @@ module tb_protected_mode #(
                             ($test$plusargs("expect_vipt_store_replay") &&
                              ((vipt_store_wait_issues == 0) ||
                               (vipt_store_replays == 0))) ||
+                            ($test$plusargs("expect_store_post") &&
+                             (posted_stores == 0)) ||
+                            ($test$plusargs("expect_store_post_unpaged") &&
+                             (posted_stores_unpaged == 0)) ||
                             ($test$plusargs("expect_cache_flush_insn") &&
                              (cache_flush_insn_count == 0)) ||
                             ($test$plusargs("expect_platform_flush") &&
@@ -1368,6 +1382,11 @@ module tb_protected_mode #(
                                 $display("  VIPT store waits/replays: %0d/%0d",
                                          vipt_store_wait_issues,
                                          vipt_store_replays);
+                            if ($test$plusargs("expect_store_post") ||
+                                $test$plusargs("expect_store_post_unpaged") ||
+                                $test$plusargs("trace_io"))
+                                $display("  Posted stores: %0d (%0d unpaged)",
+                                         posted_stores, posted_stores_unpaged);
                             if (platform_flushes != 0)
                                 $display("  Flushes: %0d, last busy-to-done %0d cycles",
                                          platform_flushes, platform_flush_cycles);

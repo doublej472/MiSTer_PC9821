@@ -1,13 +1,13 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GFX_ENGINE_HOLD: the GRCG's and the EGC's per-OPERATION cost measured where the CPU feels it - the number of clk_sys the M10K array's port A was ENABLED and the number of clk_sys the CPU held its request unaccepted (the same condition pc9821_perf_msg's MW counts) - for the shapes TH05 issues through the real pc9821_gvram with the real GRCG and EGC inside it. It asserts the FLOOR rather than a model of it: a GRCG RMW store MUST issue one array access per enabled lane and no more, and MUST NOT hold the CPU for a presentation state the array does not need (the GRCG captured the access in G_IDLE and presented it in G_ST) nor for a tail state whose only job is a later ready (a write has no response strobe, so its ready IS its completion). r13/314 removes both and presents the second pair of a two-pair TDW burst in place: the GRCG hold falls 2 clk_sys on the RMW/walk shapes and 3 on the TDW / 0xFF-datum burst shapes while every access count and every byte readback is unchanged. The EGC shapes are FLOOR GUARDS, not wins: its hold is its produce pipeline (r13/269) plus the array accesses, with no dispatch bubble at the ARRAY to remove, so this lane leaves it and registers the number the decoupling lane must move. FAIL-FIRST: the access count comes from the array's own port-A enable and the GRCG shapes hold the CPU 2-3 clk_sys longer on the pre-change tree, so the same file (which connects no new port) fails there.
+// TB_PC9821_GFX_ENGINE_HOLD: the GRCG's and the EGC's per-OPERATION cost measured where the CPU feels it - the number of clk_sys the M10K array's port A was ENABLED and the number of clk_sys the CPU held its request unaccepted (the same condition pc9821_perf_msg's MW counts) - for the shapes TH05 issues through the real pc9821_gvram with the real GRCG and EGC inside it. It asserts the FLOOR rather than a model of it: a GRCG RMW store MUST issue one array access per enabled lane and no more, and MUST NOT hold the CPU for a presentation state the array does not need (the GRCG captured the access in G_IDLE and presented it in G_ST) nor for a tail state whose only job is a later ready (a write has no response strobe, so its ready IS its completion). The current path removes both and presents the second pair of a two-pair TDW burst in place: the GRCG hold falls 2 clk_sys on the RMW/walk shapes and 3 on the TDW / 0xFF-datum burst shapes while every access count and every byte readback is unchanged. The EGC shapes are FLOOR GUARDS, not wins: its hold is its produce pipeline plus the array accesses, with no dispatch bubble at the ARRAY to remove, so the design leaves it and registers the number the decoupling lane must move. FAIL-FIRST: the access count comes from the array's own port-A enable and the GRCG shapes hold the CPU 2-3 clk_sys longer on the pre-change tree, so the same file (which connects no new port) fails there.
 //
-// r13/310 shortened the GVRAM's own one-visit lane walk and measured it in exactly this pair
-// (tb_pc9821_gfx_walk_hold.sv). What it left, and names in its own section 5, is the same two
+// An earlier change shortened the GVRAM's own one-visit lane walk and measured it in exactly this pair
+// (tb_pc9821_gfx_walk_hold.sv). What it left is the same two
 // classes of dead cycle ONE LEVEL UP in the engines that own the walk: a DISPATCH cycle (the GRCG
 // captured in G_IDLE and presented in G_ST) and a TAIL cycle (G_RESP asserting cpu_ready after the
-// walk's cl_done, where a write's ready IS its completion). r13/314 removes both, and presents the
+// walk's cl_done, where a write's ready IS its completion). The engines now remove both, and presents the
 // second pair of a two-pair TDW burst in place rather than through a state.
 //
 // IT DOES NOT CONNECT A NEW PORT, on purpose: the same file must build and run against the
@@ -35,8 +35,8 @@ module tb_pc9821_gfx_engine_hold;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -60,9 +60,9 @@ module tb_pc9821_gfx_engine_hold;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -166,7 +166,7 @@ module tb_pc9821_gfx_engine_hold;
   // ---- THE MEASUREMENT ----
   // One CPU plane-window operation, measured. `accesses` counts every clk_sys the array's port A
   // was enabled from the request being PRESENTED until the engine has drained: the CPU's own hold
-  // ends at `ready` (below), but the EGC's write pass is POSTED (r13/159) and keeps writing after
+  // ends at `ready` (below), but the EGC's write pass is POSTED and keeps writing after
   // it, so the array work of the WHOLE transaction is the honest floor. `hold` counts the clk_sys
   // the CPU held the request unaccepted - the SAME condition pc9821_perf_msg's MW counts - so both
   // numbers are the ones a capture reports.
@@ -183,7 +183,7 @@ module tb_pc9821_gfx_engine_hold;
       @(posedge clk); #1;
       while (!cpu_ready) begin hold = hold + 1; @(posedge clk); #1; end
       // The CPU's ready has come; the store may still be draining. Release the request the way
-      // z486 does and let the engine return to idle before the access count is read. r13/322 made
+      // z486 does and let the engine return to idle before the access count is read. The decouple made
       // the GRCG's and the plain path's stores decoupled too, so the wait covers EVERY owner: the
       // array FSM (gstate/m_mode), the EGC's produce, the GRCG's sequencer and the plain client.
       @(negedge clk);
@@ -214,7 +214,7 @@ module tb_pc9821_gfx_engine_hold;
       pname[6] = "E2 EGC 0x1400 fill 32-bit";
       pname[7] = "E3 EGC 0x28F0 shifted copy 32-bit";
       pname[8] = "E4 EGC 0x3100 read 32-bit";
-      // Array accesses for ONE operation: the work itself, which r13/314 does not change.
+      // Array accesses for ONE operation: the work itself, which that change does not touch.
       // "was N" is this bench's measurement on the PRE-CHANGE tree.
       want_acc[0] = 4;   // was 4   (two lanes, each read for its old word then written)
       want_acc[1] = 8;   // was 8   (four lanes, same)
@@ -233,7 +233,7 @@ module tb_pc9821_gfx_engine_hold;
       max_hold[2] = 5;   // was 8   (plus the second pair presented in place, not through G_TD)
       max_hold[3] = 5;   // was 8
       max_hold[4] = 7;   // was 7   (a READ keeps its accept/response pair of tail states)
-      max_hold[5] = 6;   // was 6   (guard: the EGC is not this lane's to shorten)
+      max_hold[5] = 6;   // was 6   (guard: the EGC's hold is not shortened)
       max_hold[6] = 12;  // was 12
       max_hold[7] = 12;  // was 12
       // E4 is the only READ shape, so it is the only row the pipelined produce moves:

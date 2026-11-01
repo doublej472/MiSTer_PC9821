@@ -4,9 +4,9 @@
 // the three parts are generate-if'd by SAMPLER_EN / SNOOP_EN / TRIG_KIND, and system.sv does not
 // instantiate the module at all unless one of them is on.
 //
-// It is the pn-stall lane's instrument (a Policenauts intro stall that took a day to find because
-// every instrument was a one-off on a scratch branch), promoted. The method it serves is
-// in AGENTS.md, "Testing on a real MiSTer" (the debug UART).
+// It was built for a Policenauts intro stall (which took a day to find because
+// every instrument was a one-off on a scratch branch), and promoted. The method it serves is
+// in docs/mister-testing.md, "The debug UART".
 //
 // RECORDS (all `0xA5, type, ...`, big-endian; the lengths are pc9821_dbg_mux's table):
 //   0x20 / 0x21  SAMPLE, 34 bytes, every SAMPLE_MS ms (0x21 = a sample was skipped just before

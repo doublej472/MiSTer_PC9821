@@ -35,14 +35,13 @@ module tb_pc9821_gdc_raster;
   reg rst_n = 0;
 
   wire [7:0]  io_dout;
-  wire [15:0] cg_code_win; wire cg_lr_win;
   wire [7:0]  cg_win_dout;
   wire [18:0] font_req_addr; wire font_req;
   wire vsync_active, vsync_irq, disp_on, gfx_access_page, gfx_disp, gfx_egc_gate;
   wire [15:0] dbg_sad; wire [7:0] dbg_pitch; wire dbg_col40, dbg_disp;
   wire text_opaque, text_cell, pix_h_active, pix_v_active, gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's RAM, r13/227).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's RAM).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -61,7 +60,6 @@ module tb_pc9821_gdc_raster;
       .tram_cpu_addr(14'd0), .tram_cpu_din(8'h00), .tram_cpu_we(1'b0),
       .tram_cpu_dout(tram_cpu_dout),
       .font_ld_addr(11'd0), .font_ld_data(16'd0), .font_ld_we(1'b0),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(5'd0), .cg_win_rd(1'b0),
       .cg_win_dout(cg_win_dout), .cg_win_din(8'h00), .cg_win_we(1'b0),
       .font_req_addr(font_req_addr), .font_req(font_req),

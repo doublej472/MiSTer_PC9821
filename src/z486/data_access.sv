@@ -21,10 +21,20 @@ module data_access
     // store path below then has to classify the store instead of assuming the
     // hard-coded PC/AT map.
     input  logic                    memmap_windows,
+    // With windows: the sidecar page's posted-store verdict (z486.sv, from the
+    // compile-time template): the page is cacheable RAM now.
+    input  logic                    memmap_post_ok,
+    output logic [19:0]             sidecar_page,
     input  logic                    fast_store_accepted,
     output logic [11:0]             dcache_vipt_probe_offset,
     output logic                    dcache_vipt_probe_valid,
     output logic [31:0]             dcache_vipt_resolve_phys_addr,
+    // dcache_vipt_resolve_phys_addr's two arms and the late select between them
+    // (the VIPT TLB hit), so the D-cache tag compare runs on both arms in
+    // parallel with the TLB's own compare (l1_cache vipt_hit_vec).
+    output logic [31:0]             dcache_vipt_resolve_tlb_phys,
+    output logic [31:0]             dcache_vipt_resolve_alt_phys,
+    output logic                    dcache_vipt_resolve_use_tlb,
     output logic                    dcache_vipt_resolve_valid,
     output logic [3:0]              fast_store_be,
     output logic                    fast_store_valid,
@@ -43,6 +53,8 @@ module data_access
     input  logic                    vipt_tlb_hit,
     input  logic                    vipt_tlb_is_vga_mem,
     input  logic [31:0]             vipt_tlb_phys_addr,
+    input  logic [31:0]             vipt_tlb_phys_hit_form,
+    input  logic [31:0]             vipt_tlb_phys_miss_form,
     input  logic                    vipt_tlb_user,
     input  logic                    vipt_tlb_writable,
     output logic                    sidecar_bg_pre,
@@ -105,6 +117,18 @@ module data_access
     output logic [1:0]              vipt_load_wb_size_r,
     output logic [31:0]             vipt_load_wb_target_r,
     output logic                    vipt_load_wb_valid_r,
+    // The write-back's byte-normalized GPR one-hot, gated by its valid:
+    // = vipt_load_wb_valid_r ? 8'h01 << norm(dst, size) : 0, every cycle.
+    output logic [7:0]              vipt_load_wb_wmask_r,
+    // The write-back's forwarding-view hits per GPR byte, [r*4 + b]: valid, not
+    // an M3 ALU result, register r = norm(dst, size), byte b in its lanes
+    // (gpr_write_merge hitv3), registered with the write-back.
+    output logic [31:0]             vipt_load_wb_view_hit_r,
+    // The write-back's AH lane select for gpr_write_merge's pv3f:
+    // (vipt_load_wb_size_r == 0) && vipt_load_wb_dst_r[2], loaded on exactly
+    // the edges vipt_load_wb_dst_r/_size_r are, from the same sources, so it
+    // equals that decode every cycle (tests/equiv/producer_ah_reg.v).
+    output logic                    vipt_load_wb_ah_r,
     // D2 instruction and issue
     input  logic                    d2_vipt_ea_hazard,
     // An older deferred memory token owns this load's destination and its
@@ -154,6 +178,7 @@ module data_access
     input  logic                    uc_is_mem_busop,
     input  logic                    uc_is_write,
     input  logic                    uc_p_pure_dly,
+    input  logic                    uc_bus_or_dly,      // this uop is a bus op or a DLY (uc[38])
     input  logic                    x87_direct_mem_req,
     output logic                    pop_direct_r,
     output logic                    rd_fast_finish,
@@ -197,6 +222,35 @@ wire       vipt_load_retire;
 // live TLB lookup sits in the RD cycle. A miss goes to paging's registered
 // path.
 reg        ucrd_valid_r;               // probed last cycle; resolves now
+// A bus read updates OPR_R no earlier than the routine's next bus or DLY
+// uop, and the microcode relies on it: LD_DESCRIPTOR reads the second
+// descriptor dword while the uops before its DLY still use the first. A hit
+// resolving under any other uop holds its data and commits at that next bus
+// or DLY uop (or at the end of the instruction); a bus uop that finds it held
+// waits one cycle, as it would wait for the slow path's read (upstream 3b27dd0).
+reg        ucrd_held_r;
+reg [31:0] ucrd_held_data_r;
+// A first-uStep or x87 read stops every uop after a miss (its DLY may fold
+// the RNI), as does a read whose DLY passed the resolve cycle. Otherwise a
+// missed read in a routine is a bus read in flight: only bus and DLY uops,
+// and the instruction's delay slot, wait for OPR_R.
+reg        ucrd_strict_r;
+// The linear page of the last microcode read that missed the L1.  A read
+// past the first uStep (or a first-uStep read that is not its EA read, the
+// only kind that probed before) skips the probe on that page and enters
+// paging directly: a device window (VRAM, the PC-98 template's uncached
+// classes) never hits, and a cold page streams through paging's line fill,
+// so probing first would only add the probe/resolve cycles to every element
+// of a REP MOVS/LODS over it.  Any probe that hits that physical page (a direct
+// load, a first-uStep EA read) shows the page is cached again and clears the
+// entry.  Only a hint: either path is correct.
+reg        ucrd_nohit_valid_r;
+reg [19:0] ucrd_nohit_page_r;
+reg [19:0] ucrd_nohit_phys_r;          // its physical page: a later L1 hit there clears it
+wire       ucrd_old_class = i_first && i_ex.ind_is_ea;
+wire       ucrd_nohit_skip = !ucrd_old_class && ucrd_nohit_valid_r &&
+                             (ind_linear[31:12] == ucrd_nohit_page_r);
+wire       ucrd_miss_busy = ucrd_slow_req_r || ucrd_slow_wait_r;
 // In the resolve cycle a uop with side effects runs only when the read's
 // translation was already known good in the RD cycle (the sidecar held its
 // page), so no fault can follow; a bus operation always waits, keeping
@@ -208,8 +262,9 @@ reg        ucrd_tlbok_r;               // the read's translation was known good
 // uop, or a DLY that folds its instruction's RNI (MOV r,m) retires and the
 // delay slot copies a stale OPR_R before the slow path returns or faults.
 assign stall_ucrd = (ucrd_valid_r && (!ucrd_tlbok_r || (!uc_p_pure_dly && uc_busreq))) ||
-                        ucrd_slow_req_r || ucrd_slow_wait_r;
-wire       ucrd_busy = ucrd_valid_r || ucrd_slow_req_r || ucrd_slow_wait_r;
+                        (ucrd_held_r && uc_bus_or_dly && !uc_p_pure_dly) ||
+                        (ucrd_miss_busy && (ucrd_strict_r || uc_bus_or_dly || i_rni_delay));
+wire       ucrd_busy = ucrd_valid_r || ucrd_held_r || ucrd_miss_busy;
 reg        rd_fast_probed_r;            // D2 preread was accepted
 reg [31:0] rd_fast_linear_r;
 reg [1:0]  rd_fast_size_r;
@@ -288,6 +343,23 @@ assign d2_plain_load_overlap_ready = vipt_load_ex_r.valid &&
                                 !d2_vipt_ea_hazard &&
                                 !vipt_load_replay_r.valid &&
                                 !vipt_load_slow_busy && !single_step;
+
+// The GPR one-hot a write-back of (dst, size) writes (data_unit load_wb_widx).
+function automatic [7:0] wb_wmask_of(input [2:0] dst, input [1:0] size);
+    wb_wmask_of = 8'h01 << ((size == 2'd0) ? {1'b0, dst[1:0]} : dst);
+endfunction
+
+// gpr_write_merge's producer-3 view hit for every GPR byte, from the fields
+// the write-back registers take (dst_norm(3), be_of_size and !wb_is_alu).
+function automatic [31:0] wb_view_hit_of(input [2:0] dst, input [1:0] size, input is_alu);
+    logic [2:0] r;
+    logic [3:0] be;
+    begin
+        r  = (size == 2'd0) ? {1'b0, dst[1:0]} : dst;
+        be = (size == 2'd0) ? (dst[2] ? 4'h2 : 4'h1) : (size == 2'd1) ? 4'h3 : 4'hF;
+        wb_view_hit_of = is_alu ? 32'h0 : ({28'h0, be} << {r, 2'b00});
+    end
+endfunction
 
 // synthesis translate_off
 wire [2:0] vipt_load_wb_norm_dst = (vipt_load_wb_size_r == 2'd0)
@@ -435,6 +507,21 @@ assign dcache_vipt_resolve_valid = (((vipt_load_ex_r.valid &&
 assign ucrd_hit = ucrd_valid_r && ucrd_translation_ok && !vipt_tlb_is_vga_mem &&
                 dcache_vipt_resolve_hit;
 assign dcache_vipt_resolve_phys_addr = vipt_resolve_phys;
+// vipt_resolve_phys = page_en ? (tlb_hit ? hit_form : miss_form) : linear
+//                   = (page_en && tlb_hit) ? hit_form : (page_en ? miss_form : linear)
+assign dcache_vipt_resolve_tlb_phys = vipt_tlb_phys_hit_form;
+assign dcache_vipt_resolve_alt_phys = vipt_page_enabled ? vipt_tlb_phys_miss_form
+                                                        : vipt_resolve_linear;
+assign dcache_vipt_resolve_use_tlb  = vipt_page_enabled && vipt_tlb_hit;
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && ((vipt_tlb_phys_addr !== (vipt_tlb_hit ? vipt_tlb_phys_hit_form
+                                                          : vipt_tlb_phys_miss_form)) ||
+                    (vipt_resolve_phys !== (dcache_vipt_resolve_use_tlb
+                                            ? dcache_vipt_resolve_tlb_phys
+                                            : dcache_vipt_resolve_alt_phys))))
+        $fatal(1, "data_access: the VIPT resolve address arms disagree with the address");
+// synthesis translate_on
 
 // A synthetic RNI is required only when the direct pipeline drains. Interior
 // load boundaries are represented by their D2 issue and WB commit tokens.
@@ -442,6 +529,38 @@ assign vipt_load_retire = vipt_load_wb_valid_r && !vipt_load_overlap_r &&
                           !vipt_load_ex_r.valid &&
                           !vipt_load_replay_r.valid &&
                           !vipt_load_slow_busy;
+
+// The write-back token's valid, write mask and view hits with the kill
+// (q_flush || any_fault || interrupt_entry) applied last, as a synchronous
+// clear over the next value formed without it: q_flush is the taken-branch
+// decision (flags forward -> condition -> q_flush, fan-out ~580) and reached
+// these flops through the whole token update. Same next state as the single
+// always_ff below had (a later assignment wins: the kill over the slow
+// completion over the EX hit); tests/equiv/wb_kill_last.v proves it.
+wire vipt_wb_ex_done   = vipt_load_ex_r.valid && vipt_load_ex_probed_r &&
+                         vipt_load_ex_hit && !any_fault;
+wire vipt_wb_slow_done = vipt_load_slow_wait_r && !mem_servicing;
+wire vipt_wb_kill      = q_flush || any_fault || interrupt_entry;
+`Z486_KEEP_COMB wire        vipt_wb_valid_nk = vipt_wb_slow_done || vipt_wb_ex_done;
+`Z486_KEEP_COMB wire [7:0]  vipt_wb_wmask_nk =
+    vipt_wb_slow_done ? wb_wmask_of(vipt_load_slow_r.dst, vipt_load_slow_r.write_size) :
+    vipt_wb_ex_done   ? wb_wmask_of(vipt_load_ex_r.dst, vipt_load_ex_r.write_size) : 8'd0;
+`Z486_KEEP_COMB wire [31:0] vipt_wb_view_hit_nk =
+    vipt_wb_slow_done ? wb_view_hit_of(vipt_load_slow_r.dst, vipt_load_slow_r.write_size,
+                                       vipt_load_slow_r.is_alu) :
+    vipt_wb_ex_done   ? wb_view_hit_of(vipt_load_ex_r.dst, vipt_load_ex_r.write_size,
+                                       vipt_load_ex_r.is_alu) : 32'd0;
+always_ff @(posedge clk) begin
+    if (!reset_n || vipt_wb_kill) begin
+        vipt_load_wb_valid_r <= 1'b0;
+        vipt_load_wb_wmask_r <= 8'd0;
+        vipt_load_wb_view_hit_r <= 32'd0;
+    end else begin
+        vipt_load_wb_valid_r <= vipt_wb_valid_nk;
+        vipt_load_wb_wmask_r <= vipt_wb_wmask_nk;
+        vipt_load_wb_view_hit_r <= vipt_wb_view_hit_nk;
+    end
+end
 
 always_ff @(posedge clk) begin
     if (!reset_n) begin
@@ -454,7 +573,6 @@ always_ff @(posedge clk) begin
         vipt_load_slow_wait_r <= 1'b0;
         vipt_slow_phys_ok_r <= 1'b0;
         vipt_slow_phys_r <= 32'd0;
-        vipt_load_wb_valid_r <= 1'b0;
         vipt_load_ex_probed_r <= 1'b0;
         vipt_load_wb_data_r <= 32'd0;
         vipt_load_wb_ret_r <= 1'b0;
@@ -462,12 +580,11 @@ always_ff @(posedge clk) begin
         vipt_load_wb_dst_r <= 3'd0;
         vipt_load_wb_dst_onehot_r <= 8'd0;
         vipt_load_wb_size_r <= 2'd2;
+        vipt_load_wb_ah_r <= 1'b0;
         vipt_load_wb_is_alu_r <= 1'b0;
         vipt_load_wb_alu_op_r <= 5'd0;
         vipt_load_overlap_r <= 1'b0;
     end else begin
-        vipt_load_wb_valid_r <= 1'b0;
-
         if (vipt_load_wb_valid_r)
             vipt_load_overlap_r <= 1'b0;
         if (i_issue && d2_plain_load_overlap_ready)
@@ -518,7 +635,6 @@ always_ff @(posedge clk) begin
                     vipt_load_replay_r <= vipt_load_ex_r;
                 end
             end else if (vipt_load_ex_hit && !any_fault) begin
-                vipt_load_wb_valid_r <= 1'b1;
                 // A RET writes its new ESP through the load port and keeps
                 // the loaded target for the redirect.
                 vipt_load_wb_data_r <= vipt_load_ex_r.is_ret ? vipt_load_ex_r.ret_esp
@@ -530,6 +646,8 @@ always_ff @(posedge clk) begin
                 vipt_load_wb_dst_r <= vipt_load_ex_r.dst;
                 vipt_load_wb_dst_onehot_r <= vipt_load_ex_r.dst_onehot;
                 vipt_load_wb_size_r <= vipt_load_ex_r.write_size;
+                vipt_load_wb_ah_r <= (vipt_load_ex_r.write_size == 2'd0) &&
+                                     vipt_load_ex_r.dst[2];
                 vipt_load_wb_is_alu_r <= vipt_load_ex_r.is_alu;
                 vipt_load_wb_alu_op_r <= vipt_load_ex_r.alu_op;
             end else if (!any_fault) begin
@@ -588,7 +706,6 @@ always_ff @(posedge clk) begin
         // drops rather than treating the first fragment as a completed load.
         if (vipt_load_slow_wait_r && !mem_servicing) begin
             vipt_load_slow_wait_r <= 1'b0;
-            vipt_load_wb_valid_r <= 1'b1;
             vipt_load_wb_data_r <= vipt_load_slow_r.is_ret ? vipt_load_slow_r.ret_esp
                                  : format_hardwired_load(
                 OPR_R, 2'd0, vipt_load_slow_r.mem_size,
@@ -598,6 +715,8 @@ always_ff @(posedge clk) begin
             vipt_load_wb_dst_r <= vipt_load_slow_r.dst;
             vipt_load_wb_dst_onehot_r <= vipt_load_slow_r.dst_onehot;
             vipt_load_wb_size_r <= vipt_load_slow_r.write_size;
+            vipt_load_wb_ah_r <= (vipt_load_slow_r.write_size == 2'd0) &&
+                                 vipt_load_slow_r.dst[2];
             vipt_load_wb_is_alu_r <= vipt_load_slow_r.is_alu;
             vipt_load_wb_alu_op_r <= vipt_load_slow_r.alu_op;
         end
@@ -607,7 +726,6 @@ always_ff @(posedge clk) begin
             vipt_load_replay_r.valid <= 1'b0;
             vipt_load_slow_req_r <= 1'b0;
             vipt_load_slow_wait_r <= 1'b0;
-            vipt_load_wb_valid_r <= 1'b0;
             vipt_load_ex_probed_r <= 1'b0;
             vipt_load_overlap_r <= 1'b0;
         end
@@ -626,6 +744,18 @@ always_ff @(posedge clk) begin
     if (reset_n && vipt_load_wb_valid_r &&
         (vipt_load_wb_dst_onehot_r !== (8'h01 << vipt_load_wb_norm_dst)))
         $fatal(1, "VIPT WB destination mask mismatch");
+    if (reset_n && (vipt_load_wb_wmask_r !==
+                    (vipt_load_wb_valid_r ? wb_wmask_of(vipt_load_wb_dst_r, vipt_load_wb_size_r)
+                                          : 8'h00)))
+        $fatal(1, "VIPT WB write mask %b is not the valid write-back's", vipt_load_wb_wmask_r);
+    if (reset_n && (vipt_load_wb_view_hit_r !==
+                    (vipt_load_wb_valid_r ? wb_view_hit_of(vipt_load_wb_dst_r, vipt_load_wb_size_r,
+                                                           vipt_load_wb_is_alu_r)
+                                          : 32'h0)))
+        $fatal(1, "VIPT WB view hits %h are not the valid write-back's", vipt_load_wb_view_hit_r);
+    if (reset_n && (vipt_load_wb_ah_r !==
+                    ((vipt_load_wb_size_r == 2'd0) && vipt_load_wb_dst_r[2])))
+        $fatal(1, "VIPT WB AH select %b is not the write-back's", vipt_load_wb_ah_r);
 end
 // synthesis translate_on
 
@@ -662,12 +792,17 @@ wire rd_fast_hit = rd_fast_valid_r && rd_fast_probed_r &&
 assign rd_fast_finish = rd_fast_valid_r && i_first && uc_exec;
 // A microcode read hit writes OPR_R as paging does for a single access: the
 // operand shifted down from its byte lane and zero-extended from its size.
-assign fast_opr_commit = (rd_fast_finish && rd_fast_hit) || ucrd_hit;
-assign fast_opr_data = ucrd_valid_r
-    ? format_hardwired_load(dcache_vipt_resolve_data, ucrd_linear_r[1:0],
-                            ucrd_size_r, LOAD_RESULT_COPY)
-    : format_hardwired_load(dcache_vipt_resolve_data, rd_fast_lane_r,
-                            rd_fast_size_r, LOAD_RESULT_COPY);
+wire [31:0] ucrd_hit_data = format_hardwired_load(dcache_vipt_resolve_data, ucrd_linear_r[1:0],
+                                                  ucrd_size_r, LOAD_RESULT_COPY);
+wire        ucrd_hit_hold = ucrd_hit && !ucrd_x87_r && !uc_bus_or_dly && !i_rni_delay;
+wire        ucrd_held_commit = ucrd_held_r &&
+    (uc_bus_or_dly || i_rni_delay || !uc_active || q_flush || any_fault || interrupt_entry);
+assign fast_opr_commit = (rd_fast_finish && rd_fast_hit) || (ucrd_hit && !ucrd_hit_hold) ||
+                         ucrd_held_commit;
+assign fast_opr_data = ucrd_held_r ? ucrd_held_data_r
+                     : ucrd_valid_r ? ucrd_hit_data
+                     : format_hardwired_load(dcache_vipt_resolve_data, rd_fast_lane_r,
+                                             rd_fast_size_r, LOAD_RESULT_COPY);
 always_ff @(posedge clk) begin
     if (!reset_n) begin
         rd_fast_valid_r <= 1'b0;
@@ -743,18 +878,21 @@ assign dir_access_size = rd_fast_valid_r
 // submission remains idle-gated above.  This keeps mem_servicing out of the
 // live-TLB/cache-address cone without changing request ordering.
 assign vipt_slow_addr_owned = vipt_load_slow_req_r;
-// A cacheable, non-crossing first-uStep EA read (or x87 direct operand read)
-// with paging idle probes the cache instead of entering paging; a missed one
-// enters paging from its token.
-// A locked read (LOCK prefix, XCHG with memory) must read memory, so it never
-// takes the cache-probing microcode-read path.
+// A cacheable, non-crossing microcode read from any uStep (or x87 direct
+// operand read) with paging idle probes the cache instead of entering paging;
+// a missed one enters paging from its token (upstream 3b27dd0; it was the
+// first-uStep EA read only).
+// A locked read (LOCK prefix, XCHG with memory, and the microcode's locked
+// descriptor/TSS read RD_OPR_WORD, z486.sv lock_read_uop) must read memory, so
+// it never takes the cache-probing microcode-read path.
 wire        ucrd_uc_read = uc_data_busreq && uc_is_mem_busop &&
     !uc_is_write && !uc_is_check_write && !mem_is_io && !locked_insn &&
-    (uc_buscode != BUSOP_RD_IND) && i_first && i_ex.ind_is_ea && !x87_direct_mem_req;
+    (uc_buscode != BUSOP_RD_IND) && (uc_buscode != BUSOP_RD_OPR_WORD) &&
+    !ucrd_nohit_skip && !x87_direct_mem_req;
 wire [1:0]  ucrd_size_now = x87_direct_mem_req ? 2'd2 : mem_eff_size;
 assign ucrd_route_pre = !hardwired_off && mem_op_eligible && (ucrd_uc_read || x87_direct_mem_req) &&
-    ind_linear_valid && !vipt_load_slow_req_r && !ucrd_valid_r &&
-    !ucrd_slow_req_r && !ucrd_slow_wait_r && paging_demand_idle &&
+    ind_linear_valid && !vipt_load_slow_req_r && !ucrd_valid_r && !ucrd_held_r &&
+    !ucrd_miss_busy && paging_demand_idle &&
     !access_crosses_dword(ucrd_size_now, ind_linear[1:0]) &&
     dcache_vipt_probe_ready && !ex_reprobe;
 // A held microcode uop must not probe twice; an x87 direct read is issued
@@ -771,16 +909,21 @@ wire        st_route_pre = !hardwired_off && mem_op_eligible && uc_data_busreq &
     paging_demand_idle && !ucrd_busy && !vipt_load_slow_req_r &&
     !rmw_store_valid && dcache_wr_ready;
 wire        st_user = (pg_cpl == 2'd3);
+wire        st_tlb_ok = vipt_tlb_hit && !vipt_tlb_is_vga_mem && (!st_user || vipt_tlb_user) &&
+                        vipt_tlb_dirty && (vipt_tlb_writable || (!st_user && !CR0[16]));
 // A template window can put an uncached class anywhere, and a store to such a
-// window must not post into the D-cache (the device would never see it; the
-// template cannot fold into this condition, which data_access evaluates before
-// the memory unit has classified anything).  Every store takes the classifying
-// demand path when any window is enabled; with none enabled the hard-coded map
-// is exact and the posted path stays.
-wire        st_postable = !memmap_windows && (vipt_page_enabled
-    ? (vipt_tlb_hit && !vipt_tlb_is_vga_mem && (!st_user || vipt_tlb_user) &&
-       vipt_tlb_dirty && (vipt_tlb_writable || (!st_user && !CR0[16])))
-    : (ind_linear[31:17] != 15'h5));
+// window must not post into the D-cache's store queue: the queue merges stores
+// to one dword and drains behind the bus unit's VGA-ordered direct reads, so a
+// device would see fewer, later writes.  With windows the post is gated by the
+// sidecar page's verdict instead, which z486.sv derives from the compile-time
+// template (the physical page is cacheable RAM: the sidecar entry's PFN paged, the
+// linear page unpaged); every other store takes the classifying demand path.
+// The page is sidecar_page_r, which st_route_pre requires to be ind_linear's.
+// With no window the hard-coded map is exact.
+wire        st_postable = memmap_windows
+    ? (memmap_post_ok && (!vipt_page_enabled || st_tlb_ok))
+    : (vipt_page_enabled ? st_tlb_ok : (ind_linear[31:17] != 15'h5));
+assign sidecar_page = sidecar_page_r;
 assign st_route = st_route_pre && st_postable;
 assign st_take = st_route && !gp_fault_trigger &&
                  !(stall_wio || stall_x87_direct || stall_invlpg || stall_rmw_probe || stall_ucrd);
@@ -805,8 +948,23 @@ always_ff @(posedge clk) begin
         ucrd_phys_r <= 32'd0;
         ucrd_slow_req_r <= 1'b0;
         ucrd_slow_wait_r <= 1'b0;
+        ucrd_held_r <= 1'b0;
+        ucrd_held_data_r <= 32'd0;
+        ucrd_strict_r <= 1'b0;
+        ucrd_nohit_valid_r <= 1'b0;
+        ucrd_nohit_page_r <= 20'd0;
+        ucrd_nohit_phys_r <= 20'd0;
     end else begin
+        if (dcache_vipt_resolve_valid && dcache_vipt_resolve_hit &&
+            (vipt_resolve_phys[31:12] == ucrd_nohit_phys_r))
+            ucrd_nohit_valid_r <= 1'b0;
         ucrd_valid_r <= ucrd_take;
+        if (ucrd_held_commit)
+            ucrd_held_r <= 1'b0;
+        if (ucrd_hit_hold) begin
+            ucrd_held_r <= 1'b1;
+            ucrd_held_data_r <= ucrd_hit_data;
+        end
         ucrd_tlbok_r <= ucrd_take && sidecar_valid_r &&
                         (sidecar_page_r == ind_linear[31:12]) && !vipt_tlb_is_vga_mem &&
                         (!vipt_page_enabled ||
@@ -816,9 +974,17 @@ always_ff @(posedge clk) begin
             ucrd_size_r <= ucrd_size_now;
             ucrd_cpl_r <= pg_cpl;
             ucrd_x87_r <= x87_direct_mem_req;
+            ucrd_strict_r <= i_first || x87_direct_mem_req;
         end
         if (ucrd_valid_r && !ucrd_hit) begin
             ucrd_slow_req_r <= 1'b1;
+            ucrd_nohit_valid_r <= 1'b1;
+            ucrd_nohit_page_r <= ucrd_linear_r[31:12];
+            ucrd_nohit_phys_r <= vipt_resolve_phys[31:12];
+            // A DLY that passed the resolve cycle leaves its wait to the
+            // uops after it.
+            if (uc_bus_or_dly)
+                ucrd_strict_r <= 1'b1;
             ucrd_phys_ok_r <= ucrd_translation_ok && !vipt_tlb_is_vga_mem;
             ucrd_phys_r <= vipt_resolve_phys;
         end

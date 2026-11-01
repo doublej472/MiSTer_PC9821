@@ -106,4 +106,73 @@ function automatic z486_cache_class_t z486_classify_phys(
     z486_classify_phys = cls;
 endfunction
 
+// The posted-store verdict of one 4 KB physical page, a pure function of the
+// compile-time template: {P, Wb}.
+//   P  = the page classifies CACHEABLE with window 0 closed (its runtime select
+//        off) and the no-allocate bound at the parameter NO_ALLOC_BOUND;
+//   Wb = the page does NOT classify CACHEABLE with window 0 open.
+// A store may post (the direct store port, data_access st_postable) only when
+// P && !(Wb && win0_unmapped); outside window 0 Wb == !P, so the runtime select
+// reaches only window-0 pages.  The page is classified with addr_raw == addr_post
+// (the A20 mask leaves it unchanged; the caller qualifies that at run time), so
+// the VGA pre-wrap choice does not matter.  Exact per page only for windows on
+// page boundaries: z486.sv turns posting off for a template that is not.
+// The runtime RAM top (RAM_BOUND_ENABLE) is deliberately not an input: it only
+// keeps lines out of the L1 above the guest's RAM, and a store there reaches
+// the platform the same whether it posts or not (no line exists to hit; see
+// memory.sv RAM_BOUND_ENABLE).
+function automatic logic [1:0] z486_page_post_bits(
+    input logic [19:0] pfn,
+    input logic        vga_en,
+    input logic [1:0]  vga_class,
+    input logic [31:0] vga_base,
+    input logic [31:0] vga_top,
+    input logic        aperture_en,
+    input logic [1:0]  aperture_class,
+    input logic [31:0] aperture_base,
+    input logic [31:0] aperture_top,
+    input logic        alias_en,
+    input logic [1:0]  alias_class,
+    input logic [31:0] alias0_base,
+    input logic [31:0] alias0_top,
+    input logic [31:0] alias1_base,
+    input logic [31:0] alias1_top,
+    input logic [31:0] alias2_base,
+    input logic [31:0] alias2_top,
+    input logic        win0_en,
+    input logic [1:0]  win0_class,
+    input logic [31:0] win0_base,
+    input logic [31:0] win0_top,
+    input logic        no_alloc_en,
+    input logic [1:0]  no_alloc_class,
+    input logic [31:0] no_alloc_bound
+);
+    logic [31:0] a;
+    logic p, wb;
+    a = {pfn, 12'h000};
+    p = (z486_classify_phys(a, a, a,
+            vga_en, vga_class, vga_base, vga_top,
+            aperture_en, aperture_class, aperture_base, aperture_top,
+            alias_en, alias_class,
+            alias0_base, alias0_top, alias1_base, alias1_top, alias2_base, alias2_top,
+            1'b0, win0_class, win0_base, win0_top,
+            no_alloc_en, no_alloc_class, no_alloc_bound) == Z486_CACHE_CACHEABLE);
+    wb = (z486_classify_phys(a, a, a,
+            vga_en, vga_class, vga_base, vga_top,
+            aperture_en, aperture_class, aperture_base, aperture_top,
+            alias_en, alias_class,
+            alias0_base, alias0_top, alias1_base, alias1_top, alias2_base, alias2_top,
+            win0_en, win0_class, win0_base, win0_top,
+            no_alloc_en, no_alloc_class, no_alloc_bound) != Z486_CACHE_CACHEABLE);
+    z486_page_post_bits = {p, wb};
+endfunction
+
+// A window lies on whole 4 KB pages (or is disabled): the per-page verdict
+// above is then exact for every byte of the page.
+function automatic logic z486_window_page_aligned(input logic en,
+                                                  input logic [31:0] base,
+                                                  input logic [31:0] top);
+    z486_window_page_aligned = !en || ((base[11:0] == 12'h000) && (top[11:0] == 12'hfff));
+endfunction
+
 endpackage

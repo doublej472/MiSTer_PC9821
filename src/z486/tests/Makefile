@@ -147,7 +147,7 @@ PLA4_RTL := $(Z486_DIR)/protection.sv
 # Targets
 .PHONY: all build test-simple test-full test-386 test-186 test-protected test-pla4 test-l1-cache test-l1-icache test-memory-order test-cache-coherence test-load-waw test-gpr-hazard test-gpr-merge test-memmap-template check-reset-lists check-pragmas check-rom-columns check-shift-ucode test-interrupt-nmi test-paging-walker test-paging-tlb test-cache-flush test-x87-bridge test-x87-sequencer test-x87-executor test-x87-testfloat test-x87-fifo test-x87-core test-x87-integration test-x87-integer dhrystone clean help
 
-.PHONY: check-equiv test-release test-pc98-map test-protected-narrow check-generators test-data-access check-runner test-l1-tags-wide test-reset-restart test-fuzz
+.PHONY: check-equiv test-release test-pc98-map test-fuzz-pc98 dhrystone-pc98 test-protected-narrow check-generators test-data-access check-runner test-l1-tags-wide test-reset-restart test-fuzz
 .PHONY: test-bigmem test-addr-unit-reloc test-reset-sweep test-pc98-map-bus test-mem-resp test-protected-throttled
 .PHONY: test-protected-zero-wait test-fuzz-zero-wait
 .PHONY: test-throttle-rate test-throttle-invariance test-fuzz-throttle test-throttle-sweep
@@ -161,10 +161,10 @@ test-release:
 	$(MAKE) -j1 check-reset-lists check-pragmas check-rom-columns check-shift-ucode check-generators check-runner check-equiv
 	$(MAKE) -j1 test-l1-cache test-l1-icache test-memory-order test-mem-resp test-load-waw test-gpr-merge test-gpr-hazard test-data-access test-memmap-template test-interrupt-nmi test-paging-walker test-paging-tlb test-cache-flush test-cache-coherence test-reset-restart
 	$(MAKE) -j1 test-addr-unit-reloc test-reset-sweep test-pc98-map-bus
-	$(MAKE) -j1 test-protected test-protected-narrow test-protected-zero-wait test-protected-throttled test-throttle-rate test-throttle-invariance test-fuzz-throttle test-fuzz-zero-wait test-simple test-pc98-map test-bigmem test-l1-tags-wide test-fuzz
+	$(MAKE) -j1 test-protected test-protected-narrow test-protected-zero-wait test-protected-throttled test-throttle-rate test-throttle-invariance test-fuzz-throttle test-fuzz-zero-wait test-simple test-pc98-map test-fuzz-pc98 test-bigmem test-l1-tags-wide test-fuzz
 	$(MAKE) -j1 obj_dir_x87/Vtb_protected_mode
 	Z486_ENABLE_X87=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_x87/Vtb_protected_mode ./test_protected_mode.py --strict
-	$(MAKE) -j1 dhrystone
+	$(MAKE) -j1 dhrystone dhrystone-pc98
 
 check-runner:
 	python3 test_runner_contract.py
@@ -587,11 +587,21 @@ test-throttle-sweep: obj_dir/Vtb_protected_mode
 	FUZZ_THROTTLE="$(SWEEP_SELS)" python3 ./hazard/fuzz_hazard_v86.py --count $(SWEEP_COUNT) --first $(SWEEP_FIRST) --jobs $(JOBS)
 	FUZZ_THROTTLE="$(SWEEP_SELS)" python3 ./hazard/fuzz_hazard_emm.py --count $(SWEEP_COUNT) --first $(SWEEP_FIRST) --jobs $(JOBS)
 
+PC98_MAP_TESTS := pc98_direct_code pc98_noalloc_code hz_nonalloc_target pc98_high_alias lock_window rmw_device_reads pc98_a20_bit20 pc98_direct_read_shapes pc98_store_post pc98_store_post_win0 pc98_memwin_timing pc98_memwin_timing_nopg
 test-pc98-map: obj_dir_pc98/Vtb_protected_mode
-	Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict pc98_direct_code pc98_noalloc_code hz_nonalloc_target pc98_high_alias lock_window rmw_device_reads pc98_a20_bit20 pc98_direct_read_shapes
-	SIM_PLUSARGS=+no_line_fill Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict pc98_direct_code pc98_noalloc_code hz_nonalloc_target pc98_high_alias lock_window rmw_device_reads pc98_a20_bit20 pc98_direct_read_shapes
-	SIM_PLUSARGS=+zero_wait Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict pc98_direct_code pc98_noalloc_code hz_nonalloc_target pc98_high_alias lock_window rmw_device_reads pc98_a20_bit20 pc98_direct_read_shapes
-	SIM_PLUSARGS="+zero_wait +no_line_fill" Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict pc98_direct_code pc98_noalloc_code hz_nonalloc_target pc98_high_alias lock_window rmw_device_reads pc98_a20_bit20 pc98_direct_read_shapes
+	Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict $(PC98_MAP_TESTS)
+	SIM_PLUSARGS=+no_line_fill Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict $(PC98_MAP_TESTS)
+	SIM_PLUSARGS=+zero_wait Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict $(PC98_MAP_TESTS)
+	SIM_PLUSARGS="+zero_wait +no_line_fill" Z486_PC98_MAP=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode ./test_protected_mode.py --strict $(PC98_MAP_TESTS)
+
+# The hazard fuzzer under the PC-98 map, with a device window and window 0's
+# range in its hot-window mix (FUZZ_PC98, hazard/fuzz_hazard.py): posted stores
+# to RAM racing demand-path device stores, against the no-fast-path reference.
+test-fuzz-pc98: obj_dir_pc98/Vtb_protected_mode
+	FUZZ_PC98=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode python3 ./hazard/fuzz_hazard.py --count $(FUZZ_PC98_COUNT) --jobs $(JOBS)
+	FUZZ_PC98=1 Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode python3 ./hazard/fuzz_hazard.py --rmw --count $(FUZZ_PC98_COUNT) --first 1001 --jobs $(JOBS)
+	FUZZ_PC98=1 FUZZ_EXTRA=+zero_wait Z486_TESTBENCH=$(CURDIR)/obj_dir_pc98/Vtb_protected_mode python3 ./hazard/fuzz_hazard.py --count $(FUZZ_PC98_COUNT) --first 2001 --jobs $(JOBS)
+FUZZ_PC98_COUNT ?= 16
 
 BIGMEM_TESTS := hz_spec_a20_rm
 test-bigmem: obj_dir_bigmem/Vtb_protected_mode
@@ -742,6 +752,10 @@ test-x87-integer: obj_dir_x87_int/Vtb_z486
 dhrystone:
 	$(MAKE) -C dhrystone compare
 
+# Dhrystone in the PC-9821 core's configuration (the PC-98 map template).
+dhrystone-pc98:
+	cd dhrystone && ./run_dhrystone.py --pc98-map --iters 200
+
 # Clean build artifacts
 clean:
 	rm -rf obj_dir_tags32
@@ -774,6 +788,8 @@ help:
 	@echo "  make test-gpr-hazard - Gate the GPR hazard survey"
 	@echo "  make test-release  - Run all self-contained release gates"
 	@echo "  make test-pc98-map - Execute/modify code in PC-98 DIRECT/NO_ALLOC windows"
+	@echo "  make test-fuzz-pc98 - The hazard fuzzer under the PC-98 map (device windows)"
+	@echo "  make dhrystone-pc98 - Dhrystone with the PC-98 map template (the core's configuration)"
 	@echo "  make test-pc98-map-bus - Check each PC-98 window's external-port access shape"
 	@echo "  make test-protected-throttled - The protected suite at THROTTLE_SELS (docs/throttle.md)"
 	@echo "  make test-throttle-rate      - Throttled time is the requested time, REP included"

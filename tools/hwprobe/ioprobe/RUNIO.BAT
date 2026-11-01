@@ -1,6 +1,6 @@
 @ECHO OFF
 REM ============================================================
-REM  PC-9821 real-machine I/O wait-state probe  (r13/245)
+REM  PC-9821 real-machine I/O wait-state probe
 REM  Copy IOPROBE.COM + this file to a DOS disk. Run:  RUNIO
 REM  Send back IO.TXT (or the last BEGIN: marker on screen).
 REM

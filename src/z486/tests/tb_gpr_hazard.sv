@@ -149,6 +149,30 @@ module tb_gpr_hazard;
     wire [31:0] alu_result;
     wire [31:0] shift_result;
 
+    // The caller registers producer 3's view hits with the write-back
+    // (data_access vipt_load_wb_view_hit_r); the bench forms them from its stimulus.
+    function automatic [31:0] wb_view_hit_of(input v, input [2:0] dst, input [1:0] size, input is_alu);
+        logic [2:0] r;
+        logic [3:0] be;
+        begin
+            r  = (size == 2'd0) ? {1'b0, dst[1:0]} : dst;
+            be = (size == 2'd0) ? (dst[2] ? 4'h2 : 4'h1) : (size == 2'd1) ? 4'h3 : 4'hF;
+            wb_view_hit_of = (v && !is_alu) ? ({28'h0, be} << {r, 2'b00}) : 32'h0;
+        end
+    endfunction
+
+    // The delay-slot write's lanes, which z486 registers with its descriptor
+    // (dly_gpr_lanes_pre_r); EA_FWD_BLO/BHI/W/D are 0/1/2/3.
+    function automatic [31:0] dly_lanes_of(input [2:0] dst, input [1:0] mode);
+        logic [2:0] r;
+        logic [3:0] be;
+        begin
+            r  = (mode <= 2'd1) ? {1'b0, dst[1:0]} : dst;
+            be = (mode == 2'd0) ? 4'h1 : (mode == 2'd1) ? 4'h2 : (mode == 2'd2) ? 4'h3 : 4'hF;
+            dly_lanes_of = {28'h0, be} << {r, 2'b00};
+        end
+    endfunction
+
     data_unit dut (
         .clk(clk),
         .reset_n(reset_n),
@@ -176,6 +200,14 @@ module tb_gpr_hazard;
         .load_wb_valid(load_wb_valid),
         .load_wb_dst(load_wb_dst),
         .load_wb_size(load_wb_size),
+        // data_access registers this one-hot with the write-back (vipt_load_wb_wmask_r).
+        .load_wb_wmask(load_wb_valid ? (8'h01 << ((load_wb_size == 2'd0)
+                                                  ? {1'b0, load_wb_dst[1:0]}
+                                                  : load_wb_dst)) : 8'h00),
+        .load_wb_view_hit(wb_view_hit_of(load_wb_valid, load_wb_dst, load_wb_size, load_wb_is_alu)),
+        // data_access registers the AH lane select beside the write-back's
+        // dst/size (vipt_load_wb_ah_r), so it is the decode every cycle.
+        .load_wb_ah((load_wb_size == 2'd0) && load_wb_dst[2]),
         .load_wb_data(load_wb_data),
         .load_wb_is_alu(load_wb_is_alu),
         .load_wb_alu_op(load_wb_alu_op),
@@ -203,6 +235,8 @@ module tb_gpr_hazard;
         .shift2_next_source(shift2_next_source),
         .shift_uc_carry(shift_uc_carry),
         .op_size(op_size),
+        .op_size_is0(op_size == 2'd0),
+        .op_size_is1(op_size == 2'd1),
         .srcreg_size(srcreg_size),
         .op_size_src(op_size_src),
         .srcreg_size_src(srcreg_size_src),
@@ -240,6 +274,8 @@ module tb_gpr_hazard;
         .ea_base(ea_base),
         .ea_index(ea_index),
         .dly_gpr_forward(dly_gpr_forward),
+        .dly_gpr_lanes(dly_lanes_of(dly_gpr_forward.dst, dly_gpr_forward.mode)),
+        .dly_gpr_onehot(8'h01 << dly_gpr_forward.dst),
         .sigma(sigma),
         .countr(countr),
         .alu_src_hold(alu_src_hold),

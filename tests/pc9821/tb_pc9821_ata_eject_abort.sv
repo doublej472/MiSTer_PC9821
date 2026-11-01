@@ -1,4 +1,4 @@
-// tb_pc9821_ata_eject_abort — the real drive, the real shared adapter, and a medium that
+// tb_pc9821_ata_eject_abort - the real drive, the real shared adapter, and a medium that
 // moves under an in-flight command: the command must ALWAYS terminate, and a disk that went
 // away must never answer a read with data.
 //
@@ -15,7 +15,7 @@
 //    of an LBA inside the new image aborted with ERR.
 //
 // The sweep form is deliberate: the failing alignments are one cycle wide, so a single
-// scenario cannot see them and only a sweep over the hand-over can. The review harness this
+// scenario cannot see them and only a sweep over the hand-over can. The harness this
 // is derived from (one offset per process run) was the same experiment unswept.
 
 `timescale 1ns / 1ps
@@ -108,6 +108,7 @@ module tb_pc9821_ata_eject_abort;
       .a_img_mounted(img_mounted), .a_img_readonly(1'b0), .a_img_size(img_size),
       .a_mounted(a_mounted), .a_readonly(a_readonly), .a_capacity(a_capacity),
       .a_req_read(blk_read), .a_req_write(blk_write), .a_req_lba(blk_lba),
+      .a_req_window(1'b1),
       .a_req_done(blk_done), .a_req_error(blk_error), .a_busy(a_busy),
       .a_buf_we(blk_we), .a_buf_addr(blk_addr), .a_buf_data(blk_data),
       .a_buf_rd_addr(blk_rd_addr), .a_buf_rd_data(blk_rd_data),
@@ -126,7 +127,7 @@ module tb_pc9821_ata_eject_abort;
   // ==== CHECKS ====
   // ---- what the guest would see. STATUS comes from the drive's own register through a
   //      hierarchical reference, as the tree's other ATA benches do, and NOT from a port read:
-  //      after an eject the drive's port answers 8'hFF (pc9821_ata.sv:431 "end else if (!device_present"),
+  //      after an eject the drive's port answers 8'hFF (pc9821_ata.sv:555 "end else if (!device_present"),
   //      so the verdict has to survive the very event under test. ----
   integer drq_cycles, bsy_cycles, err_cycles, irq_edges;
   reg     irq_q = 0;
@@ -186,7 +187,7 @@ module tb_pc9821_ata_eject_abort;
 
   // Read the sector out of the drive's buffer, which is what returns it to X_IDLE: a command
   // written while a transfer is still in flight is a takeover and is discarded
-  // (pc9821_ata.sv:344 "command_takeover"), so a second command cannot follow an undrained one.
+  // (pc9821_ata.sv:420 "command_takeover"), so a second command cannot follow an undrained one.
   task automatic drain_sector;
     begin
       while (status_r[3] && !status_r[7]) begin

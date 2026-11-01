@@ -28,7 +28,7 @@
 //
 // The one reference arm this bench does NOT model is `mode1[4]`'s blank-vs-duplicate
 // rule (NP2kai `makegrph.c:155`, QEMU `pc98-vga.c:4475` blank the repeated line when
-// it is set); this core keeps the duplicate, as r13/96 section 4 records.
+// it is set); this core keeps the duplicate.
 
 `default_nettype none
 
@@ -58,7 +58,6 @@ module tb_pc9821_scanout_pipeline;
   reg  io_wr = 0, io_rd = 0;
   reg  [7:0] io_addr = 0, io_din = 0;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   wire gfx_access_page;
   wire [15:0] gfx_line_addr;
   wire        gfx_walk_page;   // the packed walk's page bit; parked here so (.*) stays complete
@@ -69,8 +68,6 @@ module tb_pc9821_scanout_pipeline;
   reg  [17:0] font_ld_addr = 0;
   reg  [15:0] font_ld_data = 0;
   reg         font_ld_we = 0;
-  wire [15:0] cg_code_win;
-  wire        cg_lr_win;
   wire  [4:0] cg_win_byte_sel = 5'd0;
   wire        cg_win_rd = 1'b0;
   wire  [7:0] cg_win_dout;
@@ -85,7 +82,7 @@ module tb_pc9821_scanout_pipeline;
   wire        vsync_active;
   wire        vsync_irq_arm = 1'b0;
   wire        vsync_irq;
-  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on (r13/321); parked for (.*)
+  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on; parked for (.*)
   wire        disp_on;
   wire        gfx_disp;
   wire        gfx_egc_gate;
@@ -95,14 +92,14 @@ module tb_pc9821_scanout_pipeline;
   wire [15:0] dbg_sad;
   wire  [7:0] dbg_pitch;
   wire        dbg_col40, dbg_disp;
-  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter (r13/305)
+  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter
   wire        text_opaque, text_cell;
   wire [11:0] text_colour;
   wire  [9:0] pix_dot;
   wire        pix_h_active, pix_v_active;
   wire        gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB, r13/225 #2).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -147,8 +144,8 @@ module tb_pc9821_scanout_pipeline;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg         grcg_we = 1'b0;
   reg  [7:0]  grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -164,9 +161,9 @@ module tb_pc9821_scanout_pipeline;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),
@@ -179,7 +176,7 @@ module tb_pc9821_scanout_pipeline;
   
 
   // The pixel pipeline: fold -> graphics palette -> compositor, the graphics arm only. The
-  // analogue table is pc9821_gfx_palette's ping-pong RAM (r13/225 #2) and its CPU write
+  // analogue table is pc9821_gfx_palette's ping-pong RAM and its CPU write
   // port comes from pc9821_gdc_text, exactly as pc9821_system wires it.
   wire [7:0] r_out, g_out, b_out;
   // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
@@ -317,7 +314,7 @@ module tb_pc9821_scanout_pipeline;
   endtask
 
   // Capture raster 0's first 16 columns at the pixel enable, where the framework
-  // samples (r12/49 section 4). Two frame ends first, so the painted line has been
+  // samples. Two frame ends first, so the painted line has been
   // fetched into the displayed buffer.
   reg        armed = 1'b0;
   reg [7:0]  cap_r [0:79];
@@ -337,8 +334,8 @@ module tb_pc9821_scanout_pipeline;
   end
 
   // The frame boundary is the raster's own frame_end, NOT a frame_cnt change: frame_cnt is the
-  // character blink's count and advances once per CSRFORM `timing` frames (audit
-  // rtl-audit-video F1), so it is no longer a frame counter.
+  // character blink's count and advances once per CSRFORM `timing` frames,
+  // so it is no longer a frame counter.
   task automatic next_frame;
     begin
       while (u_gdc.u_crtc.frame_end) @(negedge clk);
@@ -567,7 +564,7 @@ module tb_pc9821_scanout_pipeline;
     // ---------------------------------------------------------------
     // 6. The CSRFORM 640x200 line repeat holds each GDC line for two rasters.
     // ---------------------------------------------------------------
-    // Clear mode1[4] first: that is the target games' shape (r13/96 case 3), where the
+    // Clear mode1[4] first: that is the target games' shape, where the
     // references duplicate the repeated line rather than blanking it.
     write_io(8'h68, 8'h08);
     write_io(8'hA2, 8'h4B);

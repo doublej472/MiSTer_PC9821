@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SDRAM_GATHER_MAP: the G3 gather-RMW session's slot maps are a pure function of the accepted byte-enable masks, so REGISTERING them at the accept (the pegc-slotmap-pipeline Class-2 stage that takes the entry-count -> gk_wmap -> dq_out cone off the clk_sdram critical path) is value-identical: across 1..4-entry sessions with byte, half and full-dword enables, the merged half-WRITE data stream on the pins matches an independent software model of the pre-change behaviour in the same slot order, the auto-precharge rides the last write alone, and a read issued behind the session sees every stored byte (only the internal cycle count may change, never a value).
+// TB_PC9821_SDRAM_GATHER_MAP: the G3 gather-RMW session's slot maps are a pure function of the accepted byte-enable masks, so REGISTERING them at the accept (the Class-2 stage that takes the entry-count -> gk_wmap -> dq_out cone off the clk_sdram critical path) is value-identical: across 1..4-entry sessions with byte, half and full-dword enables, the merged half-WRITE data stream on the pins matches an independent software model of the pre-change behaviour in the same slot order, the auto-precharge rides the last write alone, and a read issued behind the session sees every stored byte (only the internal cycle count may change, never a value).
 
 // ==== DUT ====
 // sdram_sync_bridge (the controller on clk_sys, as every build runs it) over the
@@ -42,7 +42,7 @@ module tb_pc9821_sdram_gather_map;
   wire        busy;
 
   sdram_sync_bridge #(
-      .FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .FAST_GRADE(1'b0), .GATHER_K(GK)
+      .FREQ(`TB_SDRAM_FREQ), .FAST_GRADE(1'b0), .GATHER_K(GK)
   ) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
@@ -61,7 +61,8 @@ module tb_pc9821_sdram_gather_map;
       .SDRAM_CKE(CKE)
   );
 
-  sdram_chip_model #(.CAS(CAS), .T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR),
+                   .FREQ_HZ(`TB_SDRAM_FREQ), .GRADE(7)) chip (
       .clk(clk_sys), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );

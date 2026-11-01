@@ -10,7 +10,7 @@
 // ---- the bench's own account of where each expectation comes from ----
 // The crossing is the -86 card's sample bus (sample_86_l/r) leaving clk_sys and being
 // sampled by pc9821_audio_volume on CLK_AUDIO, which is the framework's asynchronous
-// 24.576 MHz PLL. r13/266 measured the crackle there: the bus is a clk_sys combinational
+// 24.576 MHz PLL. The crackle was measured there: the bus is a clk_sys combinational
 // vector, the two clocks are in different SDC groups (sys/sys_top.sdc), and a raw wire lets
 // a CLK_AUDIO edge catch the bus mid-flight and mix the old and new halves. This bench
 // drives the exact module the fix instantiates, at the real clock ratio, and pins:
@@ -41,7 +41,7 @@
 //     is silently subsampled (repeated and skipped, never torn). The -86 bus is NOT an audio-rate
 //     signal - the FM accumulator's register enable is clk_en = cen/6 = 1.3312 MHz at the reset
 //     prescaler (src/opna/jt12/hdl/jt12_div.v:60-73, 91-98; cen = 7.9872 MHz,
-//     src/opna/pc9821_opna.sv:85) = one change per 38 clk_sys cycles - so the margin above the
+//     src/opna/pc9821_opna.sv:88) = one change per 38 clk_sys cycles - so the margin above the
 //     source has to be measured rather than assumed. A sweep drives a distinct value every P
 //     clk_sys and counts the destination's transitions: P = 38 (the OPNA's own rate) must deliver
 //     every value, P = 4 (10x over) must drop, and the smallest P that still delivers them all is
@@ -71,7 +71,7 @@ module tb_pc9821_pcm86_cdc;
 
   // ==== DUT ====
   // The crossing exactly as z486_mister.sv wires it: clk_sys to CLK_AUDIO, a 20x2-bit vector
-  // (z486_mister.sv:1043, the A-1 width).
+  // (z486_mister.sv:1458-1462, the -86 card's sample bus).
   localparam integer W = 20;                 // bits per channel, as shipped
   reg  [2*W-1:0] data_in  = 0;
   wire [2*W-1:0] data_out;

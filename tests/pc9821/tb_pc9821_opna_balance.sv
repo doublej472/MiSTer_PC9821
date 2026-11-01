@@ -1,14 +1,14 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The SSG-vs-drums BALANCE at the -86 board's sum, the one gain stage the die cannot speak for (the die stops at its pins: the SSG leaves on analog pin 27 as `o_analog = volume_lut[vol_a/b/c]`, fmopna_impl.c:2438-2441, while FM+ADPCM leave as the YM3016 DAC word, so the ratio between the two paths is the BOARD's analog trim). The real machine is the authority and the owner's PAIRED SNDTEST captures settle it: the WITHIN-SIDE ratio SSG(max)/FM(max), measured on each segment's own steady-state plateau, reads XE10+PMD -8.79 dB, XE10 no-PMD -8.79 dB and this core -3.03 dB (SEG 07 over SEG 01; tools/sndtest_balance.py, output docs/probes/SNDTEST-balance-2026-09-25.txt), and the frequency sweeps' own pairing in the same files agrees to 0.05 dB. So 5.76 dB of SSG leg was hot and the join became psg * 33/16 = the psg << 2 baseline (PC88MiSTer.vhd:2505-2513 / pc98-opna.c:372) times the measured board trim 33/64 (pc9821_opna.sv's SSG_JOIN_NUM/SSG_JOIN_SHIFT). tb_pc9821_opna_sndtest_balance is the RATIO's fail-first, replaying exactly those two SEG 07/SEG 01 register programs; THIS bench keeps the same join's invariant side against the die's drum law: one max channel joins at (1023 * 33) >> 4 = 2109 unipolar, AC-COUPLES zero-mean to ~+-1054.5 with the analytic droop peak ~1075 (C7C1 law declared by tb_pc9821_opna_ssg_level), pinned in the band +-1040..+-1110 (analytic peak +-3%). CHK-4 pins the balance ratio against the die's per-drum maximum 15,352 (((2047<<4)*15)>>5 & ~3; fmopna_impl.c:2681/:2745/:5364-5366 == ymfm_adpcm.cpp:223-243): SSG_ch:drum_max amplitude ratio x10000 in 1354..1446 (= -17.38..-16.79 dB, derived from the same peak band as CHK-2). No die-exact value moves: the drum-hit/program-bed balance still matches the machine to 0.0 +/- 0.3 dB paired.
+// The SSG-vs-drums BALANCE at the -86 board's sum, the one gain stage the die cannot speak for (the die stops at its pins: the SSG leaves on analog pin 27 as `o_analog = volume_lut[vol_a/b/c]`, fmopna_impl.c:2438-2441, while FM+ADPCM leave as the YM3016 DAC word, so the ratio between the two paths is the BOARD's analog trim). The real machine is the authority and the PAIRED SNDTEST captures settle it: the WITHIN-SIDE ratio SSG(max)/FM(max), measured on each segment's own steady-state plateau, reads XE10+PMD -8.79 dB, XE10 no-PMD -8.79 dB and this core -3.03 dB (SEG 07 over SEG 01; tools/sndtest_balance.py, output docs/probes/SNDTEST-balance-2026-09-25.txt), and the frequency sweeps' own pairing in the same files agrees to 0.05 dB. So 5.76 dB of SSG leg was hot and the join became psg * 33/16 = the psg << 2 baseline (PC88MiSTer.vhd:2505-2513 / pc98-opna.c:372) times the measured board trim 33/64 (pc9821_opna.sv's SSG_JOIN_NUM/SSG_JOIN_SHIFT). tb_pc9821_opna_sndtest_balance is the RATIO's fail-first, replaying exactly those two SEG 07/SEG 01 register programs; THIS bench keeps the same join's invariant side against the die's drum law: one max channel joins at (1023 * 33) >> 4 = 2109 unipolar, AC-COUPLES zero-mean to ~+-1054.5 with the analytic droop peak ~1075 (C7C1 law declared by tb_pc9821_opna_ssg_level), pinned in the band +-1040..+-1110 (analytic peak +-3%). CHK-4 pins the balance ratio against the die's per-drum maximum 15,352 (((2047<<4)*15)>>5 & ~3; fmopna_impl.c:2681/:2745/:5364-5366 == ymfm_adpcm.cpp:223-243): SSG_ch:drum_max amplitude ratio x10000 in 1354..1446 (= -17.38..-16.79 dB, derived from the same peak band as CHK-2). No die-exact value moves: the drum-hit/program-bed balance still matches the machine to 0.0 +/- 0.3 dB paired.
 //
 // The SSG-vs-drums BALANCE at the -86 board's sum, i.e. the one gain stage the
 // die cannot speak for (the die stops at its pins: the SSG leaves on the analog
 // pin 27 as `o_analog = volume_lut[vol_a/b/c]`, fmopna_impl.c:2438-2441, while
 // FM+ADPCM leave as the YM3016 DAC word - the ratio between those two paths is
 // the BOARD's analog trim). The real-machine recordings are the authority for
-// that trim, and the owner's PAIRED SNDTEST captures settle it: the WITHIN-SIDE
+// that trim, and the PAIRED SNDTEST captures settle it: the WITHIN-SIDE
 // ratio SSG(max)/FM(max) - measured on each segment's own steady-state plateau -
 // reads XE10+PMD -8.79 dB, XE10 no-PMD -8.79 dB and THIS CORE -3.03 dB (SEG 07
 // over SEG 01; tools/sndtest_balance.py, output
@@ -66,7 +66,7 @@
 //     (rung 5, and its MixTo1 2/3 is a software mix knob; its per-channel
 //     0.333-of-rail weight is 6.4-7.5 dB above the machine's measured
 //     0.14-0.16, 20*log10(0.333/0.14..0.16))
-//     and NP2kai's vol_ssg absolutes (demoted by the owner's re-ranking:
+//     and NP2kai's vol_ssg absolutes (demoted by the evidence ranking:
 //     upstream PC-88 is the FM/SSG baseline over NP2kai, and the REAL MACHINE
 //     captures outrank both for the board-level trim).
 //
@@ -79,7 +79,7 @@
 // CHK-4 the BALANCE RATIO against the die's drum law (the invariant anchor):
 //       (2*peak)*10000/15352 must land in 1354..1446 (-17.38..-16.79 dB) -
 //       the band DERIVED from CHK-2's peak band so the two cannot disagree.
-//       The invariants the review verified at both trim scales hold here too:
+//       The invariants verified at both trim scales hold here too:
 //       zero-mean DC block, die drum max 15,352, and the overflow bounds
 //       (join 0..6,329 inside the 18-bit signed DC-block path).
 //

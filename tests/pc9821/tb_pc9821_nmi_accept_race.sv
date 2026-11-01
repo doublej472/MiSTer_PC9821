@@ -1,10 +1,10 @@
-// tb_pc9821_nmi_accept_race — an NMI edge landing in the SAME clk_sys cycle as the
-// NMI accept boundary must not be eaten (review2/pulses.md H12).
+// tb_pc9821_nmi_accept_race - an NMI edge landing in the SAME clk_sys cycle as the
+// NMI accept boundary must not be eaten.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The z486 interrupt_controller's NMI latch folds its set and the boundary-accept clear into ONE next-state (review2/pulses.md H12): an NMI edge landing in the accept cycle while the boundary consumes an OLDER pending NMI is deferred into the latch (set wins, never eaten), while an edge that IS the accepted request is consumed exactly once and not re-latched (a plain set-wins latch would deliver one edge twice through nmi_request_active's combinational path). FAIL-FIRST against the old clear-wins fold, which lost the colliding edge entirely.
+// The z486 interrupt_controller's NMI latch folds its set and the boundary-accept clear into ONE next-state: an NMI edge landing in the accept cycle while the boundary consumes an OLDER pending NMI is deferred into the latch (set wins, never eaten), while an edge that IS the accepted request is consumed exactly once and not re-latched (a plain set-wins latch would deliver one edge twice through nmi_request_active's combinational path). FAIL-FIRST against the old clear-wins fold, which lost the colliding edge entirely.
 //
 // The z486 interrupt_controller's NMI latch folds its set and the boundary-accept
 // clear into ONE next-state. Before the fix the set was guarded by

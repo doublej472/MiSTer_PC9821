@@ -22,13 +22,16 @@ PC9821_Z486_RTL=(
   src/pc9821/storage/pc9821_ata.sv src/pc9821/storage/pc9821_atapi.sv
   src/pc9821/storage/pc9821_block_io.sv
   src/pc9821/storage/pc9821_block_share.sv
+  src/pc9821/storage/pc9821_hdd_image.sv
   src/pc9821/storage/pc9821_hps_slot_demux.sv
   src/pc9821/storage/pc9821_fdc.sv src/pc9821/storage/pc9821_fdd_media.sv
   src/pc9821/common/pc9821_dpram.sv
   src/pc9821/video/pc9821_crtc.sv src/pc9821/core/pc9821_text_mem.sv src/pc9821/video/pc9821_gdc2.sv
   src/pc9821/video/pc9821_cg.sv src/pc9821/video/pc9821_grcg.sv
+  src/pc9821/video/pc9821_egc_mem_gate.sv
   src/pc9821/video/pc9821_plane_fold.sv src/pc9821/video/pc9821_gfx_palette.sv
   src/pc9821/video/pc9821_video_mixer.sv
+  src/pc9821/video/pc9821_vclk_pkg.sv src/pc9821/video/pc9821_dot_ce.sv
   src/pc9821/interrupts/pc9821_inta_bridge.sv
   src/pc9821/interrupts/pc9821_interrupts.sv src/pc9821/core/pc9821_ports_pkg.sv
   src/pc9821/core/pc9821_dmac.sv
@@ -55,7 +58,6 @@ PC9821_Z486_RTL=(
   src/pc9821/core/pc9821_dbg_mux.sv
   src/pc9821/core/pc9821_dbg_cpu.sv
   src/pc9821/video/pc9821_gdc_log.sv
-  src/pc9821/core/pc9821_int21_msg.sv
   src/pc9821/core/pc9821_gvram_arb.sv src/pc9821/core/pc9821_gvram_share.sv src/pc9821/core/pc9821_gvram_scan.sv
   src/pc9821/core/pc9821_pegc_scan.sv
   src/pc9821/core/pc9821_gvram_mem.sv

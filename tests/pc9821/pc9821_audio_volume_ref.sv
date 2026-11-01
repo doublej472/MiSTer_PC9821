@@ -1,8 +1,14 @@
+// SPDX-License-Identifier: BSD-2-Clause
+// Copyright (c) 2014, Aleksander Osman; Copyright (C) 2017-2020 Alexey Melnikov.
+// Derived from ao486_MiSTer rtl/soc/sound/sound.v, module sb_volume
+// (https://github.com/MiSTer-devel/ao486_MiSTer). Licence text: NOTICE, part 4.
+// TEST REFERENCE: a frozen copy of src/pc9821/audio/pc9821_audio_volume.sv before its area rewrite, kept as the equivalence reference of tb_pc9821_audio_volume_equiv; not maintained.
+
 // N-channel audio volume attenuator for the PC-9821 core.
 //
 // The 5-bit table and the DSP-targeted multiply are unchanged except at code 0,
 // which is TRUE ZERO now (it used to be a -62 dB floor that leaked +-25/26 LSB
-// at full scale - review-audio-volume F1).
+// at full scale).
 `default_nettype none
 
 module pc9821_audio_volume_ref
@@ -22,7 +28,7 @@ module pc9821_audio_volume_ref
 // 2 dB steps. Code 0 is exact silence because NP2kai's volume-0 paths are exact
 // zeros - sound/beepg.c:161-163 gates the beeper generator on beepcfg.vol and
 // every OSD volume is a linear multiplier (sound/beepg.c:57/113,
-// cbus/ideio.c:1737-1745) - so 0 can never leak (review-audio-volume F1).
+// cbus/ideio.c:1737-1745) - so 0 can never leak.
 // 32 x 16 = 512 bits packed into one vector
 localparam [511:0] gain_lut = {
     16'hFFFF, //   0 dB (17'h10000 will be used for unity gain)
@@ -60,7 +66,7 @@ localparam [511:0] gain_lut = {
 };
 
 localparam [3:0] CH_LAST = 4'(NUM_CH-1);
-// Power-up state (review r2-resets F2): this module has no reset port - it runs
+// Power-up state: this module has no reset port - it runs
 // free on CLK_AUDIO - so the seeds below ARE its reset. `ch` is self-fed
 // (ch <= (ch == CH_LAST) ? 0 : ch + 1): unseeded it X-locks in 4-state sim and
 // poisons gain/sample, samples_out (the 10-channel master mix) and valid

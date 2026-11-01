@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DMA_ACCEPT_STEAL: a DMA request raised 1-3 clk_sys after a CPU request has been launched at the backend cannot steal that request's accept - the presenting owner is tagged from presentation to the one-cycle ack, so the CPU's byte is committed exactly once with its own payload and its read response is still returned, and the DMA's own byte is committed exactly once on its own accept; with the unlocked mux the CPU's ack is consumed as dma_ready, the in-flight payload moves under the bridge's bare crossing and the floppy byte is dropped (memmap-audit ramroute P1-2). A DMA memory READ (the uPD71071's memory-to-port direction, a floppy WRITE DATA's bytes) is answered to the DMA with the backend's own word, alone and with a CPU read in flight beside it, each response reaching only the requester whose read it is (fdd-write: the subsystem had no DMA read response at all, so a floppy write hung on hardware).
+// TB_PC9821_DMA_ACCEPT_STEAL: a DMA request raised 1-3 clk_sys after a CPU request has been launched at the backend cannot steal that request's accept - the presenting owner is tagged from presentation to the one-cycle ack, so the CPU's byte is committed exactly once with its own payload and its read response is still returned, and the DMA's own byte is committed exactly once on its own accept; with the unlocked mux the CPU's ack is consumed as dma_ready, the in-flight payload moves under the bridge's bare crossing and the floppy byte is dropped. A DMA memory READ (the uPD71071's memory-to-port direction, a floppy WRITE DATA's bytes) is answered to the DMA with the backend's own word, alone and with a CPU read in flight beside it, each response reaching only the requester whose read it is (fdd-write: the subsystem had no DMA read response at all, so a floppy write hung on hardware).
 //
-// WHY THIS EXISTS (the audit's P1-2). The port-0 request mux in
+// WHY THIS EXISTS. The port-0 request mux in
 // pc9821_memory_subsystem had no notion of which owner's request the backend had
 // LAUNCHED: `dma_owns = dma_valid && !loader_owns` was free to move while a CPU
 // request was in flight, and `mem_ready` is a raw one-cycle ack not tagged to a
@@ -91,16 +91,15 @@ module tb_pc9821_dma_accept_steal;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   // The line-form names: the boundary answers every fill as word beats now (the
-  // beat-uniform fill, trade T22), so cpu_line_dout/cpu_line_resp_valid are dead
+  // beat-uniform fill, trade T22), so cpu_line_word/cpu_line_word_valid are dead
   // bench wires (no DUT port drives them; they read 0). The idle checks' OR terms
-  // with cpu_line_resp_valid are stricter-than-needed, not weaker.
-  wire [127:0] cpu_line_dout;
+  // with cpu_line_word_valid are stricter-than-needed, not weaker.
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
@@ -134,7 +133,7 @@ module tb_pc9821_dma_accept_steal;
   wire [7:0] mem_burstcount;
   wire mem_line_read, mem_valid, mem_write;
   reg mem_ready = 0, mem_resp_valid = 0, mem_line_resp_valid = 0;
-  // The GVRAM scanout's SDRAM requester (r13/35). The wildcard instantiation needs every port
+  // The GVRAM scanout's SDRAM requester. The wildcard instantiation needs every port
   // named; nothing here drives the scanout, so it accepts and never answers.
   wire [31:0] mem3_addr, mem3_din;
   wire  [3:0] mem3_be;
@@ -144,12 +143,14 @@ module tb_pc9821_dma_accept_steal;
   reg         mem3_ready = 1, mem3_resp_valid = 0;
 
   // ==== DUT ====
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the wildcard instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   wire       grcg_expand;   // the GRCG's CG-mode bit 7, fed back from the subsystem
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
   reg        scan_enable = 0;
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
@@ -162,18 +163,18 @@ module tb_pc9821_dma_accept_steal;
 
   wire [1:0] ems_state;
 
-  // The GVRAM write client's two-word payload (r13/137); this bench's backend ignores it.
+  // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
   wire [31:0] mem_din_hi;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -182,6 +183,11 @@ module tb_pc9821_dma_accept_steal;
   wire gfx_odd_line = 1'b0;
   // ---- pc9821_memory_subsystem's DMA bus-master port, driven by the cases ----
   reg  [31:0] dma_addr = 32'd0;
+  // The DMAC presents its address's plane-window class registered with the address
+  // (pc9821_dmac mem_gvwin); this bench drives the address, so it forms the class the same way.
+  wire [1:0]  dma_gvwin = { (dma_addr[31:16] == 16'h000B),
+                            (dma_addr[31:20] == 12'd0) && ((dma_addr[19:15] == 5'b10101) ||
+                             (dma_addr[19:16] == 4'hB) || (dma_addr[19:15] == 5'b11100)) };
   reg  [31:0] dma_din  = 32'd0;
   reg   [3:0] dma_be   = 4'd0;
   reg         dma_valid = 1'b0;
@@ -447,7 +453,7 @@ module tb_pc9821_dma_accept_steal;
       // ---- the audit's contract: each request committed EXACTLY ONCE, with its
       //      OWN payload, and a read's response still returned ----
       if (b_payload_moves != 0) begin
-        $display("FAIL %0s: the request mux moved the in-flight payload %0d time(s) between launch and ack (memmap-audit P1-2)", tag, b_payload_moves);
+        $display("FAIL %0s: the request mux moved the in-flight payload %0d time(s) between launch and ack", tag, b_payload_moves);
         errors = errors + 1;
       end
       if (b_commits != (use_dma ? 2 : 1)) begin
@@ -459,7 +465,7 @@ module tb_pc9821_dma_accept_steal;
         errors = errors + 1;
       end
       if (use_dma && !commit_seen(1'b1, 32'h0000_2001, 32'h5C5C_5C5C, 4'b0010)) begin
-        $display("FAIL %0s: the DMA's byte was never committed - the floppy byte is dropped (memmap-audit P1-2)", tag);
+        $display("FAIL %0s: the DMA's byte was never committed - the floppy byte is dropped", tag);
         errors = errors + 1;
       end
       if (!is_write) begin

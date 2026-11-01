@@ -1,0 +1,15 @@
+BEGIN:CRT31K artic_hz=307200
+09A8 found=00
+MODE 24K htotal_dots=848 vtotal=440 (as found)
+RUN frames=60 ticks=326700
+RUN frames=60 ticks=326700
+RUN frames=60 ticks=326698
+09A8 after_set31=01
+MODE 31K htotal_dots=800 vtotal=449
+RUN frames=70 ticks=306930
+RUN frames=70 ticks=306930
+RUN frames=70 ticks=306930
+MODE 24K htotal_dots=848 vtotal=440 (restored)
+RUN frames=60 ticks=326699
+RESTORE 09A8 was=00 now=00
+END:CRT31K (reboot now)

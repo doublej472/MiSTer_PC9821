@@ -86,7 +86,7 @@ module tb_cache_coherence;
         .dcache_vipt_probe_valid(1'b0), .dcache_vipt_probe_offset(12'h000),
         .dcache_vipt_probe_ready(), .dcache_vipt_probe_accepted(),
         .dcache_vipt_probe_direct_accepted(),
-        .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0),
+        .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
         .dcache_vipt_resolve_hit(), .dcache_vipt_resolve_data(),
         .x87_req_selected(), .x87_req_accepted(1'b0), .x87_req_complete(1'b0),
         .x87_read_complete(1'b0), .x87_rdata(32'h0),

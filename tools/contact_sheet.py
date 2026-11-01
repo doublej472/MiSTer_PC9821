@@ -5,7 +5,7 @@ A contact sheet of a directory of screenshots, for reading a hardware run at a g
 holds every image (sorted by name) as a thumbnail with its index, and a line per image on stdout
 gives the index, the name and the mean absolute difference to the previous image - the number
 that finds the frame where the picture froze (a stalled run reads ~0.00 for every row after it)
-or the one where it changed. Used by the debug-UART method (AGENTS.md, testing on a real MiSTer)
+or the one where it changed. Used by the debug-UART method (docs/mister-testing.md, the debug UART)
 with tools/mister_capture.sh's screenshot loop.
 
 The MiSTer names its screenshots with a date prefix (`2026...`), which is the default glob; pass

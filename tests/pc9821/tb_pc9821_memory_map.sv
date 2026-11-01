@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_MEMORY_MAP:
-// The memory map's decode: every region routes where it should, including the 32 MiB open-bus boundary and the absent ROM area at 0xC0000-0xD7FFF minus the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window (served from the pack; its 0x461 = 0x0C alias included), which this block decodes and leaves unclaimed rather than serving. The local open-bus path answers in one cycle and these assertions record that shape: it is a z486 hazard, unreachable in the built design, and tb_pc9821_open_bus.sv is the bench that pins the correct phases. It also transforms the 0x043F 0x2-nibble EMS window at 0xB0000-0xBFFFF: the identity state leaves the GVRAM planes there alone, the 0x22 state reads and writes a 64 KiB page in the backend, and the unmapped state reaches neither the planes nor the backend -- and the window is a first-MiB aperture, so a guest address above 1 MiB with the same low 20 bits stays ordinary RAM. And it pins the ROM windows' read-only contract (r13/294): a store into the 0xE8000-0xF7FFF main BIOS, the 0xD8000-0xD9FFF option-ROM window or the 0xCC000-0xCFFFF SOUND.ROM window is rejected in BOTH 0x053D bit-1 gate states (their only backing is the pack, and NP2kai discards those stores: cpumem.c:135 memnc_wr8), while the 0xF8000-0xFFFFF window's store is gated by 0x053D bit 1 and falls into the r13/23 shadow.
+// The memory map's decode: every region routes where it should, including the 32 MiB open-bus boundary and the absent ROM area at 0xC0000-0xD7FFF minus the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window (served from the pack; its 0x461 = 0x0C alias included), which this block decodes and leaves unclaimed rather than serving. The local open-bus path answers in one cycle and these assertions record that shape: it is a z486 hazard, unreachable in the built design, and tb_pc9821_open_bus.sv is the bench that pins the correct phases. It also transforms the 0x043F 0x2-nibble EMS window at 0xB0000-0xBFFFF: the identity state leaves the GVRAM planes there alone, the 0x22 state reads and writes a 64 KiB page in the backend, and the unmapped state reaches neither the planes nor the backend -- and the window is a first-MiB aperture, so a guest address above 1 MiB with the same low 20 bits stays ordinary RAM. And it pins the ROM windows' read-only contract: a store into the 0xE8000-0xF7FFF main BIOS, the 0xD8000-0xD9FFF option-ROM window or the 0xCC000-0xCFFFF SOUND.ROM window is rejected in BOTH 0x053D bit-1 gate states (their only backing is the pack, and NP2kai discards those stores: cpumem.c:135 memnc_wr8), while the 0xF8000-0xFFFFF window's store is gated by 0x053D bit 1 and falls into the BIOS shadow.
 
 
 module tb_pc9821_memory_map;
@@ -13,7 +13,7 @@ module tb_pc9821_memory_map;
   // decode itself is checked both ways further down.
   reg ide_ram_gate = 1'b1;
   reg bios_ram_gate = 0;
-  // The top-window shadow (r13/23). fw_shadow_base is what pc9821_memory_subsystem
+  // The top-window shadow. fw_shadow_base is what pc9821_memory_subsystem
   // computes (pack_base + PACK_BYTES + 0x58000, above the GVRAM/PCM/EMS block the SDRAM
   // GVRAM move pushed up); top_shadow_en is the iobus's 0x043F
   // 0x8-nibble latch, and fw_shadow_dirty the subsystem's "a store has landed in the
@@ -43,15 +43,15 @@ module tb_pc9821_memory_map;
   reg [7:0] cpu_burstcount = 0;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
   wire [31:0] cpu_dout, mem_addr, mem_din;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   wire [3:0] mem_be;
   wire [7:0] mem_burstcount;
   wire mem_line_read, mem_valid, mem_write;
   reg [31:0] mem_dout = 32'h89ABCDEF;
   reg [127:0] mem_line_dout = 128'h00112233445566778899AABBCCDDEEFF;
   reg mem_ready = 0, mem_resp_valid = 0, mem_line_resp_valid = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
-  // The absent ROM area's decode output (r12/30): asserted for the guest
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
+  // The absent ROM area's decode output: asserted for the guest
   // address whose physical target is 0xC0000-0xD7FFF, which this block hands to
   // the subsystem rather than serving.
   wire absent_area;
@@ -62,7 +62,7 @@ module tb_pc9821_memory_map;
   reg  [1:0]  ems_state = 2'd0;
   reg  [31:0] ems_page_base = 32'd0;
   wire        ems_open_bus;
-  // The PEGC extended-VRAM window (r13/48). This bench is about the map's own
+  // The PEGC extended-VRAM window. This bench is about the map's own
   // decode, so the window is tied off here and driven by tb_pc9821_sys16m.sv;
   // tb_pc9821_pegvram.sv reads the bytes back through the subsystem.
   reg         peg_window = 1'b0;
@@ -79,6 +79,11 @@ module tb_pc9821_memory_map;
   reg  [1:0] d8_bank = 2'b00;
 
   wire addr_ge_ram;   // the map's shared compare output, unused here
+  // The map's EXPORTED window-0 pair (P2): d_addr is the post-bias address the subsystem's route
+  // selects read as route_addr, win0_moved the flag that produced it. check_bias below holds both
+  // to the reference expressions over every window-0 value, so the export cannot drift.
+  wire [31:0] d_addr;
+  wire        win0_moved;
   // No translation in front of the map here: the untranslated address IS cpu_addr.
   wire [31:0] cpu_addr_raw = cpu_addr;
   wire        xl_low20 = 1'b0;
@@ -87,7 +92,7 @@ module tb_pc9821_memory_map;
 
   integer errors = 0;
   // ==== STIMULUS ====
-  // The plane-window decode. Since r12/33 D1 the map does not translate these
+  // The plane-window decode. The map does not translate these
   // windows: it emits the plane index and the plane offset and
   // pc9821_memory_subsystem routes the access to pc9821_gvram, which owns the
   // planes. `identity` is what mem_addr must still carry -- the map claims no
@@ -117,6 +122,28 @@ module tb_pc9821_memory_map;
       end
     end
   endtask
+  // The map's EXPORTED window-0 bias (P2): pc9821_memory_subsystem's route_addr/win0_moved are
+  // these two wires, so this task is what holds the export to the documented arithmetic. The
+  // reference is written out here from the address and the window value, not read back from the
+  // DUT, so a wrong export (an unbiased address, a dropped membership bit, a lost carry) fails.
+  task automatic check_bias(input [31:0] addr, input [7:0] sel);
+    reg        moved_ref;
+    reg [8:0]  hi_ref;
+    reg [31:0] d_ref;
+    begin
+      win0_sel = sel;
+      cpu_addr = addr;
+      #1;
+      moved_ref = !(|addr[31:20]) && (addr[19:17] == 3'b100) && (sel != 8'h08);
+      hi_ref = {1'b0, sel} + {8'd0, addr[16]};
+      d_ref = moved_ref ? {7'd0, hi_ref, addr[15:0]} : addr;
+      if (win0_moved !== moved_ref || d_addr !== d_ref) begin
+        $display("FAIL bias addr=%08x sel=%02x -> moved=%b d=%08x, want moved=%b d=%08x",
+                 addr, sel, win0_moved, d_addr, moved_ref, d_ref);
+        errors = errors + 1;
+      end
+    end
+  endtask
   // ==== CHECKS ====
 
   initial begin
@@ -126,7 +153,7 @@ module tb_pc9821_memory_map;
     check_addr(32'h0010_0000, 32'h0010_0000);
     check_addr(32'h01FF_FFFF, 32'h01FF_FFFF);
 
-    // The PEGC extended-VRAM window (r13/48): while peg_window is asserted the map turns
+    // The PEGC extended-VRAM window: while peg_window is asserted the map turns
     // 0xF00000-0xF7FFFF into an ordinary backend access at peg_base + the in-window offset,
     // and it does so even for a guest whose RAM ends below 0xF00000 (the window is above it).
     // peg_window is the subsystem's decode of the address, so the map is driven with only the
@@ -361,7 +388,7 @@ module tb_pc9821_memory_map;
       errors = errors + 1;
     end
     // Every decode check below is a READ, and since the top-window shadow
-    // (r11/17 §1.8) the firmware-window ADDRESS depends on cpu_write: a store
+    // the firmware-window ADDRESS depends on cpu_write: a store
     // while the 0x053D bit-1 gate is set targets the BIOS-top slot whatever the
     // bank register says, a read follows the bank register. Leaving cpu_write
     // asserted from the pass-through test made the read expectations below
@@ -390,12 +417,12 @@ module tb_pc9821_memory_map;
 
     // A4000 is not a plane (text RAM ends at A3FFF), so it stays identity-mapped
     // RAM rather than being captured by the graphics aperture (in the built
-    // design the subsystem's CG window intercepts it: r8/02). 0xE8000 is
+    // design the subsystem's CG window intercepts it). 0xE8000 is
     // deliberately not tested here: it is the lower-BIOS firmware window, not
     // RAM.
     check_addr(32'h000A_4000, 32'h000A_4000);
 
-    // ---- The absent ROM area: 0xC0000-0xD7FFF (r12/30) --------------------
+    // ---- The absent ROM area: 0xC0000-0xD7FFF --------------------
     // The machine's C-Bus option-ROM space with nothing fitted reads 0xFF at
     // every byte and discards stores (docs/probes/SHADOW.TXT "REGION
     // C0000..D7FFF"; docs/probes/WIN.TXT `0461=0C rb=0D b=FFFF a=FFFF`). This
@@ -481,7 +508,7 @@ module tb_pc9821_memory_map;
       errors = errors + 1;
     end
     // The 0x063C bank select (the EMM386 /UMB boot hang). Measured on the Xe10 (docs/probes/
-    // D8BANK-XE10.TXT, the window dumped per select and matched against the owner's
+    // D8BANK-XE10.TXT, the window dumped per select and matched against the dumped
     // ROMs): selects 0 and 2 show the IDE option ROM (BANK3.BIN, the pack's +0x70000);
     // select 1 shows BANK0.BIN 0x0000-0x3FFF and select 3 BANK0.BIN 0x4000-0x7FFF
     // (the pack's +0x31000 extended-ROM bank 0) across 0xD8000-0xDBFFF, the IDE work
@@ -535,6 +562,23 @@ module tb_pc9821_memory_map;
     check_addr(32'h0008_0000, 32'h0008_0000);
     check_addr(32'h0009_8000, 32'h0009_8000);
     check_addr(32'h0009_FFFF, 32'h0009_FFFF);
+
+    // THE EXPORTED WINDOW-0 PAIR (P2). d_addr/win0_moved are what pc9821_memory_subsystem's
+    // route_addr/win0_moved read, so they carry the whole bias contract: the window's edges, the
+    // identity, the top page (whose bias crosses into bit 24), an odd value (unreachable from the
+    // iobus, which masks 0xFE, but the documented arithmetic keeps it identical) and an address
+    // above the first MiB where the window does not exist.
+    check_bias(32'h0008_0000, 8'h0A);
+    check_bias(32'h0009_FFFF, 8'h0E);
+    check_bias(32'h0009_0000, 8'h0C);
+    check_bias(32'h0008_FFFF, 8'h10);
+    check_bias(32'h0009_8000, 8'h7E);
+    check_bias(32'h0009_8000, 8'hFE);
+    check_bias(32'h0008_0000, 8'h0B);
+    check_bias(32'h0008_0000, 8'h08);
+    check_bias(32'h0018_8000, 8'h0A);
+    check_bias(32'hFFF8_0000, 8'h0A);
+    win0_sel = 8'h08;
 
     win0_sel = 8'h0E;                                  // 0xE0000-0xFFFFF
     check_addr(32'h0009_8000, 32'h0200_0000);          // -> the ROM window
@@ -651,19 +695,23 @@ module tb_pc9821_memory_map;
     win0_sel = 8'h00;
     check_addr(32'h0008_0000, 32'h0000_0000);          // page 0
 
-    // ---- the EMS window at 0xB0000-0xBFFFF (0x043F's 0x2 nibble, r12/29 s2) ------
+    // ---- the EMS window at 0xB0000-0xBFFFF (0x043F's 0x2 nibble) ------
     // The ITF's own test (BANK4@0xF8296-0xF8317) needs two things of this window:
     // the 0x22 store must DIFFER from the 0x20 state, and 0x22 must be 64 KiB of
     // writable RAM. 0x20 is the IDENTITY -- the state the BIOS's mode-set stub writes
     // (BANK7@0xD2A) and the ITF writes back (BANK4@0xF834D) -- so it must leave the
     // GVRAM plane window at 0xB0000 exactly as it was.
     win0_sel = 8'h08;
-    ems_page_base = 32'h0210_0000;
+    // The page's backend base as pc9821_memory_subsystem computes it: pack_base + PACK_BYTES
+    // + 0x48000, with pack_base the 32 MiB default here. The map reads only [31:20] and folds
+    // the low half to that 0x48000 constant (tools/check_memmap_addr_equiv.py PREMISES proves
+    // the subsystem formula and the map together), so the bench must drive the same shape.
+    ems_page_base = 32'h0214_8000;
     ems_state = 2'd0;
     check_gvram(32'h000B_0000, 32'h000B_0000, 2'd1, 15'h0000);   // 0x20: the R plane
     ems_state = 2'd1;
-    check_addr(32'h000B_0000, 32'h0210_0000);                    // 0x22: the page's first word
-    check_addr(32'h000B_FFFC, 32'h0210_FFFC);                    // and its last: 64 KiB
+    check_addr(32'h000B_0000, 32'h0214_8000);                    // 0x22: the page's first word
+    check_addr(32'h000B_FFFC, 32'h0215_7FFC);                    // and its last: 64 KiB
     cpu_valid = 1; cpu_write = 0;
     #1;
     if (!mem_valid) begin
@@ -694,7 +742,7 @@ module tb_pc9821_memory_map;
     // stores (cpumem.c:135 memnc_wr8 is `(void)address; (void)value`, the handler on
     // both ROM windows: cpumem.c:225 memfn0.wr8[0xe8000>>15]/[0xf8000>>15], :269
     // mmaptbl bwr8), and qemu-pc98's 0xd8000 ide_rom is a plain ROM alias. Only the
-    // 0xF8000-0xFFFFF window has a writable layer (the r13/23 shadow), and THAT store
+    // 0xF8000-0xFFFFF window has a writable layer (the BIOS shadow), and THAT store
     // stays gated by 0x053D bit 1.
     //
     // The 0xF8000 window with the gate open: the shadow absorbs the store.
@@ -737,7 +785,7 @@ module tb_pc9821_memory_map;
     // BANK4@0x01ED) targets the pack's banks 5/6. It is a self-copy (a no-op), but a
     // guest store there is a ROM store and must be dropped in BOTH gate states: the
     // ITF's second ROM-sum pass reads 0xE8000-0xF7FFF, and a byte landed there prints
-    // ROM SUM ERROR on the next reset (r13/23, r13/294).
+    // ROM SUM ERROR on the next reset.
     ide_rom_enable = 0;
     win0_sel = 8'h0E;
     bios_ram_gate = 0;
@@ -776,7 +824,7 @@ module tb_pc9821_memory_map;
     // The IDE option ROM decides which channels to probe from the byte at physical
     // 0xF8E90 (BANK3@0x078E). The ITF stores it (BANK4@0x19D4) through ES=0x98E8 with
     // window 0 = 0x0E, i.e. CPU address 0x98E90, and the option ROM reads it back later
-    // under the BIOS-top bank. THE WINDOW HAS TWO LAYERS (r13/23): the selected pack bank
+    // under the BIOS-top bank. THE WINDOW HAS TWO LAYERS: the selected pack bank
     // and a writable shadow in the SDRAM reserve above the pack. The gated STORE goes to
     // the SHADOW whatever bank is selected, and a READ serves the shadow only while it is
     // both enabled (0x043F's 0x8 nibble) and already written since reset. That second term

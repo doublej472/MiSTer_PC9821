@@ -10,7 +10,11 @@ module pc9821_device_select #(
     // Whether the MPU-PC98II exists (z486_mister.sv's MPU_EN). A parameter rather than a pin,
     // because it is a build-profile constant: with MPU_EN 0 `mpu_cs` is a constant 0 and
     // `gdc_cs` is the complement of exactly the list it had before the card existed.
-    parameter MPU_EN = 1'b0
+    parameter MPU_EN = 1'b0,
+    // Whether the run-time SDRAM_CLK phase instrument exists (z486_mister.sv's SDRAM_PHASE_DYN, a
+    // TEST-ONLY build: build_profile.py --dbg-sdram-phase, off in every preset). With 0 `sdph_cs`
+    // is a constant 0 and every other output is exactly what it was.
+    parameter SDRAM_PHASE_DYN = 1'b0
 ) (
     input  [15:0] addr,
 
@@ -37,6 +41,20 @@ module pc9821_device_select #(
       // MPU_EN 0 (the base build) leaves the decode exactly as it was: the card's two
       // addresses stay on the GDC's complement and the select never asserts.
     output wire mpu_cs,
+      // The SDRAM phase instrument's two ports, 0x5FF0 (command/status) and 0x5FF2 (offset)
+      // (pc9821_sdram_phase_ctl.sv). Neither is named by NP2kai's or MAME's PC-9821 port map and
+      // nothing else here decodes them; the pair is chosen by this core, for its own test build.
+    output wire sdph_cs,
+      // THE DEVICE-BUS CLAIM: the set of ports that belong to the device bus at all, as opposed
+      // to the CPU-local "system" ports pc9821_iobus decodes itself. This is the ONE place the
+      // claim is written, so a port cannot be claimed in one list and unreachable in another
+      // (for example the odd task-file lanes 0x643.. that ata_cs claims). The claim is a product
+      // of the same decode that produces the selects: every chip select below is a bus port, and
+      // the ports that reach their chip through `gdc_cs` rather than a select of their own (the
+      // 8253 window's even lanes, which are the text CRTC's registers; the CRTC window; the CG
+      // window) are the explicit sub-selects.
+      // tb_pc9821_device_select sweeps all 65,536 ports against a recorded 85-port list.
+    output wire dev_bus_cs,
     output wire gdc_cs           // everything else on the device bus
 );
     assign pic_master_cs = (addr == 16'h0000) || (addr == 16'h0002);
@@ -66,8 +84,48 @@ module pc9821_device_select #(
       // pc9821.cpp:768), but NP2kai attaches two ports, and that divergence
       // is recorded here: 0xE0D1/0xE0D3 stay undecoded here.
     assign mpu_cs = MPU_EN && ((addr == 16'hE0D0) || (addr == 16'hE0D2));
+    assign sdph_cs = SDRAM_PHASE_DYN && ((addr == 16'h5FF0) || (addr == 16'h5FF2));
     assign gdc_cs = !(interrupt_cs || kbd_cs || ata_cs || cal_cs || opna_cs || pcm_cs ||
-                      gameport_cs || mpu_cs);
+                      gameport_cs || mpu_cs || sdph_cs);
+
+      // THE DEVICE-BUS SUB-SELECTS: the ports the bus presents to no chip select (they are the
+      // GDC bucket's, `gdc_cs` below, which is deliberately UNCHANGED - the CRTC/GDC/CG/GRCG all
+      // take `device_io_wr && gdc_cs` plus their own register code). They are here only so the
+      // claim can be a sum of decodes instead of a second hand-kept list.
+    wire gdc_text_cs, pit_window_cs, grcg_cs, cg_cs, ata_bus_cs;
+      // 0x0060-0x006E: exactly the ports pc9821_crtc's port_code decodes there - the text GDC's
+      // parameter and command ports, the VSYNC arm, both MODE FF registers and 0x6E. The even
+      // lanes only: a word OUT to the GDC's pair reaches its odd half through the lane walk's
+      // own address, not as a separate device port (0x66/0x6C are decoded by nothing).
+    assign gdc_text_cs = (addr[15:8] == 8'h00) && (addr[7:4] == 4'h6) && !addr[0] &&
+                         (addr[3:1] != 3'b011) && (addr[3:1] != 3'b110);
+      // 0x0070-0x0077: the 8253 window. pit_cs above is the chip's own (odd) select; the even
+      // lanes 0x70/0x72/0x74/0x76 are the text CRTC's PL/BL/CL/SSL registers (pc9821_crtc's
+      // port_code 6-9, `8'h70:   port_code = 5'd6;`), which reach it through `gdc_cs`.
+    assign pit_window_cs = (addr[15:3] == 13'h000E) && !addr[0];
+      // 0x0078-0x007E even: the GRCG's two registers (0x7C/0x7E) and their 0x78/0x7A partners,
+      // the same code pc9821_crtc's port_code decodes.
+    assign grcg_cs = (addr[15:3] == 13'h000F) && !addr[0];
+      // 0xA0-0xA6 EVERY LANE (the CG/graphics word ports: 0xA0/0xA2 are pc9821_gdc2's and
+      // 0xA1/0xA3/0xA5/0xA9 pc9821_cg's, so the pairs are word-accessible), then 0xA8-0xAE's
+      // even page registers plus 0xA9. 0xAB/0xAD/0xAF are decoded by nothing: they are not bus
+      // ports on the machine and stay off it.
+    assign cg_cs = (addr[15:4] == 12'h000A) &&
+                   ((addr[3:0] <= 4'h6) || !addr[0] || (addr[3:0] == 4'h9));
+      // THE IDE BUS PORTS ARE ata_cs MINUS THE LANES THE BUS NEVER STROKES. ata_cs's range
+      // shape covers every task-file address (0x640-0x64E, 0x740-0x74E); the bus presents only
+      // the even lanes plus 0x641 (the first file's odd partner), which is what the machine's
+      // own device list holds. The mask is a subtraction from ata_cs, not a second decode, so
+      // the two cannot disagree about the four 0x043x ports the card also lives at.
+    assign ata_bus_cs = ata_cs &&
+                        !(addr[0] && (addr[15:4] == 12'h064) && (addr[3:1] != 3'b000)) &&
+                        !(addr[0] && (addr[15:4] == 12'h074));
+      // The claim: the 8259 pair and the PIT, then every device above, then the three sub-selects.
+      // interrupt_cs covers pic_master_cs/pic_slave_cs/pit_cs; every other member is disjoint
+      // from every other (the bench asserts the leaf selects are one-hot).
+    assign dev_bus_cs = interrupt_cs || kbd_cs || cal_cs || ata_bus_cs || opna_cs || pcm_cs ||
+                        gameport_cs || mpu_cs || sdph_cs || gdc_text_cs || pit_window_cs ||
+                        grcg_cs || cg_cs;
 endmodule
 
 `default_nettype wire

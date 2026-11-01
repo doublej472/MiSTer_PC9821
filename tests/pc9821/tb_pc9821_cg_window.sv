@@ -49,7 +49,7 @@
 // ==== WHAT THIS PROVES ====
 // The memory-mapped CG window at 0xA4000: a 32-byte repeating view of the glyph the CG registers select, the user CG RAM write/read path, the code registers packing as A1 high / A3 low, the decode boundary at 0xA5000, a ready-then-response phase, and the ITF configuration record present on a fresh power-up store (the marker at window offsets 0x11/0x13 and the ten bytes the ITF sums, read before anything writes them). It does NOT cover the ROM glyph classes: the ANK page is answered from the pack slice by tb_pc9821_cg_read_path. The even/low page is ASSERTED at the dummy byte the machine itself measures, 0x8F (docs/probes/VRAM.TXT, exactly this class; NP2kai has one dummy page shared by every class, io/cgrom.c:18): a store there vanishes and a read answers 0x8F.
 //
-// The memory-mapped CG window at 0xA4000: a 32-byte repeating view of the glyph the CG registers select, the user CG RAM write/read path, the code registers packing as A1 high / A3 low, the decode boundary at 0xA5000, a ready-then-response phase, and the ITF configuration record present on a fresh power-up store (the marker at window offsets 0x11/0x13 and the ten bytes the ITF sums, read before anything writes them). It does NOT cover the ROM glyph classes: the ANK page is answered from the pack slice by tb_pc9821_cg_read_path. The even/low page is ASSERTED at the machine's measured dummy 0x8F (docs/probes/VRAM.TXT, exactly this class; NP2kai has one dummy page shared by every class, io/cgrom.c:18) - the old reported-only note tracked a zero-read model both references contradicted (review-cg F2).
+// The memory-mapped CG window at 0xA4000: a 32-byte repeating view of the glyph the CG registers select, the user CG RAM write/read path, the code registers packing as A1 high / A3 low, the decode boundary at 0xA5000, a ready-then-response phase, and the ITF configuration record present on a fresh power-up store (the marker at window offsets 0x11/0x13 and the ten bytes the ITF sums, read before anything writes them). It does NOT cover the ROM glyph classes: the ANK page is answered from the pack slice by tb_pc9821_cg_read_path. The even/low page is ASSERTED at the machine's measured dummy 0x8F (docs/probes/VRAM.TXT, exactly this class; NP2kai has one dummy page shared by every class, io/cgrom.c:18) - the old reported-only note tracked a zero-read model both references contradicted.
 
 
 module tb_pc9821_cg_window;
@@ -91,19 +91,17 @@ module tb_pc9821_cg_window;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0] cpu_be = 4'hF;
   reg [7:0] cpu_burstcount = 1;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0] tram_din, tram_dout;
   wire tram_we;
 
   // Shared CG byte channel between the subsystem's window responder and the GDC.
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   wire [4:0] cg_win_byte_sel;
   wire cg_win_rd;
   wire [7:0] cg_win_dout;
@@ -146,7 +144,7 @@ module tb_pc9821_cg_window;
   // ==== DUT ====
   // Two blocks, because this window spans both, wired exactly as
   // pc9821_system.sv wires them.
-  // The GVRAM datapath's ports (r12/33): the GRCG's device-bus bytes, and the
+  // The GVRAM datapath's ports: the GRCG's device-bus bytes, and the
   // scanout's read side. Unused here, but the instantiation needs them.
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0;
@@ -230,7 +228,6 @@ module tb_pc9821_cg_window;
       .tram_cpu_addr(tram_addr), .tram_cpu_din(tram_din),
       .tram_cpu_we(tram_we), .tram_cpu_dout(tram_dout),
       .font_ld_addr(font_addr), .font_ld_data(font_data), .font_ld_we(font_we),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .font_req_addr(font_req_addr), .font_req(font_req),
@@ -249,7 +246,7 @@ module tb_pc9821_cg_window;
   // A same-cycle ready+resp_valid answer wedges z486, and two sequential waits cannot
   // tell the phases apart -- both pass with it.
   always @(posedge clk_sys)
-    if (cpu_ready && (cpu_resp_valid || cpu_line_resp_valid))
+    if (cpu_ready && (cpu_resp_valid || cpu_line_word_valid))
       $fatal(1, "ready and response in the same cycle");
 
   reg [7:0] rval;
@@ -327,7 +324,7 @@ module tb_pc9821_cg_window;
       // The responder delivers data with cpu_resp_valid, one cycle after the
       // accept (z486 samples din on the response, matching the open-bus
       // responder). Sample where the data is valid.
-      while (!cpu_resp_valid && !cpu_line_resp_valid) @(negedge clk_sys);
+      while (!cpu_resp_valid && !cpu_line_word_valid) @(negedge clk_sys);
       #1 data = cpu_dout[lane*8 +: 8];
       @(negedge clk_sys); cpu_valid = 0;
       repeat (4) @(negedge clk_sys);
@@ -433,10 +430,9 @@ module tb_pc9821_cg_window;
     // ---------------------------------------------------------------
     mem_write_byte(32'h000A_4006, 8'h77);
     mem_read_byte(32'h000A_4006, rval);
-    // ASSERTED since review-cg F2: the machine measured 0x8F here in exactly this
+    // ASSERTED: the machine measured 0x8F here in exactly this
     // class (docs/probes/VRAM.TXT: even writes dropped, even reads 0x8F) and NP2kai
-    // has ONE dummy page shared by every class (io/cgrom.c:18,43-48). The old
-    // reported-only note tracked a zero-read model.
+    // has ONE dummy page shared by every class (io/cgrom.c:18,43-48).
     if (rval !== 8'h8F)
       fail("the even/low page is not the machine's dummy 0x8F: a store there must vanish");
 
@@ -502,7 +498,7 @@ module tb_pc9821_cg_window;
     //     soft reset on purpose). Write a byte the power-up image does NOT carry into a
     //     record cell (row 1 = store 0x811 via window offset 3), pulse the platform
     //     reset, and require the guest's byte back; an untouched record cell (row 0xD =
-    //     store 0x81D, power-up 0xFF) must still hold its image. This is the r13/47
+    //     store 0x81D, power-up 0xFF) must still hold its image. This is the earlier
     //     finding: the record already persists, so the ITF's repeated DIP prompt is not
     //     a re-seed --
     // ---------------------------------------------------------------

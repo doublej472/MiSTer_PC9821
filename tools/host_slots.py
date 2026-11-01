@@ -209,7 +209,7 @@ def main() -> int:
         for p in live:
             print(p.name, p.read_text())
         total, h, unc = lane_total(a.dir, a.mine)
-        print(f"lane total {total} = {h} slot(s) held + {unc} running container(s) no slot covers")
+        print(f"total {total} = {h} slot(s) held + {unc} running container(s) no slot covers")
     return 0
 
 

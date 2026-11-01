@@ -20,7 +20,7 @@
     "max_static_s": 300,
     "min_changes": 0
   },
-  "_comment": "Per game item: boot_wait (s from load_core to the DOS prompt; default --boot-wait), steps (type|wait|click|key), run (s of screenshots after the steps), shot_every (s), max_static_s (the longest the screen may sit unchanged), min_changes (screenshot pairs that must differ), known_frame {ref, max_diff, by_s, not_before_s}. A step argument that begins with '?' means the command has not been supplied yet: the item is SKIPPED, never passed. 'pngo' (a batch file on the example disk) and the 50 s wait and the title click are an example Policenauts recipe. known_frame refs are PNGs in --refs (your directory; game frames are not committed): make them with --record-refs from a build you have seen work. config_default: rewrite a 'REM DEFAULTn' boot-menu default in CONFIG.SYS of that item's image COPY (on the example disk: 0 = noemm, 1 = himem, 2 = emm386, 3 = full with NECCD; DOOM refuses EMM386 and needs 0).",
+  "_comment": "Per game item: boot_wait (s from load_core to the DOS prompt; default --boot-wait), steps (type|wait|click|key), run (s of screenshots after the steps), shot_every (s), max_static_s (the longest the screen may sit unchanged), min_changes (screenshot pairs that must differ), dense [{from_s, to_s, every_s}] (windows shot every every_s instead of shot_every: a transient known frame needs them), known_frame {ref, max_diff, by_s, not_before_s, until_s} (or known_frames, a list; ANY shot taken in [not_before_s, until_s] seconds after the steps may match; by_s picks the shot --record-refs copies). Shot times come from the screenshots' own time stamps. A step argument that begins with '?' means the command has not been supplied yet: the item is SKIPPED, never passed. 'pngo' (a batch file on the example disk) and the 50 s wait and the title click are an example Policenauts recipe. known_frame refs are PNGs in --refs (your directory; game frames are not committed): make them with --record-refs from a build you have seen work. config_default: rewrite a 'REM DEFAULTn' boot-menu default in CONFIG.SYS of that item's image COPY (on the example disk: 0 = noemm, 1 = himem, 2 = emm386, 3 = full with NECCD; DOOM refuses EMM386 and needs 0).",
   "policenauts": {
     "boot_wait": 40,
     "steps": [
@@ -125,7 +125,7 @@
     }
   },
   "flamezap": {
-    "_comment": "EGC-heavy (sprite blits through the EGC); needs the EMS boot profile (config_default 2 = emm386 on the example disk): on noemm it fails with 'Palloc error'.",
+    "_comment": "EGC-heavy (sprite blits through the EGC); needs the EMS boot profile (config_default 2 = emm386 on the example disk): on noemm it fails with 'Palloc error'. Shots start at the launch so the intro is covered: the intro is deterministic, and its ships frame (~15 s after the steps on most runs) matches the reference within ~3 on every good build while a starfield-only, black or sprite-trailed screen scores 10 or more, hence max_diff 5. The frame lasts about a second and the launch moves by a few seconds from card to card (one card shows it ~3.5 s early, diff 8 at the nearest 3 s shot), so 6-24 s is shot every second (dense) and ANY shot in that window may match (not_before_s/until_s).",
     "boot_wait": 40,
     "steps": [
       [
@@ -138,18 +138,34 @@
       ],
       [
         "wait",
-        30
+        1
       ]
     ],
-    "run": 120,
-    "shot_every": 10,
+    "run": 150,
+    "shot_every": 3,
+    "dense": [
+      {
+        "from_s": 6,
+        "to_s": 24,
+        "every_s": 1
+      }
+    ],
     "max_static_s": 60,
     "min_changes": 3,
     "config_default": 2,
-    "known_frame": {
-      "ref": "flamezap-title.png",
-      "max_diff": 14.0,
-      "by_s": 100
-    }
+    "known_frames": [
+      {
+        "ref": "flamezap-intro-ships.png",
+        "max_diff": 5.0,
+        "by_s": 15,
+        "not_before_s": 6,
+        "until_s": 24
+      },
+      {
+        "ref": "flamezap-title.png",
+        "max_diff": 14.0,
+        "by_s": 132
+      }
+    ]
   }
 }

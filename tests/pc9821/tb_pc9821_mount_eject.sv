@@ -7,7 +7,7 @@
 // pc9821_block_io's own unmount rule (`eject = img_mounted && (img_size < 512)`) and hps_io's
 // event contract (img_size/img_readonly "valid only for active bit in img_mounted",
 // sys/hps_io.sv:129-130). The reset policy - an IDE slot's change resets once, a floppy's never -
-// is the owner's (2026-10-08: "fdd needs to not reset, but ide should"). Nothing is taken from
+// is a design decision (a floppy change must not reset, a disk change must). Nothing is taken from
 // the RTL under test.
 // ==== DUT ====
 
@@ -59,6 +59,7 @@ module tb_pc9821_mount_eject;
       .a_img_mounted(img_mounted[0]), .a_img_readonly(img_ro), .a_img_size(img_size),
       .a_mounted(a_mounted), .a_readonly(), .a_capacity(a_capacity),
       .a_req_read(1'b0), .a_req_write(1'b0), .a_req_lba(32'd0),
+      .a_req_window(1'b1),
       .a_req_done(), .a_req_error(), .a_busy(),
       .a_buf_we(), .a_buf_addr(), .a_buf_data(), .a_buf_rd_addr(), .a_buf_rd_data(16'd0),
       .a_sd_lba(), .a_sd_blk_cnt(), .a_sd_rd(), .a_sd_wr(), .a_sd_ack(1'b0), .a_sd_buff_din(),

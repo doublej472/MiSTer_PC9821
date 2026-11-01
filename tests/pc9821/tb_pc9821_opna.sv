@@ -24,6 +24,7 @@ module tb_pc9821_opna;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -67,6 +68,7 @@ module tb_pc9821_opna;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
   wire [3:0] dbg_gate;
@@ -85,7 +87,7 @@ module tb_pc9821_opna;
 
   // The EGC's register file and its gate. This bench drives the sound ports, not
   // the graphics accelerator, so the gate is tied off and the registers are left
-  // unread; they are declared because pc9821_iobus carries them (r12/32, merged
+  // unread; they are declared because pc9821_iobus carries them (merged
   // with this branch) and the `.*` instantiation below matches ports by name.
   wire        egc_gate = 1'b0;
   wire [15:0] egc_access, egc_fgbg, egc_ope, egc_fg;
@@ -104,7 +106,7 @@ module tb_pc9821_opna;
   wire [1:0] ems_state;
   wire top_shadow_en;
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
-  // port (r13/57) and the `.*` DUT instantiation matches by name, so it must
+  // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
@@ -130,8 +132,14 @@ module tb_pc9821_opna;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -147,6 +155,10 @@ module tb_pc9821_opna;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the chip select is pc9821_iobus's own decode now (the ONE pc9821_device_select
+  // instance lives inside it), so `.*` above binds it instead of a local copy.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -154,10 +166,6 @@ module tb_pc9821_opna;
   // ports, it is the only device the bus waits a cycle for, and its output is
   // the only byte on the device bus (0xFF otherwise, standing in for the
   // devices this bench does not build).
-  wire opna_cs = (device_io_addr == 16'h0188) ||
-                 (device_io_addr == 16'h018A) ||
-                 (device_io_addr == 16'h018C) ||
-                 (device_io_addr == 16'h018E);
   wire [7:0] opna_io_dout;
   wire       opna_rd_wait, opna_irq;
   wire signed [19:0] opna_snd_l, opna_snd_r;
@@ -258,7 +266,7 @@ module tb_pc9821_opna;
 
   // The extended bank's register/data pair (0x18C/0x18E), the port pair the
   // card puts FM channels 4-6 behind: jt12_mmr decodes the chip address's high
-  // bit as the channel's high bit (jt12_mmr.v:536), and the glue reaches it only
+  // bit as the channel's high bit (jt12_mmr.v:535), and the glue reaches it only
   // when 0xA460 bit 0 is set (pc9821_opna.sv op_sel).
   task automatic sound_x(input [7:0] reg_index, input [7:0] data);
     begin
@@ -296,7 +304,7 @@ module tb_pc9821_opna;
     // tone/noise enables. A FRESH register reads the MACHINE's 0x00
     // (docs/probes/OPNA.TXT CHIPID: `0x18A with 0x188=07 ... : 00`), not
     // NP2kai's reset byte 0xbf (sound/opna.c:137), so this RMW installs 0x80 -
-    // every source routed, i.e. what "start the SSG" means. r12/06 P0-3 read the
+    // every source routed, i.e. what "start the SSG" means. An earlier analysis read the
     // 0x80 as an artefact of a model whose reads return 0; the capture shows the
     // hardware's own byte IS 0, and the die-shot LLE and ymfm agree (see
     // pc9821_opna.sv's seed block).
@@ -330,7 +338,7 @@ module tb_pc9821_opna;
     // ---- 4. WAITREADY: BUSY clears in bounded time ----------------------
     // The old constants satisfied this by accident (0x03 and 0x7F both have bit
     // 7 clear), so this is not a bug the rewrite fixes but a property the
-    // chip-backed model must keep -- a regression trap, as r12/06 P0-2 asks.
+    // chip-backed model must keep -- a regression trap.
     // The data write below starts a real busy period, so the poll has something
     // to wait for; a stuck BUSY would fail it.
     write_byte(16'h018A, 8'h80);
@@ -397,7 +405,7 @@ module tb_pc9821_opna;
     // channel A the way the games do - tone period via regs 0/1, the tone
     // enable in reg 7, the level in reg 8 - and require the output to MOVE.
     // A card that answers its ports perfectly and emits nothing is the fault
-    // the owner reported, and nothing here could see it before.
+    // observed on hardware, and nothing here could see it before.
     begin
       integer lo, hi;
       sound_o(8'h00, 8'h00);   // tone A period fine
@@ -454,7 +462,7 @@ module tb_pc9821_opna;
     end
 
     // ---- 11. the six FM channels produce output -------------------------
-    // THE FAILURE the owner reported, and the one the SSG check above cannot
+    // THE FAILURE observed on hardware, and the one the SSG check above cannot
     // see: the OPNA answers every port and the SSG plays, but the FM melody is
     // silent. The FM register file is written through the vendored core's
     // sample-rate operator scan (src/opna/jt12/hdl/jt12_reg.v -> jt12_csr.v),
@@ -513,7 +521,7 @@ module tb_pc9821_opna;
       // ...and at a TONE's amplitude, not a tail's. CHK-9's SSG square was just set to
       // level 0, and the board's AC coupling leaves a ONE-SIGNED decaying step of up to
       // the SSG's coupled peak (<= 1110, tb_pc9821_opna_ssg_level's band) - which on its
-      // own satisfied both tests above with the FM missing entirely (bench-audit
+      // own satisfied both tests above with the FM missing entirely (a planted
       // mutation: mix_l without fm_l PASSED). One TL=0 carrier is the operator's full
       // scale, +-4096 in this junction's units (qemu fmopn.c:3023-3025 halving its
       // 8192; pc9821_opna.sv's join comment), so a sounding note must cross +-2048.
@@ -522,9 +530,9 @@ module tb_pc9821_opna;
 
       // The SAME channel, keyed on again the way a driver keys a note: the
       // key-on first and a register write right behind it. That is the one
-      // window r13/44 (§5) left open, and it is specific to the key-on: jt12_mmr
+      // window left open, and it is specific to the key-on: jt12_mmr
       // holds `up_keyon` as a LEVEL only until the next DATA write lands
-      // (jt12_mmr.v:343-339), and jt12_kon samples it at the chip's clock enable
+      // (jt12_mmr.v:342-347), and jt12_kon samples it at the chip's clock enable
       // (jt12_kon.v:70-78) - one clk in 37 at 50 MHz. The key-on above is the
       // LAST write, so it stays held and is always captured; here the 0xA4 byte
       // (FNUM high, the driver's order) arrives immediately behind it and clears
@@ -552,12 +560,12 @@ module tb_pc9821_opna;
 
       // The OTHER three FM channels, written the way the card makes them reachable:
       // the second port pair 0x18C/0x18E, which jt12_mmr decodes as the high part
-      // bit (up_ch = {part, selected_register[1:0]}, jt12_mmr.v:536) and which the
+      // bit (up_ch = {part, selected_register[1:0]}, jt12_mmr.v:535) and which the
       // glue gates on 0xA460 bit 0 (op_sel). The channel sound_o programmed above
       // is part 0; channels 4-6 answer only on the extended pair, so a note here
       // proves the half of the FM register bank the earlier checks never touched.
       // The key-on stays on the LOW pair: jt12_mmr takes it only with !addr[1]
-      // (jt12_mmr.v:343), with the channel in din[2:0] = 4.
+      // (jt12_mmr.v:342, `!addr[1]`), with the channel in din[2:0] = 4.
       write_byte(16'h0A460, 8'h73);   // re-enable the extension (CHK-10 left it closed)
       sound_o(8'h28, 8'h00);          // key off all channels
       repeat (4000) @(posedge clk);
@@ -591,8 +599,8 @@ module tb_pc9821_opna;
     end
 
     // ---- 12. the rhythm (ADPCM-A) channel sounds, on a loaded image -------
-    // The chip's ADPCM-A path is a SECOND key-on, on its own registers, and the
-    // owner reports it silent too. NP2kai's model is the reference for what the
+    // The chip's ADPCM-A path is a SECOND key-on, on its own registers, and it
+    // was observed silent too. NP2kai's model is the reference for what the
     // driver writes (sound/opna.c writeRegister 0x10-0x1D -> rhythm_setreg):
     // 0x11 is the total level (active low), 0x18-0x1D are the per-instrument
     // level (bits 4:0, active low) and pan (bits 7:6), and a bit in 0x10 STARTS
@@ -617,7 +625,7 @@ module tb_pc9821_opna;
       // Key the FM notes CHK-11 left sounding (channels 1 and 4) off and let their
       // RR=15 release finish first: a sustained FM note swings both ways on its own,
       // so with it still playing the "the drum emits something" test below could not
-      // fail (bench-audit, 2026-10-12). What remains is CHK-9's one-signed SSG
+      // fail. What remains is CHK-9's one-signed SSG
       // coupling tail (<= 1110), which the amplitude bound below clears.
       sound_o(8'h28, 8'h00);
       sound_o(8'h28, 8'h04);

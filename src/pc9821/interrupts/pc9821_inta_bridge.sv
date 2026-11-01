@@ -41,7 +41,7 @@ reg inta_responded;  // Guard against double-fire (BIU holds inta for 2 posedges
 // The two states whose arm answers the CPU: the first INTA's dummy response (S_IDLE) and
 // the second INTA's PIC acknowledge (S_INTA2). `cpu_inta` is a LEVEL - z486 holds it until
 // this bridge's ready, and its external valid clears on the accept edge
-// (src/z486/memory.sv:620-523 `ext_valid_r <= 1'b0`), so the CPU
+// (src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`), so the CPU
 // releases the strobe for exactly one cycle between the two INTA bus cycles and may
 // re-present on the next. One answer per asserted strobe is what the flag below counts.
 wire inta_gate    = (state == S_IDLE) || (state == S_INTA2);
@@ -114,9 +114,8 @@ always @(posedge clk) begin
         endcase
 
         // The taken flag's ONE next-state expression (R2): set by an answer, held for as
-        // long as the strobe is asserted, cleared by the release. It used to be two `<=`
-        // sites in this block - one per answer arm plus a trailing `if (!cpu_inta)` clear -
-        // resolved by position. Folded, so the resolution is a boolean:
+        // long as the strobe is asserted, cleared by the release. One expression, not
+        // several `<=` sites resolved by position, so the resolution is a boolean:
         //   next = cpu_inta & (old | answer)   [answer implies cpu_inta, so the clear can
         //                                      only fire while the strobe is low]
         inta_responded <= cpu_inta && (inta_responded | inta_arm);
@@ -127,7 +126,7 @@ end
   // ---------------------------------------------------------------------------
   // R8: THE CONTRACT THE UNCONDITIONAL S_INTA1 EXIT RESTS ON (docs/single-cycle-event-
   // discipline.md R5/R6/R8). `inta_responded` is the taken flag - one answer per asserted
-  // strobe - and S_INTA1 no longer waits for the level because the flag, not the wait,
+  // strobe - and S_INTA1 does not wait for the level because the flag, not the wait,
   // enforces the release. Both halves of that sentence are pinned here; they cost nothing
   // in synthesis and run in every bench that builds this module.
   // ---------------------------------------------------------------------------

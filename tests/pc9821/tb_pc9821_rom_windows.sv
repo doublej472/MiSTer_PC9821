@@ -1,13 +1,13 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_ROM_WINDOWS: every firmware ROM window answers the owner's dump bytes at the address and bank the machine puts them at - the 0xD8000 8 KiB option-ROM window reads BANK3.BIN from offset 0 (EIP = file offset, the freeze lane's verified site), 0xE8000-0xF7FFF reads the fixed lower BIOS (BANK5/BANK6), and 0xF8000-0xFFFFF reads each of the ten selections' own 32 KiB bank (the states 0x043F = 0xE0|bank<<1 and 0x043D install - the port decode itself is tb_pc9821_iobus's) from its first byte to the window's end, and the PC-9801-86's 16 KiB SOUND.ROM window at 0xCC000-0xCFFFF answers the machine-captured dump at all eight of SHADOW.TXT's sampled blocks (FAIL-FIRST: before the window this core answered 0xFF there), bounded above and below by the absent area's 0xFF and swallowing its stores like every other ROM window. The expected bytes are transcribed from bios/xe10/BANK*.BIN and SOUND.ROM - each BANK's first and last dwords, chosen because those pairs are unique across the eight banks - and cross-checked against docs/probes/SHADOW.TXT:150-199, never derived from the RTL. The 0xD8000 gate-off shape (0x053D bit 4 clear) is a recorded DIVERGE row, not a failure: QEMU non-PCI says 0xFF, QEMU's Xa7 class says a DRAM shadow, NP2kai has no gate at all, and the machine has never been read there (the owed probe: read 0xD8000 under 0x53D=0x02).
+// TB_PC9821_ROM_WINDOWS: every firmware ROM window answers the dump bytes at the address and bank the machine puts them at - the 0xD8000 8 KiB option-ROM window reads BANK3.BIN from offset 0 (EIP = file offset, a verified site), 0xE8000-0xF7FFF reads the fixed lower BIOS (BANK5/BANK6), and 0xF8000-0xFFFFF reads each of the ten selections' own 32 KiB bank (the states 0x043F = 0xE0|bank<<1 and 0x043D install - the port decode itself is tb_pc9821_iobus's) from its first byte to the window's end, and the PC-9801-86's 16 KiB SOUND.ROM window at 0xCC000-0xCFFFF answers the machine-captured dump at all eight of SHADOW.TXT's sampled blocks (FAIL-FIRST: before the window this core answered 0xFF there), bounded above and below by the absent area's 0xFF and swallowing its stores like every other ROM window. The expected bytes are transcribed from bios/xe10/BANK*.BIN and SOUND.ROM - each BANK's first and last dwords, chosen because those pairs are unique across the eight banks - and cross-checked against docs/probes/SHADOW.TXT:150-199, never derived from the RTL. The 0xD8000 gate-off shape (0x053D bit 4 clear) is a recorded DIVERGE row, not a failure: QEMU non-PCI says 0xFF, QEMU's Xa7 class says a DRAM shadow, NP2kai has no gate at all, and the machine has never been read there (the owed probe: read 0xD8000 under 0x53D=0x02).
 
 // ==== WHY ====
-// The owner asked for every ROM to be exposed CORRECTLY.
+// Every ROM must be exposed CORRECTLY.
 // The memmap benches pin the TRANSLATION (window -> pack offset); this one pins the
 // CONTENT CHAIN end to end through the real pack download and the real responder: the
-// bytes a guest reads at each window are the owner's dump bytes of the bank the machine
+// bytes a guest reads at each window are the dump's bytes of the bank the machine
 // puts there. A wrong window, a bank-select off-by-one (0xE2 landing on bank 2), a
 // truncated window or a mis-placed pack slot each make one of these rows read another
 // bank's tag and fail by name.
@@ -71,8 +71,8 @@ module tb_pc9821_rom_windows;
   reg  [7:0]  cpu_burstcount = 8'd1;
   reg         cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   // Parked ports (GVRAM/TRAM/CG/EGC/scanout/font-reader): not this bench's subject.
   reg         gvram_access_page = 0;
@@ -405,7 +405,7 @@ module tb_pc9821_rom_windows;
     // shape): a store is swallowed and the pack's byte survives.
     cpu_write_byte(32'h000C_C000, 8'h5A);
     check_dword(32'h000C_C000, 32'h57561E06, "CC000 after a guest store (dropped)",
-                "the ROM pack is read-only (r13/294)");
+                "the ROM pack is read-only");
     if (backend.peek(32'h000C_6800) !== 32'h57561E06) begin
       $display("FAIL     the SOUND.ROM store reached the pack: pack[0xC6800]=%08x, want 57561E06",
                backend.peek(32'h000C_6800));

@@ -35,7 +35,7 @@
 //     `page` holds) and its NON-packed arm drops the walk's bit 15 (LOW15) - the
 //     recorded divergence is exactly that bit: this core keeps it in both arms so
 //     an SAD-bit-14 flip moves the display whatever the 256E latch holds, which is
-//     what the machine does (the owner's Xe10 shows full frames under DOOM's flip).
+//     what the machine does (a real Xe10 shows full frames under DOOM's flip).
 // There is NO 200-line interleave here: the references copy
 // packed rows directly (qemu 4422-4438, MAME 100-123), so gfx_odd_line is not
 // even a port.
@@ -51,8 +51,8 @@
 // palette's input one clk before the sample. Without that, the first cycle of a group
 // still holds the PREVIOUS group's dword while the lane is the new dot's, and every dot
 // that OPENS a group (one pixel in four, plus the first active dot of every line through
-// the blank region) then displays the byte FOUR DOTS to the left - measured as 160 of a
-// line's 640 dots by tb_pc9821_pegc_scan_dot before this rule, 0 after.
+// the blank region) then displays the byte FOUR DOTS to the left - 160 of a line's 640
+// dots (tb_pc9821_pegc_scan_dot measures 0).
 //
 // The register that captures the buffer read carries NO reset: a reset on that
 // register makes Quartus refuse the inference and build the buffer out of flops
@@ -67,10 +67,10 @@
 // response beat lands (tb_pc9821_pegc_store_rate's store-to-scanout legs: 0 stale
 // bytes for both a second partial dword and eight queued partial stores), because
 // the buffer's residency is one hold window (1 us) plus one drain while the FSM's
-// first burst is ~50-100 clk_sys behind its tick. An earlier form of this module
-// held each burst until the buffer reported empty, which is COHERENT BY
-// CONSTRUCTION - and starved the scanout under a store stream (10 response beats
-// in 4 raster lines, measured), so the display lost lines instead. The reference
+// first burst is ~50-100 clk_sys behind its tick. Holding each burst until the
+// buffer reports empty would be COHERENT BY CONSTRUCTION - and starves the scanout
+// under a store stream (10 response beats in 4 raster lines, measured), so the
+// display would lose lines instead. The reference
 // (NP2kai vram/makegrex.c reads vramex directly) has no such lag to model; the
 // measured one is below the fetch's own resolution, so the fetch is left ungated.
 
@@ -157,20 +157,41 @@ module pc9821_pegc_scan (
   // (the gvram_scan `fill_complete` rule: hold and repeat the previous line
   // rather than ever blending one).
   wire prev_done = !fetch_active;
-  wire [8:0] burst_words = ((LINE_WORDS - fetch_w) > {5'd0, BURST_LEN})
-                           ? {5'd0, BURST_LEN} : (LINE_WORDS - fetch_w);
+  // EVERY LIVE BURST IS THE FULL BURST_LEN, so there is no burst_words subtractor:
+  // fetch_w is ALWAYS a multiple of BURST_LEN. Reset/restart write it to 0
+  // (`fetch_w <= 9'd0;`); its only other write adds BURST_LEN (`fetch_w <= fetch_w +
+  // {5'd0, BURST_LEN};`); and a request is live only while `fetch_w < LINE_WORDS`. LINE_WORDS
+  // = 160 = 16 x BURST_LEN exactly, so the values a live request can hold are
+  // 0, 10, ..., 150 - each leaves at least one full burst (160 - 150 = 10 =
+  // BURST_LEN), so a min() `((LINE_WORDS - fetch_w) > BURST_LEN) ?
+  // BURST_LEN : (LINE_WORDS - fetch_w)` would never take its second arm and its 9-bit
+  // subtract/compare/mux would be dead on the SDRAM request path; the burst is BURST_LEN. (A LINE_WORDS that did
+  // not divide evenly would break this - keep the encoding 16 x 10.) Cycle-identical:
+  // the request, its burstcount and its beat count are the same at every clk.
   // The packed byte base: {page, scan_line_base} << 3 (MAME's `(...) << 3`,
   // pc9821.cpp:104-113). The page bit is the walk's own (SCROLL bit 14, already the
   // frame-boundary-latched value) XOR the 0xA4 term MAME adds (pc9821.cpp:98,112).
   wire [18:0] line_base_new = {scan_walk_page ^ (page_force_zero ? 1'b0 : scan_page),
                                scan_line_base, 3'b000};
-  wire restart_now = (scan_tick || scan_arm || restart_pend) && burst_idle;
+  // THE REQUEST HANDSHAKE IS NEVER CUT. A request, once presented, keeps its valid and its
+  // payload until the controller's ready (the sdram_sync_bridge contract: the controller
+  // samples the payload on the cycle it takes the request). So a line boundary that lands
+  // while a request is presented does not restart under it: it is deferred (restart_pend)
+  // until that request is taken and its burst drains, and while a restart is pending no NEW
+  // request is presented (req_held keeps only the one already on the port). A restart in the
+  // cycle a request was taken would also lose the taken burst's place: its beats would fill
+  // the new line from column 0 and fetch_w would add its step to the previous line's count. In the
+  // normal frame the line's fetch is done before the next tick (no request is presented),
+  // so this changes nothing there; it binds only on an overrun or a raster reprogram.
+  wire req_open = fetch_active && (fetch_w < LINE_WORDS) && !req_inflight;
+  reg  req_held;              // a request was presented and not taken last cycle
+  assign mem_valid      = req_open && (!restart_pend || req_held);
+  wire restart_now = (scan_tick || scan_arm || restart_pend) && burst_idle && !mem_valid;
 
   assign mem_addr       = peg_base + {13'd0, line_base_q} + {21'd0, fetch_w, 2'b00};
-  assign mem_valid      = fetch_active && (fetch_w < LINE_WORDS) && !req_inflight;
   assign mem_write      = 1'b0;
   assign mem_be         = 4'hF;
-  assign mem_burstcount = {4'd0, burst_words[3:0]};
+  assign mem_burstcount = {4'd0, BURST_LEN};
   assign mem_din        = 32'd0;
 
   always @(posedge clk) begin
@@ -188,7 +209,9 @@ module pc9821_pegc_scan (
       line_ready_r  <= 1'b0;
       scan_tick_d   <= 1'b0;
       scan_enable_d <= 1'b0;
+      req_held      <= 1'b0;
     end else begin
+      req_held      <= mem_valid && !mem_ready;
       scan_tick_d   <= scan_line_tick;
       scan_enable_d <= scan_enable;
 
@@ -214,9 +237,9 @@ module pc9821_pegc_scan (
       end
 
       if (mem_valid && mem_ready) begin
-        fetch_w      <= fetch_w + burst_words;
+        fetch_w      <= fetch_w + {5'd0, BURST_LEN};
         req_inflight <= 1'b1;
-        beats_left   <= burst_words[3:0];
+        beats_left   <= BURST_LEN;
       end
       if (mem_resp_valid && (beats_left != 4'd0)) begin
         // A response beat always belongs to the line being filled: the restart

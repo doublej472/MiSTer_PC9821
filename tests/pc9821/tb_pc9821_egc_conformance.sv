@@ -1,20 +1,20 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_CONFORMANCE: a DIFFERENTIAL conformance suite for the EGC. The REAL pc9821_egc (through the REAL pc9821_gvram client and the REAL src/memory/sdram.v controller against the chip model) and the behavioural REFERENCE model tests/pc9821/pc9821_egc_ref.sv - a function-for-function transcription of NP2kai's mem/memegc.c and io/egc.c - are driven through the same matrix of registers and CPU accesses and must agree BYTE FOR BYTE on the resulting GVRAM and on every read datum. Each case gets its own 16-byte window on both pages. The matrix covers the three write modes (WS_CPU 0x0000, WS_ROP 0x0800/0x0B00/0x0CF0, WS_PATREG 0x1000/0x1400), all 256 ROP codes, the read modes (COMPAREREAD 0x2000, SHIFT_CPU 0x0400, RL_MEMREAD 0x0100), the colour-quad selects, the plane-enable register, the mask register, byte/word/dword and odd-word accesses over every byte-enable set, the shift register (both directions, moved and byte-aligned sub-byte shifts, srcbit >= 8), and the two shapes already bit by the optimizations: a 32-bit put with shift 0 over a WCB-dirty destination (the r13/138 m_mode fallback) and a posted write followed by a same-word read (r13/159). It does NOT measure timing or column counts; those are tb_pc9821_egc.sv's sections 12-15.
+// TB_PC9821_EGC_CONFORMANCE: a DIFFERENTIAL conformance suite for the EGC. The REAL pc9821_egc (through the REAL pc9821_gvram client and the REAL src/memory/sdram.v controller against the chip model) and the behavioural REFERENCE model tests/pc9821/pc9821_egc_ref.sv - a function-for-function transcription of NP2kai's mem/memegc.c and io/egc.c - are driven through the same matrix of registers and CPU accesses and must agree BYTE FOR BYTE on the resulting GVRAM and on every read datum. Each case gets its own 16-byte window on both pages. The matrix covers the three write modes (WS_CPU 0x0000, WS_ROP 0x0800/0x0B00/0x0CF0, WS_PATREG 0x1000/0x1400), all 256 ROP codes, the read modes (COMPAREREAD 0x2000, SHIFT_CPU 0x0400, RL_MEMREAD 0x0100), the colour-quad selects, the plane-enable register, the mask register, byte/word/dword and odd-word accesses over every byte-enable set, the shift register (both directions, moved and byte-aligned sub-byte shifts, srcbit >= 8), and the two shapes already bit by the optimizations: a 32-bit put with shift 0 over a WCB-dirty destination (the m_mode fallback) and a posted write followed by a same-word read. It does NOT measure timing or column counts; those are tb_pc9821_egc.sv's sections 12-15.
 //
-// Two review egc.md regressions sit outside that matrix: section 0 is the NO-ARM-AFTER-
+// Two regressions sit outside that matrix: section 0 is the NO-ARM-AFTER-
 // RESET store (F1) - the very first EGC op after reset, with the registers at their
 // power-up image and no 0x4AC/0x4AE write, must store bit-exactly (NP2kai's egc_reset
 // arms remain = 16); section 9 is the MISALIGNED 16-BIT SPLIT (F2) - memegc_wr16/rd16 at
 // an odd address runs its two byte operations HIGH-byte-first when sft bit 12 is set, so
 // the be = 0110 walk must follow that direction order in both feeding modes.
 //
-// Two findings of an earlier EGC RTL review sit outside
+// Two more cases sit outside
 // the matrix for the same reason: section 10 drives the 3-BYTE UNALIGNED BEATS
-// (review-egc.md F1) in a feeding mode, where merging the even lane pair into one word
+// in a feeding mode, where merging the even lane pair into one word
 // unit diverges from memegc_wr32's four byte operations; section 11 pins the
-// STACK-GATED FEED's ring write (review-egc.md F2), which the CPU-visible surface cannot
+// STACK-GATED FEED's ring write, which the CPU-visible surface cannot
 // reach (see the section header), so the check reads the ring itself against gold.ebuf.
 
 `default_nettype none
@@ -39,8 +39,8 @@ module tb_pc9821_egc_conformance;
   reg         cpu_line_read = 1'b0;
   reg         cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -65,9 +65,9 @@ module tb_pc9821_egc_conformance;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -114,7 +114,7 @@ module tb_pc9821_egc_conformance;
       cpu_write   = wr;
       cpu_valid   = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Release at the ready edge (z486's own shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`):
+      // Release at the ready edge (z486's own shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`):
       // the pipelined produce registers the read response one cycle after the ready -
       // the read values are unchanged and still the machine's own (docs/probes/egc-conformance/xe10/
       // EGCREAD.CSV), and the +1 stays under the machine's measured read cost (GFX2-rerun.TXT
@@ -223,13 +223,13 @@ module tb_pc9821_egc_conformance;
   endtask
 
   // ---- one occurring x86 SHAPE, driven as its logical access into the gold and as the
-  //      z486 beat split into the DUT (review benches N3). The gold takes memegc's own
+  //      z486 beat split into the DUT. The gold takes memegc's own
   //      dispatch VERBATIM (pc9821_egc_ref op8/op16/op32 = memegc.c:1379-1424) at the
   //      access's byte address; the DUT sees the beats calc_be/calc_be_first/
-  //      calc_be_second issue for it (src/z486/z486_pkg.sv:1121/:1181/:1196), lane L of
+  //      calc_be_second issue for it (src/z486/z486_pkg.sv:1169/:1226/:1242), lane L of
   //      the dword carrying din[8*L +: 8] (shift_write_data's mapping). No beat-level
   //      rule is consulted on the gold side at all, so the comparison is DUT-vs-NP2kai,
-  //      not DUT-vs-a-rule-the-DUT's-review-fixed.
+  //      not DUT-vs-a-rule-derived-from-the-DUT.
   task automatic shape_op(input integer idx, input [8*40-1:0] tag,
                           input integer kind,   // 0 = byte, 1 = word, 2 = dword
                           input integer aa,     // the access's addr[1:0], at win_base+4+aa
@@ -304,7 +304,7 @@ module tb_pc9821_egc_conformance;
     gold.rst();
 
     // ============================================================
-    // 0. THE NO-ARM-AFTER-RESET STORE (review egc.md F1). The FIRST EGC op after
+    // 0. THE NO-ARM-AFTER-RESET STORE. The FIRST EGC op after
     //    reset, with the register file at its power-up image (as egc_reset leaves it,
     //    io/egc.c:69-80) and NO 0x4AC/0x4AE write: NP2kai's egc_reset ends in egcshift()
     //    at leng 0x000F, so remain is 16 and the first store is masked 0xFFFF/0xFFFF.
@@ -319,7 +319,7 @@ module tb_pc9821_egc_conformance;
       egc_op(3968, "no-arm store", 1'b0, 2'd0, win_base(3968) + 4,
              32'hA5C3_9E6B, 4'hF, 1'b1);
       cmp_win(3968, "no-arm store");
-      $display("NOTE egc_conf: section 0 no-arm-after-reset store (F1) - 1 case");
+      $display("NOTE egc_conf: section 0 no-arm-after-reset store - 1 case");
     end
 
     // ============================================================
@@ -328,10 +328,10 @@ module tb_pc9821_egc_conformance;
     //    A 16-bit unit in this mode feeds the shifter (memegc.c egc_opew default
     //    `EGCOPE_SHIFTW2`); a byte unit does not (egc_opeb default).
     //
-    //    PROVENANCE (review benches N3): the be-set walk is re-derived from NP2kai's
-    //    dispatch (mem/memegc.c:1379-1424) + the z486 beat split (z486_pkg.sv:1121
-    //    calc_be / :1181 calc_be_first / :1196 calc_be_second), NOT from the DUT-side
-    //    review fix (r13/175) it used to mirror -- see pc9821_egc_ref's op() header for
+    //    PROVENANCE: the be-set walk is re-derived from NP2kai's
+    //    dispatch (mem/memegc.c:1379-1424) + the z486 beat split (z486_pkg.sv:1169
+    //    calc_be / :1226 calc_be_first / :1242 calc_be_second), NOT from the DUT-side
+    //    rule it used to mirror -- see pc9821_egc_ref's op() header for
     //    the per-set derivation. The sweep is split:
     //      * CONFORMANCE (counted): the 10 byte-enable sets an x86 access generates.
     //      * SELF-CONSISTENCY PIN (NOT counted): the 5 synthetic hole sets (0101, 1001,
@@ -620,7 +620,7 @@ module tb_pc9821_egc_conformance;
     end
 
     // ============================================================
-    // 9. THE MISALIGNED 16-BIT SPLIT (review egc.md F2). NP2kai's memegc_wr16/rd16 at
+    // 9. THE MISALIGNED 16-BIT SPLIT. NP2kai's memegc_wr16/rd16 at
     //    an ODD address is two byte operations, and with sft bit 12 (descending) set
     //    they run HIGH-byte-first (memegc.c:1379-1413): the two source bytes enter the
     //    ring in REVERSE order. be = 0110 is exactly that misaligned word on this bus
@@ -675,13 +675,13 @@ module tb_pc9821_egc_conformance;
                32'h9E3B_71C4, 4'hF, 1'b1);
         cmp_win(2576 + s, "byte read feed");
       end
-      $display("NOTE egc_conf: section 9 misaligned word split + byte produce (F2) - 12 cases");
+      $display("NOTE egc_conf: section 9 misaligned word split + byte produce - 12 cases");
     end
 
     // ============================================================
-    // 10. THE 3-BYTE UNALIGNED BEATS IN A FEEDING MODE (review-egc.md F1). The z486
+    // 10. THE 3-BYTE UNALIGNED BEATS IN A FEEDING MODE. The z486
     //     splits a dword at addr 1 / addr 3 into the beat pairs 1110+0001 / 1000+0111
-    //     (z486_pkg.sv:1181 calc_be_first / :1196 calc_be_second); NP2kai decomposes
+    //     (z486_pkg.sv:1226 calc_be_first / :1242 calc_be_second); NP2kai decomposes
     //     the SAME logical access into FOUR byte operations - memegc_wr32 is two
     //     memegc_wr16s (memegc.c:1421-1424), both at odd addresses, each two byte ops
     //     (memegc.c:1397-1413). Merging the even lane pair of a 3-byte beat into ONE
@@ -694,7 +694,7 @@ module tb_pc9821_egc_conformance;
     //     leaves the high lane unwritten. The gold takes the logical op32 dispatch
     //     verbatim and the DUT the beat pair (shape_op's split), so every case here is
     //     DUT vs memegc_wr32. Expected FAIL on the merged walk. ope 0x0B00 (the WS_ROP
-    //     stale-src form) is driven beside 0x1400 per the review's follow-up.
+    //     stale-src form) is driven beside 0x1400.
     // ============================================================
     begin : beat3_feeding
       integer a, c;
@@ -709,11 +709,11 @@ module tb_pc9821_egc_conformance;
           shape_op(3840 + c*2 + a, "f1 beat3", 2, (a == 0) ? 1 : 3, 32'h9E3B_71C4);
           cmp_win(3840 + c*2 + a, "f1 beat3");
         end
-      $display("NOTE egc_conf: section 10 3-byte beats in feeding modes (review-egc F1) - 4 cases");
+      $display("NOTE egc_conf: section 10 3-byte beats in feeding modes - 4 cases");
     end
 
     // ============================================================
-    // 11. THE STACK-GATED FEED'S RING WRITE (review-egc.md F2). NP2kai's EGCOPE_SHIFTB/
+    // 11. THE STACK-GATED FEED'S RING WRITE. NP2kai's EGCOPE_SHIFTB/
     //     SHIFTW write the feed data at egc.inptr BEFORE shiftinput_* runs
     //     (memegc.c:639-706); only the pointer/stack/srcbit updates sit behind
     //     `if (egc.stack <= 16)` (memegc.c:590-637). The pre-fix RTL dropped the ring
@@ -766,7 +766,7 @@ module tb_pc9821_egc_conformance;
           errors = errors + 1;
         end
       end
-      $display("NOTE egc_conf: section 11 stack-gated feed ring write (review-egc F2) - 11 cases");
+      $display("NOTE egc_conf: section 11 stack-gated feed ring write - 11 cases");
     end
 
     // ==== VERDICT ====

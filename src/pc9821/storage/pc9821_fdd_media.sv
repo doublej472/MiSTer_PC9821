@@ -50,8 +50,8 @@
 //   0/1) MOUNT AS WELL (Phase 2): NP2kai's reader takes all three and answers each track's
 //   geometry from its own _D88SEC headers (the switch over the major, fdd_d88.c:92-118),
 //   and this module serves the walked track table with no class assumption. What is still
-//   NOT modelled is that switch's per-arm gating (the 2D track fold and the rpm/media-type
-//   tests, fdd_d88.c:93-113) - see the container test below. A major of 3 is ALSO accepted,
+//   NOT modelled of that switch is the 2D track fold (fdd_d88.c:93-99); its rpm/media-type
+//   tests ARE (req_2hd/req_rpm, the mode_ok gate) - see the container test below. A major of 3 is ALSO accepted,
 //   as a flagged tolerance for the tooling that writes it - see the container test below.
 //   RAW (XDF/HDM/FDD/BIN family): body only, geometry from the file size, the rows of
 //   NP2kai's own guesser table (diskimage/fd/fdd_xdf.c's supportxdf, :20-74). EVERY
@@ -86,7 +86,7 @@
 // shared block adapter's read-ahead window (8 sectors per handshake, 16 KiB, the same window
 // the hard disk reads through) instead of paying the measured ~4600 clk_sys per handshake.
 //
-// THE BLOCK ADAPTER IS NOT OURS ANY MORE (docs/trade-candidates.md T9, owner-approved): one
+// THE BLOCK ADAPTER IS NOT OURS ANY MORE (docs/trade-candidates.md T9): one
 // pc9821_block_io engine is SHARED by the two floppy drives and pc9821_ata, arbitrated by
 // pc9821_block_share, because every slot reaches one hps_io channel that serves one block
 // transfer at a time (see that module's header for the evidence and for what the devices'
@@ -154,7 +154,7 @@ module pc9821_fdd_media (
     // (pc9821_block_io's eject: "an unmount aborts the transfer it is serving, with an error")
     // or when the block lies past the image. A block that came back with an error is NOT the
     // medium's data: before this port the fetch engine marked it resident anyway, and a read
-    // that an eject cut off was served out of whatever the buffer last held (osd-mount lane).
+    // that an eject cut off was served out of whatever the buffer last held.
     input  wire        blk_err,
     input  wire        blk_busy,       // the request is in hand (pc9821_block_share's b_busy)
     input  wire        blk_fill_we,
@@ -207,8 +207,49 @@ module pc9821_fdd_media (
     // never equipped, so `unit[1]` carries no behaviour.
     input  wire [1:0]  unit,
     /* verilator lint_on UNUSEDSIGNAL */
+    // The sector's ID (req_c/req_h/req_r/req_n, matched against a D88 header) and the TRACK it
+    // is looked for on (req_tc/req_hd: pc9821_fdc's track register and the command's HD bit).
+    // NP2kai seeks `(fdc.treg[fdc.us] << 1) + fdc.hd` for a D88 and a raw image alike
+    // (fdd_d88.c fdd_read_d88, fdd_xdf.c fdd_read_xdf `seekp = (fdc.treg[fdc.us] << 1) + fdc.hd;`)
+    // and compares the header with the command's C/H (searchsector_d88), so the two pairs differ
+    // on a medium whose IDs do not name their own cylinder/side.
     input  wire [7:0]  req_c,
     input  wire [7:0]  req_h,
+    input  wire [7:0]  req_tc,
+    input  wire        req_hd,
+    // The command's MF bit (1 = MFM, pc9821_fdc's media_mf). A RAW image is all MFM: NP2kai's
+    // fdd_seeksector_common refuses any other mode for a read or a write (diskimage/fddfile.c
+    // `if ((fdc.mf != 0xff) && (fdc.mf != 0x40))` -> 0xc0) and fdd_readid_common refuses READ
+    // ID too (`if ((!fdc.mf) || ...` -> 0xe0). A D88 READ DATA whose (C,H,R,N) header matches
+    // but whose mfm_flg disagrees with MF ends the search with no sector (searchsector_d88
+    // `if ((fdc.mf != 0xff) && !((fdc.mf ^ (((D88SEC)p)->mfm_flg)) & 0x40)) break;`): mfm_flg
+    // 0x00 is MFM and 0x40 FM. A D88 WRITE does not test it (fdd_write_d88's
+    // searchsector_d88(FALSE)). A D88 READ ID DOES, a recorded divergence from NP2kai's D88
+    // reader (fdd_readid_d88 tests rpmcheck only) and NOT a choice of ours: NP2kai's own raw
+    // path refuses it (diskimage/fddfile.c fdd_readid_common `if ((!fdc.mf) || ...`), so its two
+    // readers disagree, and the controller cannot do otherwise - the uPD765 family separates the
+    // ID address mark in MF's own encoding, the MFM A1 sync (missing-clock 0x4489) or the FM IDAM
+    // clock pattern (0xF57E), so an FM READ ID never recognises an MFM-recorded ID field. MAME
+    // models exactly that (src/devices/machine/upd765.cpp read_id_start `mfm = command[0] &
+    // 0x40;`, the search `if(mfm && cur_live.shift_reg == 0x4489)` / `if(!mfm && ... == 0xf57e)`,
+    // and SCAN_ID_FAILED `st1 |= ST1_ND|ST1_MA;`). The answer keeps NP2kai's READ ID failure
+    // status, ST1 = ND (FDC_ReadID `FDCRLT_IC0 | FDCRLT_ND`); MAME adds MA. It matters for boot:
+    // the Xe10 BIOS issues an FM READ ID first and, when it answers, reads the boot sector in FM
+    // only, so a D88 whose track 0 is MFM did not boot (NP2kai's HLE BIOS never takes this path).
+    input  wire        req_mf,
+    // THE CONTROLLER'S MEDIA MODE for this request: req_2hd is the 0x00BE register's bit 1
+    // (NP2kai CTRL_FDMEDIA: `if (fdc.chgreg & 2) CTRL_FDMEDIA = DISKTYPE_2HD; else 2DD`,
+    // io/fdc.c fdc_obe) and req_rpm the drive's 1.44 MB / 360 rpm bit (0x04BE, fdc.rpm[us]).
+    // A medium only answers in its own mode, NP2kai's d88trk_read switch over the D88 class
+    // (diskimage/fd/fdd_d88.c: 2D/2DD fail `if ((rpm) || (type != DISKTYPE_2DD))`, 2HD fails
+    // `if (CTRL_FDMEDIA != DISKTYPE_2HD)` or `(fdtype_minor == 0) && (rpm)`) and the raw
+    // reader's fdd_seeksector_common (diskimage/fddfile.c `(CTRL_FDMEDIA !=
+    // fdd->inf.xdf.disktype) || (fdc.rpm[fdc.us] != fdd->inf.xdf.rpm)` -> failure). A failed
+    // request answers ND, so a 2DD disk read in 2HD mode misses and the BIOS boot moves on to
+    // its other mode. NOT MODELLED: the 2D class's track fold (`track = ((track >> 1) & 0xfe)
+    // | (track & 1)`, fdd_d88.c) - a 2D image is gated like a 2DD one but read unfolded.
+    input  wire        req_2hd,
+    input  wire        req_rpm,
     input  wire [7:0]  req_r,
     input  wire [7:0]  req_n,
     input  wire [7:0]  req_idx,        // header ordinal for req_hdr (NP2kai fdc.crcn)
@@ -258,8 +299,8 @@ module pc9821_fdd_media (
     end
   endgenerate
 
-  // THE ADAPTER IS SHARED, not instantiated here (docs/trade-candidates.md T9,
-  // owner-approved): one pc9821_block_io engine serves this device and pc9821_ata through
+  // THE ADAPTER IS SHARED, not instantiated here (docs/trade-candidates.md T9):
+  // one pc9821_block_io engine serves this device and pc9821_ata through
   // pc9821_block_share, which arbitrates the one hps_io block channel the two slots share and
   // loads the engine with whichever image it is serving. It costs this module nothing but the
   // seam below, and it hands the floppy back the engine's 8-sector read-ahead window that T7
@@ -327,6 +368,9 @@ module pc9821_fdd_media (
   reg  [ 1:0] is_d88;               // [u] the image parsed as a D88 (else a raw body)
   reg  [ 7:0] raw_tracks [0:1];     // [u] half-tracks (raw): 154..160, so a byte names the whole range
   reg  [ 7:0] raw_sects  [0:1];     // [u] sectors per track (raw): the row's own 8..26
+  reg  [ 1:0] cls_2dd;              // [u] the medium is a 2D/2DD one (D88 major 0/1, raw DD rows)
+  reg  [ 1:0] cls_rpm1;             // [u] a raw 1.44 MB row (fdd_xdf.c rpm 1: HD4, DMF)
+  reg  [ 1:0] cls_minor;            // [u] a D88 2HD whose fd_type minor is non-zero (rpm either)
   reg  [ 7:0] raw_n      [0:1];     // [u] N of the raw geometry: 1..3 (256..1024-byte sectors)
   reg  [ 1:0] mnt_req;              // [u] a mount arrived and has not been walked yet
   // [u] the img_size that came WITH that mount, ENCODED AS {the high half is non-zero, the low
@@ -416,9 +460,9 @@ module pc9821_fdd_media (
   localparam [31:0] RAW_SZ_T158 = {24'd0, RAW_T158} * {24'd0, RAW_S8} * (32'd128 << RAW_N3);
   localparam [31:0] RAW_SZ_T160 = {24'd0, RAW_T160} * {24'd0, RAW_S8} * (32'd128 << RAW_N3);
 
-  // THE RAW ARM'S OWN BLOCK-INDEX GUARD (the width audit's guard-coverage gap: the D88 guard
-  // above tests D88_MAX_EXTENT alone, so raising a raw constant past what `blk_lba` can name
-  // left that check silent while a requester still built a truncated index).
+  // THE RAW ARM'S OWN BLOCK-INDEX GUARD (the D88 guard above tests D88_MAX_EXTENT alone, so
+  // raising a raw constant past what `blk_lba` can name would leave that check silent while a
+  // requester still built a truncated index).
   // EVERY expression that forms blk_lba is covered by an extent bound:
   //   * ST_SEEK's `blk_lba <= seek_off[24:9]` - the D88 arm through `fd_size <=
   //     D88_MAX_EXTENT` (d88_looks_valid, so seek_off < D88_MAX_EXTENT) and the raw arm
@@ -433,8 +477,7 @@ module pc9821_fdd_media (
   // gen_raw_blk_index_width_check fails the build if the bound itself outgrows the 16-bit
   // index. 64-BIT ARITHMETIC ON PURPOSE in the bound: at 32 bits a large enough constant
   // would overflow the very expression being guarded and the check would pass while raw_off
-  // wrapped (the audit's raise to 70000 half-tracks is still inside 32 bits, so the missing
-  // check was a coverage gap, not an overflow).
+  // wrapped (a raise to 70000 half-tracks is still inside 32 bits).
   localparam [31:0] RAW_TMAX =
       (RAW_T154 >= RAW_T156 && RAW_T154 >= RAW_T158 && RAW_T154 >= RAW_T160) ? {24'd0, RAW_T154} :
       (RAW_T156 >= RAW_T158 && RAW_T156 >= RAW_T160)                         ? {24'd0, RAW_T156} :
@@ -504,7 +547,7 @@ module pc9821_fdd_media (
 
   // ---------------------------------------------------------------- the mount latch [u]
   // A MOUNT IS A TUPLE - the pulse AND the size that came with it - AND IT IS LATCHED, not
-  // lost (v-reset-audit F3). pc9821_system wires this module's reset as `reset || !cpu_run`,
+  // lost. pc9821_system wires this module's reset as `reset || !cpu_run`,
   // and cpu_run is LOW for the whole firmware-pack download, while the HPS mounts an image
   // (MGL delay ~1 s) BEFORE the pack finishes (~4 s). hps_io's img_mounted is a SINGLE-CYCLE
   // pulse (z486_mister wires img_mounted[1] into this drive's slot and img_mounted[2] into the
@@ -535,12 +578,12 @@ module pc9821_fdd_media (
   // A HELD MODULE IS NOT AN IDLE ONE: while `reset` is asserted the FSM cannot walk, so
   // `mnt_req` must not be consumed here - the reset term is `reset || !cpu_run` and the HPS
   // mounts images BEFORE the firmware pack finishes, so a pending mount that is cleared while
-  // held is a floppy the guest never sees (v-reset-audit F3's class, in its per-drive form).
+  // held is a floppy the guest never sees (the mount-latch case above, in its per-drive form).
   //
   // A WALK ABORTED BY A RESET IS RE-ARMED, NOT LOST. `walk_en` consumes the drive's mnt_req
-  // entry at the walk's START, so an OSD Reset mid-walk (the owner's flow: mount an image,
-  // then select Reset) used to abort the walk with its pulse already spent - and nothing
-  // would ever re-announce the image, because hps_io pulses img_mounted from the HPS's
+  // entry at the walk's START, so an OSD Reset mid-walk (mount an image, then select
+  // Reset) would abort the walk with its pulse already spent - and nothing would ever
+  // re-announce the image, because hps_io pulses img_mounted from the HPS's
   // image-selection transaction alone (sys/hps_io.sv:461, the `'h1c` handler) and an OSD
   // Reset is a STATUS bit write, not a mount. The latch block below therefore RE-ARMS the
   // drive whose walk the reset is aborting (`walking` names the two states a walk lives in),
@@ -564,30 +607,28 @@ module pc9821_fdd_media (
 
   // ---------------------------------------------------------------- the media change [u]
   // A MOUNT ON A DRIVE IS A MEDIA CHANGE THE GUEST MUST SEE, NOT A DEFERRED BOOKKEEPING STEP
-  // (owner, 2026-10-08: floppies mount, swap and eject while the core runs, without a reset).
+  // (floppies mount, swap and eject while the core runs, without a reset).
   // Three things follow from the edge, and each is the drive's own:
   //   * READY DROPS AT ONCE. `present[u]` clears on the mount edge (the trailing write at the
   //     end of the FSM block, so it applies even while the module is held) and rises again only
   //     when the new image's walk parses a format - so the controller's media_present, and with
-  //     it ST3's RDY and the data-path decision, goes not-ready for the whole change. Before
-  //     this, a mount of a drive whose sibling was streaming left `present` - and the OLD
+  //     it ST3's RDY and the data-path decision, goes not-ready for the whole change. Without
+  //     it, a mount of a drive whose sibling was streaming would leave `present` - and the OLD
   //     image's geometry - standing until the deferred walk began.
   //   * A REQUEST IN FLIGHT FOR THAT DRIVE IS ABORTED, with `err`, instead of being finished
-  //     out of a medium that is gone: the walk used to wait for it (`fsm_idle`), so an eject
-  //     mid-sector streamed the rest of the sector, and every later block of it, from fetches
-  //     the adapter now rejects - i.e. from whatever the block buffer last held.
-  //     WHAT THE GUEST SEES THEN IS UNDEFINED (owner, 2026-10-08: "Ejecting a FDD during a read
-  //     should be undefined behavior"); the abort exists for the HOST side only. A request left
+  //     out of a medium that is gone: were the walk to wait for it (`fsm_idle`), an eject
+  //     mid-sector would stream the rest of the sector, and every later block of it, from
+  //     fetches the adapter rejects - i.e. from whatever the block buffer last held.
+  //     WHAT THE GUEST SEES THEN IS UNDEFINED; the abort exists for the HOST side only. A request left
   //     standing on a medium that is gone holds the engine (`fsm_idle` stays false while it
   //     waits for bytes a stalled or reset controller will never take), so the new image's walk
   //     could never start and the drive - and its sibling - would stay dead until a core reset.
-  //     Ending it on the edge is the one term that rules that out (priced when it
-  //     landed).
+  //     Ending it on the edge is the one term that rules that out.
   //   * A HEADER WALK OF THAT DRIVE needs nothing extra: ST_PARSE re-runs the walk from block 0
   //     when its drive's mnt_req was re-armed meanwhile (`walk_en` below), so the new image is
-  //     the one parsed. (osd-mount also abandoned the walk on the edge; that only saved the rest
-  //     of a 0x2B0-byte header stream and was dropped as mid-read handling.)
-  // A mount of the OTHER drive aborts nothing (its walk waits for `fsm_idle`, as before).
+  //     the one parsed. (Abandoning the walk on the edge would only save the rest of a
+  //     0x2B0-byte header stream.)
+  // A mount of the OTHER drive aborts nothing (its walk waits for `fsm_idle`).
   // ST_WB is a request too: a mount edge while a write's last block is owed ENDS it with `err`
   // and drops the owed write-back - the block belongs to the image that has just gone, and a
   // write-back issued after the edge would land in whatever image the slot holds now.
@@ -656,6 +697,14 @@ module pc9821_fdd_media (
   reg        rq_wr;        // the request is a WRITE (WRITES in the header)
   reg        rq_fmt;       // ... and a FORMAT sector (req_hdr with req_wr)
   reg [7:0]  rq_c, rq_h, rq_r, rq_n, rq_idx;
+  reg [7:0]  rq_tc;
+  reg        rq_hd;
+  reg        rq_mf;
+  reg        rq_2hd, rq_rpm;
+  // The request's mode against its drive's medium (see req_2hd): 1 = the medium answers.
+  wire       mode_ok = is_d88[req_u]
+                       ? (cls_2dd[req_u] ? (!rq_2hd && !rq_rpm) : (rq_2hd && !(!cls_minor[req_u] && rq_rpm)))
+                       : ((cls_2dd[req_u] == !rq_2hd) && (cls_rpm1[req_u] == rq_rpm));
 
   // scan / emit
   reg [4:0]  hi;           // header byte index 0..16; hi[4] means "all 16 in"
@@ -729,11 +778,12 @@ module pc9821_fdd_media (
   // The host's read port for a write-back: hps_io presents sd_buff_addr and samples
   // sd_buff_din at its own strobe, many clocks later, so a registered read is what the disk's
   // buffer gives it too. No reset and no initial value: either would stop the read inferring a
-  // block RAM port (AGENTS.md's inference trap).
+  // block RAM port (docs/fitting.md's inference trap).
   always @(posedge clk) blk_rd_data <= blk[blk_rd_addr];
 
-  // The track index is (C << 1) | H, the D88 file layout's own ordering.
-  wire [31:0] rq_track = ({24'd0, rq_c} << 1) | {30'd0, rq_h[1:0]};
+  // The track index is (treg << 1) | HD, the D88 file layout's own ordering, on the PHYSICAL
+  // track (req_tc/req_hd) - not the ID C/H the header walk below matches.
+  wire [31:0] rq_track = ({24'd0, rq_tc} << 1) | {31'd0, rq_hd};
   // The raw file offset, fdd_read_xdf's ((C*2+H) * sects + R-1) << (7+N) (:352-355) with
   // the requesting DRIVE's own geometry terms. THE PRODUCT IS WRITTEN AS THE SHIFT-ADD
   // CHAIN, NOT A `*`, and 128 << N as a mux of FIXED shifts - because the module-alone A&S
@@ -748,13 +798,13 @@ module pc9821_fdd_media (
   // shifted left with H in bit 0 - so rq_track[8:0] is the whole value, never a
   // truncation, and 511 * 26 fits 16 bits).
   // THE OFFSET IS FORMED FROM THE REQUEST AS IT IS ACCEPTED and latched with it (FD-a, a
-  // timing seam: the shift-add product and the N mux used to run from the rq_* latches through
+  // timing seam: otherwise the shift-add product and the N mux run from the rq_* latches through
   // seek_off into ST_SEEK's bounds compares and img_left in ONE clk_sys path). raw_off is
   // loaded on the accept edge - the edge rq_c/rq_h/rq_r/req_u load from these same live
   // fields - from the accepting drive's raw_sects/raw_n, which nothing writes in ST_READY or
   // ST_SEEK (only ST_PARSE does), so in ST_SEEK, its only reader (through seek_off), it holds
   // exactly the value the combinational form of the latches held there.
-  wire [ 8:0] a_track9   = {req_c, 1'b0} | {7'd0, req_h[1:0]};   // rq_track's [8:0], live
+  wire [ 8:0] a_track9   = {req_tc, 1'b0} | {8'd0, req_hd};   // rq_track's [8:0], live
   wire [16:0] a_t9e      = {8'd0, a_track9};
   wire [ 7:0] a_sects    = raw_sects[unit[0]];
   wire [ 7:0] a_n        = raw_n[unit[0]];
@@ -794,7 +844,7 @@ module pc9821_fdd_media (
   // arrays (two arrays would infer two blocks and need the read address muxed anyway).
   // The drive the presented address belongs to is the request being ACCEPTED this cycle (its
   // `unit` is valid with `req`) and the one in flight otherwise; the write walk never reads.
-  wire [7:0] tp_track = {req_c[6:0], 1'b0} | {6'd0, req_h[1:0]};
+  wire [7:0] tp_track = {req_tc[6:0], 1'b0} | {7'd0, req_hd};
   wire       tp_unit  = ((st == ST_READY) && req) ? unit[0] : req_u;
   wire [8:0] tp_raddr = {tp_unit, (((st == ST_READY) && req) ? tp_track : rq_track[7:0])};
   reg  [21:0] track_q;
@@ -844,11 +894,10 @@ module pc9821_fdd_media (
   // three and answers "not found" for any other (fdd_d88.c:92-118): the D88 path asserts no
   // geometry of its own - it serves whatever the walked track table holds - so a 2D/2DD
   // image's per-track N and sector count come from its own _D88SEC headers, like the 2HD
-  // one's. DOCUMENTED DIVERGENCES, not modelled: NP2kai's per-arm gating of that switch -
-  // the 2D track fold (its DISKTYPE_2D arm rejects odd cylinders and remaps the track index,
-  // fdd_d88.c:93-99) and the rpm/CTRL_FDMEDIA tests of all three arms (:95-113). This seam
-  // carries neither fdc.rpm nor the media strap, so a request is answered whatever those
-  // say (the same choice the raw rows make - see the raw geometry section).
+  // one's. The rpm/CTRL_FDMEDIA tests of all three arms (:95-113) ARE modelled
+  // (req_2hd/req_rpm, mode_ok); the raw rows apply fdd_seeksector_common's disktype/rpm test the
+  // same way. DOCUMENTED DIVERGENCE, not modelled: the 2D arm's track fold (it rejects odd
+  // cylinders and remaps the track index, fdd_d88.c:93-99) - a 2D image is read unfolded.
   // MAJOR 3 IS A FLAGGED TOLERANCE, NOT THE FORMAT'S CODE. MAME maps 0x30 to SSDD, a
   // single-sided 42-track class (d88_dsk.cpp:462-466), and NP2kai's D88 reader rejects every
   // major but 0/1/2 (fdd_d88.c:92-118). It is accepted anyway because some PC-98 tooling
@@ -875,9 +924,9 @@ module pc9821_fdd_media (
       // NOT in this reset domain (below), so the FSM's idle state follows it: ST_READY when a
       // walk has completed and a request can be served from the geometry that survives,
       // ST_NONE otherwise - where the re-armed mnt_req (the latch block above) restarts the
-      // walk this reset aborted. Resetting into ST_NONE unconditionally was the owner's bug:
-      // with no img_mounted pulse ever coming again, `ready` (st == ST_READY) never rose and
-      // the mounted image was dead to the guest (tb_pc9821_fdd_mount_reset's R1 arm).
+      // walk this reset aborted. Resetting into ST_NONE unconditionally would leave,
+      // with no img_mounted pulse ever coming again, `ready` (st == ST_READY) never rising and
+      // the mounted image dead to the guest (tb_pc9821_fdd_mount_reset's R1 arm).
       st           <= (|present) ? ST_READY : ST_NONE;
       // NO MEDIUM, NO PROTECT: the flag is the MOUNTED MEDIUM's state, so a drive that has never
       // been walked (or whose medium was ejected) reports 0, not "protected". That matters because
@@ -927,6 +976,11 @@ module pc9821_fdd_media (
       rq_hdr       <= 1'b0;
       rq_c         <= 8'h00;
       rq_h         <= 8'h00;
+      rq_tc        <= 8'h00;
+      rq_hd        <= 1'b0;
+      rq_mf        <= 1'b1;
+      rq_2hd       <= 1'b1;
+      rq_rpm       <= 1'b0;
       rq_r         <= 8'h00;
       rq_n         <= 8'h00;
       rq_idx       <= 8'h00;
@@ -1080,6 +1134,9 @@ module pc9821_fdd_media (
           ST_PARSE: begin
             if (d88_looks_valid) begin
               is_d88[mnt_u]  <= 1'b1;
+              cls_2dd[mnt_u]   <= (fd_type[7:4] == 4'd0) || (fd_type[7:4] == 4'd1);
+              cls_rpm1[mnt_u]  <= 1'b0;
+              cls_minor[mnt_u] <= (fd_type[3:0] != 4'd0);
               present[mnt_u] <= 1'b1;
               // THE MEDIUM'S OWN PROTECT STATE: the D88 header's bit 4 OR the mount's
               // read-only flag - NP2kai's condition (diskimage/fd/fdd_d88.c:306), with the
@@ -1091,6 +1148,9 @@ module pc9821_fdd_media (
               is_d88[mnt_u]  <= 1'b0;
               // A raw body carries no protect field, so the mount's flag is its whole answer.
               writeprotect[mnt_u] <= mnt_ro[mnt_u];
+              cls_2dd[mnt_u]   <= 1'b0;
+              cls_rpm1[mnt_u]  <= 1'b0;
+              cls_minor[mnt_u] <= 1'b0;
               // The size rows of fdd_xdf.c's supportxdf (headersize 0): each arm is a
               // row of the table, its label is the row's own {half-tracks, sectors, N}
               // product (RAW_SZ_*), and the three geometry registers load THAT row's
@@ -1108,10 +1168,12 @@ module pc9821_fdd_media (
                     raw_n[mnt_u] <= RAW_N3; present[mnt_u] <= 1'b1;
                   end
                   RAW_SZ_HD4: begin                       // fdd_xdf.c:33-34 {0,160,18,2,2HD,1}
+                    cls_rpm1[mnt_u] <= 1'b1;
                     raw_tracks[mnt_u] <= RAW_T160; raw_sects[mnt_u] <= RAW_S18;
                     raw_n[mnt_u] <= RAW_N2; present[mnt_u] <= 1'b1;
                   end
                   RAW_SZ_DMF: begin                       // fdd_xdf.c:35    {0,160,21,2,2HD,1}
+                    cls_rpm1[mnt_u] <= 1'b1;
                     raw_tracks[mnt_u] <= RAW_T160; raw_sects[mnt_u] <= RAW_S21;
                     raw_n[mnt_u] <= RAW_N2; present[mnt_u] <= 1'b1;
                   end
@@ -1124,10 +1186,12 @@ module pc9821_fdd_media (
                     raw_n[mnt_u] <= RAW_N3; present[mnt_u] <= 1'b1;
                   end
                   RAW_SZ_DD6: begin                       // fdd_xdf.c:41    {0,160,8,2,2DD,0}
+                    cls_2dd[mnt_u] <= 1'b1;
                     raw_tracks[mnt_u] <= RAW_T160; raw_sects[mnt_u] <= RAW_S8;
                     raw_n[mnt_u] <= RAW_N2; present[mnt_u] <= 1'b1;
                   end
                   RAW_SZ_DD9: begin                       // fdd_xdf.c:42    {0,160,9,2,2DD,0}
+                    cls_2dd[mnt_u] <= 1'b1;
                     raw_tracks[mnt_u] <= RAW_T160; raw_sects[mnt_u] <= RAW_S9;
                     raw_n[mnt_u] <= RAW_N2; present[mnt_u] <= 1'b1;
                   end
@@ -1169,6 +1233,11 @@ module pc9821_fdd_media (
               rq_fmt <= req_wr && req_hdr;
               rq_c   <= req_c;
               rq_h   <= req_h;
+              rq_tc  <= req_tc;
+              rq_hd  <= req_hd;
+              rq_mf  <= req_mf;
+              rq_2hd <= req_2hd;
+              rq_rpm <= req_rpm;
               rq_r   <= req_r;
               rq_n   <= req_n;
               rq_idx <= req_idx;
@@ -1186,7 +1255,7 @@ module pc9821_fdd_media (
             // branch touches no block. Its ordinal bound is the geometry's sector count,
             // and R = the ordinal + 1 with N = the row's N (:325-340).
             if (!is_d88[req_u] && rq_hdr) begin
-              if ((rq_track < {24'd0, raw_tracks[req_u]}) && (rq_idx < raw_sects[req_u])) begin
+              if ((rq_track < {24'd0, raw_tracks[req_u]}) && (rq_idx < raw_sects[req_u]) && rq_mf && mode_ok) begin
                 hdr_r     <= rq_idx + 8'd1;
                 hdr_n     <= raw_n[req_u];
                 hdr_sects <= raw_sects[req_u];
@@ -1211,13 +1280,14 @@ module pc9821_fdd_media (
             // `if (fdc.eot > fdd->inf.xdf.sectors)` -> 0xc0 (diskimage/fd/fdd_xdf.c:399-404). A
             // raw FORMAT's EOT is its SC, which fdd_formatinit_xdf does not test, so the raw
             // EOT test is a write's only.
-            else if (is_d88[req_u]
+            else if (!mode_ok || (is_d88[req_u]
                   ? ((seek_off == 25'd0) || (seek_off >= {4'd0, fd_size[req_u][20:0]}) ||
                      (rq_track > 32'd163) || rq_fmt)
                   : ((rq_track >= {24'd0, raw_tracks[req_u]}) || (rq_r == 8'd0) ||
+                     (!rq_mf && !rq_fmt) ||
                      (rq_r > raw_sects[req_u]) || (rq_n != raw_n[req_u]) ||
                      (rq_wr && !rq_fmt && (rq_idx > raw_sects[req_u])) ||
-                     (seek_off >= {4'd0, mnt_size[req_u][20:0]}))) begin
+                     (seek_off >= {4'd0, mnt_size[req_u][20:0]})))) begin
               aerr <= 1'b1;
               st   <= ST_READY;
             end else begin
@@ -1258,7 +1328,12 @@ module pc9821_fdd_media (
               if ((!rq_hdr && (hb[0] == rq_c) && (hb[1] == rq_h) &&
                    (hb[2] == rq_r) && (hb[3] == rq_n)) ||
                   (rq_hdr && (seen == rq_idx))) begin
-                if (rq_hdr) begin
+                if (!rq_wr && (rq_mf == hb[6][6])) begin
+                  // the header matched in the other recording mode: no sector (the
+                  // searchsector_d88 `break` above the port note)
+                  aerr <= 1'b1;
+                  st   <= ST_READY;
+                end else if (rq_hdr) begin
                   hdr_r     <= hb[2];
                   hdr_n     <= hb[3];
                   hdr_sects <= hdr_sectors[7:0];

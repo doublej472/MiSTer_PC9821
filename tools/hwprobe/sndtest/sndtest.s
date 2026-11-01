@@ -20,7 +20,7 @@
  *       a 16-bit two's-complement WRAP (fmopna_impl.c:5370), so the hot triple
  *       is the wrap check.
  *   frequency sweeps on FM and SSG at 100/250/500/1k/2k/4k/8k/10k Hz - the
- *       board LPF the owner reported, measured instead of assumed.
+ *       board LPF heard on the machine, measured instead of assumed.
  *   a quiet/loud pair with IDENTICAL content, repeated last - limiter/AGC
  *       detection (a level-dependent path changes the second pair's ratio).
  * The 0.5 s silent gaps are the item-45 baseline (noise floor / DC).
@@ -65,7 +65,7 @@
  *                        = clock/8 at max fidelity with the FM resampler at
  *                        18:1 (ymfm_opn.cpp:1335-1400, ymfm_opn.h:519-524);
  *                        jt12 clocks the phase generator at cen/6 with one
- *                        operator scan per 24 enables (pc9821_opna.sv:161-164);
+ *                        operator scan per 24 enables (pc9821_opna.sv:166);
  *                        NP2kai's own OPN core has the same shape
  *                        (`keynote = fn << (ratebit+blk+FREQ_BITS-21)`,
  *                        opngenc.c:571; `freq_inc = ((fc+detune)*multiple)>>1`,
@@ -113,8 +113,7 @@
  *                        fmopna_impl.c:3060 and :5364-5373; ymfm's
  *                        ch_pan_left = bit 7 / ch_pan_right = bit 6), bits 4:0
  *                        = the instrument level. The probe writes 0xC0 | IL
- *                        (both sides). GAIN LAW (die == ymfm == ours,
- *                        opna-lle-audit.md section 4.2): vol = 94 - IL - TL,
+ *                        (both sides). GAIN LAW (die == ymfm == ours): vol = 94 - IL - TL,
  *                        mul = 15 - (vol & 7), shift = vol >> 3,
  *                        gain = mul / 2^(1 + shift); the first sounding
  *                        register pair is IL + TL = 32. TL is 0x3F here, so
@@ -124,7 +123,7 @@
  *                        SD 0x01C0-0x043F, TOP 0x0440-0x1B7F, HH 0x1B80-0x1CFF,
  *                        TOM 0x1D00-0x1F7F, RIM 0x1F80-0x1FFF) - ymfm
  *                        ymfm_opn.cpp:1005-1010, the die's end-of-sample compare
- *                        fmopna_impl.c:3022-3030, our jt08_adpcm_cnt.v:100-106.
+ *                        fmopna_impl.c:3022-3030, our jt08_adpcm_cnt.v:149.
  *                        ymfm reaches them through the ADPCM-A register indices
  *                        0x10-0x1F, which the YM2608's own port map does not
  *                        expose (its write_data sends host 0x10-0x1F to
@@ -137,7 +136,7 @@
  * TIMING. Nothing is paced by a CPU loop: the segment clock is the ARTIC
  * free-running counter at 005C/005F, 307200 Hz (QEMU pc98-sys.c TIMESTAMP_HZ
  * and NP2kai io/artic.c agree; machine-confirmed by the VSYNC/raster counts of
- * the probe2 captures; our pc9821_iobus.sv:1088-1107
+ * the probe2 captures; our pc9821_iobus.sv:1491-1492
  * models it). Every wait is a bounded poll of that counter, so the run is
  * identical on the core and needs no clk_sys assumption. The BIOS tick at
  * 0040:006C is read at both ends of every segment and printed as a cross-check;
@@ -668,7 +667,7 @@ sec_restore:
  * ================================================================== */
 /* opna_ready: wait for the board's write queue to drain - the guest's own
  * WAITREADY, `poll 0x188 bit 7`. The chip's BUSY is 192 master clocks = 24.05 us
- * (opna-lle-audit.md A12), which covers one operator scan, so a poll after every
+ *, which covers one operator scan, so a poll after every
  * write is what lets the FM register file absorb back-to-back writes. Bounded:
  * a chip that never clears it costs the bound, not a hang. */
 opna_ready:
@@ -752,27 +751,34 @@ idl:
  * 213 ms and the 24-bit value every 54.6 s, so it is read again after the high
  * byte and a low-word wrap bumps the high byte. Read-only. */
 artic_read:
-    push    bx
-    push    cx
+    /* EAX = the 24-bit ARTIC count; EBX/ECX/DX preserved whole. High byte, low word, high
+     * byte again: if the high byte moved, the low word was read at the wrap and its own value
+     * says which side (a small low word belongs to the new high byte). The previous
+     * low/high/low read double-counted a wrap landing between its first two reads (a +65536
+     * jump), and saved only BX/CX while writing EBX/ECX (crt31k found both on the core). */
+    push    ebx
+    push    ecx
     push    dx
-    mov     dx, 0x005C
-    in      ax, dx
-    movzx   ebx, ax
     mov     dx, 0x005F
     in      al, dx
-    movzx   ecx, al
+    movzx   ebx, al                     /* H1 */
     mov     dx, 0x005C
     in      ax, dx
-    cmp     ax, bx
-    jae     ar_nowrap
-    inc     ecx
-ar_nowrap:
-    movzx   eax, ax
-    shl     ecx, 16
+    movzx   ecx, ax                     /* L */
+    mov     dx, 0x005F
+    in      al, dx
+    movzx   eax, al                     /* H2 */
+    cmp     eax, ebx
+    je      ar_same
+    cmp     ecx, 0x8000
+    jb      ar_same                     /* L read after the wrap: H2 */
+    mov     eax, ebx                    /* L read before the wrap: H1 */
+ar_same:
+    shl     eax, 16
     or      eax, ecx
     pop     dx
-    pop     cx
-    pop     bx
+    pop     ecx
+    pop     ebx
     ret
 
 /* bios_tick: AX = the BIOS timer-tick word at 0040:006C. A CROSS-CHECK only -

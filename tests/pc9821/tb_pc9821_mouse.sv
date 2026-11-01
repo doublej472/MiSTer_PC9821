@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PC-98 BUS MOUSE (pc9821_mouse behind pc9821_iobus's 0x7FD9-0x7FDF/0xBFDB decode) against NP2kai io/mouseif.c: the power-up read-back composes to 0xEF (buttons 0xE0 with the latch_x = -1 reset nibble, mouseif_reset:325-326), a 0x7FDF MODE WRITE resets the Port C latch to 0 (mouseif_o7fdf's setportc(0), :197-216 - review-iobus row 8's divergence, unambiguous in NP2kai and identical in qemu-pc98's hw/input/pc98-mouse.c), PS/2 packets accumulate into the X/Y delta counters with Y NEGATED (PS/2 up-positive vs the PC-98 down-positive counter, sdl/mousemng.c:229-234) and portc bits 7/6/5 select latch-vs-live, axis and nibble (i7fd9:239-271), the Port C low nibble is 0x08 | three strap bits DERIVED from the live software-DIP store rather than a constant (mouseif.c:296-303 computes bit 2 from dipsw[2] bit 7 and bits 1:0 from ~dipsw[0] bits 5:4; over the measured power-up image 0x841E = 0x7C / 0x8E1E = 0x49 all three are 0, so the power-up 0x7FDD read is 0xF8 - the old hardcoded 0x03 strap answered 0xFB, a nibble no power-up bank yields), the buttons read as active-low L/M/R at bits 7/6/5 (mousemng.h + MAME's bit map; middle PRESSED is the one MAME-only behaviour and is NOTE'd, not silently claimed), the latch edge clamps to [-128,127] and arms the four-read overflow guard (setportc:142-163, i7fd9:253-266: +496 reads nibble F clamped for four reads and then nibble 0 wrapped - software ASSUMES the overflow), and IRQ13 pulses every (SYS_CLOCK_HZ/120) << timing clk with the 0xBFDB timing field (mouseint:131-140 + mouseif_obfdb:309-312; the 120 Hz base qemu and MAME agree on), silenced by INT# and re-armed by its falling edge (setportc:164-173). The R4 packet/latch coincidence merge is swept across the latch write with the same-cycle hit counted and asserted. FAIL-FIRST: the file connects no NEW port (pc9821_iobus by .*, ps2_mouse/mouse_irq joining the existing nets), so the same file builds against the pre-change pc9821_iobus.sv and every section fails there (0xE0 not 0xEF, no Port C reset, the strap nibble 0x0B where the store's bytes give 0x08, frozen deltas/buttons, no guard, mouse_irq never pulses).
+// The PC-98 BUS MOUSE (pc9821_mouse behind pc9821_iobus's 0x7FD9-0x7FDF/0xBFDB decode) against NP2kai io/mouseif.c: the power-up read-back composes to 0xEF (buttons 0xE0 with the latch_x = -1 reset nibble, mouseif_reset:325-326), a 0x7FDF MODE WRITE resets the Port C latch to 0 (mouseif_o7fdf's setportc(0), :197-216 - unambiguous in NP2kai and identical in qemu-pc98's hw/input/pc98-mouse.c), PS/2 packets accumulate into the X/Y delta counters with Y NEGATED (PS/2 up-positive vs the PC-98 down-positive counter, sdl/mousemng.c:229-234) and portc bits 7/6/5 select latch-vs-live, axis and nibble (i7fd9:239-271), the Port C low nibble is 0x08 | three strap bits DERIVED from the live software-DIP store rather than a constant (mouseif.c:296-303 computes bit 2 from dipsw[2] bit 7 and bits 1:0 from ~dipsw[0] bits 5:4; over the measured power-up image 0x841E = 0x7C / 0x8E1E = 0x49 all three are 0, so the power-up 0x7FDD read is 0xF8 - the old hardcoded 0x03 strap answered 0xFB, a nibble no power-up bank yields), the buttons read as active-low L/M/R at bits 7/6/5 (mousemng.h + MAME's bit map; middle PRESSED is the one MAME-only behaviour and is NOTE'd, not silently claimed), the latch edge clamps to [-128,127] and arms the four-read overflow guard (setportc:142-163, i7fd9:253-266: +496 reads nibble F clamped for four reads and then nibble 0 wrapped - software ASSUMES the overflow), and IRQ13 pulses every (SYS_CLOCK_HZ/120) << timing clk with the 0xBFDB timing field (mouseint:131-140 + mouseif_obfdb:309-312; the 120 Hz base qemu and MAME agree on), silenced by INT# and re-armed by its falling edge (setportc:164-173). The R4 packet/latch coincidence merge is swept across the latch write with the same-cycle hit counted and asserted. FAIL-FIRST: the file connects no NEW port (pc9821_iobus by .*, ps2_mouse/mouse_irq joining the existing nets), so the same file builds against the pre-change pc9821_iobus.sv and every section fails there (0xE0 not 0xEF, no Port C reset, the strap nibble 0x0B where the store's bytes give 0x08, frozen deltas/buttons, no guard, mouse_irq never pulses). With Port C's upper half an input and the lower half an output, the 0x7FDD read is the latch masked to 0x1F (bit 4, INT#, survives).
 //
 // TB_PC9821_MOUSE: the PC-98 BUS MOUSE (pc9821_mouse behind pc9821_iobus's
 // port decode) against NP2kai io/mouseif.c - the PRIMARY reference - driven
@@ -17,14 +17,13 @@
 //     0xFF.
 //     [source: NP2kai io/mouseif.c]
 //
-//  2. THE MODE-WRITE PORT-C RESET (mouseif_o7fdf:197-216; review-iobus.md
-//     row 8): a 0x7FDF mode write RESETS THE PORT C LATCH TO 0 (the mode
+//  2. THE MODE-WRITE PORT-C RESET (mouseif_o7fdf:197-216): a 0x7FDF mode write RESETS THE PORT C LATCH TO 0 (the mode
 //     branch ends in setportc(portc) with local portc = 0 - the uPD8255
 //     mode-set clears the output latches, which qemu-pc98 hw/input/pc98-mouse.c
 //     implements identically, `pc98_mouse_set_portc(s, 0)`), so writing 0xB5 to
 //     0x7FDD and then mode 0x93 reads 0x0B, not 0xBB. FAIL-FIRST: the pre-fix
-//     RTL kept the latch and reads 0xBB (the divergence review-iobus.md asked
-//     to settle "if NP2kai is unambiguous" - it is, and qemu agrees).
+//     RTL kept the latch and reads 0xBB (NP2kai is unambiguous here, and qemu
+//     agrees).
 //     [source: NP2kai io/mouseif.c:197-216 + qemu-pc98 hw/input/pc98-mouse.c]
 //
 //  3. X/Y DELTAS, THE NIBBLE MUX AND THE THREE BUTTONS (i7fd9:228-275):
@@ -101,6 +100,7 @@ module tb_pc9821_mouse;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   wire beep_mute;
   wire [1:0] beep_vol;      // fix-audio-volume added this iobus output (beeper 2-bit volume)
 
@@ -157,6 +157,7 @@ module tb_pc9821_mouse;
   // would leave any flush-triggering write waiting in iobus's S_FLUSH forever.
   // The real request/done contract is tb_pc9821_cache_flush's subject.
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   wire cache_flush_busy = 1'b0;
   wire cache_flush_done = cache_flush_req;
 
@@ -184,8 +185,14 @@ module tb_pc9821_mouse;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -203,6 +210,11 @@ module tb_pc9821_mouse;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1), .SYS_CLOCK_HZ(CLK_HZ)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -333,6 +345,13 @@ module tb_pc9821_mouse;
     rd_is(16'h7FDD, 8'hB8, "7FDD round-trips the 0xB5 latch high nibble");
     wr(16'h7FDF, 8'h93);   // mode write: setportc(0) clobbers the latch
     rd_is(16'h7FDD, 8'h08, "the mode write RESETS the Port C latch");
+    // With Port C's UPPER half an input (mode bit 3) and the lower half an output the read is the
+    // latch masked to 0x1F - bit 4 (INT#) survives (mouseif_i7fdd, mouseif.c:296-303 as the
+    // header of pc9821_mouse.sv reads it): mode 0x98, latch 0xB5 -> 0x15.
+    wr(16'h7FDF, 8'h98);
+    wr(16'h7FDD, 8'hB5);
+    rd_is(16'h7FDD, 8'h15, "C-upper input: the Port C read is the latch masked to 0x1F");
+    wr(16'h7FDF, 8'h93);   // back to the power-up mode (clears the latch again)
     wr(16'h7FDF, 8'h09);   // BSR: set bit 4 (INT# masked), a quiet bench
 
     // ==== 3. deltas, the nibble mux, and the three buttons =================

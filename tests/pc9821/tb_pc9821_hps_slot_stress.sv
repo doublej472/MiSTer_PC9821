@@ -83,6 +83,7 @@ module hps_stress_cluster #(parameter DEMUX = 1) (
       .a_img_mounted(a_img_mounted), .a_img_readonly(1'b0), .a_img_size(a_img_size),
       .a_mounted(a_mounted), .a_readonly(a_readonly), .a_capacity(a_capacity),
       .a_req_read(a_req_read), .a_req_write(a_req_write), .a_req_lba(a_req_lba),
+      .a_req_window(1'b1),
       .a_req_done(a_req_done), .a_req_error(a_req_error), .a_busy(a_busy),
       .a_buf_we(a_buf_we), .a_buf_addr(a_buf_addr), .a_buf_data(a_buf_data),
       .a_buf_rd_addr(a_buf_rd_addr), .a_buf_rd_data(wfun(nonce_a, a_buf_rd_addr)),
@@ -109,6 +110,20 @@ module hps_stress_cluster #(parameter DEMUX = 1) (
   // hps_io samples the din of the slot it is serving; the engine drives the same value on all
   assign sd_buff_din = a_ack ? a_din : b_ack ? b_din : c_din;
 
+  // The CD-DA ring as the drive's read-ahead sees it: always room (four sectors' worth too), and
+  // each sector played the moment its last sample is written (CDDA_PLAYED one cycle after every
+  // 588th CDDA_WR since the last flush), so a play completes at its fetched end.
+  wire       cdda_flush;
+  reg  [9:0] pm_n = 0;
+  reg        pm_played = 0;
+  always @(posedge clk) begin
+    pm_played <= 1'b0;
+    if (cdda_flush) pm_n <= 10'd0;
+    else if (cdda_wr) begin
+      if (pm_n == 10'd587) begin pm_n <= 10'd0; pm_played <= 1'b1; end
+      else pm_n <= pm_n + 10'd1;
+    end
+  end
   pc9821_atapi #(.AUDIO_EN(1'b1)) cd (
       .clk(clk), .rst_n(rst_n),
       .io_rd(io_rd), .io_wr(io_wr), .io_addr(io_addr), .io_din(io_din), .io_dout(cd_dout),
@@ -116,7 +131,8 @@ module hps_stress_cluster #(parameter DEMUX = 1) (
       .img_mounted(cd_img_mounted), .img_size(cd_img_size),
       .sd_lba(cd_sd_lba), .sd_blk_cnt(cd_sd_blk_cnt), .sd_rd(cd_sd_rd), .sd_ack(cd_ack),
       .sd_buff_wr(k_wr), .sd_buff_addr(k_addr), .sd_buff_dout(k_dout),
-      .cdda_req(1'b1), .cdda_wr(cdda_wr), .cdda_data(cdda_data),
+      .cdda_req(1'b1), .cdda_req4(1'b1), .cdda_played(pm_played), .cdda_flush(cdda_flush),
+      .cdda_wr(cdda_wr), .cdda_data(cdda_data),
       .log_byte(), .log_we(), .log_accept(1'b1)
   );
 

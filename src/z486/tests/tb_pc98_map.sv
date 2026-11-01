@@ -206,6 +206,7 @@ module tb_pc98_map;
     integer wr_na = 0, wr_al1 = 0, wr_w0 = 0, wr_al2 = 0;
     // Fast (RMW) store acceptance counts.
     integer fs_ram = 0, fs_hr = 0, fs_r96 = 0, fs_other = 0;
+    integer ps_ram = 0, ps_hr = 0, ps_r96 = 0, ps_other = 0;
     // win0_unmapped runtime toggle phase.
     integer w0off1_single_n = 0, w0off1_fill_n = 0;
     integer w0on_fill_n = 0, w0on_single_n = 0;
@@ -321,9 +322,18 @@ module tb_pc98_map;
         end
     end
 
-    // Track accepted fast (RMW) stores by physical address.
+    // Track the direct store port by physical address: the cached RMW's write
+    // (fs_*, at rmw_fast_phys_r) and a posted plain store (ps_*, data_access
+    // st_take at st_phys) - the two sources of fast_store_valid.
     always @(posedge clk) begin
-        if (reset_n && dut.fast_store_valid) begin
+        if (reset_n && dut.fast_store_valid && dut.st_take) begin
+            case (dut.st_phys)
+                W_RAM:   ps_ram <= ps_ram + 1;
+                W_HR:    ps_hr <= ps_hr + 1;
+                W_R96:   ps_r96 <= ps_r96 + 1;
+                default: ps_other <= ps_other + 1;
+            endcase
+        end else if (reset_n && dut.fast_store_valid) begin
             case (dut.rmw_fast_phys_r)
                 W_RAM + 4: fs_ram <= fs_ram + 1;
                 W_HR + 4:  fs_hr <= fs_hr + 1;
@@ -659,6 +669,7 @@ module tb_pc98_map;
             wr_ram = 0; wr_ap = 0; wr_al0 = 0; wr_hr = 0; wr_r96 = 0;
             wr_na = 0; wr_al1 = 0; wr_w0 = 0; wr_al2 = 0;
             fs_ram = 0; fs_hr = 0; fs_r96 = 0; fs_other = 0;
+            ps_ram = 0; ps_hr = 0; ps_r96 = 0; ps_other = 0;
             w0off1_single_n = 0; w0off1_fill_n = 0;
             w0on_fill_n = 0; w0on_single_n = 0;
             w0off2_single_n = 0; w0off2_fill_n = 0;
@@ -803,6 +814,16 @@ module tb_pc98_map;
         check_int("16 MiB RAM RMW takes the fast store path", fs_hr, 1);
         check_int("96 MiB RAM RMW takes the fast store path", fs_r96, 1);
         check_int("no uncached window takes the fast store path", fs_other, 0);
+        // A plain store posts exactly where the template says the page is
+        // cacheable RAM (this bench leaves ram_cache_top open); no store to a
+        // device window, to window 0 while it is unmapped or past the
+        // no-allocate bound posts.
+        $display("posted stores: ram=%0d hr=%0d r96=%0d other=%0d",
+                 ps_ram, ps_hr, ps_r96, ps_other);
+        check_int("cacheable RAM store posts", ps_ram, 1);
+        check_int("16 MiB RAM store posts", ps_hr, 1);
+        check_int("96 MiB RAM store posts", ps_r96, 1);
+        check_int("no uncached window store posts", ps_other, 0);
 
         // Phase 3: runtime toggling of win0_unmapped.
         clear_counts();

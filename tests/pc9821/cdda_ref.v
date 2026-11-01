@@ -1,5 +1,11 @@
+// SPDX-License-Identifier: BSD-2-Clause
+// Copyright (c) 2014, Aleksander Osman; Copyright (C) 2017-2020 Alexey Melnikov;
+// and the ao486_MiSTer contributors. A copy of src/soc/cdda.v, from ao486_MiSTer
+// rtl/soc/cdda.v (https://github.com/MiSTer-devel/ao486_MiSTer). Licence text: NOTICE, part 4.
+// TEST REFERENCE: a frozen copy of src/soc/cdda.v before its divider rewrite, kept as the equivalence reference of tb_pc9821_cdda_equiv; not maintained.
+
 /* verilator lint_off PROCASSINIT */   // The CLK_AUDIO half has no reset, so its power-up state IS
-                                       // the seeds below (review r2-resets F3): each of them is a
+                                       // the seeds below: each of them is a
                                        // declaration with an initial value that the procedural code
                                        // then assigns, which is exactly this warning's shape.
 /* verilator lint_off SIMILARNAME */   // Vendor naming, upstream ao486's: `audio_l`/`audio_r`
@@ -28,7 +34,7 @@ localparam SECTOR_SIZE  = 2352*8/32;
 localparam BUFFER_WIDTH = $clog2(2 * SECTOR_SIZE);
 localparam BUFFER_SIZE  = 2**BUFFER_WIDTH;
 
-// Power-up state (review r2-resets F3): the CLK_AUDIO domain has no reset and
+// Power-up state: the CLK_AUDIO domain has no reset and
 // the seeds below are the whole of its initialisation. Unseeded, the fractional
 // divider X-locks in 4-state sim (clk_44100_cnt <= X + 88200 = X and the wrap
 // compare is X) and AUDIO_CE/AUDIO_L/AUDIO_R never resolve; the ring pointers X

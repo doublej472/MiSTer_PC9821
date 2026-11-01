@@ -86,7 +86,7 @@ module tb_l1_cache;
         .vipt_probe_valid(vipt_probe_valid),
         .vipt_probe_ready(vipt_probe_ready),
         .vipt_probe_accepted(vipt_probe_accepted),
-        .vipt_resolve_phys_addr(vipt_resolve_phys_addr),
+        .vipt_resolve_phys_addr(vipt_resolve_phys_addr), .vipt_resolve_tlb_phys(vipt_resolve_phys_addr), .vipt_resolve_alt_phys(vipt_resolve_phys_addr), .vipt_resolve_use_tlb(1'b0),
         .vipt_resolve_valid(vipt_resolve_valid),
         .vipt_resolve_data(vipt_resolve_data),
         .vipt_resolve_hit(vipt_resolve_hit),

@@ -4,7 +4,7 @@
 // TB_PC9821_SPRITE_SCENE: models a busy Touhou-frame graphics scene - many EGC 0x3100 sprite put units per frame plus the plain plane-window restores - against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, and profiles the write path end to end: the EGC units per clk_sys, the GVRAM plane-byte rate in MB/s, the backend transaction mix (the partial-byte RMW the DQM-less module would need, the full-word write-backs, the fill reads), the write-combining buffer's hit rate, and the scanout line fetch's worst latency against the 2014 clk_sys raster budget while the scene saturates the client. It ASSERTS the scene's writes land by value (the EGC 0x3100 read-then-write copies the source plane bytes to the destination, a plain restore reads back), that NO partial-byte write reaches the controller (the buffer's whole point), and that the scanout still meets its deadline under the load.
 //
 // WHY THIS EXISTS is the profile the claim describes: the instrument that decides whether the
-// plain-path client's per-lane C_NEXT/C_VAL/C_WAIT walk (r13/107 section 2.4/3.2), the
+// plain-path client's per-lane C_NEXT/C_VAL/C_WAIT walk, the
 // backend's fill/write-back, the EGC's own per-unit latency or the scanout's contention is the
 // binding term on a realistic busy scene.
 //
@@ -47,8 +47,8 @@ module tb_pc9821_sprite_scene;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -73,9 +73,9 @@ module tb_pc9821_sprite_scene;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -114,11 +114,11 @@ module tb_pc9821_sprite_scene;
   integer egc_write_units = 0;
 
   always @(posedge clk) begin
-    // The GVRAM is block RAM now (r13/283): there is no backend transaction and no write-combining
+    // The GVRAM is block RAM now: there is no backend transaction and no write-combining
     // buffer, so the cb_/wcb_ counters stay at zero and the split column reads simply.
     if (dut.u_arb.cc_valid && dut.u_arb.cc_ready) client_accesses <= client_accesses + 1;
     // Plane bytes the plain path commits: one byte per enabled lane of the access. The
-    // direction is the client's own LATCHED `c_write_q`, not the live `cpu_write`: r13/322
+    // direction is the client's own LATCHED `c_write_q`, not the live `cpu_write`: the core
     // decouples the store, so z486 drops `cpu_write` the cycle the walk accepts the access.
     if (dut.u_arb.cc_plain_ready && dut.u_arb.c_write_q) plane_bytes <= plane_bytes + popcount4(dut.u_arb.cc_lane_be);
     // Plane bytes the EGC commits: one per enabled plane lane of each write request the arbiter

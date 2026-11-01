@@ -16,10 +16,24 @@ THE SCRIPTED SET (--items, default all)
   rusty        Rusty's start      }  shape), take a screenshot every N seconds and check
   policenauts  the Policenauts intro, to the logo
   flamezap     Flame Zapper Kotsujin's attract/play (EGC-heavy sprite blits; EMS profile)
+  cpusuite     CPUSUITE.COM (tools/hwprobe/cpusuite): z486's own self-checking test programs, run from
+               DOS on the core (a CPU-correctness stress test for clocks past timing closure); boots
+               the CONFIG.SYS profile 0 (noemm: HIMEM, no EMM386) unless the scenarios file says
+               otherwise. ~1.5 min including the boot (256 programs in under 30 s); --cpusuite-passes N
+               loops the pack for a longer stress run
+  crt31k       CRT31K.COM (tools/hwprobe/crt31k): times the 24 kHz raster, switches to the 31 kHz dot clock
+               (0x09A8 bit 0 + the BIOS 31 kHz master SYNC), times it, restores; screenshots every 3 s
+               show the switch on HDMI. Not in the default set (run it with --items crt31k)
   PASS CHECKS  probe items: every INTEG_*.TXT ends 'INTEG END FAILS=0000', INTEG_OK.TXT exists, and
                for probe-cda the PLAY row says 'PLAY OK' (a probe that could not play audio proved nothing
                about CD-DA).  Game items: the screen is not frozen (frame-diff between consecutive
                screenshots), and a known frame is reached (downscaled difference to a reference image).
+               crt31k: CRT31K.TXT reaches END:CRT31K with no TIMEOUT, 0x09A8 reads 01 after the set and is
+               restored, and the 31 kHz dot clock (calibrated by the run's own 24 kHz rows, as
+               crt31k_decode.py does) is within 10 ppm of the Xe10's 25 168 031 Hz (docs/probes/CRT31K.TXT).
+               cpusuite: CPUSUITE.TXT ends 'CPUSUITE END ... FAIL=0', ran every program the pack holds
+               (its build/manifest.json) on every pass, and each one has a PASS row; a run that stops
+               early names the program it stopped in (the harness commits each name before running it).
 
 NOTHING OF THE USER'S IS EVER COMMITTED. The images are arguments; reference frames live in --refs
 (a directory of the user's choosing, outside any commit); the patched image copies live under
@@ -49,6 +63,7 @@ import os
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -70,7 +85,13 @@ REMOTE_RBF = f"/media/fat/_Computer/{CORE}-{TAG}.rbf"
 REMOTE_MGL = f"/media/fat/{TAG.upper()}.mgl"
 SHOTS = f"/media/fat/screenshots/{SETNAME}"
 
-ITEMS = ("keymap", "probe", "probe-cda", "doom", "th05", "rusty", "policenauts", "flamezap")
+ITEMS = ("keymap", "probe", "probe-cda", "doom", "th05", "rusty", "policenauts", "flamezap", "cpusuite", "crt31k")
+# The set a run without --items gets (tools/mister_multi.py DEFAULT_ITEMS is the same list): all
+# of them but crt31k (cpusuite takes ~1.5 min on the card, boot included; measured 2026-10-14).
+DEFAULT_ITEMS = tuple(i for i in ITEMS if i != "crt31k")
+CPUSUITE = ROOT / "tools/hwprobe/cpusuite"
+CRT31K = ROOT / "tools/hwprobe/crt31k"
+CRT31K_CAPTURE_HZ = 25_168_031     # docs/probes/CRT31K.TXT, calibrated (crt31k_decode.py)
 GAME_ITEMS = ("keymap", "doom", "th05", "rusty", "policenauts", "flamezap")
 
 STATIC_DIFF = 0.2          # mean abs diff (0-255) below which two screenshots are 'the same frame'
@@ -80,6 +101,110 @@ THUMB = (80, 50)
 # ---------------------------------------------------------------------------------------------
 # pure logic (the part --selftest exercises without a MiSTer)
 # ---------------------------------------------------------------------------------------------
+BLACK_MAX = 8              # a frame whose brightest sample is at or below this (0-255) has no content
+
+
+def _png_samples(data: bytes):
+    """Stdlib decode of an 8-bit, non-interlaced PNG -> (samples bytes, channels) with alpha dropped,
+    or None when the PNG is another kind (the caller then tries PIL)."""
+    import zlib
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, plte, hdr = 8, [], None, None
+    while pos + 8 <= len(data):
+        ln, typ = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + ln]
+        pos += 12 + ln
+        if typ == b"IHDR":
+            hdr = struct.unpack(">IIBBBBB", body)
+        elif typ == b"PLTE":
+            plte = body
+        elif typ == b"IDAT":
+            idat.append(body)
+        elif typ == b"IEND":
+            break
+    if not hdr:
+        return None
+    w, h, depth, ctype, _, _, interlace = hdr
+    chans = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ctype)
+    if depth != 8 or interlace or chans is None or (ctype == 3 and not plte):
+        return None
+    raw = zlib.decompress(b"".join(idat))
+    stride = w * chans
+    prev = bytearray(stride)
+    out = bytearray()
+    i = 0
+    for _ in range(h):
+        f = raw[i]
+        line = bytearray(raw[i + 1:i + 1 + stride])
+        i += 1 + stride
+        if f == 1:
+            for x in range(chans, stride):
+                line[x] = (line[x] + line[x - chans]) & 255
+        elif f == 2:
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 255
+        elif f == 3:
+            for x in range(stride):
+                a = line[x - chans] if x >= chans else 0
+                line[x] = (line[x] + ((a + prev[x]) >> 1)) & 255
+        elif f == 4:
+            for x in range(stride):
+                a = line[x - chans] if x >= chans else 0
+                b = prev[x]
+                c = prev[x - chans] if x >= chans else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                pr = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                line[x] = (line[x] + pr) & 255
+        elif f != 0:
+            return None
+        out += line
+        prev = line
+    if ctype == 3:
+        return bytes(plte[3 * v + k] for v in out for k in range(3) if 3 * v + k < len(plte)), 3
+    if ctype in (4, 6):
+        keep = chans - 1
+        return bytes(v for j, v in enumerate(out) if j % chans < keep), keep
+    return bytes(out), chans
+
+
+def frame_stats(path):
+    """(min, max, mean) over every colour sample of a screenshot, or None when it cannot be decoded.
+    Stdlib first (the tools must run wherever python3 does), PIL for PNGs the decoder declines."""
+    path = Path(path)
+    try:
+        dec = _png_samples(path.read_bytes())
+    except Exception:
+        dec = None
+    if dec is not None:
+        smp = dec[0]
+        return (min(smp), max(smp), sum(smp) / len(smp)) if smp else None
+    try:
+        from PIL import Image, ImageStat
+        im = Image.open(path).convert("RGB")
+        lo, hi = zip(*im.getextrema())
+        return min(lo), max(hi), sum(ImageStat.Stat(im).mean) / 3
+    except Exception:
+        return None
+
+
+def is_black(stats) -> bool:
+    """No content: the brightest sample is at most BLACK_MAX, or the frame is one flat colour."""
+    return stats is not None and (stats[1] <= BLACK_MAX or stats[0] == stats[1])
+
+
+def check_content(paths):
+    """A screenshot sequence whose every frame is blank (no video ever reached the scaler) fails,
+    whatever else it satisfies: a static black screen is 'not frozen' only vacuously."""
+    st = [frame_stats(p) for p in paths]
+    known = [x for x in st if x is not None]
+    if not known:
+        return True, "content not checked (screenshots not decodable)"
+    nb = sum(1 for x in known if is_black(x))
+    ok = nb < len(known)
+    return ok, f"{len(known) - nb}/{len(known)} frames have content (max pixel {max(x[1] for x in known)})"
+
+
 def thumb(path):
     from PIL import Image
     return Image.open(path).convert("L").resize(THUMB)
@@ -96,34 +221,81 @@ def frame_diffs(paths):
     return [mean_abs_diff(ts[i - 1], ts[i]) for i in range(1, len(ts))]
 
 
-def longest_static_run(diffs) -> int:
-    """Longest run of consecutive near-identical screenshot pairs, in INTERVALS."""
+def longest_static_run(diffs, gaps=None) -> float:
+    """Longest run of consecutive near-identical screenshot pairs: in INTERVALS, or in seconds
+    when gaps (the time between each pair, same length as diffs) is given."""
     best = cur = 0
-    for d in diffs:
-        cur = cur + 1 if d < STATIC_DIFF else 0
+    for i, d in enumerate(diffs):
+        cur = cur + (1 if gaps is None else gaps[i]) if d < STATIC_DIFF else 0
         best = max(best, cur)
     return best
 
 
-def check_motion(paths, max_static_s: float, every_s: float, min_changes: int):
+def check_motion(paths, max_static_s: float, every_s: float, min_changes: int, times=None):
+    """times: each shot's time in seconds (shot_times); without it the shots are every_s apart."""
     diffs = frame_diffs(paths)
-    run = longest_static_run(diffs) * every_s
+    if times is not None:
+        run = longest_static_run(diffs, [times[i] - times[i - 1] for i in range(1, len(times))])
+    else:
+        run = longest_static_run(diffs) * every_s
     changes = sum(1 for d in diffs if d >= STATIC_DIFF)
     ok = run <= max_static_s and changes >= min_changes
     return ok, f"{len(paths)} shots, {changes} changes, longest static run {run:.0f}s (limit {max_static_s:.0f}s, need {min_changes} changes)"
 
 
-def check_known_frame(paths, ref_path, max_diff: float, every_s: float, not_before_s: float = 0.0):
+def check_known_frame(paths, ref_path, max_diff: float, every_s: float, not_before_s: float = 0.0,
+                      until_s: float | None = None, times=None):
+    """PASS when ANY shot taken in [not_before_s, until_s] is within max_diff of the reference
+    (the best of them is reported). times: each shot's time (shot_times), else i * every_s.
+    A transient frame (an intro scene a second or two long) needs shots dense enough to land on
+    it whatever the launch jitter: the scenario's `dense` windows supply them."""
     ref = thumb(ref_path)
     best = (1e9, -1)
     for i, p in enumerate(paths):
-        if i * every_s < not_before_s:
+        t = times[i] if times is not None else i * every_s
+        if t < not_before_s or (until_s is not None and t > until_s):
             continue
         d = mean_abs_diff(thumb(p), ref)
         best = min(best, (d, i))
     if best[1] < 0:
-        return False, "no screenshot after the earliest allowed time"
-    return best[0] <= max_diff, f"closest to {Path(ref_path).name}: shot {best[1]} (~{best[1] * every_s:.0f}s), diff {best[0]:.2f} (limit {max_diff})"
+        return False, f"no screenshot inside the allowed window for {Path(ref_path).name}"
+    t = times[best[1]] if times is not None else best[1] * every_s
+    win = f", window {not_before_s:g}-{until_s:g}s" if until_s is not None else ""
+    return best[0] <= max_diff, f"closest to {Path(ref_path).name}: shot {best[1]} (~{t:.0f}s{win}), diff {best[0]:.2f} (limit {max_diff})"
+
+
+def shot_schedule(s: dict):
+    """The times (s after the steps) at which a game item takes its screenshots: every
+    `shot_every` up to `run`, and inside each `dense` window {from_s, to_s, every_s} every
+    every_s instead (a transient known frame needs dense shots to be caught reliably)."""
+    every = s.get("shot_every", 15)
+    run = s.get("run", 180)
+    times = [every * k for k in range(1, int(run // every) + 1)]
+    for w in s.get("dense") or []:
+        lo, hi, st = float(w["from_s"]), float(w["to_s"]), float(w.get("every_s", 1))
+        if st <= 0 or hi < lo:
+            raise SystemExit(f"scenario: bad dense window {w}")
+        times = [t for t in times if not lo <= t <= hi]
+        k = 0
+        while lo + k * st <= hi + 1e-9:
+            times.append(round(lo + k * st, 3))
+            k += 1
+    return sorted(set(times))
+
+
+SHOT_TS = "%Y%m%d_%H%M%S"
+
+
+def shot_times(paths, card_t0: str, fallback):
+    """Each shot's time in seconds after card_t0 (the card's `date +%Y%m%d_%H%M%S` when the shot
+    loop began), from the timestamp Main_MiSTer puts in the name; the fallback (the schedule)
+    when a stamp is unreadable."""
+    import datetime
+    try:
+        t0 = datetime.datetime.strptime(card_t0, SHOT_TS)
+        return [(datetime.datetime.strptime(Path(p).name[:15], SHOT_TS) - t0).total_seconds() for p in paths]
+    except (ValueError, TypeError):
+        return list(fallback[:len(paths)]) + [fallback[-1] if fallback else 0.0] * max(0, len(paths) - len(fallback))
 
 
 def parse_integ(text: str) -> dict:
@@ -164,6 +336,105 @@ def judge_probe(captures: dict, expect: list, want_play: bool):
     return (not problems), ("; ".join(problems) if problems else "all INTEG captures FAILS=0000")
 
 
+def parse_cpusuite(text: str) -> dict:
+    """CPUSUITE.TXT -> {'begin': (programs, passes)|None, 'rows': [(name, verdict, detail)],
+    'pending': name|None (the program the run stopped in), 'end': {PASSES,RUN,PASS,FAIL}|None}."""
+    r = {"begin": None, "rows": [], "pending": None, "end": None}
+    for line in text.replace("\r", "").split("\n"):
+        m = re.match(r"CPUSUITE BEGIN V1 PROGRAMS=(\d+) PASSES=(\d+)", line)
+        if m:
+            r["begin"] = (int(m.group(1)), int(m.group(2)))
+            continue
+        m = re.match(r"CPUSUITE END PASSES=(\d+) RUN=(\d+) PASS=(\d+) FAIL=(\d+)", line)
+        if m:
+            r["end"] = dict(zip(("PASSES", "RUN", "PASS", "FAIL"), map(int, m.groups())))
+            continue
+        m = re.match(r"(\S+) (PASS|FAIL)\b ?(.*)", line)
+        if m:
+            r["rows"].append((m.group(1), m.group(2), m.group(3).strip()))
+        elif line.strip():
+            r["pending"] = line.split()[0]     # a name with no verdict: the run stopped there
+    return r
+
+
+def judge_cpusuite(text, expect: list, passes: int):
+    """-> (ok, detail). expect: the program names the pack holds (its manifest)."""
+    if text is None:
+        return False, "CPUSUITE.TXT missing: the harness did not start (no XMS? EMM386 loaded? see the screenshot)"
+    r = parse_cpusuite(text)
+    fails = [f"{n} ({d or v})" for n, v, d in r["rows"] if v != "PASS"]
+    problems = []
+    if r["end"] is None:
+        where = f"stopped in {r['pending']}" if r["pending"] else "no END row"
+        problems.append(f"did not finish: {where} after {len(r['rows'])} results (a hang: the machine did not come back)")
+    else:
+        want = len(expect) * passes
+        if r["end"]["RUN"] != want or r["end"]["PASSES"] != passes:
+            problems.append(f"ran {r['end']['RUN']} programs in {r['end']['PASSES']} passes, want {want} in {passes}")
+        if r["end"]["FAIL"] != 0:
+            problems.append(f"FAIL={r['end']['FAIL']}")
+    counts = {}
+    for n, v, _ in r["rows"]:
+        if v == "PASS":
+            counts[n] = counts.get(n, 0) + 1
+    missing = [n for n in expect if counts.get(n, 0) < passes]
+    if r["end"] is not None and missing:
+        problems.append(f"{len(missing)} programs without a PASS on every pass (first: {missing[0]})")
+    if fails:
+        problems.append(f"{len(fails)} failed: " + ", ".join(fails[:12]) + (" ..." if len(fails) > 12 else ""))
+    npass = sum(1 for _, v, _ in r["rows"] if v == "PASS")
+    if problems:
+        return False, f"{npass}/{len(r['rows'])} rows PASS; " + "; ".join(problems)
+    return True, f"{npass}/{len(r['rows'])} PASS ({len(expect)} programs x {passes} pass{'es' if passes > 1 else ''})"
+
+
+def cpusuite_files() -> tuple[dict, list]:
+    """Build CPUSUITE.COM and its pack (make; the pack is generated from src/z486/tests/programs)
+    -> ({DOS name: bytes}, the program names the pack holds)."""
+    subprocess.run(["make", "-C", str(ROOT / "tools/hwprobe"), "cpusuite"], check=True)
+    man = json.loads((CPUSUITE / "build/manifest.json").read_text())
+    return ({"CPUSUITE.COM": (CPUSUITE / "cpusuite.com").read_bytes(),
+             "CPUSUITE.BIN": (CPUSUITE / "build/CPUSUITE.BIN").read_bytes()}, man["run"])
+
+
+def crt31k_files() -> dict:
+    """Build CRT31K.COM (make) -> {DOS name: bytes}."""
+    subprocess.run(["make", "-C", str(ROOT / "tools/hwprobe"), "crt31k/crt31k.com"], check=True)
+    return {"CRT31K.COM": (CRT31K / "crt31k.com").read_bytes()}
+
+
+def judge_crt31k(text):
+    """CRT31K.TXT -> (ok, detail): the run finished and restored 0x09A8, and the 31 kHz dot clock
+    (calibrated by the same run's 24 kHz rows) is the Xe10's within 10 ppm."""
+    if not text or "END:CRT31K" not in text:
+        return False, "no END:CRT31K row (the probe did not finish; see the screenshots)"
+    sys.path.insert(0, str(CRT31K))
+    import crt31k_decode
+    artic, modes = crt31k_decode.decode(text)
+    problems = []
+    if "TIMEOUT" in text:
+        problems.append("a run TIMED OUT (no VSYNC edge)")
+    if "after_set31=01" not in text:
+        problems.append("0x09A8 does not read 01 after the set")
+    m = re.search(r"RESTORE 09A8 was=(\w\w) now=(\w\w)", text)
+    if not m or m.group(1) != m.group(2):
+        problems.append("0x09A8 not restored")
+    dot = {}
+    for md in modes:
+        if md["runs"]:
+            dot[md["name"]] = sum(artic * n / t * md["v"] * md["h"] for n, t in md["runs"]) / len(md["runs"])
+    d24 = next((v for k, v in dot.items() if k.startswith("24K")), None)
+    d31 = next((v for k, v in dot.items() if k.startswith("31K")), None)
+    if d24 is None or d31 is None:
+        return False, "; ".join(problems + ["no 24K or 31K rows"])
+    cal = crt31k_decode.NOMINAL_24K_DOT / d24
+    ppm = (d31 * cal - CRT31K_CAPTURE_HZ) / CRT31K_CAPTURE_HZ * 1e6
+    detail = f"31 kHz dot {d31 * cal:.0f} Hz calibrated ({d31:.0f} raw), {ppm:+.2f} ppm from the Xe10's {CRT31K_CAPTURE_HZ}"
+    if not -10.0 < ppm < 10.0:
+        problems.append("the 31 kHz dot clock is not the Xe10's")
+    return (not problems), "; ".join(problems + [detail])
+
+
 def load_scenarios(path):
     sc = json.load(open(path))
     for k in GAME_ITEMS:
@@ -197,6 +468,33 @@ def item_needs(item, sc):
 # ---------------------------------------------------------------------------------------------
 # preparing the guest-visible files (host side, on COPIES)
 # ---------------------------------------------------------------------------------------------
+
+def container_skip(path: Path) -> int:
+    """Bytes of container header before the disk data: an HDI/FDI image's HeaderSize, else 0.
+
+    The core recognises an HDI by content too (pc9821_hdd_image.sv), because hps_io gives it
+    a size and a pulse, never a name. This mirrors that validation so the runner can patch and
+    read the guest's files through the header: reserved 0, HeaderSize [32, 1 MiB] and a whole
+    sector, 512 bytes/sector, and each geometry field inside NP2kai's bounds (fdd/sxsihdd.c:
+    0 < sectors, heads < 256, 0 < cylinders < 65536). DataSize and the file size are not
+    checked, as NP2kai does not check them. Anything else is a raw image and its data starts
+    at 0, which is what the core does with it.
+    """
+    try:
+        with open(path, "rb") as f:
+            h = f.read(32)
+    except OSError:
+        return 0
+    if len(h) < 32:
+        return 0
+    rsv, _ftype, hs, _ds, bps, spt, heads, cyls = struct.unpack("<8I", h)
+    if rsv or not (32 <= hs <= (1 << 20)) or hs % 512 or bps != 512:
+        return 0
+    if not (0 < spt < 256 and 0 < heads < 256 and 0 < cyls < 65536):
+        return 0
+    return hs
+
+
 def manifest_for(img: Path, drive: str, kind: str, select: dict) -> str:
     with open(img, "rb") as f:
         if kind == "cd":
@@ -287,6 +585,8 @@ class Mister:
                      "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10"]
         self.created = []          # remote paths, for the cleanup verification
         self.plan = []
+        self.uart_pids = []        # the ttyS1 readers this run started (only these are killed)
+        self.shot_stems = set()    # the screenshot name stems this run's files carry
 
     def sh(self, cmd, check=True, timeout=600):
         self.plan.append(("ssh", cmd))
@@ -327,17 +627,23 @@ def host_slug(host: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in h) or "host"
 
 
-def take_lock(m: Mister, wait_s: int, say) -> str:
+def take_lock(m: Mister, wait_s: int, say, poll_s: float = 30) -> str:
     """Take the card's lock, waiting up to wait_s seconds for another holder. Returns "got" or
     "held: <owner>" (the caller refuses on the latter)."""
     deadline = time.time() + wait_s
+    # poll_s below 1: the mkdir is retried ON the card (every poll_s, for up to a minute per ssh
+    # call), so a loop that releases and re-takes the lock back to back can still be interleaved
+    tries = int(60 / poll_s) if 0 < poll_s < 1 else 1
+    owner = f"{os.uname().nodename} pid {os.getpid()} {time.ctime()}"
     while True:
-        held = m.sh(f"mkdir {LOCK} 2>/dev/null && echo '{os.uname().nodename} pid {os.getpid()} {time.ctime()}' > {LOCK}/owner "
-                    f"&& echo got || (echo held: $(cat {LOCK}/owner 2>/dev/null))", check=False).strip()
+        held = m.sh(f"g=0; t=0; while [ $t -lt {tries} ]; do if mkdir {LOCK} 2>/dev/null; then g=1; break; fi; "
+                    f"t=$((t+1)); [ $t -lt {tries} ] && sleep {poll_s}; done; "
+                    f"if [ $g = 1 ]; then echo '{owner}' > {LOCK}/owner; echo got; "
+                    f"else echo held: $(cat {LOCK}/owner 2>/dev/null); fi", check=False, timeout=120).strip()
         if held.startswith("got") or time.time() >= deadline:
             return held
         say(f"locked by another run ({held}); waiting")
-        time.sleep(30)
+        time.sleep(poll_s)
 
 
 def log(out, msg):
@@ -347,8 +653,68 @@ def log(out, msg):
         f.write(line + "\n")
 
 
+def shot_stems(a) -> set:
+    """The name stems this run's screenshots can carry. Main_MiSTer names a screenshot
+    <YYYYMMDD_HHMMSS>-<stem>.png after the last file loaded through the core's ROM loader: the
+    pack, which this run's MGL loads last (every regression capture so far is
+    `..-pc98pack-xe10.png`), or the core's own name when nothing was loaded."""
+    return {Path(a.pack).stem, f"{CORE}-{TAG}"}
+
+
+def own_shot(name: str, stems, since: str) -> bool:
+    """A screenshot this run caused: named <stamp>-<one of stems>.png with a stamp at or after
+    `since` (the card's clock when the item began). Anything else in SHOTS is someone else's.
+    stems None accepts any stem (a core whose naming is unknown; the stamp still bounds it)."""
+    m = re.fullmatch(r"(\d{8}_\d{6})-(.+)\.png", name)
+    return bool(m and (stems is None or m.group(2) in stems) and (not since or m.group(1) >= since))
+
+
+def card_now(m: Mister) -> str:
+    return m.sh(f"date +{SHOT_TS}", check=False).strip()
+
+
+def collect_shots(m: Mister, a, before: set, since: str, itemdir: Path):
+    """Fetch this item's own new screenshots (own_shot), record them for the cleanup, and
+    return their local paths in time order. Other files in SHOTS are left alone."""
+    stems = shot_stems(a)
+    m.shot_stems |= stems
+    out = []
+    for f in sorted(set(m.sh(f"ls {SHOTS} 2>/dev/null || true").split()) - before):
+        if not own_shot(f, stems, since):
+            continue
+        m.get(f"{SHOTS}/{f}", itemdir / f)
+        m.created.append(f"{SHOTS}/{f}")          # a screenshot the run made: removed in cleanup
+        out.append(itemdir / f)
+    return out
+
+
+def start_uart(m: Mister):
+    """Start this run's ttyS1 reader and record its PID (the sh exec's into cat, so $! is cat)."""
+    pid = m.sh("stty -F /dev/ttyS1 115200 raw -echo; rm -f /tmp/zreg/uart.bin; "
+               "nohup sh -c 'exec cat /dev/ttyS1 > /tmp/zreg/uart.bin' </dev/null >/dev/null 2>&1 & echo $!").strip()
+    if pid.isdigit():
+        m.uart_pids.append(int(pid))
+
+
+def stop_uart(m: Mister):
+    """Kill only the readers this run started, and only while each PID is still a cat on ttyS1
+    (a PID reused by another process is left alone)."""
+    for pid in m.uart_pids:
+        m.sh(f"[ \"$(cat /proc/{pid}/comm 2>/dev/null)\" = cat ] && ls -l /proc/{pid}/fd 2>/dev/null "
+             f"| grep -q ttyS1 && kill {pid}", check=False)
+    m.uart_pids = []
+
+
+def cat_cmd(a, hskip: int, name: str) -> str:
+    """Read one capture file out of the card-side image copy (an HDI's header is skipped)."""
+    return (f"python3 {REMOTE_TMP}/integ_manifest.py --image {GAMES}/{TAG}-hdd.img "
+            f"{'--partition %d ' % a.partition if a.partition is not None else ''}"
+            f"{'--skip %d ' % hskip if hskip else ''}--cat {name} 2>/dev/null")
+
+
 def run_item(m: Mister, item, a, sc, prep, out):
     """Boot the core on a fresh image copy, drive it, collect. Returns (verdict, detail)."""
+    hskip = prep.get("skip", 0)          # an HDI container's front header, for the guest-side reads
     itemdir = out / item
     itemdir.mkdir(parents=True, exist_ok=True)
     # a fresh copy of the patched image for this item (items must not contaminate each other)
@@ -359,6 +725,8 @@ def run_item(m: Mister, item, a, sc, prep, out):
             m.sh(f"cp {GAMES}/{TAG}-{n}.base {GAMES}/{TAG}-{n}.img")
             m.created.append(f"{GAMES}/{TAG}-{n}.img")
     cfg = (sc.get(item, {}) if sc else {}).get("config_default")
+    if cfg is None and item == "cpusuite" and re.search(rb"(?m)^REM DEFAULT\d+\r?$", prep["config_sys"]):
+        cfg = 0          # the programs enter protected mode themselves: no EMM386 (profile 0, noemm)
     if cfg is not None:
         # a per-item boot profile: CONFIG.SYS of THIS item's image copy (SELSYS `REM DEFAULTn`, 0-based:
         # 0 = noemm, 1 = himem, 2 = emm386, 3 = full/NECCD), patched on the MiSTer with the shipped fatimg
@@ -366,15 +734,16 @@ def run_item(m: Mister, item, a, sc, prep, out):
         local.write_bytes(set_default_profile(prep["config_sys"], cfg))
         m.put(local, f"{REMOTE_TMP}/CONFIG.{item}")
         m.sh(f"python3 {REMOTE_TMP}/fatimg.py {GAMES}/{TAG}-hdd.img "
-             f"{'--partition %d ' % a.partition if a.partition is not None else ''}--put CONFIG.SYS {REMOTE_TMP}/CONFIG.{item}")
+             f"{'--partition %d ' % a.partition if a.partition is not None else ''}"
+             f"{'--skip %d ' % hskip if hskip else ''}--put CONFIG.SYS {REMOTE_TMP}/CONFIG.{item}")
     mgl = mgl_text(f"{TAG}-hdd.img", f"{TAG}-fdd0.img" if prep.get("fdd0") else None,
                    f"{TAG}-fdd1.img" if prep.get("fdd1") else None,
                    f"{TAG}-cd.img" if prep.get("cd") else None, a.pack)
     m.write(mgl, REMOTE_MGL)
+    since = card_now(m)
     before = set(m.sh(f"ls {SHOTS} 2>/dev/null || true").split())
     if a.uart:
-        m.sh("stty -F /dev/ttyS1 115200 raw -echo; rm -f /tmp/zreg/uart.bin; "
-             "nohup sh -c 'cat /dev/ttyS1 > /tmp/zreg/uart.bin' </dev/null >/dev/null 2>&1 &")
+        start_uart(m)
     log(out, f"{item}: load_core")
     m.sh(f"echo 'load_core {REMOTE_MGL}' > /dev/MiSTer_cmd")
     boot = (sc.get(item, {}).get("boot_wait") if sc else None) or a.boot_wait
@@ -409,8 +778,7 @@ def run_item(m: Mister, item, a, sc, prep, out):
             m.sh("echo screenshot > /dev/MiSTer_cmd")      # what the guest shows while INTEG runs (a hang is visible)
             caps = {}
             for n in names:
-                t = m.sh(f"python3 {REMOTE_TMP}/integ_manifest.py --image {GAMES}/{TAG}-hdd.img "
-                         f"{'--partition %d ' % a.partition if a.partition is not None else ''}--cat {n} 2>/dev/null", check=False)
+                t = m.sh(cat_cmd(a, hskip, n), check=False)
                 caps[n] = t or None
             if m.dry or caps.get("INTEG_OK.TXT") or time.time() > deadline:
                 break
@@ -418,19 +786,57 @@ def run_item(m: Mister, item, a, sc, prep, out):
             if t:
                 (itemdir / n).write_text(t)
         if not m.dry:
-            for f in sorted(set(m.sh(f"ls {SHOTS} 2>/dev/null || true").split()) - before):
-                m.get(f"{SHOTS}/{f}", itemdir / f)
-                m.created.append(f"{SHOTS}/{f}")
+            collect_shots(m, a, before, since, itemdir)
         ok, detail = judge_probe(caps, exp, item == "probe-cda") if not m.dry else (True, "dry run")
         if item == "probe-cda" and not m.dry and cdcap and caps.get(cdcap):
             r = parse_integ(caps[cdcap])
             detail += (f"; CD verify under CD-DA (informational - NECCD.SYS refuses data reads while audio plays, "
                        f"as the MSCDEX driver spec requires): FAILS={r['fails']}, " + ((r['bad'][0] if r['bad'] else 'no rows')))
         verdict = "DRY" if m.dry else ("PASS" if ok else "FAIL")
+    elif item == "crt31k":
+        type_("cd \\\n")
+        type_("CRT31K > CRT31K.TXT\n")
+        t0 = time.time()
+        text = None
+        while True:
+            time.sleep(0 if m.dry else 3)
+            m.sh("echo screenshot > /dev/MiSTer_cmd")     # the 24 -> 31 -> 24 kHz switches on HDMI
+            if time.time() - t0 > 25 or m.dry:
+                text = m.sh(cat_cmd(a, hskip, "CRT31K.TXT"), check=False) or None
+                if m.dry or (text and "END:CRT31K" in text) or time.time() - t0 > 90:
+                    break
+        if text:
+            (itemdir / "CRT31K.TXT").write_text(text)
+        if not m.dry:
+            collect_shots(m, a, before, since, itemdir)
+        ok, detail = judge_crt31k(text) if not m.dry else (True, "dry run")
+        verdict = "DRY" if m.dry else ("PASS" if ok else "FAIL")
+    elif item == "cpusuite":
+        type_("cd \\\n")
+        # /Pn, not /P:n (ztype typed ':' as '+' before it mapped ':' to the PC-98 colon key; /Pn still works)
+        type_("CPUSUITE\n" if a.cpusuite_passes == 1 else f"CPUSUITE /P{a.cpusuite_passes}\n")
+        t0 = time.time()
+        deadline = t0 + a.cpusuite_timeout
+        text = None
+        while True:
+            time.sleep(0 if m.dry else 15)
+            m.sh("echo screenshot > /dev/MiSTer_cmd")
+            text = m.sh(cat_cmd(a, hskip, "CPUSUITE.TXT"), check=False) or None
+            # the header row is written before the first program runs: no file after 90 s means
+            # the harness refused to start (its message is on the screenshot)
+            if m.dry or (text and "CPUSUITE END" in text) or time.time() > deadline or \
+                    (not text and time.time() - t0 > 90):
+                break
+        if text:
+            (itemdir / "CPUSUITE.TXT").write_text(text)
+        if not m.dry:
+            collect_shots(m, a, before, since, itemdir)
+        ok, detail = judge_cpusuite(text, prep["cpusuite"], a.cpusuite_passes) if not m.dry else (True, "dry run")
+        verdict = "DRY" if m.dry else ("PASS" if ok else "FAIL")
     else:
         s = sc[item]
         every = s.get("shot_every", 15)
-        t_start = time.time()
+        sched = shot_schedule(s)
         for step in s["steps"]:
             op = step[0]
             if op == "type":
@@ -441,32 +847,35 @@ def run_item(m: Mister, item, a, sc, prep, out):
                 m.sh(f"python3 {REMOTE_TMP}/zclick.py " + " ".join(str(x) for x in step[1:]))
             elif op == "key":
                 type_(f"~k{int(step[1])};")
-        n = int(s.get("run", 180) // every)
-        for _ in range(n):
-            time.sleep(0 if m.dry else every)
+        n = len(sched)
+        card_t0 = card_now(m)
+        t0 = time.time()
+        for t in sched:          # an absolute schedule: ssh latency does not accumulate
+            time.sleep(0 if m.dry else max(0.0, t0 + t - time.time()))
             m.sh("echo screenshot > /dev/MiSTer_cmd")
         time.sleep(0 if m.dry else 3)
-        after = m.sh(f"ls {SHOTS} 2>/dev/null || true").split()
-        new = sorted(set(after) - before)
-        shots = []
-        for f in new:
-            m.get(f"{SHOTS}/{f}", itemdir / f)
-            shots.append(itemdir / f)
-            m.created.append(f"{SHOTS}/{f}")          # a screenshot the run made: removed in cleanup
+        shots = collect_shots(m, a, before, since, itemdir)
         if m.dry:
             return "DRY", "dry run"
+        times = shot_times(shots, card_t0, sched)
         # the screenshots taken before the steps finished (the boot) are part of the sequence
         if len(shots) < max(3, n // 2):
             return "FAIL", f"only {len(shots)} screenshots came back of {n} requested"
-        ok1, d1 = check_motion(shots, s.get("max_static_s", 60), every, s.get("min_changes", 3))
+        ok1, d1 = check_motion(shots, s.get("max_static_s", 60), every, s.get("min_changes", 3), times)
         detail = d1
         if not ok1:
             verdict = "FAIL"
-        ref = s.get("known_frame")
-        if ref:
+        okc, dc = check_content(shots)
+        if not okc:
+            verdict = "FAIL"
+            detail += f"; BLACK: {dc}"
+        # `known_frame` is one reference; `known_frames` a list, every one of which must be reached
+        refs = list(s.get("known_frames") or []) + ([s["known_frame"]] if s.get("known_frame") else [])
+        for ref in refs:
             refp = Path(a.refs or ".") / ref["ref"]
             if a.record_refs:
-                idx = min(len(shots) - 1, int(ref.get("by_s", s.get("run", 180)) // every))
+                by = ref.get("by_s", s.get("run", 180))
+                idx = min(range(len(shots)), key=lambda i: abs(times[i] - by))
                 Path(a.refs).mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(shots[idx], refp)
                 detail += f"; RECORDED {refp.name} from shot {idx} (look at it before trusting it)"
@@ -475,13 +884,14 @@ def run_item(m: Mister, item, a, sc, prep, out):
                 if verdict == "PASS":
                     verdict = "SKIP-FRAME"
             else:
-                ok2, d2 = check_known_frame(shots, refp, ref.get("max_diff", 12.0), every, ref.get("not_before_s", 0))
+                ok2, d2 = check_known_frame(shots, refp, ref.get("max_diff", 12.0), every,
+                                            ref.get("not_before_s", 0), ref.get("until_s"), times)
                 detail += "; " + d2
                 if not ok2:
                     verdict = "FAIL"
     if a.uart:
         m.get(f"{REMOTE_TMP}/uart.bin", itemdir / "uart.bin")
-        m.sh("for p in $(pidof cat); do ls -l /proc/$p/fd 2>/dev/null | grep -q ttyS1 && kill $p; done", check=False)
+        stop_uart(m)
     return verdict, detail
 
 
@@ -500,13 +910,16 @@ def main(argv=None):
     ap.add_argument("--cd-drive", default="E:", help="the letter MSCDEX gives the CD in the guest")
     ap.add_argument("--max-bytes", type=int, default=2 << 20, help="bytes checked per file")
     ap.add_argument("--pack", default="pc98pack-xe10.bin", help="the pack already on the MiSTer (games/PC9821/)")
-    ap.add_argument("--items", default=",".join(ITEMS))
+    ap.add_argument("--items", default=",".join(DEFAULT_ITEMS), help=f"comma list (default {','.join(DEFAULT_ITEMS)})")
     ap.add_argument("--scenarios", help="JSON: per game item boot_wait/steps/run/checks")
     ap.add_argument("--refs", help="directory of known-frame reference PNGs (yours; never committed)")
     ap.add_argument("--record-refs", action="store_true", help="write the known frames instead of checking them")
     ap.add_argument("--uart", action="store_true", help="capture /dev/ttyS1 (trace builds)")
     ap.add_argument("--boot-wait", type=int, default=40, help="seconds from load_core to the DOS prompt")
     ap.add_argument("--probe-timeout", type=int, default=900)
+    ap.add_argument("--cpusuite-passes", type=int, default=1, help="cpusuite: run the whole pack N times (CPUSUITE /P:N)")
+    ap.add_argument("--cpusuite-timeout", type=int, default=600,
+                    help="cpusuite: seconds from typing CPUSUITE to giving up on its END row")
     ap.add_argument("--host", default=os.environ.get("MISTER_HOST", "root@MiSTer"),
                     help="ssh destination (default $MISTER_HOST, else root@MiSTer)")
     ap.add_argument("--password", default=os.environ.get("MISTER_PASS", "1"),
@@ -515,6 +928,9 @@ def main(argv=None):
     ap.add_argument("--out", help="results directory (default .build/mister-regress/<time>)")
     ap.add_argument("--lock-wait", type=int, default=0, metavar="SECONDS",
                     help="wait up to this long for another run's lock on the card (default: refuse)")
+    ap.add_argument("--lock-poll", type=float, default=30, metavar="SECONDS",
+                    help="how often --lock-wait asks for the lock (default 30; a back-to-back loop on the card "
+                         "re-takes it within seconds of releasing it)")
     ap.add_argument("--go", action="store_true", help="actually touch the MiSTer (otherwise: print the plan)")
     ap.add_argument("--keep", action="store_true", help="do not clean up (debugging)")
     ap.add_argument("--selftest", action="store_true")
@@ -537,7 +953,11 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
 
     # ---- host-side preparation (no MiSTer involved)
-    sel = {"largest": a.hdd_largest, "max_bytes": a.max_bytes, "under": a.hdd_under, "partition": a.partition}
+    skip = container_skip(Path(a.hdd_image))
+    if skip:
+        log(out, f"{a.hdd_image}: HDI container, data starts at {skip} bytes")
+    sel = {"largest": a.hdd_largest, "max_bytes": a.max_bytes, "under": a.hdd_under,
+           "partition": a.partition, "skip": skip}
     manifests = {a.hdd_drive.upper(): manifest_for(Path(a.hdd_image), a.hdd_drive.upper(), "fat", sel)}
     if a.fdd0:
         manifests["A:"] = manifest_for(Path(a.fdd0), "A:", "fat", {"largest": 99, "max_bytes": a.max_bytes})
@@ -546,14 +966,22 @@ def main(argv=None):
             Path(a.cd), a.cd_drive.upper(), "cd", {"largest": 6, "max_bytes": a.max_bytes, "layout": a.cd_layout})
     # per run, so runs against two MiSTers at once never share the patched copy
     patched = out / "hdd.patched.img"
+    files = probe_files(manifests)
+    cpus_names = []
+    if "cpusuite" in items:
+        cf, cpus_names = cpusuite_files()
+        files.update(cf)
+    if "crt31k" in items:
+        files.update(crt31k_files())
     if a.go:
         log(out, f"patching a COPY of {a.hdd_image} -> {patched}")
-        patch_hdd(Path(a.hdd_image), patched, probe_files(manifests), a.partition, None, 0)
+        patch_hdd(Path(a.hdd_image), patched, files, a.partition, None, skip)
     else:
-        log(out, f"(dry run) would patch a COPY of {a.hdd_image} -> {patched} with {sorted(probe_files(manifests))}")
+        log(out, f"(dry run) would patch a COPY of {a.hdd_image} -> {patched} with {sorted(files)}")
     with open(a.hdd_image, "rb") as f:
-        cfg_sys = fatimg.Fat(f, fatimg.locate_volume(f, a.partition, None, 0)).cat("CONFIG.SYS")
-    prep = {"config_sys": cfg_sys, "manifests": manifests, "cd": bool(a.cd), "fdd0": bool(a.fdd0), "fdd1": bool(a.fdd1)}
+        cfg_sys = fatimg.Fat(f, fatimg.locate_volume(f, a.partition, None, skip)).cat("CONFIG.SYS")
+    prep = {"config_sys": cfg_sys, "manifests": manifests, "cd": bool(a.cd), "fdd0": bool(a.fdd0), "fdd1": bool(a.fdd1),
+            "cpusuite": cpus_names, "skip": skip}
 
     # ---- the plan
     runnable, skipped = [], []
@@ -571,7 +999,7 @@ def main(argv=None):
     locked = False
     try:
         if a.go:
-            held = take_lock(m, a.lock_wait, lambda msg: log(out, msg))
+            held = take_lock(m, a.lock_wait, lambda msg: log(out, msg), a.lock_poll)
             if not held.startswith("got"):
                 raise SystemExit(f"the MiSTer is locked by another run ({held}); not touching it")
             locked = True
@@ -622,10 +1050,13 @@ def main(argv=None):
 def cleanup(m: Mister, out: Path):
     """Remove everything the run created and VERIFY it is gone. Returns what is still there."""
     log(out, "cleanup")
-    m.sh("for p in $(pidof cat); do ls -l /proc/$p/fd 2>/dev/null | grep -q ttyS1 && kill $p; done", check=False)
+    stop_uart(m)
     paths = sorted(set(m.created))
     for p in paths:
-        assert TAG in p.lower() or p.startswith(SHOTS), p
+        # a test-named file, or one of this run's own screenshots (directly in SHOTS, named by
+        # own_shot's pattern with a stem this run loaded); nothing else is ever removed
+        assert TAG in Path(p).name.lower() or p.startswith(REMOTE_TMP + "/") or (
+            str(Path(p).parent) == SHOTS and own_shot(Path(p).name, m.shot_stems, "")), p
     # the run's own screenshots are listed by name in m.created; the test files carry the tag
     m.sh("rm -f " + " ".join(shlex.quote(p) for p in paths) + f" {REMOTE_MGL}", check=False)
     m.sh(f"rm -rf {REMOTE_TMP}", check=False)
@@ -671,6 +1102,17 @@ def selftest() -> int:
         check(not ok, f"a stall after motion is caught ({msg})")
         ok, msg = check_motion(stall, 150, 15, 3)
         check(ok, "the same stall passes with a longer allowance (the limit is per scenario)")
+        blk = Image.new("RGB", (640, 400), (0, 0, 0))
+        blk.save(d / "blk.png")
+        check(not check_content([d / "blk.png"] * 12)[0], "an all-black sequence fails the content check")
+        check(check_content([d / "blk.png", moving[0]])[0] and check_content(moving)[0],
+              "a sequence with content passes the content check")
+        flat = Image.new("RGB", (64, 40), (90, 90, 90))
+        flat.save(d / "flat.png")
+        check(is_black(frame_stats(d / "flat.png")), "a single-colour frame counts as blank")
+        pal = Image.new("P", (16, 16)); pal.putpalette([0, 0, 0, 200, 0, 0] + [0] * 750); pal.putpixel((3, 3), 1)
+        pal.save(d / "pal.png")
+        check(frame_stats(d / "pal.png")[1] == 200, "a palette PNG decodes")
         ref = shot(200, "logo")
         ok, msg = check_known_frame(moving + [ref], ref, 12.0, 15)
         check(ok, f"the known frame is found among the shots ({msg})")
@@ -692,6 +1134,64 @@ def selftest() -> int:
         check(not judge_probe(capsp, names, True)[0], "judge: CD-DA that never played fails the cda item")
         capsp = dict(caps, **{"INTEG_P.TXT": "PLAY OK DRV=04 TRACK=02 START=00051000 SECTORS=00000100\r\nINTEG END FAILS=0000\r\n"})
         check(judge_probe(capsp, names, True)[0], "judge: CD-DA playing passes")
+
+
+        # ---- an HDI container: recognised by content, and patching/reading skips its header
+        raw = d / "raw.img"
+        payload = bytes((i * 3 + 7) & 0xFF for i in range(512 * 17 * 2 * 1))
+        raw.write_bytes(payload)
+        check(container_skip(raw) == 0, "container: a raw image with no header has no skip")
+        hdr = bytearray(4096)
+        struct.pack_into("<8I", hdr, 0, 0, 0, 4096, len(payload), 512, 17, 2, 1)
+        hdi = d / "good.hdi"
+        hdi.write_bytes(bytes(hdr) + payload)
+        check(container_skip(hdi) == 4096, "container: a valid HDI reports its HeaderSize")
+        bad = bytearray(hdr)
+        struct.pack_into("<I", bad, 0, 1)
+        (d / "rsv.hdi").write_bytes(bytes(bad) + payload)
+        check(container_skip(d / "rsv.hdi") == 0, "container: reserved != 0 falls back to raw")
+        bad = bytearray(hdr)
+        struct.pack_into("<I", bad, 8, 4097)
+        (d / "odd.hdi").write_bytes(bytes(bad) + payload)
+        check(container_skip(d / "odd.hdi") == 0, "container: a HeaderSize that is not whole sectors falls back")
+        bad = bytearray(hdr)
+        struct.pack_into("<I", bad, 12, len(payload) + 512)
+        (d / "size.hdi").write_bytes(bytes(bad) + payload)
+        check(container_skip(d / "size.hdi") == 4096, "container: a DataSize that disagrees is still an HDI (NP2kai)")
+        bad = bytearray(hdr)
+        struct.pack_into("<I", bad, 28, 2)
+        (d / "geom.hdi").write_bytes(bytes(bad) + payload)
+        check(container_skip(d / "geom.hdi") == 4096, "container: a geometry that disagrees with DataSize is still an HDI (NP2kai)")
+        bad = bytearray(hdr)
+        struct.pack_into("<I", bad, 24, 0)
+        (d / "heads0.hdi").write_bytes(bytes(bad) + payload)
+        check(container_skip(d / "heads0.hdi") == 0, "container: a zero geometry field falls back")
+        # ---- cpusuite: the result file's parse and verdict
+        ok_txt = ("CPUSUITE BEGIN V1 PROGRAMS=2 PASSES=1\r\naaa PASS\r\nbbb PASS triple fault\r\n"
+                  "CPUSUITE END PASSES=1 RUN=2 PASS=2 FAIL=0\r\n")
+        check(judge_cpusuite(ok_txt, ["aaa", "bbb"], 1)[0], "cpusuite: every program PASS and the END row passes")
+        bad_txt = ok_txt.replace("bbb PASS triple fault", "bbb FAIL verdict=FF").replace("PASS=2 FAIL=0", "PASS=1 FAIL=1")
+        ok, msg = judge_cpusuite(bad_txt, ["aaa", "bbb"], 1)
+        check(not ok and "bbb (verdict=FF)" in msg, f"cpusuite: a FAIL row fails the item and names it ({msg})")
+        hang = "CPUSUITE BEGIN V1 PROGRAMS=2 PASSES=1\r\naaa PASS\r\nbbb "
+        ok, msg = judge_cpusuite(hang, ["aaa", "bbb"], 1)
+        check(not ok and "stopped in bbb" in msg, f"cpusuite: a run that hangs names the program it hung in ({msg})")
+        short = ok_txt.replace("RUN=2", "RUN=1")
+        check(not judge_cpusuite(short, ["aaa", "bbb"], 1)[0], "cpusuite: an END row with too few programs fails")
+        check(not judge_cpusuite(ok_txt, ["aaa", "bbb", "ccc"], 1)[0], "cpusuite: a program of the pack with no row fails")
+        two = ("CPUSUITE BEGIN V1 PROGRAMS=1 PASSES=2\r\naaa PASS\r\naaa PASS\r\nCPUSUITE END PASSES=2 RUN=2 PASS=2 FAIL=0\r\n")
+        check(judge_cpusuite(two, ["aaa"], 2)[0] and not judge_cpusuite(two, ["aaa"], 3)[0], "cpusuite: passes are counted")
+        check(not judge_cpusuite(None, ["aaa"], 1)[0], "cpusuite: no result file fails")
+        check("cpusuite" in DEFAULT_ITEMS, "cpusuite: in the default set")
+        # ---- crt31k: the capture itself passes; the core before the 31 kHz clock fails
+        cap = (ROOT / "docs/probes/CRT31K.TXT").read_text()
+        ok, msg = judge_crt31k(cap)
+        check(ok, f"crt31k: the Xe10's own capture passes ({msg})")
+        old = cap.replace("ticks=306930", "ticks=366433")      # 31K rows at the 21.05 MHz clock
+        check(not judge_crt31k(old)[0], "crt31k: a 31 kHz run at the 24 kHz dot clock fails")
+        check(not judge_crt31k(cap.replace("END:CRT31K", ""))[0], "crt31k: an unfinished run fails")
+        check(not judge_crt31k(cap.replace("now=00", "now=01"))[0], "crt31k: an unrestored 0x09A8 fails")
+        check("crt31k" not in DEFAULT_ITEMS, "crt31k: not in the default set")
 
         cs = b"DEVICE=X\r\nREM DEFAULT3\r\nREM WAIT5\r\n"
         check(set_default_profile(cs, 0) == b"DEVICE=X\r\nREM DEFAULT0\r\nREM WAIT5\r\n", "config: DEFAULTn rewritten, CRLF and every other byte kept")
@@ -746,6 +1246,104 @@ def selftest() -> int:
         cleanup(m2, Path(tempfile.mkdtemp()))
         rm = [v for k, v in m2.plan if k == "ssh" and v.startswith("rm -f")][0]
         check(REMOTE_RBF in rm and f"{GAMES}/{TAG}-hdd.img" in rm and REMOTE_MGL in rm, "cleanup: removes the RBF, the image copy and the MGL")
+        check(not any("pidof" in v or ("kill" in v and "/proc/" not in v) for k, v in m2.plan if k == "ssh"),
+              "cleanup: kills no ttyS1 reader it did not start (no pidof sweep)")
+        m2.uart_pids = [4242]
+        stop_uart(m2)
+        kills = [v for k, v in m2.plan if k == "ssh" and "kill" in v]
+        check(len(kills) == 1 and "kill 4242" in kills[0] and "/proc/4242/comm" in kills[0] and m2.uart_pids == []
+              and "pidof" not in kills[0],
+              "uart: only the recorded reader PID is killed, after checking it is still a cat on ttyS1")
+        m3 = Mister("nowhere", "x", dry=True)
+        m3.shot_stems = {"pc98pack-xe10"}
+        m3.created.append(f"{SHOTS}/20261031_023224-OtherCore.png")
+        try:
+            cleanup(m3, Path(tempfile.mkdtemp()))
+            check(False, "cleanup: refuses to remove a screenshot that is not this run's")
+        except AssertionError:
+            check(True, "cleanup: refuses to remove a screenshot that is not this run's")
+        m3.created = [f"{SHOTS}/20261031_023224-pc98pack-xe10.png"]
+        cleanup(m3, Path(tempfile.mkdtemp()))
+        check(any(f"{SHOTS}/20261031_023224-pc98pack-xe10.png" in v for k, v in m3.plan if v.startswith("rm -f")),
+              "cleanup: removes this run's own screenshot")
+
+        # ---- only this run's screenshots are fetched and deleted
+        an = argparse.Namespace(pack="pc98pack-xe10.bin", partition=None)
+        st = shot_stems(an)
+        check(own_shot("20261031_023224-pc98pack-xe10.png", st, "20261031_023200"),
+              "shots: a new shot named after the pack this run loaded, after the item began, is the run's")
+        check(not own_shot("20261031_023124-pc98pack-xe10.png", st, "20261031_023200"),
+              "shots: a shot stamped before the item began is not the run's")
+        check(not own_shot("20261031_023224-SomeImage.png", st, "20261031_023200")
+              and not own_shot("20261031_023224-pc98pack-xe10.png.bak", st, "")
+              and not own_shot("notes.txt", st, ""),
+              "shots: another core's or another file's screenshot is never the run's")
+
+        class ListingMister(Mister):
+            """A card whose SHOTS listing is fixed; fetches are recorded, nothing is run."""
+            def __init__(self, listing):
+                super().__init__("nowhere", "x", dry=True)
+                self.listing = listing
+
+            def sh(self, cmd, check=True, timeout=600):
+                self.plan.append(("ssh", cmd))
+                return " ".join(self.listing) if cmd.startswith(f"ls {SHOTS}") else ""
+
+        lm = ListingMister(["20261031_020000-pc98pack-xe10.png", "20261031_023224-pc98pack-xe10.png",
+                            "20261031_023225-SomeGame.png", "20261031_023226-pc98pack-xe10.png"])
+        got = collect_shots(lm, an, {"20261031_020000-pc98pack-xe10.png"}, "20261031_023200", d)
+        check([p.name for p in got] == ["20261031_023224-pc98pack-xe10.png", "20261031_023226-pc98pack-xe10.png"]
+              and lm.created == [f"{SHOTS}/{p.name}" for p in got],
+              "shots: only the run's own new screenshots are fetched and marked for removal")
+
+        # ---- B1: every capture read-back of an HDI image skips its header (cpusuite included)
+        for item in ("probe", "crt31k", "cpusuite"):
+            mi = Mister("nowhere", "x", dry=True)
+            ai = argparse.Namespace(partition=None, pack="pc98pack-xe10.bin", uart=False, boot_wait=0,
+                                    cpusuite_passes=1, cpusuite_timeout=1, probe_timeout=1, cd=None,
+                                    cd_drive="E:")
+            prep_i = {"skip": 4096, "config_sys": b"REM DEFAULT3\r\n", "cpusuite": ["aaa"],
+                      "manifests": {"C:": "x"}}
+            run_item(mi, item, ai, {}, prep_i, d)
+            cats = [v for k, v in mi.plan if k == "ssh" and "integ_manifest.py" in v and "--cat" in v]
+            check(cats and all("--skip 4096 " in v for v in cats),
+                  f"{item}: every capture read of an HDI image copy passes --skip 4096 ({len(cats)} reads)")
+            ai.partition = 1
+            check("--partition 1 --skip 4096 --cat X" in cat_cmd(ai, 4096, "X") and "--skip" not in cat_cmd(ai, 0, "X"),
+                  f"{item}: cat_cmd carries --partition and --skip only when set")
+
+        # ---- dense shots and the known-frame window
+        sc_fz = {"shot_every": 3, "run": 30, "dense": [{"from_s": 4, "to_s": 10, "every_s": 1}]}
+        sched = shot_schedule(sc_fz)
+        check(sched == [3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 21, 24, 27, 30],
+              f"schedule: every 3 s, every 1 s inside the dense window ({sched})")
+        check(shot_schedule({"shot_every": 10, "run": 30}) == [10, 20, 30], "schedule: no dense window, the old grid")
+        check(shot_times([d / "20261031_023230-p.png", d / "20261031_023301-p.png"], "20261031_023224", [3, 6]) == [6.0, 37.0],
+              "shot times come from the card's stamps, not the request order")
+        check(shot_times([d / "x.png"], "", [3, 6]) == [3], "shot times fall back to the schedule without stamps")
+        # a transient frame present only between the 3 s grid points (the launch ran 1.5 s early)
+        ref2 = shot(300, "logo")
+        seq = [shot(400 + i, "moving") for i in range(len(sched))]
+        seq_times = list(sched)
+        seq[sched.index(7)] = ref2
+        grid_only = [p for p, t in zip(seq, seq_times) if t % 3 == 0]
+        grid_t = [t for t in seq_times if t % 3 == 0]
+        check(not check_known_frame(grid_only, ref2, 5.0, 3, 4, 20, grid_t)[0],
+              "known frame: a transient frame between 3 s shots is missed by the grid alone")
+        ok, msg = check_known_frame(seq, ref2, 5.0, 3, 4, 20, seq_times)
+        check(ok, f"known frame: the dense window catches it on ANY shot in the window ({msg})")
+        check(not check_known_frame(seq, ref2, 5.0, 3, 8, 20, seq_times)[0],
+              "known frame: a match outside [not_before_s, until_s] does not count")
+        frozen2 = [seq[0]] * len(seq)
+        check(not check_known_frame(frozen2, ref2, 5.0, 3, 4, 20, seq_times)[0] and
+              not check_motion(frozen2, 6, 3, 3, seq_times)[0],
+              "known frame: a frozen intro fails both the frame and the motion check")
+        check(not check_known_frame([d / "blk.png"] * len(seq), ref2, 5.0, 3, 4, 20, seq_times)[0],
+              "known frame: a black intro fails")
+        stall_t = [0, 1, 2, 3, 4, 5, 6, 30]
+        check(check_motion([seq[0]] * 7 + [seq[1]], 6, 3, 1, stall_t)[0] and
+              not check_motion([seq[0]] * 8, 6, 3, 1, stall_t)[0],
+              "motion: a static run is measured in the shots' real seconds, dense shots included")
 
     check(host_slug("root@my-card.lan") == "my-card.lan" and host_slug("a b") == "a_b",
           "host_slug: the user@ prefix is dropped and unsafe characters replaced")

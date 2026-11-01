@@ -3,17 +3,15 @@
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GFX_SCENE: models a Touhou-style BUSY sprite frame - the per-sprite work TH05 spends under many objects (the GRCG footprint erase, the plane-window sprite draw, and the EGC background restore) - against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram (which OWNS the plain path, the WCB, the GRCG and the EGC), and reports WHERE the cycles go: the per-sprite cost of each shape, the backend transactions it issues, and the split between the client that serializes the four lanes and the SDRAM backend the coalescer already amortised. It also runs the whole scene with the SCANOUT fetching every raster line and asserts no line loses its 2014-clk_sys deadline under that load.
 //
-// WHY THIS EXISTS. r13/61 measured the plane-window write at 3.8 MB/s against the machine's 13.8;
-// r13/82's word-keyed write-combining buffer took the BACKEND cost of a four-plane column from
+// WHY THIS EXISTS. An earlier measurement put the plane-window write at 3.8 MB/s against the machine's 13.8;
+// The word-keyed write-combining buffer took the BACKEND cost of a four-plane column from
 // 4.00 to 1.25 transactions but left the end-to-end rate at 4.1 MB/s and named the plain path's own
-// client as the ceiling (~5.5 MB/s with a FREE backend). r13/107 ranked the client rewrite ("the
+// client as the ceiling (~5.5 MB/s with a FREE backend). An earlier ranking put the client rewrite ("the
 // four serialized lanes") as the largest graphics lever but L-effort/H-risk. This bench is the
 // instrument that decides WHERE a busy scene actually spends its time, so the lever is chosen from
 // a measurement rather than from the backend-only arithmetic.
 //
-// The controller is built as z486_mister.sv builds it: FREQ = 50 MHz (CLK_SYS), HAS_DQM = 0 (a
-// partial store is the controller's read-modify-write) and FAST_GRADE = 0. The 2014 clk_sys line
-// budget is the machine's (848 dots x 440 lines at 21.0526 MHz).
+// The 2014 clk_sys line budget is the machine's (848 dots x 440 lines at 21.0526 MHz).
 
 `default_nettype none
 
@@ -47,8 +45,8 @@ module tb_pc9821_gfx_scene;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -73,9 +71,9 @@ module tb_pc9821_gfx_scene;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -95,12 +93,12 @@ module tb_pc9821_gfx_scene;
   // ==== BACKEND TRANSACTION COUNTERS ====
   integer cb_all = 0, cb_wr = 0, cb_rd = 0, cb_fullwr = 0, cb_partialwr = 0;
   // The SCANOUT's own SDRAM port (sb_*), counted apart from the GVRAM client so its share of the
-  // read traffic is a measurement, not a guess (this lane, r13/141).
+  // read traffic is a measurement, not a guess.
   integer sb_reqs = 0, sb_beats = 0;
-  // The GVRAM is block RAM now (r13/283): there is no backend transaction and no scanout SDRAM
+  // The GVRAM is block RAM now: there is no backend transaction and no scanout SDRAM
   // port to count, so these counters stay at zero and the traffic columns read as clk_sys alone.
 
-  // ==== EGC UNIT COST (the measure the EGC FSM lane is judged by) ====
+  // ==== EGC UNIT COST (the measure the EGC FSM is judged by) ====
   // One CPU access that the EGC gate owns is one EGC unit. Counting the completed ones by their
   // direction is what makes "clk_sys per unit" a measurement and not a division: phase B issues a
   // 16-bit read unit and a 16-bit write unit per sprite row, and the two do not cost the same
@@ -112,7 +110,7 @@ module tb_pc9821_gfx_scene;
     else if (cpu_ready)         egc_rd_units <= egc_rd_units + 1;
   end
 
-  // ==== PHASE-B CYCLE SPLIT (r13/168) ====
+  // ==== PHASE-B CYCLE SPLIT ====
   // The EGC's own state per cycle, plus the SDRAM controller's. One clk_sys/unit figure is not
   // enough to decide where the blit's cycles go: the same number is produced by a slow memory
   // path, by the CPU's bus cadence, or by the sequencer's own states. Histogrammed every cycle
@@ -131,7 +129,7 @@ module tb_pc9821_gfx_scene;
     bs_cnt[dut.u_arb.gstate] <= bs_cnt[dut.u_arb.gstate] + 1;
     case (dut.u_egc.state)
       4'd0, 4'd7, 4'd6: b_cpu_hand  <= b_cpu_hand  + 1;
-      // r13/269: the produce is four states (S_FEED/S_STEP_LO/S_STEP_HI plus the commit, which is
+      // The produce is four states (S_FEED/S_STEP_LO/S_STEP_HI plus the commit, which is
       // S_EVAL for a read and S_COMMIT for a write).
       4'd3, 4'd9, 4'd10, 4'd11, 4'd12: b_seq <= b_seq + 1;
       4'd2:             b_read_wait <= b_read_wait + 1;
@@ -191,8 +189,8 @@ module tb_pc9821_gfx_scene;
       // level (C_RESP / G_RESP / the EGC's S_RESP), so a posedge+1ns sample can step over it.
       while (!cpu_ready) @(negedge clk);
       // z486 clears its request IN the ready cycle (memory.sv's `ext_valid_r` clear on `ready`,
-      // src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`), so the request is released here and
-      // not one cycle later. Holding it through the next cycle -- which the pre-r13/272
+      // src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`), so the request is released here and
+      // not one cycle later. Holding it through the next cycle -- which the earlier
       // C_RESP2/C_HOLD tail absorbed unnoticed -- presents a SECOND, identical access to the
       // plain client, whose write arm is now C_IDLE + C_RESP; and since the pipelined produce
       // registers the read response one cycle after the ready (read values unchanged:
@@ -244,7 +242,7 @@ module tb_pc9821_gfx_scene;
     end
   endfunction
 
-  // ---- Phases F/G: TH05's own tile layer (r13/167). ----
+  // ---- Phases F/G: TH05's own tile layer. ----
   // TILE_H/TILE_VRAM_W/TILES_X/TILES_Y/TILE_IMAGE_COUNT and PLAYFIELD_VRAM_LEFT are
   // th02/main/tile/tile.{inc,hpp} and th02/main/playfld.hpp; the atlas geometry is
   // th02/main/tile/tile.hpp's tile_image_vo().
@@ -329,7 +327,7 @@ module tb_pc9821_gfx_scene;
   // raster.
   integer scan_lines = 0, scan_misses = 0, scan_min_cols = 9999, scan_worst = 0;
   reg     scan_run = 1'b0;
-  reg     scan_dup = 1'b0;   // r13/141: repeat each base twice (the 640x200 GDC doubling)
+  reg     scan_dup = 1'b0;   // repeat each base twice (the 640x200 GDC doubling)
   integer scene_line = 0;
 
   // Runs concurrently with the sprite work: one tick per LINE_BUDGET clk_sys (the raster), and the
@@ -455,7 +453,7 @@ module tb_pc9821_gfx_scene;
     $display("NOTE gfx_scene: D scanout during the scene: %0d lines, %0d missed, worst line fetch %0d clk_sys of %0d, min beats %0d/80",
              scan_lines, scan_misses, scan_worst, LINE_BUDGET, scan_min_cols);
 
-    // ---- PHASE E: the scanout ALONE, DISTINCT vs DUPLICATE bases (r13/141) ----
+    // ---- PHASE E: the scanout ALONE, DISTINCT vs DUPLICATE bases ----
     // The scanout's own SDRAM port traffic, counted apart from the GVRAM client. The 640x200
     // mode puts one GDC line on two raster lines, so the base repeats and the line is fetched
     // twice - BY the ping-pong contract (one advance per tick), not by waste. This shows the
@@ -484,7 +482,7 @@ module tb_pc9821_gfx_scene;
       $display("NOTE gfx_scene: E the 640x200 doubling re-fetches the same line: %0d vs %0d req",
                 e_dup, e_distinct);
 
-      // NOT an assertion: this is the EVIDENCE r13/141 cites. The 640x200 mode puts one GDC line
+      // NOT an assertion: this is the EVIDENCE for the doubling. The 640x200 mode puts one GDC line
       // on two raster lines, and the ping-pong contract is one buffer advance per line tick
       // (tb_pc9821_gvram), so the second tick's buffer must hold the line too - the re-fetch
       // is by design, not waste. A skip was built and measured; it broke that contract.

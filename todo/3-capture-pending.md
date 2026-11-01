@@ -39,12 +39,13 @@ missing probe has to be written; run it on the core first, then on the machine).
     total is measured. **Done when:** HSYNC is scoped on the video output and
     `pc9821_crtc.sv` matches the measured porches.
 
-23. **GDC status bit 6 (blank): per-line on the machine, per-frame on the core.**
-    **CAPTURE-PENDING.** For both GDCs (`0xA0` and `0x60`) the machine's duty is 23.4 %, which is
-    the horizontal blank of one line (208/848); the RTL drives a frame blank (~31.4 %). Rusty's
-    `OP.COM` waits four bit-6 edges between page strobes (4 lines on the machine, 4 frames on the
-    core). **Done when:** bit 6 is sampled against a raster tick inside a line on the machine and
-    `pc9821_crtc.sv` drives the measured signal, with a fail-first bench.
+23. **GDC status bit 6 (blank): the phase inside the line.** **CAPTURE-PENDING.** Both GDCs
+    (`0xA0` and `0x60`) read bit 6 high 23.4 % of the time on the machine, the horizontal blank
+    of one line (208/848); the core now drives the per-line horizontal blank on every line
+    (`tb_pc9821_crtc_stat_blank`; NP2kai `io/gdc.c` `gdc_i60` raises it once per raster line).
+    Unmeasured: where in the line the high part sits (the core uses the dots after the active
+    640). **Done when:** bit 6 is sampled against a raster tick inside a line on the machine
+    and `pc9821_crtc.sv` places the measured window.
 
 24. **Game port: opposite-direction priority.** **CAPTURE-PENDING.** With up+down (or
     left+right) held, the core reports the minimum discharge (up/left wins,
@@ -89,9 +90,16 @@ missing probe has to be written; run it on the core first, then on the machine).
     captured.
 
 38. **OPNA ADPCM-B over the data bus.** **UNVERIFIED (INFERRED).** The ADPCM-B RAM is not
-    fitted (`adpcm_din = 8'h00`) but the register-0x08 bus-fed path is wired, so a bus-fed stream
-    may not be silent. **Done when:** a bench drives the bus-fed path, and either it is shown
-    silent or a title that uses it is found (then it is a real gap).
+    fitted (`adpcm_din = 8'h00`) but the register-0x08 bus-fed path is wired (`jt12_top.v`
+    `bus_din(din)`, the write data goes out on the unconnected `adpcm_dout`). Measured in
+    simulation (2026-10, scratch bench, not kept: it would only pin our RTL): with the
+    extension on, ADPCM-B started in external-memory mode (`0x100 = 0xA0`, level `0xFF`,
+    delta-N `0x4000`) over a RAM that reads zero is NOT silent - the output peaks at ~1.2 k
+    (nibble 0 decodes to a rising delta), against 0 with the unit not started. So the core is
+    silent only for a guest that never starts ADPCM-B. **Done when:** the real chip's behaviour
+    with no RAM behind it (or whether the machine has the 256 KiB the -86 board lists) is
+    captured - a probe that writes a pattern through `0x108` and reads it back through
+    `0x108`/the BRDY flag - and the core either fits the RAM or gates the unit to match.
 
 94. **Software-DIP store: the machine's post-POST state.** **CAPTURE-PENDING.** Both
     configuration stores are re-seeded from the power-up image on every reset
@@ -135,7 +143,24 @@ missing probe has to be written; run it on the core first, then on the machine).
 
 121. **IDE bank placement under Linux's `pc98ide` driver.** **CAPTURE-PENDING.** The driver writes
     `0` to `0x432` and identifies units on bank 0 only; the core's disk is bank 0's master in every
-    build (fixed layout, owner 2026-10-11; `tb_pc9821_ata_linux_probe`), so it finds the disk. Open
-    is the owner's Xe10, whose CF card sits on the second connector (`docs/probes/IDE.TXT`).
+    build (fixed layout; `tb_pc9821_ata_linux_probe`), so it finds the disk. Open
+    is the measured Xe10, whose CF card sits on the second connector (`docs/probes/IDE.TXT`).
     **Done when:** that Linux image is booted there - finding the disk would mean the `0x432` bank
     model is wrong - and `ideprobe` is run in the same setup.
+
+126. **Graphics GDC arc: radius and rounding.** **CAPTURE-PENDING.** The conformance suite's
+    GDCDRAW ARC rows ERRORed on the Xe10 (the machine locked up after the runaway rectangles), so
+    no arc is measured. `pc9821_gdc2` draws radius D + 1 (the datasheet's D = r - 1, MAME
+    draw_arc) as the exactly rounded circle round(r - sqrt(r^2 - i^2)); NP2kai takes radius D and
+    misrounds single dots through its 4096-entry table. **Done when:** `tools/hwprobe/gdcfig`'s
+    picture (its arcs at radii 1..100 in all eight octants) is captured on the Xe10 and compared
+    dot for dot with the core's.
+
+128. **Text row geometry: 20/30 lines, partitions, smooth scroll.** **CAPTURE-PENDING.**
+    `pc9821_crtc.sv`'s text line sequencer transcribes NP2kai `vram/maketext.c`
+    (`tb_pc9821_text_modes`); no machine capture of a 20/30-line, split or scrolled screen exists.
+    Open: the PL < 16 row (NP2kai runs nowline PL..BL-PL, not PL..BL), a partition switch in
+    mid-row, the SSL cut below the SDR region, and whether a CRTC write lands mid-frame (live
+    here) or next frame (NP2kai). **Done when:** `tools/hwprobe/txtmode` (`TXTMODE`, a key per
+    state) is photographed in all seven states on the machine and compared with the core's
+    screenshots of the same binary, and the RTL follows any difference.

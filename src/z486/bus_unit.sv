@@ -5,7 +5,10 @@
 module bus_unit
     import z486_pkg::*;
 #(
-    parameter ENABLE_X87 = 0
+    parameter ENABLE_X87 = 0,
+    // Form the direct-launch decision on the paging unit's two mem_req arms
+    // (memory.sv CLASS_SPLIT); 0 forms it from the request as presented.
+    parameter SPLIT = 0
 )
 (
     // Clock and reset
@@ -22,6 +25,13 @@ module bus_unit
     input  logic dcache_req_is_inta,
     input  logic dcache_req_is_vga_mem,
     input  logic dcache_req_is_x87,
+    // The request's routing on both mem_req arms (read only with SPLIT):
+    // {valid, is_io, is_inta, is_vga_mem, write} and {is_direct, is_uncached}.
+    input  logic [4:0] dcache_req_route_m1,
+    input  logic [4:0] dcache_req_route_m0,
+    input  logic [1:0] dcache_req_cls_m1,
+    input  logic [1:0] dcache_req_cls_m0,
+    input  logic dcache_req_split_sel,
     output logic dcache_req_accepted,
     output logic dcache_req_complete,
     output logic dcache_read_complete,
@@ -117,14 +127,16 @@ assign icache_read_pending = (icache_rd_pending != 8'd0);
 // queue, so direct VGA accesses remain mutually ordered without draining
 // unrelated normal-RAM stores first.
 wire direct_req_ordered = dcache_req_is_vga_mem || dcache_stores_drained;
-wire ext_direct_req = dcache_direct_req && direct_req_ordered &&
+wire ext_direct_req;
+wire dcache_req_direct_inval;
+wire ext_direct_req_whole = dcache_direct_req && direct_req_ordered &&
                       !direct_rd_pending &&
                       !dcache_read_pending && !icache_read_pending;
 // A template DIRECT-window write invalidates its I-cache line in the first
 // bus-valid cycle, without feeding external ready into the I-cache/prefetch
 // merge.  Only DIRECT (not NO_ALLOC) writes need this: NO_ALLOC never installs
 // a line, so there is nothing stale to clear.
-wire dcache_req_direct_inval = dcache_req_is_direct && dcache_req_write &&
+wire dcache_req_direct_inval_whole = dcache_req_is_direct && dcache_req_write &&
                                !dcache_req_is_io && !dcache_req_is_inta &&
                                !dcache_req_is_device_mmio;
 wire icache_direct_inval_held;
@@ -132,8 +144,46 @@ wire icache_direct_inval_held;
 // stranded, so it cannot overwrite the queued address.  Only the launch is
 // gated; ext_direct_req still blocks other ext requests, so the store stalls
 // rather than being dropped.
-wire ext_direct_launch = ext_direct_req &&
-                         !(icache_direct_inval_held && dcache_req_direct_inval);
+wire ext_direct_launch_whole = ext_direct_req_whole &&
+                         !(icache_direct_inval_held && dcache_req_direct_inval_whole);
+// The same three decisions on each mem_req arm, mem_req (the segment verdict)
+// selecting last (Shannon; the x87, device-MMIO and drain terms are taken as
+// they are); tests/equiv/req_route_split.v proves the selected arms equal to
+// the decisions above.
+// x87 / device-MMIO / drain / pending / held terms common to both arms.
+wire route_x87  = x87_req_selected || x87_sink;
+wire route_idle = !direct_rd_pending && !dcache_read_pending && !icache_read_pending;
+function automatic [2:0] route_of(input [4:0] rt, input [1:0] cls, input x87, input mmio,
+                                  input drained, input idle, input held);
+    logic v, io, inta, vga, wr, dir, unc, ddr, edr, inval;
+    begin
+        {v, io, inta, vga, wr} = rt;
+        {dir, unc} = cls;
+        ddr   = v && !x87 && (io || inta || unc || mmio);
+        edr   = ddr && (vga || drained) && idle;
+        inval = dir && wr && !io && !inta && !mmio;
+        route_of = {edr, edr && !(held && inval), inval};
+    end
+endfunction
+wire [2:0] route_r1 = route_of(dcache_req_route_m1, dcache_req_cls_m1, route_x87,
+                               dcache_req_is_device_mmio, dcache_stores_drained,
+                               route_idle, icache_direct_inval_held);
+wire [2:0] route_r0 = route_of(dcache_req_route_m0, dcache_req_cls_m0, route_x87,
+                               dcache_req_is_device_mmio, dcache_stores_drained,
+                               route_idle, icache_direct_inval_held);
+wire [2:0] route_split = dcache_req_split_sel ? route_r1 : route_r0;
+assign ext_direct_req          = SPLIT ? route_split[2] : ext_direct_req_whole;
+wire   ext_direct_launch       = SPLIT ? route_split[1] : ext_direct_launch_whole;
+assign dcache_req_direct_inval = SPLIT ? route_split[0] : dcache_req_direct_inval_whole;
+// synthesis translate_off
+always @(posedge clk)
+    if (reset_n && SPLIT &&
+        ({ext_direct_req, ext_direct_launch, dcache_req_direct_inval} !==
+         {ext_direct_req_whole, ext_direct_launch_whole, dcache_req_direct_inval_whole}))
+        $fatal(1, "bus_unit: the split direct launch %b disagrees with the request's %b",
+               {ext_direct_req, ext_direct_launch, dcache_req_direct_inval},
+               {ext_direct_req_whole, ext_direct_launch_whole, dcache_req_direct_inval_whole});
+// synthesis translate_on
 wire ext_dcache_req = dcache_mem_valid && !ext_direct_req &&
                       !direct_rd_pending && !icache_read_pending;
 wire ext_icache_req = icache_mem_valid && !ext_direct_req && !ext_dcache_req &&

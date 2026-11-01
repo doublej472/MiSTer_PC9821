@@ -1,0 +1,208 @@
+PC-9821 z486 MiSTer core
+Copyright 2026 Jonathan Frederick and the project's contributors
+
+Third-party notices.
+
+The licence for this project's own code has not been decided yet; until it is,
+no licence is granted for it beyond what the third-party parts below carry for
+their own code.
+
+This project is built on, and redistributes, work by others. Each part listed
+below keeps its own licence, stated in that part.
+
+--------------------------------------------------------------------------------
+1. z486 CPU - src/z486/
+--------------------------------------------------------------------------------
+   Copyright 2026 nand2mario. https://github.com/nand2mario/z486
+   Apache License 2.0 (src/z486/LICENSE), with the scope set by
+   src/z486/LICENSE-SCOPE.md: the grant covers *.sv, *.svh, *.py and *.md only.
+   ucode.hex is expressly excluded, and the other data files (the other *.hex
+   images and the *.mif files) fall outside the grant as well.
+
+--------------------------------------------------------------------------------
+2. MiSTer framework - sys/
+--------------------------------------------------------------------------------
+   Template_MiSTer, https://github.com/MiSTer-devel/Template_MiSTer
+   Copyright Alexey Melnikov (Sorgelig) and the MiSTer-devel contributors.
+   An unmodified copy. GNU General Public License: the repository's LICENSE is
+   GPL version 2; per-file headers say "either version 2 ... or (at your option)
+   any later version", "either version 3 ... or any later version", or "GPL
+   Licensed" without a version. See each file's header.
+   Some sys/ files are Altera/Intel megafunction wizard output and carry
+   Altera's own notice, which applies to them.
+
+   Derived from it, under the same GPL terms:
+   - src/pc9821/video/pc9821_video_cleaner.sv: reduced from sys/video_cleaner.sv,
+     Copyright (c) 2018 Sorgelig, "GPL Licensed".
+   - tests/pc9821/tb_pc9821_shadowmask.sv (simulation only): embeds an earlier
+     revision of sys/shadowmask.sv (Sorgelig) as a test oracle.
+
+--------------------------------------------------------------------------------
+3. YM2608 / SSG sound - src/opna/jt12/, src/opna/jt49/, src/opna/jtopna.v
+--------------------------------------------------------------------------------
+   JT12 and JT49, Copyright Jose Tejada Gomez (jotego),
+   https://github.com/jotego/jt12 and https://github.com/jotego/jt49,
+   as carried (with the YM2608 fork jt08) by
+   https://github.com/MiSTer-devel/PC88_MiSTer at the commit pinned in
+   src/opna/LICENSE-SCOPE.md.
+   GNU General Public License, version 3 or later (src/opna/jt12/LICENSE,
+   src/opna/jt49/LICENSE). Local changes are listed in
+   src/opna/LICENSE-SCOPE.md and marked in each file.
+   src/opna/jtopna.v is PC88_MiSTer's wrapper; it has no per-file header and is
+   covered by that repository's notice, GNU GPL version 2 or later.
+   The YM2608 rhythm sample ROM is NOT included.
+
+--------------------------------------------------------------------------------
+4. ao486_MiSTer-derived files
+--------------------------------------------------------------------------------
+   https://github.com/MiSTer-devel/ao486_MiSTer (its rtl/ directory)
+     src/soc/cdda.v
+     src/common/cdc_vector_handshake_continuous.sv
+     src/common/synchronizer.sv
+     src/pc9821/audio/pc9821_audio_volume.sv (gain table and multiply from
+       ao486 rtl/soc/sound/sound.v, module sb_volume)
+     tests/pc9821/cdda_ref.v, tests/pc9821/pc9821_audio_volume_ref.sv
+       (simulation-only copies of the two above)
+
+   Copyright (c) 2014, Aleksander Osman
+   Copyright (C) 2017-2020 Alexey Melnikov
+   and the ao486_MiSTer contributors
+   All rights reserved.
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are met:
+
+   * Redistributions of source code must retain the above copyright notice, this
+     list of conditions and the following disclaimer.
+
+   * Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+   FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+   CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+   OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+5. Original MiSTer port
+--------------------------------------------------------------------------------
+   Portions derived from nand2mario's z486_MiSTer port
+   (https://github.com/nand2mario/z486_MiSTer); licence to be confirmed: that
+   repository states no licence.
+   Files with surviving portions:
+     z486_mister.sv (the top level; parts of it also follow ao486_MiSTer's
+       ao486.sv and Template_MiSTer's Template.sv, GNU GPL version 2 or later,
+       Copyright (C) 2017-2020 Alexey Melnikov, and carry gameport/MIDI wiring
+       contributed by odiaboeeu)
+     z486_mister.qsf, z486_mister.qpf, z486_mister.clk_sys_top_setup.tcl,
+     backend.qip, rtl/pll/pll_0002.qip, Makefile, .gitignore, build_profile.py,
+     tools/profile/z486_mister.sdc.in, tools/fit_metrics.py,
+     tools/check_sdram_pins.py,
+     src/memory/sdram.v, src/memory/split_sdram_backend.sv,
+     src/memory/sdram_sync_bridge.sv, src/common/uart_tx_V2.v,
+     src/pc9821/interrupts/pc9821_inta_bridge.sv
+
+--------------------------------------------------------------------------------
+6. Simulation SDRAM model - tests/pc9821/xsds_128mbyte_sdram_model.sv
+--------------------------------------------------------------------------------
+   From https://github.com/birdybro/SDRAMsim_MiSTer (simulation only).
+
+   MIT License
+
+   Copyright (c) 2026 Kevin Coleman
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+--------------------------------------------------------------------------------
+7. Altera PLL MegaWizard templates
+--------------------------------------------------------------------------------
+   tools/profile/pll_template.v, tools/profile/vpll_template.v, and the PLLs
+   build_profile.py generates from them under rtl/.
+   Copyright (C) Altera Corporation (now Intel). Altera's megafunction notice in
+   each file applies: use is limited to programming Altera devices.
+
+--------------------------------------------------------------------------------
+8. NP2kai and Main_MiSTer tables
+--------------------------------------------------------------------------------
+   Small data tables are transcribed from NP2kai
+   (https://github.com/AZO234/NP2kai):
+   - the port 0x9A0 query table in src/pc9821/core/pc9821_iobus.sv;
+   - the ATAPI MODE SENSE page words in src/pc9821/storage/pc9821_atapi.sv;
+   - rows of the BIOS key table (bios/keytable.res: the normal and shift rows
+     for key codes 0x00-0x34, and the arrow keys of row 0x38) in
+     tools/mister/ztype.py (BIOS_NORMAL, BIOS_SHIFT, ARROW_PC98, test data);
+   - the PC-98 key numbers and the symbols the BIOS key table gives (keystat.tbl
+     names, bios/keytable.res) in tools/gen_keymap_table.py (PC98_KEYS).
+
+   MIT License
+
+   Copyright (c) 2017 AZO
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+   A subset of the PS/2 set-2 key codes of Main_MiSTer's input.cpp ev2ps2[]
+   table (https://github.com/MiSTer-devel/Main_MiSTer, GNU General Public
+   License version 3) is transcribed in tools/mister/ztype.py (EV2PS2, test
+   data) and tools/gen_keymap_table.py (the set-2 codes of PC_KEYS). The values
+   are the standard PS/2 scan-code set 2 assignments; they are listed here so
+   their source is on record. No other Main_MiSTer code is copied.
+
+   Other projects (NP2kai, qemu-pc98, MAME, ymfm, nukeykt's YM2608-LLE, ReC98)
+   are cited in comments as behavioural references; no other code is copied
+   from them.
+
+--------------------------------------------------------------------------------
+9. Not included
+--------------------------------------------------------------------------------
+   No NEC PC-9821 BIOS, ITF or font ROM, no Yamaha YM2608 rhythm sample ROM and
+   no disk image is part of this repository. They are copyrighted by their
+   owners and are supplied by the user at run time. NEC, PC-9821 and Yamaha
+   are trademarks of their respective owners.
+
+--------------------------------------------------------------------------------
+The compiled bitstream
+--------------------------------------------------------------------------------
+   The FPGA bitstream (.rbf) combines the parts above with this project's own
+   code. It includes GPL-3 code (part 3) and the GPL framework (part 2), whose
+   GNU General Public License terms apply to the bitstream; the Apache-2.0
+   (part 1), BSD (part 4) and MIT (parts 6 and 8) parts are compatible with
+   GPL version 3. This repository is its corresponding source.

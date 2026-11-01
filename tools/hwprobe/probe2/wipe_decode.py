@@ -24,7 +24,7 @@ per measurement:
     WIPE RESTVEC FD80:0937 -> FD80:0937
 
 TIME BASE. ARTIC ticks are converted with the device clock only: 1 tick =
-3255.208333 ns (307 200 Hz, the rate r13/215 section 1.4 machine-confirmed and
+3255.208333 ns (307 200 Hz, the rate a raster check on the machine confirmed and
 the rate FLIP.TXT's own PERIOD line is quoted against), i.e. 162.7604 clk_sys per
 tick at the core's 50 MHz. Absolute nanosecond figures are therefore comparable
 across runs and machines; nothing here is scaled by a run-local constant.
@@ -33,7 +33,7 @@ THE CORE'S NUMBERS come from a core-side bench replay of the same step (a
 one-off research bench, not kept in the tree) and from the FLIP.TXT raster
 capture. Unlike the machine's columns they are BENCH results, so they carry the
 commit they were measured at - a hand-copied bench number is a constant that
-rots the moment the RTL moves. It already did once: the gvram-latency-fix lane's
+rots the moment the RTL moves. It already did once: the GVRAM latency fix's
 per-operation GVRAM acceptance period took the step from 22 508 to 30 507 clk_sys
 and the fill from 11 999 to 19 995, while the blit (which has to read anyway) and
 the I/O term did not move:
@@ -73,7 +73,7 @@ CLK50_PER_TICK = 50_000_000 / 307_200  # 162.7604 clk_sys per tick
 
 # --- the core's own numbers -------------------------------------------------
 # PROVENANCE. Measured on tip a62e97db (committed 2026-09-24), the first tip
-# carrying the gvram-latency-fix lane's per-operation GVRAM acceptance period.
+# carrying the GVRAM latency fix's per-operation GVRAM acceptance period.
 # STEP/FILL/BLIT
 # are the C3 steady-state step, the C1 fill and the C2 blit "accept" clk_sys of
 # a one-off research replay bench (not in the gate's manifest and not kept in
@@ -91,14 +91,14 @@ CORE_FRAME_TICKS = 5_445.0                   # FLIP.TXT PERIOD=5445 (machine cap
 CORE_FRAME_NS = CORE_FRAME_TICKS * NS_PER_TICK
 CORE_LINES = 440                             # FLIP.TXT, same capture
 # DERIVED, not measured by the replay: the row body and the ALU body are the
-# z486's instruction cost from r13/284's per-instruction rates applied to the
+# z486's instruction cost from the measured per-instruction rates applied to the
 # row's instruction mix (wipe-step-probe-REPORT.md section 5.2). They are CPU
 # numbers, so a GVRAM-side change (like the fix above) does not move them.
 CORE_ROW_CLK = 890                           # per row body, report section 5.2
-CORE_ALU_CLK_PER_ITER = 9.0                  # 6 instr at r13/284's measured 1-2 clk
+CORE_ALU_CLK_PER_ITER = 9.0                  # 6 instr at the measured 1-2 clk
 CORE_RUN_LOGO_EDGES = 281.0                  # 151 + 65 + 65 frame units
 
-# The wall-clock decomposition this probe is meant to close (owner-measured
+# The wall-clock decomposition this probe is meant to close (measured
 # totals): the un-synchronised T_draw is 2.0375 s on the machine and 1.0875 s on
 # the core, i.e. ~20.6 / ~11.0 ms per step IF the wipe carried it - the number
 # the reporting inherited and no static term could reproduce.
@@ -299,7 +299,7 @@ def decode(cap: Capture) -> int:
               f"(the body is 4 adds + dec + jnz, so the rate is a simple-ALU rate)")
         print(f"      core: {CORE_ALU_CLK_PER_ITER/6:.1f} clk/instr = "
               f"{1e9/(CORE_ALU_CLK_PER_ITER*20/6)/1e6:.1f} M instr/s at 50 MHz "
-              f"(r13/284: simple ALU 1-2 clk) -> the machine's CPU is "
+              f"(simple ALU 1-2 clk) -> the machine's CPU is "
               f"{(CORE_ALU_CLK_PER_ITER*20/6)/(per/6):.2f}x the core per instruction")
     if "rowbody" in cap.w1 and "rowbody-gfx" in cap.w1:
         t = ns(cap.w1["rowbody"][1]) / cap.w1["rowbody"][0]

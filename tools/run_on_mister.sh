@@ -28,7 +28,7 @@
 # The stall record's LAST byte is the LF that ends the line; the byte BEFORE it says WHICH trigger
 # fired, which is the whole reason the field exists. That byte names WHICH of three conditions the
 # machine was in, and this is the one thing in the record that separates a stopped machine from a
-# healthy one (r13/119: the trigger is emitted before the newline, so a tty's CR-to-LF translation
+# healthy one (the trigger is emitted before the newline, so a tty's CR-to-LF translation
 # can never glue it to the next record's start):
 #
 #   W  a request is OUTSTANDING and has not completed for 200 ms  - THE WEDGE. It has stopped.
@@ -105,7 +105,7 @@ cmd_state() {
     bytes="$("${SSH[@]}" "test -f '$cfg' && od -An -tx1 '$cfg' | tr -d ' \n'" 2>/dev/null || true)"
     if [ -z "$bytes" ]; then
         echo "  $cfg  ABSENT - and that is correct: with the rotated OSD lists a missing"
-        echo "     file IS the default (16 MB of RAM, the core's native VSync rate)"
+        echo "     file IS the default (16 MB of RAM)"
     else
         echo "  $cfg  present, $((${#bytes} / 2)) bytes: $(echo "$bytes" | sed 's/../& /g')"
         case "$bytes" in
@@ -118,7 +118,7 @@ cmd_state() {
                 echo "         ssh root@<mister> 'dd if=/dev/zero of=$cfg bs=16 count=1'"
                 echo "       or re-select the size in the OSD, which rewrites the file." ;;
             *)
-                echo "     all zero: that IS the default now (16 MB, native VSync)" ;;
+                echo "     all zero: that IS the default now (16 MB)" ;;
         esac
     fi
 
@@ -146,6 +146,15 @@ cmd_state() {
             echo "   here by hand, confirm it came from the tree named above)"
         else
             echo "  no fit-source.sha256 beside it - this RBF has no recorded provenance"
+        fi
+        if [ -f "$REPO/output_files/artifact-timing.json" ]; then
+            python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+v=d.get("hdmi_setup", d.get("other_setup"))
+t=d.get("hdmi_tns", d.get("other_tns"))
+print("  pll_hdmi %s ns (seed %s, TNS %s)" % ("-" if v is None else "%+.3f" % v,
+      d.get("seed", "?"), "-" if t is None else "%.3f" % t))' \
+                "$REPO/output_files/artifact-timing.json" 2>/dev/null || true
         fi
         echo "  to put it on the card:  tools/mister_load.sh"
     else
@@ -182,7 +191,7 @@ cmd_boot() {
 
 # THE HARDWARE LOOP, AND THE ONE THING IT MUST NOT DO IS MEASURE THE WRONG BITSTREAM.
 # A measurement of an artifact you did not just build is worse than no measurement, because it
-# reads as a result. the out-of-tree lane tooling and the fit reports have each bitten this
+# reads as a result. out-of-tree tooling and fit reports have each bitten this
 # tree that way: a
 # report for one tree was read as another's. So compare the card's RBF against the local one and
 # stop on a mismatch, naming both hashes. PC9821_ALLOW_STALE=1 overrides, deliberately loudly,

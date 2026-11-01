@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_MULTIPLE:
-// ATA multiple-block mode, which NP2kai's IDENTIFY page advertises (word 47 = 0x8080) and the xe10 IDE option ROM drives: SET MULTIPLE MODE accepts exactly 2/4/8/16/32/64/128 and ABRTs any other count, READ MULTIPLE serves its sectors byte-exact while raising the data interrupt once per negotiated BLOCK, and WRITE MULTIPLE (0xC5) drains its sectors byte-exact with the reference's block-end cadence (four sectors in a block of 2 raise two interrupts, because the final sector always interrupts). It also pins the model's streaming limit and the reason IDENTIFY word 47 withdraws the multiple advertisement (r13/244): a host that reads a block without checking DRQ, as the Xe10 ROM does, sees 0x00 while the fetch stalls.
+// ATA multiple-block mode, which NP2kai's IDENTIFY page advertises (word 47 = 0x8080) and the xe10 IDE option ROM drives: SET MULTIPLE MODE accepts exactly 2/4/8/16/32/64/128 and ABRTs any other count, READ MULTIPLE serves its sectors byte-exact while raising the data interrupt once per negotiated BLOCK, and WRITE MULTIPLE (0xC5) drains its sectors byte-exact with the reference's block-end cadence (four sectors in a block of 2 raise two interrupts, because the final sector always interrupts). It also pins the model's streaming limit and the reason IDENTIFY word 47 withdraws the multiple advertisement: a host that reads a block without checking DRQ, as the Xe10 ROM does, sees 0x00 while the fetch stalls.
 
 module tb_pc9821_ata_multiple;
 

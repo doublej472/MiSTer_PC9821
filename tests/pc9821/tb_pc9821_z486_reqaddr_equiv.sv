@@ -641,7 +641,7 @@ module tb_pc9821_z486_reqaddr_equiv;
       // and both VIPT sidecar writes, matching the invalidate-priority valid-bit
       // chain this shadow models). f97e7f9 wrote the word array unconditionally
       // and dropped the valid/shadow write - the fork's OWN PER_WAY fuse fired
-      // (`paging_tlb.sv:476 (PER_WAY REG FUSE MISMATCH)` with set=0 way=2
+      // (`PER_WAY REG FUSE MISMATCH` in that revision's paging_tlb.sv, with set=0 way=2
       // real=c344869f1d ref=0000000000) - so this stimulus then carried an
       // `&& !invalidate_all && !invalidate_page` gate (a fork bug, worked
       // around by a local patch). The fix landed upstream in

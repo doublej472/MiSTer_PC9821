@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Lightweight git-worktree wrapper for isolated parallel lanes.
+"""Lightweight git-worktree wrapper for isolated parallel lines of work.
 
 Each "lane" is a git worktree on its own branch (`lane/<name>`) checked out
 from a base commit (default: the current HEAD of the repo's main branch). The
-worktree lives OUTSIDE the repo (a sibling directory), so the central tree
-stays clean while a worker edits the lane in isolation. Merge back only when
-the work is done and reviewed.
+worktree has its own checkout, so the central tree stays clean while the lane
+is edited in isolation. Merge back only when the work is done and reviewed.
 
 Commands:
     new    <name> [--base REF] [--root DIR]
@@ -73,7 +72,7 @@ def cmd_new(args):
         sys.exit(1)
     p = sh("git", "worktree", "add", "-b", branch, path, base)
     print(f"created lane '{args.name}' at {path} (branch {branch}, base {base})")
-    print("launch the worker with cwd=<path>; merge back with:")
+    print(f"work in {path}; merge back with:")
     print(f"  tools/worktree.py merge {args.name} --apply")
 
 

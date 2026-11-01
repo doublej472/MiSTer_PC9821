@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (c) 2018 Sorgelig. Derived from Template_MiSTer sys/video_cleaner.sv
+// (https://github.com/MiSTer-devel/Template_MiSTer; upstream: "GPL Licensed"). See NOTICE, part 2.
+
 // The framework's video_cleaner (sys/video_cleaner.sv, Copyright (c) 2018 Sorgelig, GPL), reduced
 // to what this core uses of it and with its polarity detectors' counters sized for this core.
 //

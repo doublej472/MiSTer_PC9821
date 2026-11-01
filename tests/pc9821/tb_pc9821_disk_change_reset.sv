@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DISK_CHANGE_RESET: The image slot a mount lands in decides whether the core asks for a platform reset: a mount on hps_io slot 0 (the ATA/HDD image) while the firmware pack is loaded raises reset_req for exactly ONE cycle, a mount on slot 1 (the FDC0 floppy, the OSD's S1,D88FDDHDM,Mount FDD1 entry) raises nothing at all however long it is held, and a mount on either slot before the pack is loaded raises nothing either (the boot mount is excluded by ordering, since the MGL lists the image before the pack) - so changing a floppy cannot re-POST the machine, which is the owner's rule and a FAIL-FIRST scoping proof against the reset wire that ORed both slots; a held mount level raises nothing on every new clock (the request is the rising edge) and a second separate mount pulses again.
+// TB_PC9821_DISK_CHANGE_RESET: The image slot a mount lands in decides whether the core asks for a platform reset: a mount on hps_io slot 0 (the ATA/HDD image) while the firmware pack is loaded raises reset_req for exactly ONE cycle, a mount on slot 1 (the FDC0 floppy, the OSD's S1,D88FDDHDM,Mount FDD1 entry) raises nothing at all however long it is held, and a mount on either slot before the pack is loaded raises nothing either (the boot mount is excluded by ordering, since the MGL lists the image before the pack) - so changing a floppy cannot re-POST the machine, which is the rule and a FAIL-FIRST scoping proof against the reset wire that ORed both slots; a held mount level raises nothing on every new clock (the request is the rising edge) and a second separate mount pulses again.
 //
-// The slot-1 case is the owner's rule that changing a floppy must not reset the machine, and it
+// The slot-1 case is the rule that changing a floppy must not reset the machine, and it
 // FAILS against a reset wire that ORs both slots together - which is what this core did before
 // it - so the bench is the scoping proof, not a restatement. A mount level that is merely still
 // high raises nothing on every new clock (the request is the rising edge), and a separate second

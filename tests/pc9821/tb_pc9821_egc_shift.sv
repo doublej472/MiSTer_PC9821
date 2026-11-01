@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_SHIFT: drives the real pc9821_egc shifter directly, through a four-plane D1 model, and asserts every emitted word byte-by-byte against a port of NP2kai mem/memegc.c's shifter (egcshift, shiftinput_incw/decw, egcsftb_*/egcsftw_*): the 0x28F0 shake form, where the source read feeds the shifter and the write stores the ROP src, and the 0x0CF0 write-feed form, where NP2kai's EGCOPE_SHIFTW feeds from the CPU word. It sweeps the sft src_bit/dst_bit field, the bit-length register (0x4AE) at 1, 8, 16, 17 and 640 dots, the descending direction (sft bit 12), and master.lib's egc_shift_left_all and egc_shift_left register values. It is FAIL-FIRST: the deviations an earlier review recorded - the re-arm's un-cleared stack, the whole-byte src_bit/dst_bit difference sft_moved ignores, and the missing descending dnr window - make it fail, one named MISMATCH line per unit. Section 6 is the review egc.md F1 regression: a NO-ARM-AFTER-RESET store must be bit-correct (NP2kai's egc_reset arms remain = 16, so the first post-reset produce masks 0xFFFF and not 0x0080). Section 7 is the F2 regression: the MISALIGNED 16-bit split (be = 0110) is memegc_wr16/rd16 at an ODD address - two byte operations run HIGH-byte-first when sft bit 12 is set - driven in both feeding shapes (the 0x28F0 read-feed blit and the 0x0CF0 write feed), against the same NP2kai port with the byte feed (EGCOPE_SHIFTB / shiftinput_byte / egcsftb_*0).
+// TB_PC9821_EGC_SHIFT: drives the real pc9821_egc shifter directly, through a four-plane D1 model, and asserts every emitted word byte-by-byte against a port of NP2kai mem/memegc.c's shifter (egcshift, shiftinput_incw/decw, egcsftb_*/egcsftw_*): the 0x28F0 shake form, where the source read feeds the shifter and the write stores the ROP src, and the 0x0CF0 write-feed form, where NP2kai's EGCOPE_SHIFTW feeds from the CPU word. It sweeps the sft src_bit/dst_bit field, the bit-length register (0x4AE) at 1, 8, 16, 17 and 640 dots, the descending direction (sft bit 12), and master.lib's egc_shift_left_all and egc_shift_left register values. It is FAIL-FIRST: the deviations recorded against NP2kai - the re-arm's un-cleared stack, the whole-byte src_bit/dst_bit difference sft_moved ignores, and the missing descending dnr window - make it fail, one named MISMATCH line per unit. Section 6 is the review egc.md F1 regression: a NO-ARM-AFTER-RESET store must be bit-correct (NP2kai's egc_reset arms remain = 16, so the first post-reset produce masks 0xFFFF and not 0x0080). Section 7 is the F2 regression: the MISALIGNED 16-bit split (be = 0110) is memegc_wr16/rd16 at an ODD address - two byte operations run HIGH-byte-first when sft bit 12 is set - driven in both feeding shapes (the 0x28F0 read-feed blit and the 0x0CF0 write feed), against the same NP2kai port with the byte feed (EGCOPE_SHIFTB / shiftinput_byte / egcsftb_*0).
 module tb_pc9821_egc_shift;
   reg clk = 0;
   always #5 clk = ~clk;
@@ -448,7 +448,7 @@ module tb_pc9821_egc_shift;
 
   // egcsftb_*0 (mem/memegc.c:372-570): the byte produce's stack gate, its stack spend
   // and the bit-length re-arm around the _sub above. The gate's `(UINT)(8 - egc.dstbit)`
-  // wraps negative for dstbit 9..15 (review egc.md F7, a faithful NP2kai quirk), so a
+  // wraps negative for dstbit 9..15 (a faithful NP2kai quirk), so a
   // produce there is gated forever and only dstbit == 8 reaches the _sub's early return.
   task automatic n_b0(input integer ext);
     begin
@@ -481,7 +481,7 @@ module tb_pc9821_egc_shift;
     end
   endtask
 
-  // The reference side of one MISALIGNED word (review egc.md F2): memegc_wr16/rd16 at
+  // The reference side of one MISALIGNED word: memegc_wr16/rd16 at
   // an ODD address is two byte operations, run HIGH-byte-first when sft bit 12 is set
   // (memegc.c:1379-1413) - so the hi byte (ext 0, at addr+1) feeds first descending.
   task automatic n_feed_odd(input [15:0] val);
@@ -542,7 +542,7 @@ module tb_pc9821_egc_shift;
       cpu_page = 1'b0; cpu_offset = off; cpu_plane = pl;
       cpu_be = off[1] ? 4'b1100 : 4'b0011; cpu_write = 1'b0; cpu_valid = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // The negedge below is the old release's own wait, kept so the +1 stays in the cadence.
@@ -570,7 +570,7 @@ module tb_pc9821_egc_shift;
 
   // A MISALIGNED 16-bit access at `off` (off & 3 == 1): ONE cycle with be = 0110, the
   // operand's lo byte at lane 1 and its hi byte at lane 2 (calc_be's word at an odd
-  // lane, z486_pkg.sv:1121).
+  // lane, z486_pkg.sv:1169).
   task automatic cpu_write_odd(input [14:0] off, input [1:0] pl, input [15:0] data);
     begin
       @(negedge clk);
@@ -749,7 +749,7 @@ module tb_pc9821_egc_shift;
     end
   endtask
 
-  // One NO-ARM-AFTER-RESET store (review egc.md F1): NP2kai's egc_reset ends in
+  // One NO-ARM-AFTER-RESET store: NP2kai's egc_reset ends in
   // egcshift() at leng 0x000F (io/egc.c:69-80), so the shifter's first post-reset
   // produce has the FULL 16-dot bit length and masks the first word store 0xFFFF. A
   // guest that stores before its first 0x4AC/0x4AE write (a plain WS_CPU copy) must
@@ -800,7 +800,7 @@ module tb_pc9821_egc_shift;
     end
   endtask
 
-  // One BYTE BLIT (review egc.md F2's blast radius made explicit): each iteration is a
+  // One BYTE BLIT: each iteration is a
   // single-byte READ feeding one egcsftb_*0 produce and a single-byte write of the ROP
   // src. A DESCENDING byte produce must read the ring at the FIRST step's position -
   // egcsftb_dnl_sub does outptr-- and THEN reads outptr[1]/outptr[0] (mem/memegc.c:
@@ -851,7 +851,7 @@ module tb_pc9821_egc_shift;
     end
   endtask
 
-  // One MISALIGNED-WORD BLIT (review egc.md F2), the 0x28F0 read-feed form: each
+  // One MISALIGNED-WORD BLIT, the 0x28F0 read-feed form: each
   // iteration is a be = 0110 READ feeding the shifter with memegc_rd16's two byte
   // operations (HIGH-byte-first when descending) followed by a be = 0110 write of the
   // ROP src per byte unit. Six misaligned words per case.
@@ -900,7 +900,7 @@ module tb_pc9821_egc_shift;
     end
   endtask
 
-  // One MISALIGNED-WORD WRITE FEED (review egc.md F2), the 0x0CF0 form: each be = 0110
+  // One MISALIGNED-WORD WRITE FEED, the 0x0CF0 form: each be = 0110
   // store feeds the CPU bytes through memegc_wr16's two byte operations (HIGH-byte-first
   // when descending) and stores the ROP src per byte unit.
   task automatic run_odd_writefeed(input [15:0] sft, input [15:0] leng,
@@ -1091,15 +1091,15 @@ module tb_pc9821_egc_shift;
     end
 
     // ============================================================
-    $display("== egc_shift section 6: the no-arm-after-reset store (review egc.md F1) ==");
+    $display("== egc_shift section 6: the no-arm-after-reset store ==");
     // ============================================================
     run_noarm("no-arm-after-reset WS_CPU store");
 
     // ============================================================
-    $display("== egc_shift section 7: the misaligned 16-bit split (review egc.md F2) ==");
+    $display("== egc_shift section 7: the misaligned 16-bit split ==");
     // ============================================================
     // be = 0110 is memegc_wr16/rd16 at an ODD address: two byte operations, run
-    // HIGH-byte-first when sft bit 12 is set. Ascending controls and the review's
+    // HIGH-byte-first when sft bit 12 is set. Ascending controls and the
     // descending shapes, in both feeding forms.
     run_odd_blit(16'h0002, 16'h000F, "misaligned blit, ascending src 2 dst 0");
     run_odd_blit(16'h000A, 16'h003F, "misaligned blit, ascending srcbit 10");

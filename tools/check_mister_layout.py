@@ -6,7 +6,7 @@ signal levels: which name MiSTer keys a core's config file on, and which pack a 
 loads. No Verilator bench can read a shell script, and the failure this guards is four shell
 scripts drifting apart from each other and from the card.
 
-THE DEFECT THIS EXISTS TO CATCH, found on the owner's card. Three tools built the config path
+THE DEFECT THIS EXISTS TO CATCH, found on a real card. Three tools built the config path
 as /media/fat/config/<RBF-name>.CFG, i.e. PC9821Z486.CFG. MiSTer keys that file on the MGL's
 <setname>, which is PC9821, so the real file is PC9821.CFG - and PC9821Z486.CFG has never
 existed on any card. The card's config directory is keyed that way for every core, which is
@@ -153,7 +153,7 @@ def staging_leaves_no_config(deploy: Path) -> list[str]:
                       if p.is_file() and p.suffix.lower() == ".cfg")
         if left:
             return ["%s left a config in its own staging tree: %s - copying that tree onto a "
-                    "card would overwrite the RAM size the owner selected"
+                    "card would overwrite the RAM size the user selected"
                     % (deploy.name, ", ".join(left))]
         return []
 

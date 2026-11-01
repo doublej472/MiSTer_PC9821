@@ -39,6 +39,10 @@ module pc9821_gfx_msg (
     // A request outstanding and NOT accepted is the CPU waiting on its target; the I/O subset of
     // that is the DEVICE wait, so pc9821_perf_msg's MW minus this is the memory-only wait. The same
     // definition of "waiting" as the watchdog trigger's and pc9821_perf_msg's, so the three agree.
+    // DW IS A PLATFORM-CYCLE COUNT: the request length grows with the OSD CPU Speed
+    // throttle ratio, so like MW it is only meaningful at CPU Speed = Full (pc9821_perf_msg's
+    // header states the rule and why it is documented rather than re-based). FR is a vblank
+    // count and IR a count of INTA bus cycles (two per interrupt), both throttle-independent.
     reg [31:0] dw, fr, ir;
     always @(posedge clk) begin
         if (reset) begin

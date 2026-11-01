@@ -111,8 +111,7 @@ module pc9821_egc (
     // Operation telemetry: one pulse per CPU command the EGC accepts and one per unit it
     // commits, so pc9821_perf_msg can report ET/EU beside EG and a capture reads EG/ET (cycles per
     // transaction) against EG/EU (cycles per unit) - the split between "many operations" and "long
-    // operations" that decides whether the fix is to decouple the EGC or to shorten its per-unit
-    // burst/pass.
+    // operations" (whether the cost is in decoupling the EGC or in its per-unit burst/pass).
     output wire        dbg_egc_txn,
     output wire        dbg_egc_unit
 );
@@ -122,17 +121,30 @@ module pc9821_egc (
   // ---------------------------------------------------------------
   // The transaction's OWN register image, latched at the S_IDLE accept
   // ---------------------------------------------------------------
-  // The eight registers are read LIVE throughout the produce, which was safe only while a store
-  // held the CPU until its op drained. released the CPU at the accept (a WRITE's
+  // Reading the eight registers LIVE throughout the produce would be safe only if a store held
+  // the CPU until its op drained. A store releases the CPU at the accept (a WRITE's
   // cpu_ready pulses in S_FEED), so a guest `out 0x4A0..0x4AE` can land while the produce still
   // runs and change the op - or, for 0x4AC/0x4AE, abort it. NP2kai's EGC op is one atomic memory
   // access, so it can never see that; the registers are therefore latched here, as
   // acc_off/acc_be/acc_din/acc_plane/acc_page already are, and every cone reads the latched copy.
   // The re-arm is applied at an engine boundary by `shifter_arm`/`shift_arm_pend`, so it is
   // neither mid-produce nor lost.
-  /* verilator lint_off UNUSEDSIGNAL */   // the high bits are not decoded, exactly as the reg_* ports above
-  reg [15:0] acc_access, acc_fgbg, acc_ope, acc_fg, acc_mask, acc_bg, acc_sft, acc_leng;
-  /* verilator lint_on UNUSEDSIGNAL */
+  //
+  // OBSERVATION LEMMA (C3): the image keeps only the bits a cone decodes, packed at the offsets
+  // below. Nothing else writes these registers (the reset arm and the S_IDLE accept are the only
+  // writers), and every read of them is listed beside its declaration; a consumer of a dropped
+  // bit is a Verilator SELRANGE error, and tools/check_egc_snapshot.py proves the packing equal
+  // to the full-width image for every 16-bit guest write, checks the single-writer property, and
+  // fails when a read appears outside the retained set. The `ifdef VERILATOR` fence at the end of
+  // this file re-derives every consumer from a full-width shadow each cycle.
+  reg [3:0]  acc_access;   // reg_access[3:0] - plane_en[3:0] (:154-157)
+  reg [3:0]  acc_fgbg;     // {reg_fgbg[9:8], reg_fgbg[14:13]} - fgbg_sel, read_plane (:159-160)
+  reg [13:0] acc_ope;      // reg_ope[13:0] - ope_cmprd/sftcpu/mode/pat_rd/pat_wr, ROP table (:182-201, :824)
+  reg [15:0] acc_fg;
+  reg [15:0] acc_mask;
+  reg [15:0] acc_bg;
+  reg [8:0]  acc_sft;      // {reg_sft[12], reg_sft[7:0]} - dir at [8], the bit addresses at [7:0] (:255-257, :1011, :1210-1211)
+  reg [11:0] acc_leng;     // reg_leng[11:0] - the shifter arming length (:1212)
 
   // ---------------------------------------------------------------
   // Static register decode
@@ -143,8 +155,8 @@ module pc9821_egc (
   assign plane_en[2] = !acc_access[2];
   assign plane_en[3] = !acc_access[3];
 
-  wire [1:0]  fgbg_sel   = acc_fgbg[14:13];   // colour-register pattern source
-  wire [1:0]  read_plane = acc_fgbg[9:8];     // the plane a shifted read returns
+  wire [1:0]  fgbg_sel   = acc_fgbg[1:0];     // colour-register pattern source (reg_fgbg[14:13])
+  wire [1:0]  read_plane = acc_fgbg[3:2];     // the plane a shifted read returns (reg_fgbg[9:8])
   // NP2kai's BYTE path feeds the shifter and returns egc_src in the DEFAULTS of its fgbg switch,
   // which 0x6000 falls into; only 0x2000 (bgc) and 0x4000 (fgc) bypass it (egc_opeb case 0x1000).
   // So the byte path's "no colour quad" test is 00 OR 11, not the 00 the pattern quads use.
@@ -155,12 +167,12 @@ module pc9821_egc (
   // had to select FG or BG to load the reference colour at all (v1.3 "FG/BG writes are performed
   // only after selecting FG/BG in port 04A2h", EGCWRITE.CSV) - but the read is separable from
   // that write gate, and three families measure it: `RD22_PATSEL` (PASS on the Xe10 with 4492,
-  // the retained-FG mask, where a raw return would have to be 4CB3 - the value this core
-  // produced while it gated on the colour source), plus the pattern source the CK00_*_MASK,
+  // the retained-FG mask, where a raw return would have to be 4CB3 - the value a core gating on
+  // the colour source produces), plus the pattern source the CK00_*_MASK,
   // B08_CMP_* and RD10_RAMP_* families are actually driven with. That stimulus is witnessed by
-  // the pre-fix core's own column of the same capture: those 48 rows all read back the addressed
-  // PLANE word (5555, the ramp's B plane) on this core while the machine returns the mask, i.e.
-  // the core took a non-comparing arm - and with bit 13 clear no mask can be produced at all, so
+  // the same capture run on a core with a non-comparing arm: those 48 rows all read back the
+  // addressed PLANE word (5555, the ramp's B plane) there while the machine returns the mask, i.e.
+  // that core took a non-comparing arm - and with bit 13 clear no mask can be produced at all, so
   // bit 13 is set and 0x4A2's bits 14-13 are 00. RD21 (`compare-reference-retained-FG-while-P-is-BG`)
   // independently fixes the reference as the retained FG for BOTH colour selections.
   // NP2kai has no compare branch here at all (mem/memegc.c:1170-1172 returns `mem[addr]`), and
@@ -225,7 +237,7 @@ module pc9821_egc (
   // feed and the produce share no clock: `S_FEED` writes the ring and the produce's
   // window read is presented the next state, so the produce reads the COMMITTED entries.
   // `efunc`/`e_s8l`/`e_s8r` are NP2kai's egc.func / sft8bitl / sft8bitr (egcshift()).
-  // The ring is block RAM now, split by entry parity so the produce's four-entry read
+  // The ring is block RAM, split by entry parity so the produce's four-entry read
   // window [base, base+3] fits the two-port M10K: `ebuf_e` holds the even entries (ring entry 2k
   // at word k) and `ebuf_o` the odd, each a 32-bit word carrying all four planes' byte at that
   // offset. `pc9821_dpram` (true dual port) gives each copy two read ports; the feed's one write
@@ -240,8 +252,8 @@ module pc9821_egc (
   reg [31:0] lastvram [0:3];  // the quad of the last backend read
 
   wire [2:0] sft_src8 = acc_sft[2:0];
-  wire [2:0] sft_dst8 = acc_sft[6:4];
-  wire       sft_dir  = acc_sft[12];   // the descending direction: the mirror (see the header)
+  wire [2:0] sft_dst8 = acc_sft[6:4];   // the byte-unit feeder's 3-bit sub-byte shift
+  wire       sft_dir  = acc_sft[8];    // the descending direction: the mirror (see the header)
   wire       sft_moved = (sft_src8 != sft_dst8);
   wire       sft_right = (sft_src8 > sft_dst8);
 
@@ -313,11 +325,11 @@ module pc9821_egc (
   // ---------------------------------------------------------------
   // The operand's first byte lane: from the CPU's BYTE ENABLES, not the address
   // ---------------------------------------------------------------
-  // z486's address output is 30 bits ("Physical address [31:2]", src/z486/z486.sv:48
+  // z486's address output is 30 bits ("Physical address [31:2]", src/z486/z486.sv:78
   // `addr`) and pc9821_system forms the guest address as {z_addr, 2'b00}
-  // (src/pc9821/core/pc9821_system.sv:426 and :632, the `.cpu_addr` connections), so
+  // (src/pc9821/core/pc9821_system.sv:647 and :1061, the `.cpu_addr` connections), so
   // every access reaches this module DWORD-ALIGNED and the operand's byte lane is
-  // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1121 `calc_be`). Deriving the lane
+  // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1169 `calc_be`). Deriving the lane
   // from cpu_offset[1:0] made it 0 for every access, so a 16-bit unit on lanes 2:3
   // (be = 1100) became a BYTE unit on lane 0.
   //
@@ -397,9 +409,9 @@ module pc9821_egc (
   // The produce: `S_FEED` writes the unit's source bytes into the M10K ring, `S_STEP_LO`/
   // `S_STEP_HI` each run ONE `mask_step`, and the plane loop (see THE PLANE-SERIAL DATAPATH)
   // steps the four planes and commits. Reads loop in `S_EVAL` (so the benches' read-evaluate
-  // probe still holds) and writes in `S_COMMIT`. EGC_RESP2 is no longer entered (a read's ready
+  // probe still holds) and writes in `S_COMMIT`. EGC_RESP2 is not entered (a read's ready
   // leaves from its last plane step); the package keeps the value so the numbering, and the
-  // bench-only parallel reference that still uses it, are unchanged.
+  // bench-only parallel reference that uses it, stay fixed.
   localparam egc_state_e S_IDLE = EGC_IDLE, S_RD_RESP = EGC_RD_RESP, S_EVAL = EGC_EVAL,
              S_WR = EGC_WR, S_WR_ACC = EGC_WR_ACC, S_HOLD = EGC_HOLD,
              S_WR_B_ACC = EGC_WR_B_ACC, S_FEED = EGC_FEED, S_STEP_LO = EGC_STEP_LO,
@@ -413,8 +425,8 @@ module pc9821_egc (
   // `cl_done` can arrive in the cycle the next unit's read is accepted; a wait state must not take
   // that pulse for its own request. Cleared where a request is presented, set on its accept.
   reg        req_acc;
-  // `plane_idx` indexes a COLUMN of the unit's dword now, not a plane: the planes
-  // travel as the four byte-enable lanes of one D1 access (D1/D2).
+  // `plane_idx` indexes a COLUMN of the unit's dword, not a plane: the planes
+  // travel as the four byte-enable lanes of one access.
   reg [1:0]  plane_idx;
   reg [3:0]  unit_lane;
   reg        unit_word;
@@ -426,10 +438,9 @@ module pc9821_egc (
   // acc_off[14:2] is consulted.
   reg [14:0] acc_off;
   reg [1:0]  acc_plane;
-  // The access PAGE, latched at the S_IDLE accept. `cl_addr` is {page, plane offset} and
-  // the write pass reads the page LIVE today; with the CPU released at the accept (a store's ready
-  // now pulses there) z486 can move `cpu_page` for its next access while the produce is still
-  // writing, so the page must be latched exactly as acc_off/acc_plane/acc_be/acc_din are.
+  // The access PAGE, latched at the S_IDLE accept. `cl_addr` is {page, plane offset}, and
+  // with the CPU released at the accept (a store's ready pulses there) z486 can move
+  // `cpu_page` for its next access while the produce is still writing, so the page must be latched exactly as acc_off/acc_plane/acc_be/acc_din are.
   reg        acc_page;
   /* verilator lint_on UNUSEDSIGNAL */
   reg [31:0] resp_data;
@@ -888,7 +899,7 @@ module pc9821_egc (
   // fd_lo and fd_hi are consecutive and so differ in parity) and the window's first read
   // (`ea0`/`oa0`) in S_STEP_LO onwards, so the produce's window bytes are registered from an
   // address the RAM took AFTER the write committed; port B is the window's second read. That is
-  // what replaces the old feed bypass: the produce consumes the COMMITTED entry.
+  // why no feed bypass is needed: the produce consumes the COMMITTED entry.
   wire [31:0] feed_lo_w = {feed_lo[3], feed_lo[2], feed_lo[1], feed_lo[0]};
   wire [31:0] feed_hi_w = {feed_hi[3], feed_hi[2], feed_hi[1], feed_hi[0]};
   // The feed's ring write is NOT stack-gated: NP2kai's EGCOPE_SHIFTB/SHIFTW write egc.inptr[]
@@ -995,7 +1006,7 @@ module pc9821_egc (
   /* verilator lint_off WIDTHTRUNC */   // next_lane is 4 bits because it is unit_lane + 2, and next_set_lane
   // returns 4 for "no lane"; every index into acc_be is guarded by that value being <= 3.
   wire [3:0] next_lane = unit_lane + (unit_word ? 4'd2 : 4'd1);
-  wire [3:0] next_set  = byte_walk ? byte_walk_next(acc_be, acc_sft[12], unit_lane)
+  wire [3:0] next_set  = byte_walk ? byte_walk_next(acc_be, sft_dir, unit_lane)
                                    : next_set_lane(acc_be, next_lane);
   wire       more_units = (next_set <= 4'd3);
   wire       next_word = word_unit(acc_be, next_set[1:0]);
@@ -1070,7 +1081,7 @@ module pc9821_egc (
       // NP2kai's egc_reset ends in egcshift() at leng 0x000F (io/egc.c:69-80), so
       // `remain` is 16 and the FIRST post-reset produce carries the full bit length:
       // the first store of a guest that never writes 0x4AC/0x4AE after reset must be
-      // masked 0xFFFF, not the one-bit 0x0080 a remain of 1 produced (review egc.md F1).
+      // masked 0xFFFF, not the one-bit 0x0080 a remain of 1 would produce.
       remain  <= 13'd16;
       stack   <= 6'd0;
       dstbit  <= 4'd0;
@@ -1091,14 +1102,21 @@ module pc9821_egc (
       wbe_hi   <= 4'd0;
       cmp_acc  <= 16'hFFFF;
       rp_pick  <= 16'h0000;
-      acc_access <= 16'hFFF0;
-      acc_fgbg   <= 16'h00FF;
-      acc_ope    <= 16'h0000;
+      acc_access <= 4'h0;      // 0xFFF0's plane-enable bits
+      acc_fgbg   <= 4'h0;      // 0x00FF: pattern source 00, read plane 0
+      acc_ope    <= 14'h0000;
       acc_fg     <= 16'h0000;
       acc_mask   <= 16'hFFFF;
       acc_bg     <= 16'h0000;
-      acc_sft    <= 16'h0000;
-      acc_leng   <= 16'h000F;
+      acc_sft    <= 9'h000;
+      acc_leng   <= 12'h00F;
+`ifdef VERILATOR
+      acc_ref_access <= 16'hFFF0;
+      acc_ref_fgbg   <= 16'h00FF;
+      acc_ref_ope    <= 16'h0000;
+      acc_ref_sft    <= 16'h0000;
+      acc_ref_leng   <= 16'h000F;
+`endif
       shift_arm_pend <= 1'b0;
       scrub          <= 5'd0;
       scrubbing      <= 1'b1;
@@ -1189,7 +1207,7 @@ module pc9821_egc (
           stack   <= shifter_rearm ? 6'd0 : stack_n;
           dstbit  <= shifter_rearm ? acc_sft[7:4] : pr_db_n;
           srcbit  <= shifter_rearm ? acc_sft[3:0] : srcbit_n;
-          remain  <= shifter_rearm ? ({1'd0, acc_leng[11:0]} + 13'd1) : pr_remain_n;
+          remain  <= shifter_rearm ? ({1'b0, acc_leng} + 13'd1) : pr_remain_n;
           // The feed wrote the unit's source bytes at inptr in S_FEED and advances it here
           // (outptr too, for the word feed's srcbit >= 8 step); the produce advances outptr by its
           // two sub calls. A re-arm re-points both at the arm's base.
@@ -1260,14 +1278,23 @@ module pc9821_egc (
           // The op's own configuration image. The eight registers are read LIVE by the
           // produce states, and the CPU is released at this accept, so they are latched
           // here and every cone reads the latched copy - NP2kai's atomic op equivalent.
-          acc_access <= reg_access;
-          acc_fgbg   <= reg_fgbg;
-          acc_ope    <= reg_ope;
+          acc_access <= reg_access[3:0];
+          acc_fgbg   <= {reg_fgbg[9:8], reg_fgbg[14:13]};
+          acc_ope    <= reg_ope[13:0];
           acc_fg     <= reg_fg;
           acc_mask   <= reg_mask;
           acc_bg     <= reg_bg;
-          acc_sft    <= reg_sft;
-          acc_leng   <= reg_leng;
+          acc_sft    <= {reg_sft[12], reg_sft[7:0]};
+          acc_leng   <= reg_leng[11:0];
+`ifdef VERILATOR
+          // The observation-lemma fence's full-width shadow: the same two writers, the same
+          // guard, so the equality it checks below is the snapshot's own next-state function.
+          acc_ref_access <= reg_access;
+          acc_ref_fgbg   <= reg_fgbg;
+          acc_ref_ope    <= reg_ope;
+          acc_ref_sft    <= reg_sft;
+          acc_ref_leng   <= reg_leng;
+`endif
           // ACCEPT-AND-DECOUPLE: a CPU WRITE is ACCEPTED here and its ready pulses at the
           // next edge; the produce pipeline (S_FEED -> S_STEP_LO -> S_STEP_HI -> the plane loop
           // -> S_WR) and its writes to the array then complete BEHIND the CPU. The write-path
@@ -1406,7 +1433,7 @@ module pc9821_egc (
         // One cycle only, and UNCONDITIONAL (R6): `if (unit_write || !cpu_valid)` left this
         // state by observing a level drop, which is the banned shape - the GRCG's G_HOLD is the
         // same state one module over and is unconditional. What the read arm needs is the
-        // CPU's accept gap, not the level: src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0` clears it
+        // CPU's accept gap, not the level: src/z486/bus_unit.sv:350 `ext_valid_r <= 1'b0` clears it
         // at the ready edge, and a direct read's own `direct_rd_pending` keeps the next request off the
         // bus until the response lands, so the same request cannot be re-presented before S_IDLE is
         // reached. The assertion in the VERILATOR block below pins it.
@@ -1427,11 +1454,65 @@ module pc9821_egc (
 
 `ifdef VERILATOR
   // ---------------------------------------------------------------------------
+  // C3 OBSERVATION-LEMMA FENCE: the narrowed accepted-request snapshot against its full-width
+  // shadow. The shadow has the SAME two writers as the snapshot (the reset arm and S_IDLE's
+  // accept), so `acc_* == slice(acc_ref_*)` is that state's own invariant, and every consumer is
+  // re-derived from the shadow and must equal the value the narrowed field produced. A dropped
+  // or misplaced bit fails here in every bench that builds this module.
+  // ---------------------------------------------------------------------------
+  /* verilator lint_off UNUSEDSIGNAL */   // the shadow keeps the DROPPED bits on purpose: the
+  // comparison below is what proves no consumer can see them
+  reg [15:0] acc_ref_access, acc_ref_fgbg, acc_ref_ope, acc_ref_sft, acc_ref_leng;
+  /* verilator lint_on UNUSEDSIGNAL */
+  integer fi;
+  always @(posedge clk) if (!reset) begin
+    if (acc_access !== acc_ref_access[3:0])
+      $fatal(1, "pc9821_egc snapshot fence: acc_access %0h != %0h", acc_access, acc_ref_access[3:0]);
+    if (acc_fgbg !== {acc_ref_fgbg[9:8], acc_ref_fgbg[14:13]})
+      $fatal(1, "pc9821_egc snapshot fence: acc_fgbg %0h != %0h", acc_fgbg,
+             {acc_ref_fgbg[9:8], acc_ref_fgbg[14:13]});
+    if (acc_ope !== acc_ref_ope[13:0])
+      $fatal(1, "pc9821_egc snapshot fence: acc_ope %0h != %0h", acc_ope, acc_ref_ope[13:0]);
+    if (acc_sft !== {acc_ref_sft[12], acc_ref_sft[7:0]})
+      $fatal(1, "pc9821_egc snapshot fence: acc_sft %0h != %0h", acc_sft,
+             {acc_ref_sft[12], acc_ref_sft[7:0]});
+    if (acc_leng !== acc_ref_leng[11:0])
+      $fatal(1, "pc9821_egc snapshot fence: acc_leng %0h != %0h", acc_leng, acc_ref_leng[11:0]);
+    // The decode cones, from the full-width image.
+    for (fi = 0; fi < 4; fi = fi + 1)
+      if (plane_en[fi] !== !acc_ref_access[fi])
+        $fatal(1, "pc9821_egc snapshot fence: plane_en[%0d]", fi);
+    if (fgbg_sel !== acc_ref_fgbg[14:13])   $fatal(1, "pc9821_egc snapshot fence: fgbg_sel");
+    if (read_plane !== acc_ref_fgbg[9:8])   $fatal(1, "pc9821_egc snapshot fence: read_plane");
+    if (ope_cmprd !== acc_ref_ope[13])      $fatal(1, "pc9821_egc snapshot fence: ope_cmprd");
+    if (ope_sftcpu !== acc_ref_ope[10])     $fatal(1, "pc9821_egc snapshot fence: ope_sftcpu");
+    if (ope_mode !== acc_ref_ope[12:11])    $fatal(1, "pc9821_egc snapshot fence: ope_mode");
+    if (pat_rd !== (acc_ref_ope[9:8] == 2'b01)) $fatal(1, "pc9821_egc snapshot fence: pat_rd");
+    if (pat_wr !== (acc_ref_ope[9:8] == 2'b10)) $fatal(1, "pc9821_egc snapshot fence: pat_wr");
+    if (rop_needs_dst !==
+        |((acc_ref_ope[7:0] ^ (acc_ref_ope[7:0] >> 2)) & 8'h33))
+      $fatal(1, "pc9821_egc snapshot fence: rop_needs_dst");
+    if (sft_src8 !== acc_ref_sft[2:0])      $fatal(1, "pc9821_egc snapshot fence: sft_src8");
+    if (sft_dst8 !== acc_ref_sft[6:4])      $fatal(1, "pc9821_egc snapshot fence: sft_dst8");
+    if (sft_dir  !== acc_ref_sft[12])       $fatal(1, "pc9821_egc snapshot fence: sft_dir");
+    if (sft_moved !== (acc_ref_sft[2:0] != acc_ref_sft[6:4]))
+      $fatal(1, "pc9821_egc snapshot fence: sft_moved");
+    if (sft_right !== (acc_ref_sft[2:0] > acc_ref_sft[6:4]))
+      $fatal(1, "pc9821_egc snapshot fence: sft_right");
+    // The ROP table's ternary index is the one consumer whose INDEX is data: prove every one of
+    // the 16 selects still lands on the same guest bit.
+    for (fi = 0; fi < 16; fi = fi + 1)
+      if (rop_b[fi] !== acc_ref_ope[{1'b0, src_b[fi], dq_w[fi], pat_b[fi]}])
+        $fatal(1, "pc9821_egc snapshot fence: rop_b[%0d]", fi);
+  end
+`endif
+
+`ifdef VERILATOR
+  // ---------------------------------------------------------------------------
   // R6/R8: THE UNCONDITIONAL S_HOLD BUBBLE'S CONTRACT (docs/single-cycle-event-
-  // discipline.md R6/R8; gfxeng audit F4). S_HOLD is one cycle by construction - it no
-  // longer observes cpu_valid - and that is safe because the CPU's own accept gap keeps a
-  // completed request off the bus (src/z486/memory.sv:620-523 `ext_valid_r <= 1'b0` clears it at
-  // the ready edge). Both halves are pinned here; they cost nothing in synthesis and run in
+  // discipline.md R6/R8). S_HOLD is one cycle by construction - it does not observe
+  // cpu_valid - and that is safe because the CPU's own accept gap keeps a completed request
+  // off the bus (src/z486/bus_unit.sv:350 `ext_valid_r <= 1'b0` clears it at the ready edge). Both halves are pinned here; they cost nothing in synthesis and run in
   // every bench that builds this module.
   // ---------------------------------------------------------------------------
   reg hold_q;    // S_HOLD last cycle: the state is one cycle wide, never two

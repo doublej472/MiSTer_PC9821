@@ -11,6 +11,9 @@
 `ifdef Z486_INTERNAL_CACHE
 `define DHRY_INTERNAL_CPU_CACHE
 `endif
+`ifdef DHRY_PC98_MAP
+`include "z486_pc98_preset.svh"
+`endif
 
 module tb_dhrystone;
     localparam SEG_ES = 0, SEG_CS = 1, SEG_SS = 2, SEG_DS = 3;
@@ -54,7 +57,13 @@ module tb_dhrystone;
     wire        inta;
 
 `ifdef Z486_CURRENT_CORE
+`ifdef DHRY_PC98_MAP
+    // The PC-9821 core's configuration: the PC-98 memory-map template and the
+    // runtime RAM bound (32 MiB, the core's default OSD RAM size).
+    z486 #(`Z486_PC98_MAP_PARAMS, .RAM_BOUND_ENABLE(1)) dut (
+`else
     z486 dut (
+`endif
 `else
     z386 dut (
 `endif
@@ -87,7 +96,11 @@ module tb_dhrystone;
         .cache_flush_done(),
         .a20_enable(1'b1),
         .win0_unmapped(1'b0),
+`ifdef DHRY_PC98_MAP
+        .ram_cache_top(32'h0200_0000),
+`else
         .ram_cache_top(32'hffff_ffff),
+`endif
         .fast_off_req(1'b0),
         .cache_off_req(1'b0),
         .x87_off_req(1'b0),

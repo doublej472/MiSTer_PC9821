@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GFX_WALK_HOLD: the GVRAM's ONE-VISIT lane walk measured where the CPU feels it - the number of ARRAY ACCESSES the M10K's port A was enabled for and the number of clk_sys the CPU held its request unaccepted (the same condition pc9821_perf_msg's MW counts) - for the eight store shapes TH05 issues through the real pc9821_gvram with the real GRCG inside it. It asserts the floor rather than a model of it: a plain 32-bit plane-window store MUST be 4 accesses (four byte-interleaved words, one write port) and 4 clk_sys, a mixed-datum GRCG RMW MUST be 8 and 10, a single-plane RMW put with a 0xFF datum must NOT pay the read the old whole-mask test charged it (8 accesses before, 4 now), and an RMW store whose datum is 0x00000000 changes nothing so it must issue NO access at all (it cost 8 accesses and an 11-clk_sys hold before r13/310). The access count comes from the array's own port-A enable, and every pattern is checked byte-exact on readback so the count cannot be met by dropping a lane. FAIL-FIRST: it does not connect the walk telemetry, so the same file builds against the pre-change pc9821_gvram and every bound above fails there.
+// TB_PC9821_GFX_WALK_HOLD: the GVRAM's ONE-VISIT lane walk measured where the CPU feels it - the number of ARRAY ACCESSES the M10K's port A was enabled for and the number of clk_sys the CPU held its request unaccepted (the same condition pc9821_perf_msg's MW counts) - for the eight store shapes TH05 issues through the real pc9821_gvram with the real GRCG inside it. It asserts the floor rather than a model of it: a plain 32-bit plane-window store MUST be 4 accesses (four byte-interleaved words, one write port) and 4 clk_sys, a mixed-datum GRCG RMW MUST be 8 and 10, a single-plane RMW put with a 0xFF datum must NOT pay the read the old whole-mask test charged it (8 accesses before, 4 now), and an RMW store whose datum is 0x00000000 changes nothing so it must issue NO access at all (it cost 8 accesses and an 11-clk_sys hold before the walk was shortened). The access count comes from the array's own port-A enable, and every pattern is checked byte-exact on readback so the count cannot be met by dropping a lane. FAIL-FIRST: it does not connect the walk telemetry, so the same file builds against the pre-change pc9821_gvram and every bound above fails there.
 //
-// WHY THESE TWO NUMBERS. r13/310's diagnosis is that a GVRAM store is a CPU MEMORY transaction
+// WHY THESE TWO NUMBERS. The diagnosis is that a GVRAM store is a CPU MEMORY transaction
 // whose ready waits on the array walk, so the walk's cycles land in the CPU's memory wait (`MW`)
 // and the game's frame time follows. Two things can be wrong with such a walk and this bench names
 // them separately:
@@ -54,8 +54,8 @@ module tb_pc9821_gfx_walk_hold;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -79,9 +79,9 @@ module tb_pc9821_gfx_walk_hold;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -161,7 +161,7 @@ module tb_pc9821_gfx_walk_hold;
   // ---- THE MEASUREMENT ----
   // One CPU plane-window STORE, measured. `accesses` counts the clk_sys the array's port A was
   // enabled for the WHOLE operation (from the request being presented until every owner has
-  // drained - r13/322 makes a store ACCEPTED at its accept and completed behind the CPU, so the
+  // drained - the accept-and-decouple makes a store ACCEPTED at its accept and completed behind the CPU, so the
   // walk is no longer over when the ready comes); `hold` counts the clk_sys the CPU held the
   // request unaccepted, which is the SAME condition pc9821_perf_msg's MW counts (a request
   // outstanding, z_ready low), so both numbers are the ones a capture reports.
@@ -270,7 +270,7 @@ module tb_pc9821_gfx_walk_hold;
       max_hold[3] = 10;  // was 11  (a mixed datum keeps its 8 accesses and gains only the bubble)
       max_hold[4] = 3;   // was 11
       max_hold[5] = 6;   // was 11
-      max_hold[6] = 8;   // was 8   (the pair-burst arm, which r13/310 did not touch)
+      max_hold[6] = 8;   // was 8   (the pair-burst arm, which the walk rewrite did not touch)
       max_hold[7] = 6;   // was 7
     end
   endtask

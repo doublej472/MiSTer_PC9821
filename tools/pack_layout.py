@@ -65,7 +65,7 @@ THE SOUND.ROM REGION IS A FITTED DEVICE'S ROM, so its 0xFF fill is a STATE and n
 missing input: without the image the 0xCC000 window reads 0xFF, which is exactly what the
 machine answers when no PC-9801-86 card is fitted (docs/probes/SHADOW.TXT:150-199: every
 2 KiB block of the C-bus area outside the card's 16 KiB reads 0xFF). The image itself is
-the owner's dump (SOUND.ROM, 16384 bytes; its bytes match all eight of the capture's
+the user's dump (SOUND.ROM, 16384 bytes; its bytes match all eight of the capture's
 sampled blocks), supplied like the rhythm image -- found beside it in --dumps, or named
 with --sound -- and the region is therefore `optional` in REGIONS: check_pack warns on
 the filler instead of failing it (unlike every other region, whose 0xFF fill can only
@@ -298,7 +298,7 @@ def find_rhythm(directory: Path) -> Path | None:
 
     The directory already holds every other runtime ROM, so a present
     OPNA_ADPCM.ROM is the image the pack should carry; leaving it unused is the way a
-    zero-filled rhythm region shipped and became the owner's percussion pop. Matching is
+    zero-filled rhythm region shipped and became the percussion pop heard on hardware. Matching is
     case-insensitive, as for the other dump names.
     """
     return _find_named(directory, RHYTHM_NAME)
@@ -308,7 +308,7 @@ def find_sound(directory: Path) -> Path | None:
     """The PC-9801-86's SOUND.ROM inside a --dumps directory, if the user put one there.
 
     Same discovery as the rhythm image ("beside OPNA_ADPCM.ROM"): the
-    directory already holds every other runtime ROM, and the owner's dump set carries
+    directory already holds every other runtime ROM, and a full dump set carries
     SOUND.ROM beside them.
     """
     return _find_named(directory, SOUND_NAME)
@@ -389,7 +389,7 @@ def build(dumps: Dumps, rhythm: Path | None = None,
         load_rhythm(rhythm) if rhythm is not None else bytes(RHYTHM_SIZE)
     # The PC-9801-86's option ROM: 16 KiB at 0xCC000-0xCFFFF, the window the
     # machine answers real code at when the card is fitted (docs/probes/SHADOW.TXT:150-199
-    # matches the owner's SOUND.ROM dump at all eight sampled blocks). Without the image
+    # matches a SOUND.ROM dump at all eight sampled blocks). Without the image
     # the region keeps the pack's 0xFF fill, which is the machine's own "no card fitted"
     # answer -- a state, not a missing input (see the module docstring).
     if sound is not None:

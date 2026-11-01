@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// IRQ9 is WITHDRAWN when the 0x064E status read lowers the IDE line and IRQ1 likewise on the keyboard line's falling edge (the machine measured post-ack IRR bit clear on both, docs/probes/IRQWD.TXT), while the as-yet-unmeasured IRQ15 still holds on its 0x128 read; the unmask after a withdrawn poll delivers nothing and after a surviving one exactly one INT/INTA. FAIL-FIRST: the old pure edge latch delivered a phantom IRQ9 here.
+// IRQ9 is WITHDRAWN when the 0x064E status read lowers the IDE line and IRQ1 likewise on the keyboard line's falling edge (the machine measured post-ack IRR bit clear on both, docs/probes/IRQWD.TXT), while the as-yet-unmeasured IRQ15 still holds on its 0x128 read; the unmask after a withdrawn poll delivers nothing and after a surviving one exactly one INT/INTA. FAIL-FIRST: the old pure edge latch delivered a phantom IRQ9 here. IRQ1 is ALSO withdrawn while UNMASKED when the 0x41 read lowers the line, so a byte the guest polled while the request was latched is not dispatched a second time (the guest would read the stale data register and queue a duplicate key); the positive control still delivers it once while the line is high at the acknowledge.
 //
 // WHERE THIS COMES FROM. The 2026-10-02 real-Xe10 IRQWD capture
 // (docs/probes/IRQWD.TXT) measured the masked-ack case the older reports only
@@ -244,6 +244,9 @@ module tb_pc9821_irq_withdraw;
   // missing interrupt is a count - which is what every check below reads.
   reg intr_prev = 0;
   reg inta_busy = 0;
+  // When 0 the client holds the acknowledge off, the way a guest with IF clear (or
+  // inside another handler) delays taking an already-asserted request.
+  reg ack_enable = 1;
   always @(negedge clk) begin
     if (!rst_n) begin
       intr_prev = 0;
@@ -251,7 +254,7 @@ module tb_pc9821_irq_withdraw;
       if (cpu_intr && !intr_prev) intr_pulses = intr_pulses + 1;
       intr_prev = cpu_intr;
       if (cpu_intr) intr_seen = 1;
-      if (cpu_intr && !inta_busy) begin
+      if (cpu_intr && !inta_busy && ack_enable) begin
         inta_busy = 1;
         cpu_inta = 1;
         @(negedge clk);
@@ -387,6 +390,38 @@ module tb_pc9821_irq_withdraw;
     repeat (200) @(posedge clk);
     if (!intr_seen || inta_count != base_count + 1)
       fail("an unacked IRQ1 request did not deliver exactly one interrupt");
+    else if (inta_vector !== 8'h09)
+      fail("IRQ1 vector not 0x09 (master base 0x08 + 1)");
+    keyboard_irq = 1'b0;
+    write_port(16'h0002, 8'h7F);
+    eoi_both;
+
+    // ---- F: an UNMASKED IRQ1 is withdrawn by its acking read (FAIL-FIRST) --
+    // The keyboard line falls only when the guest has just read the data register.
+    // If that read lands after the request latched but before the CPU took it
+    // (the guest polled the byte with interrupts delayed), the request is spent:
+    // holding it dispatches the consumed byte, and the guest's INT 09h reads the
+    // stale data register and queues a duplicate key. The positive control is the
+    // same raise with the line still high at the acknowledge.
+    write_port(16'h0002, 8'h7D);              // IRQ1 unmasked, as DOS leaves it
+    ack_enable = 0;                            // the CPU has not taken it yet
+    keyboard_irq = 1'b1;
+    repeat (8) @(posedge clk);
+    if (!dbg_irr[1]) fail("the unmasked IRQ1 raise did not latch in the IRR");
+    keyboard_irq = 1'b0;                       // the acking 0x41 data read
+    repeat (8) @(posedge clk);
+    base_count = inta_count;
+    open_window;
+    ack_enable = 1;                            // interrupts can be taken again
+    repeat (200) @(posedge clk);
+    if (intr_seen || inta_count != base_count)
+      fail("an UNMASKED IRQ1 whose acking 0x41 read lowered the line still delivered: the consumed byte is dispatched again");
+    base_count = inta_count;
+    open_window;
+    keyboard_irq = 1'b1;                       // positive control: still high at the ack
+    repeat (200) @(posedge clk);
+    if (!intr_seen || inta_count != base_count + 1)
+      fail("an unacked unmasked IRQ1 did not deliver exactly one interrupt");
     else if (inta_vector !== 8'h09)
       fail("IRQ1 vector not 0x09 (master base 0x08 + 1)");
     keyboard_irq = 1'b0;

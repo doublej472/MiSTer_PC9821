@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PEGC_STORE_RATE: the PEGC posted store buffer sustains the packed-store rates the DOOM path needs (trade-candidates T21 / T23): a back-to-back byte store stream (rep movsb's shape: one byte lane per dword address, walking the lanes) and a dword store stream, driven through the real pc9821_pegc_storebuf onto the REAL sdram_sync_bridge (the controller on clk_sys) at the deployed settings (HAS_DQM=0, ADQM=1, FAST_GRADE=0) and the REAL src/memory/sdram.v against sdram_chip_model on port 0 while the packed scanout line fetch runs on port 3 the whole time, sustain at least 25 MB/s of byte stores and at least the 14.44 MB/s frame need in dword stores into SDRAM (the 55 MB/s dword budget, set for the 50/100 split-clock build, is REPORTED since the SDRAM moved onto clk_sys - trade T36), the byte stream's four neighbouring bytes of a dword collapse into ONE backend write (write transactions <= bytes/4 + 4), the dword stream drains through port 0's TWO-WORD write (din0_hi real data, read back byte-exact), a read issued right behind a store sees the buffered bytes (drain-before-read), and dirty dwords never linger: the buffer reports empty within 2 us of the last store's accept and a scanout line fetched 4 us after stores that fill its first 64 bytes shows the new bytes (P2-6, the horizontal-stripe class). THE COLUMN STREAM IS ASSERTED NOW, not raised: one byte lane per step at stride 640 (the shape a packed-mode game draws its frame with) must sustain at least the RATE MODEL's own floor for the shape - the GD gather-session cost 7+s clk_sdram per session of s byte stores (the G3 7+2s less one per store for the read the mask eliminates) over the stream's run distribution 4,3,3,3,3 stores per 2 KiB SDRAM row, its effective band minus the model allowance, at the CONTROLLER's clock (11.83 MB/s at this bench's 50 MHz same-clock controller and GATHER_K=4, measured 21.64; 23.66 at the old 100 MHz clk_sdram) and never below the 14.44 MB/s a 640x400 frame at 56.42 Hz needs, because same-row stores now drain as GATHER sessions (up to GATHER_K entries per request: one ACT, NO half reads, one masked half write per touched half with the byte mask on A[12:11], one precharge) instead of one controller read-modify-write per byte; FAIL-FIRST: this leg measured 5.8-6.7 MB/s before G3 and 5.87 MB/s on HEAD's un-posted path. THE SCANOUT'S OWN CAPACITY IS MEASURED THROUGHOUT: with either stream running the packed line fetch still completes inside its raster line (worst 535-540 of the 2015-clk_sys line) and the fourth requester keeps feeding the line buffer at 162-165 response beats per line against 160 owed, so the store stream does NOT starve the packed scanout (an earlier form that gated each burst on the buffer being empty measured 2 beats per line - a held line on the display - and is NOT shipped). RESIDENCY BOUND (FAIL-FIRST): a SKIPPED-TO-SAME-DWORD byte stream driven at one store per clk_sys holds one PARTIAL entry for the whole stream under a window that ages only on idle cycles, so the backend received 0 writes in 300 clk_sys and the fetched line read the replaced dword; every entry's window now ages from its OWN allocation (the 1aacf864 fix generalised) and the same run measures 5 writes in 300 clk_sys (>= 4 = the bound at HOLD_CYCLES 50). FROZEN PRESENTATION (the pair-drain payload freeze): with the backend's accept held off while a pair drain is presented, a store to the pair's SECOND dword posts as its own entry - the presented payload mem_din_hi included does not move, and the store's bytes reach the backend in a later request (pre-fix the merge landed in the presented word and vanished at the drain's pop). FULL-BUFFER COMBINE (FAIL-FIRST): in_ready is count < DEPTH alone, so a store that could only combine into a FULL buffer waits for one drain and then merges (8 backend writes, not 9); the pre-change buffer accepted it at once.
+// TB_PC9821_PEGC_STORE_RATE: the PEGC posted store buffer sustains the packed-store rates the DOOM path needs (trade-candidates T21 / T23): a back-to-back byte store stream (rep movsb's shape: one byte lane per dword address, walking the lanes) and a dword store stream, driven through the real pc9821_pegc_storebuf onto the REAL sdram_sync_bridge (the controller on clk_sys at the shipping 90 MHz) at the deployed settings (ADQM=1, FAST_GRADE=0) and the REAL src/memory/sdram.v against sdram_chip_model on port 0 while the packed scanout line fetch runs on port 3 the whole time, sustain at least 25 MB/s of byte stores and at least the 14.44 MB/s frame need in dword stores into SDRAM (the 55 MB/s dword budget, set for the 50/100 split-clock build, is REPORTED since the SDRAM moved onto clk_sys - trade T36), the byte stream's four neighbouring bytes of a dword collapse into ONE backend write (write transactions <= bytes/4 + 4), the dword stream drains through port 0's TWO-WORD write (din0_hi real data, read back byte-exact), a read issued right behind a store sees the buffered bytes (drain-before-read), and dirty dwords never linger: the buffer reports empty within 2 us of the last store's accept and a scanout line fetched 4 us after stores that fill its first 64 bytes shows the new bytes (P2-6, the horizontal-stripe class). THE COLUMN STREAM IS ASSERTED NOW, not raised: one byte lane per step at stride 640 (the shape a packed-mode game draws its frame with) must sustain at least the RATE MODEL's own floor for the shape - the GD gather-session cost 7+s clk_sdram per session of s byte stores (the G3 7+2s less one per store for the read the mask eliminates) over the stream's run distribution 4,3,3,3,3 stores per 2 KiB SDRAM row, its effective band minus the model allowance, at the CONTROLLER's clock (21.30 MB/s at this bench's 90 MHz same-clock controller and GATHER_K=4, measured 29.92; 11.83 at the 50 MHz clock this bench ran before, 23.66 at the old 100 MHz clk_sdram) and never below the 14.44 MB/s a 640x400 frame at 56.42 Hz needs, because same-row stores now drain as GATHER sessions (up to GATHER_K entries per request: one ACT, NO half reads, one masked half write per touched half with the byte mask on A[12:11], one precharge) instead of one controller read-modify-write per byte; FAIL-FIRST: this leg measured 5.8-6.7 MB/s before G3 and 5.87 MB/s on HEAD's un-posted path. THE SCANOUT'S OWN CAPACITY IS MEASURED THROUGHOUT: with either stream running the packed line fetch still completes inside its raster line (worst 594-604 of the 3627-clk_sys line) and the fourth requester keeps feeding the line buffer at 149-173 response beats per line against 160 owed (at least 128 asserted), so the store stream does NOT starve the packed scanout (an earlier form that gated each burst on the buffer being empty measured 2 beats per line - a held line on the display - and is NOT shipped). RESIDENCY BOUND (FAIL-FIRST): a SKIPPED-TO-SAME-DWORD byte stream driven at one store per clk_sys holds one PARTIAL entry for the whole stream under a window that ages only on idle cycles, so the backend received 0 writes in six hold windows and the fetched line read the replaced dword; every entry's window now ages from its OWN allocation (the 1aacf864 fix generalised) and the same run measures 5 writes in 540 clk_sys, six windows (>= 4 = the bound at HOLD_CYCLES 90, 1 us). FROZEN PRESENTATION (the pair-drain payload freeze): with the backend's accept held off while a pair drain is presented, a store to the pair's SECOND dword posts as its own entry - the presented payload mem_din_hi included does not move, and the store's bytes reach the backend in a later request (pre-fix the merge landed in the presented word and vanished at the drain's pop). FULL-BUFFER COMBINE (FAIL-FIRST): in_ready is count < DEPTH alone, so a store that could only combine into a FULL buffer waits for one drain and then merges (8 backend writes, not 9); the pre-change buffer accepted it at once.
 
 // ==== DUT ====
 // The store path is the seam: CPU-side valid/ready store and read ports of this bench
@@ -12,7 +12,7 @@
 // pair's second dword). The packed scanout is the real pc9821_pegc_scan on the
 // controller's FOURTH requester, and the controller is the real src/memory/sdram.v
 // against sdram_chip_model, so the store rate is measured against the same RMW
-// (HAS_DQM=0 byte stores) and the same round-robin the DOOM path faces.
+// (ADQM=1 masked byte stores) and the same round-robin the DOOM path faces.
 
 
 module tb_pc9821_pegc_store_rate;
@@ -22,8 +22,17 @@ module tb_pc9821_pegc_store_rate;
   // GATHER_K). The sweep over 2/3/4/8 builds this bench with -GGK=<n>.
   parameter integer GK = 4;
 
+  // The requesters AND the SDRAM controller run on clk_sys at the SHIPPING clock (build_profile.py
+  // base: 90 MHz). The rates this bench asserts are the shipping build's; a 50 MHz controller pays
+  // two clocks of the -7 part's 21 ns tRCD/tRP where 90 MHz pays two as well, so a 50 MHz run
+  // under-states the machine by the clock ratio. Every clock-derived constant below is its time
+  // value at SYS_MHZ.
+  localparam integer SYS_MHZ  = 90;
+  localparam integer LINE_CLK = 2015 * SYS_MHZ / 50;   // the 40.3 us raster line, in clk_sys
+  localparam integer HOLD_CLK = SYS_MHZ;               // the 1 us combining window (pc9821_memory_subsystem's SYS_CLOCK_HZ / 1e6)
+  localparam integer RES_CLK  = 6 * HOLD_CLK;          // six hold windows of saturated same-dword stores
   reg clk_sys = 0;
-  always #10 clk_sys = ~clk_sys;      // 50 MHz: the requesters AND the SDRAM controller
+  always #(500.0 / SYS_MHZ) clk_sys = ~clk_sys;
   reg reset = 1;
   reg resetn = 0;
 
@@ -85,7 +94,7 @@ module tb_pc9821_pegc_store_rate;
   wire [12:0] SDRAM_A;
   wire  [1:0] SDRAM_BA, SDRAM_DQM;
   wire        nWE, nRAS, nCAS, nCS, CKE;
-  sdram_sync_bridge #(.FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(GK)) backend (
+  sdram_sync_bridge #(.FREQ(SYS_MHZ * 1_000_000), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(GK)) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
       .valid0(p0_valid), .ready0(p0_ready), .wr0(p0_write), .addr0(p0_addr[26:0]),
@@ -104,7 +113,7 @@ module tb_pc9821_pegc_store_rate;
       .SDRAM_CKE(CKE)
   );
 
-  sdram_chip_model #(.T_RP(`TB_CHIP_TRP), .T_WR(`TB_CHIP_TWR)) chip (
+  sdram_chip_model #(.T_RP(2), .T_WR(2), .FREQ_HZ(SYS_MHZ * 1_000_000), .GRADE(7)) chip (
       .clk(clk_sys), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nWE(nWE), .nRAS(nRAS), .nCAS(nCAS), .nCS(nCS)
   );
@@ -115,7 +124,7 @@ module tb_pc9821_pegc_store_rate;
   // the PEGC route (trade-candidates T21; pegc-perf-REPORT.md P0-1). Every check
   // below is written against the CPU-side ports only, so the same run measured
   // both this form and HEAD's direct (un-posted) path.
-  pc9821_pegc_storebuf #(.HOLD_CYCLES(50), .GATHER_K(GK)) storebuf (
+  pc9821_pegc_storebuf #(.HOLD_CYCLES(HOLD_CLK), .GATHER_K(GK)) storebuf (
       .clk(clk_sys), .reset(reset),
       .in_valid(s_valid), .in_write(s_write), .in_addr(s_addr), .in_din(s_din),
       .in_be(s_be), .in_burstcount(8'd1),
@@ -148,7 +157,7 @@ module tb_pc9821_pegc_store_rate;
   wire        fz_mvalid, fz_mwrite, fz_mgath;
   wire [440:0] fz_mex;
   reg         fz_mready = 0;
-  pc9821_pegc_storebuf #(.HOLD_CYCLES(50), .GATHER_K(GK)) freezebuf (
+  pc9821_pegc_storebuf #(.HOLD_CYCLES(HOLD_CLK), .GATHER_K(GK)) freezebuf (
       .clk(clk_sys), .reset(reset),
       .in_valid(fz_valid), .in_write(fz_write), .in_addr(fz_addr), .in_din(fz_din),
       .in_be(fz_be), .in_burstcount(8'd1),
@@ -185,7 +194,7 @@ module tb_pc9821_pegc_store_rate;
   // a line tick, fetches the line, and the DISPLAY swap is deferred (
   // `if (prev_done)` in pc9821_pegc_scan) when the fetch has not finished - so a fetch that
   // misses the line deadline DROPS the line instead of showing a blended one. The raster
-  // budget is the bench's own tick interval (2015 clk_sys = the 40.3 us line this bench and
+  // budget is the bench's own tick interval (LINE_CLK clk_sys = the 40.3 us line this bench and
   // tb_pc9821_gvram_bandwidth use). Count the cycles from the tick to the line's 160th
   // response beat, and report the worst one.
   // The scanout's KEEP-UP count: response beats in a window against 160 per raster line.
@@ -287,8 +296,8 @@ module tb_pc9821_pegc_store_rate;
   // ONE CPU-side store, race-free: the payload is driven at a NEGEDGE, held until the
   // accept is SEEN (a posedge where the ready is high - the ready is combinational, so
   // sampling it after the edge is the accept of that edge), then dropped at the next
-  // negedge. `cpu_store32` publishes its payload for the accept edge to race (the trap
-  // the storebuf lane's report records), which re-posts a store several times and can
+  // negedge. `cpu_store32` publishes its payload for the accept edge to race (a known
+  // trap), which re-posts a store several times and can
   // merge the OLD address with the NEW data - fine for a rate stream, useless for a
   // reordering/coherency probe.
   task automatic store_sync(input [31:0] a, input [31:0] d, input [3:0] be);
@@ -322,11 +331,13 @@ module tb_pc9821_pegc_store_rate;
   endtask
 
   // Regions (byte offsets from PEG_BASE): the background lines at 0..0x27FF, the
-  // coherence line at 0x2800, the two streams well away from both.
+  // coherence line at 0x2800, the two streams well away from both. EVERYTHING lies inside the one
+  // 512 KiB window the PEGC route maps (peg_window / pegc_packed: {peg_base[31:19], offset[18:0]}),
+  // which the store buffer's entries rely on (they share bits [26:19]).
   localparam [31:0] BYTE_BASE  = PEG_BASE + 32'h0004_0000;
   localparam [31:0] DWORD_BASE = PEG_BASE + 32'h0005_0000;
-  localparam [31:0] COL_BASE   = PEG_BASE + 32'h0006_0000;   // 256 steps x 640 fits in 160 KiB
-  localparam [31:0] FZ_X       = PEG_BASE + 32'h0008_0000;   // the freeze harness's pair
+  localparam [31:0] COL_BASE   = PEG_BASE + 32'h0000_8000;   // 256 steps x 640 = 160 KiB: 0x8000..0x2FFFF
+  localparam [31:0] FZ_X       = PEG_BASE + 32'h0007_3000;   // the freeze harness's pair
   localparam [31:0] LINE_BASE  = PEG_BASE + 32'h0000_0000;   // {page 0, base} << 3
   localparam [14:0] COHER_BASE = 15'h0500;                   // offset 0x2800 = 10240
 
@@ -364,7 +375,7 @@ module tb_pc9821_pegc_store_rate;
   endtask
 
   // The scanout runs THROUGHOUT the streams: a line fetch on its own port every
-  // raster line (40.3 us = 2015 clk_sys), walking 16 non-overlapping lines
+  // raster line (40.3 us = LINE_CLK clk_sys), walking 16 non-overlapping lines
   // (640 bytes each: the GDC line base steps 80 per line, base << 3 = byte offset).
   reg background_on = 0;
   integer bg_tick = 0;
@@ -374,7 +385,7 @@ module tb_pc9821_pegc_store_rate;
       bg_tick <= 0; bg_line <= 0; scan_line_tick <= 0;
     end else if (background_on) begin
       scan_line_tick <= 1'b0;
-      if (bg_tick == 2015) begin
+      if (bg_tick == LINE_CLK) begin
         bg_tick <= 0;
         bg_line <= bg_line + 1;
         scan_line_tick <= 1'b1;
@@ -493,7 +504,7 @@ module tb_pc9821_pegc_store_rate;
   // so the engine lands within a cycle of the model but not exactly on it.
   // The model counts CONTROLLER cycles, so its MB/s is at the controller's clock: clk_sys since
   // the split-clock removal (it was the 100 MHz clk_sdram, 23.66 MB/s at GATHER_K=4).
-  localparam real CTRL_MHZ = `TB_SDRAM_FREQ / 1.0e6;
+  localparam real CTRL_MHZ = SYS_MHZ;
   function real model_col_floor(input integer gk);
     real clk;
     integer ri, left, s, n;
@@ -538,7 +549,7 @@ module tb_pc9821_pegc_store_rate;
     @(negedge clk_sys);
     reset = 0; resetn = 1;
     repeat (4) @(posedge clk_sys);
-    repeat (30000) @(posedge clk_sys);   // 600 us: past the controller's 200 us JEDEC init
+    repeat (600 * SYS_MHZ) @(posedge clk_sys);   // 600 us: past the controller's 200 us JEDEC init
 
     // ---- MICRO: does a LONE partial (byte) store preserve the dword's other lanes? ----
     // The reference model: a byte store writes ONE byte (NP2kai's vramex is a byte array;
@@ -588,23 +599,23 @@ module tb_pc9821_pegc_store_rate;
     byte_stream(BYTE_BYTES, byte_mbps);
     kap_on = 1'b0;
     $display("MEASURED scanout keep-up under the byte stream: %0d beats, %0d lines' worth expected (%0d beats/line)",
-             kap_beats, (kap_cycles / 2016), (kap_beats * 2016) / (kap_cycles == 0 ? 1 : kap_cycles));
+             kap_beats, (kap_cycles / (LINE_CLK + 1)), (kap_beats * (LINE_CLK + 1)) / (kap_cycles == 0 ? 1 : kap_cycles));
     // The fetch must keep the raster fed with the store stream running: a starved scanout
-    // is a held/duplicated line on the display. One line is 160 beats per 2015 clk_sys;
+    // is a held/duplicated line on the display. One line is 160 beats per LINE_CLK clk_sys;
     // the threshold is 4/5 of that (the window's arithmetic rounds down by a fraction of
     // a line). The measured figure is ~156-175.
-    if ((kap_beats * 2016) < (kap_cycles * 128)) begin
+    if ((kap_beats * (LINE_CLK + 1)) < (kap_cycles * 128)) begin
       $display("FAIL scanout keep-up: %0d beats per line (want >= 128) under the byte stream -- the fetch is starved",
-               (kap_beats * 2016) / (kap_cycles == 0 ? 1 : kap_cycles));
+               (kap_beats * (LINE_CLK + 1)) / (kap_cycles == 0 ? 1 : kap_cycles));
       errors = errors + 1;
     end
     w1 = wr_accepts;
-    $display("MEASURED worst line fetch under the byte stream: %0d clk_sys (raster line 2015), %s",
-             lat_max, (lat_max > 2015) ? "MISSES THE DEADLINE" : "inside the line");
+    $display("MEASURED worst line fetch under the byte stream: %0d clk_sys (raster line %0d), %s",
+             lat_max, LINE_CLK, (lat_max > LINE_CLK) ? "MISSES THE DEADLINE" : "inside the line");
     // The packed display is one line ahead: a fetch that does not finish inside its raster
     // line is a held (repeated) line. 0 means no line finished inside the window at all.
-    if ((lat_max == 0) || (lat_max > 2015)) begin
-      $display("FAIL line-fetch deadline: worst fetch %0d clk_sys of the 2015-clk_sys raster line", lat_max);
+    if ((lat_max == 0) || (lat_max > LINE_CLK)) begin
+      $display("FAIL line-fetch deadline: worst fetch %0d clk_sys of the %0d-clk_sys raster line", lat_max, LINE_CLK);
       errors = errors + 1;
     end
     $display("MEASURED byte stream: %.2f MB/s, %0d backend writes for %0d bytes",
@@ -628,23 +639,23 @@ module tb_pc9821_pegc_store_rate;
     dword_stream(DWORD_WORDS, dword_mbps);
     kap_on = 1'b0;
     $display("MEASURED scanout keep-up under the dword stream: %0d beats, %0d lines' worth expected (%0d beats/line)",
-             kap_beats, (kap_cycles / 2016), (kap_beats * 2016) / (kap_cycles == 0 ? 1 : kap_cycles));
-    if ((kap_beats * 2016) < (kap_cycles * 128)) begin
+             kap_beats, (kap_cycles / (LINE_CLK + 1)), (kap_beats * (LINE_CLK + 1)) / (kap_cycles == 0 ? 1 : kap_cycles));
+    if ((kap_beats * (LINE_CLK + 1)) < (kap_cycles * 128)) begin
       $display("FAIL scanout keep-up: %0d beats per line (want >= 128) under the dword stream -- the fetch is starved",
-               (kap_beats * 2016) / (kap_cycles == 0 ? 1 : kap_cycles));
+               (kap_beats * (LINE_CLK + 1)) / (kap_cycles == 0 ? 1 : kap_cycles));
       errors = errors + 1;
     end
     w1 = wr_accepts;
-    $display("MEASURED worst line fetch under the dword stream: %0d clk_sys (raster line 2015), %s",
-             lat_max, (lat_max > 2015) ? "MISSES THE DEADLINE" : "inside the line");
-    if ((lat_max == 0) || (lat_max > 2015)) begin
-      $display("FAIL line-fetch deadline: worst fetch %0d clk_sys of the 2015-clk_sys raster line", lat_max);
+    $display("MEASURED worst line fetch under the dword stream: %0d clk_sys (raster line %0d), %s",
+             lat_max, LINE_CLK, (lat_max > LINE_CLK) ? "MISSES THE DEADLINE" : "inside the line");
+    if ((lat_max == 0) || (lat_max > LINE_CLK)) begin
+      $display("FAIL line-fetch deadline: worst fetch %0d clk_sys of the %0d-clk_sys raster line", lat_max, LINE_CLK);
       errors = errors + 1;
     end
     $display("MEASURED dword stream: %.2f MB/s, %0d backend writes (%0d pairs) for %0d dwords",
              dword_mbps, w1 - w0, wr_pairs - p1, DWORD_WORDS);
     // The 55 MB/s budget was set against the 100 MHz split-clock controller's pair drain; with
-    // the controller on clk_sys it is REPORTED (trade T36, owner-accepted 2026-10-09), and the
+    // the controller on clk_sys it is REPORTED (trade T36), and the
     // machine-derived floor - the packed frame's 14.44 MB/s - is what is asserted.
     $display("MEASURED dword stream against the old %0d.%0d MB/s split-clock budget: %s (reported, not asserted - trade T36)",
              DWORD_BUDGET_X10 / 10, DWORD_BUDGET_X10 % 10,
@@ -716,7 +727,7 @@ module tb_pc9821_pegc_store_rate;
       cpu_store32(LINE_BASE + 32'((14'(COHER_BASE) << 3) + 32'(k)),
                   {4{8'hE0 + 8'(k)}}, 4'h1 << k[1:0]);
     s_valid = 1'b0;               // or the held store would re-post past its accept
-    while (s_busy && (drain_cycles < 100)) begin
+    while (s_busy && (drain_cycles < 2 * SYS_MHZ)) begin
       @(negedge clk_sys);
       drain_cycles = drain_cycles + 1;
     end
@@ -726,7 +737,7 @@ module tb_pc9821_pegc_store_rate;
                drain_cycles);
       errors = errors + 1;
     end
-    repeat (200) @(posedge clk_sys);   // 4 us: the bounded staleness the scanout may see
+    repeat (4 * SYS_MHZ) @(posedge clk_sys);   // 4 us: the bounded staleness the scanout may see
     fetch_line(COHER_BASE);
     fetch_line(COHER_BASE);
     walk_line(1'b1);
@@ -753,7 +764,7 @@ module tb_pc9821_pegc_store_rate;
       store_sync(LINE_BASE + 32'(((14'(COHER_BASE) + 14'd80) << 3) + 32'(k * 4)),
                  line_dword(9'(k)), 4'hF);
     // The settled state: the buffer is empty and the line is in SDRAM (probe it).
-    while (s_busy && (drain_cycles < 200)) begin
+    while (s_busy && (drain_cycles < 4 * SYS_MHZ)) begin
       @(negedge clk_sys);
       drain_cycles = drain_cycles + 1;
     end
@@ -775,12 +786,12 @@ module tb_pc9821_pegc_store_rate;
     //
     // The stream is driven here synchronously (one store per clk_sys, no task: a task's
     // inter-store gap is the idle cycle the old rule needed), and the property is
-    // checked where it is observable - at the BACKEND: 300 cycles is six hold windows
-    // (HOLD_CYCLES = 50), so the buffer must hand the backend at least a few writes. The
+    // checked where it is observable - at the BACKEND: RES_CLK cycles is six hold windows
+    // (HOLD_CYCLES = HOLD_CLK), so the buffer must hand the backend at least a few writes. The
     // scanout cannot see the difference (its own fetch is slower than the window - the
     // leg below measures that), so the port is the right instrument.
     w0 = wr_accepts;
-    for (k = 0; k < 300; k = k + 1) begin
+    for (k = 0; k < RES_CLK; k = k + 1) begin
       @(negedge clk_sys);
       s_addr = LINE_BASE + 32'(((14'(COHER_BASE) + 14'd80) << 3));
       s_din  = 32'hE0E0_E0E0;
@@ -790,11 +801,11 @@ module tb_pc9821_pegc_store_rate;
     end
     s_valid = 1'b0;
     w1 = wr_accepts;
-    $display("MEASURED saturated same-dword stream: %0d backend writes in 300 clk_sys (bound wants >= %0d)",
-             w1 - w0, (300 / 50) - 2);
-    if ((w1 - w0) < ((300 / 50) - 2)) begin
+    $display("MEASURED saturated same-dword stream: %0d backend writes in %0d clk_sys (bound wants >= %0d)",
+             w1 - w0, RES_CLK, (RES_CLK / HOLD_CLK) - 2);
+    if ((w1 - w0) < ((RES_CLK / HOLD_CLK) - 2)) begin
       $display("FAIL residency bound: a saturated same-dword stream held its entry for %0d clk_sys (%0d writes, want >= %0d) -- the combining window is not a bound",
-               (w1 - w0 == 0) ? 300 : 0, w1 - w0, (300 / 50) - 2);
+               (w1 - w0 == 0) ? RES_CLK : 0, w1 - w0, (RES_CLK / HOLD_CLK) - 2);
       errors = errors + 1;
     end
     // The dword is the CPU's now, not the display's problem: the stream's last bytes are
@@ -888,7 +899,7 @@ module tb_pc9821_pegc_store_rate;
     begin : fz_full
       integer fi, nwr, hit5;
       reg [31:0] fb;
-      fb = FZ_X + 32'h0001_0000;
+      fb = FZ_X + 32'h0000_4000;
       // Eight partial entries, one per 2 KiB SDRAM row (no gather group, no pair), with
       // the backend accept held off so the buffer stays full.
       for (fi = 0; fi < 8; fi = fi + 1)

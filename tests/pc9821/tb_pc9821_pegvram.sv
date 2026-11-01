@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PEGVRAM:
-// With the 15-16 MiB system-space hole on (port 0x043B bit 2 cleared, as the ITF's phase-2 test requests with `out 0x43B,0`) the PEGC's 512 KiB extended VRAM exists at physical 0xF00000-0xF7FFFF: a 512 KiB fill of 0xFFFFFFFF completes and reads back, then a fill of 0 reads back, at real sdram.v timing, through the ordinary mapper route; and the same window with the hole OFF is ordinary RAM that leaves no trace in the PEGC store. The aperture is gated by the register file's [0xE0102] bit 0 (NP2kai memvgaf_rd8/wr8; MAME pegc_vram_view): with it clear a read answers 0xFF and a store leaves no trace (FAIL-FIRST row: before the gate landed the store reached the backend), and the machine's own enable flow - open the PEGC view, write [0xE0102]=1 through the register file - turns it on. The two packed windows (0xA8000 with bank 0xE0004, 0xB0000 with bank 0xE0006) reach the SAME store at {bank, offset[14:0]} (NP2kai memvga.c VGARD8/VGAWR8, qemu (bank & 0x0f) * 0x8000) and round-trip against the flat aperture. The ITF's own phase-2 block fills and verifies exactly this range at 0xF00000 after clearing 0x043B bit 2 and setting [0xE0102]=1, and its failure prints the warn-only "EXTENDED GVRAM ERROR". The size and the address are qemu-pc98's (PEGC_POST_SIZE = 0x80000 decoded at 0xf00000, hw/display/pc98-vga.c pegc_post_readb/writeb) and NP2kai's (memvgaf over vramex[0x80000], mem/memvga.c), both 512 KiB flat RAMs.
+// With the 15-16 MiB system-space hole on (port 0x043B bit 2 cleared, as the ITF's phase-2 test requests with `out 0x43B,0`) the PEGC's 512 KiB extended VRAM exists at physical 0xF00000-0xF7FFFF: a 512 KiB fill of 0xFFFFFFFF completes and reads back, then a fill of 0 reads back, at real sdram.v timing, through the ordinary mapper route; and the same window with the hole OFF is ordinary RAM that leaves no trace in the PEGC store. The aperture is gated by the register file's [0xE0102] bit 0 (NP2kai memvgaf_rd8/wr8; MAME pegc_vram_view): with it clear a read answers 0xFF and a store leaves no trace (FAIL-FIRST row: before the gate landed the store reached the backend), and the machine's own enable flow - open the PEGC view, write [0xE0102]=1 through the register file - turns it on. The two packed windows (0xA8000 with bank 0xE0004, 0xB0000 with bank 0xE0006) reach the SAME store at {bank, offset[14:0]} (NP2kai memvga.c VGARD8/VGAWR8, qemu (bank & 0x0f) * 0x8000) and round-trip against the flat aperture, up to the store's top - banks 14 and 15, where the 640x480 frame at the Win95 driver's 1024-byte pitch ends (line 479 at 0x77C00) - and against the 0xFFF00000 alias (NP2kai i386c/cpumem.c memp_read8 -> memvgaf) in both directions. The ITF's own phase-2 block fills and verifies exactly this range at 0xF00000 after clearing 0x043B bit 2 and setting [0xE0102]=1, and its failure prints the warn-only "EXTENDED GVRAM ERROR". The size and the address are qemu-pc98's (PEGC_POST_SIZE = 0x80000 decoded at 0xf00000, hw/display/pc98-vga.c pegc_post_readb/writeb) and NP2kai's (memvgaf over vramex[0x80000], mem/memvga.c), both 512 KiB flat RAMs.
 
 // ==== DUT ====
 // pc9821_memory_subsystem with its backend answered by sdram_backend_model at the timing
@@ -48,8 +48,8 @@ module tb_pc9821_pegvram;
   reg  [7:0]  cpu_burstcount = 8'd1;
   reg         cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   // Parked ports (GVRAM/TRAM/CG/EGC/scanout/font reader): not this bench's subject.
   reg         gvram_access_page = 0;
@@ -258,7 +258,7 @@ module tb_pc9821_pegvram;
     end
 
     // The machine's own enable flow, exactly as the ITF's phase-2 block runs it
-    // (BANK4@0x1434-0x144C disassembled from the owner's pack: out 0x6A 07/21/68/06
+    // (BANK4@0x1434-0x144C disassembled from the firmware pack: out 0x6A 07/21/68/06
     // brackets the mode select, then [0xE0102] = 1 before the fill): open the PEGC
     // MMIO view, write [0xE0102] = 1 through the register file (the dword at
     // 0xE0100 carries [0xE0100] = 0 - packed mode - in its low byte), close the view.
@@ -355,6 +355,41 @@ module tb_pc9821_pegvram;
     cpu_load(32'h000E_0004, rd);
     if (rd !== 32'h0003_0005) begin
       $display("FAIL CHK-6 banks: 0xE0004 read %08x, want 00030005 (NP2kai mio1 round-trip)", rd);
+      errors = errors + 1;
+    end
+
+    // ---- CHK-7: the TOP of the store, where the 640x480 256-colour frame ends. At the
+    // Win95 PC-9821 driver's 1024-byte pitch (PEGCV8.DRV's mode row, seg 2 @0x0BCC) line 479
+    // starts at 0x77C00, inside bank 14; bank 15 is the store's last 32 KiB. The driver
+    // reaches the frame through the flat aperture (DPMI-mapped 0xF00000, seg 2 @0x0B7E) and
+    // the 0xFFF00000 alias is the same store (NP2kai i386c/cpumem.c:805 memp_read8 `>=
+    // 0xfff00000 && < 0xfff80000` -> memvgaf); the banked windows must see the same bytes. ----
+    cpu_store(32'h000E_0004, 32'h000F_000E, 4'hF);           // bank A = 14, bank B = 15
+    cpu_store(32'hFFF7_7C00, 32'hC0DE_4790, 4'hF);           // line 479, dot 0, via 0xFFF00000
+    cpu_load(32'h000A_FC00, rd);                             // window A: 14*0x8000 + 0x7C00
+    if (rd !== 32'hC0DE_4790) begin
+      $display("FAIL CHK-7 high alias -> window A: 0xFFF77C00 read through 0xAFC00 (bank 14) as %08x, want c0de4790", rd);
+      errors = errors + 1;
+    end
+    cpu_load(32'h00F7_7C00, rd);
+    if (rd !== 32'hC0DE_4790) begin
+      $display("FAIL CHK-7 high alias -> aperture: 0xFFF77C00 read at 0xF77C00 as %08x, want c0de4790", rd);
+      errors = errors + 1;
+    end
+    cpu_store(32'h000B_7FFC, 32'h7FFF_C15F, 4'hF);           // window B, bank 15: the last dword
+    cpu_load(32'hFFF7_FFFC, rd);
+    if (rd !== 32'h7FFF_C15F) begin
+      $display("FAIL CHK-7 window B -> high alias: 0xB7FFC (bank 15) read at 0xFFF7FFFC as %08x, want 7fffc15f", rd);
+      errors = errors + 1;
+    end
+    cpu_load(32'h00F7_FFFC, rd);
+    if (rd !== 32'h7FFF_C15F) begin
+      $display("FAIL CHK-7 window B -> aperture: 0xB7FFC (bank 15) read at 0xF7FFFC as %08x, want 7fffc15f", rd);
+      errors = errors + 1;
+    end
+    cpu_load(32'h000E_0004, rd);
+    if (rd !== 32'h000F_000E) begin
+      $display("FAIL CHK-7 banks: 0xE0004 read %08x, want 000f000e", rd);
       errors = errors + 1;
     end
     pegc_256 = 1'b0;

@@ -12,18 +12,18 @@ the DEVICE CLOCK RATES - no run-local scale exists anywhere in the run:
     PIT channel-0: 2 457 600 counts/s  (1 count = 406.901 ns)
     ARTIC counter:   307 200 ticks/s   (1 tick  = 3255.208 ns)
 
-Both rates are machine-confirmed (r13/215 section 1.4: 8 raw PIT counts per
+Both rates are machine-confirmed (8 raw PIT counts per
 ARTIC tick over three windows on two programs; the ARTIC rate independently by
 the raster edge counts).  The PITDIV line cross-checks the PIT STRAP: a
 divisor near 0x4E00 means the BIOS work-area 0501 bit-7 strap selects the
-1.9968 MHz oscillator and the PIT rate is switched to 1 996 800 counts/s
-(review P2f); anything unrecognised keeps 2.4576 MHz with a loud warning.
+1.9968 MHz oscillator and the PIT rate is switched to 1 996 800 counts/s;
+anything unrecognised keeps 2.4576 MHz with a loud warning.
 
-REFEREE (review P1-3): **ARTIC is preferred whenever its delta is >= 1 tick** -
+REFEREE: **ARTIC is preferred whenever its delta is >= 1 tick** -
 at these scales the 24-bit counter cannot wrap (54.6 s) and its reads cannot
 tear, while the PIT's 16-bit raw delta wraps silently above one 65536-count
-period and the torn latch word mis-assembles (r13/215 section 1.1).  The
-review's worked example: a 70000-count truth (3 PIT reloads) reads as raw16 =
+period and the torn latch word mis-assembles.  The
+worked example: a 70000-count truth (3 PIT reloads) reads as raw16 =
 61808 - 11% low, INSIDE the old 25% band - exactly the cold command->first-DRQ
 regime.  PIT is kept only for sub-tick windows (ARTIC delta 0).  The 8:1
 cross-check is retained as a health label with the machine-measured 0.5-5%
@@ -31,7 +31,7 @@ agreement band: ok / WRAP (the -8192-count reload signature, explicitly
 rejected) / neq (disagreement beyond 5%) / sub (sub-tick, PIT used).
 
 LEGACY x2 RULE: the archived /TIME and T2R captures print halved-era PIT ns
-(the mode-3 /2 that r13/215 refuted), so any quoted ns from
+(the mode-3 /2 that a raster check on the machine refuted), so any quoted ns from
 them must be doubled before it is compared with this probe's output or with
 the 30-clk / 81-clk anchor axes.
 
@@ -58,15 +58,15 @@ data that look like constants.  A refusal exits 1; a quoted-but-defective captur
 exits 0.
 
 STRAP ASSUMPTION.  The 8:1 law the tables and the self-check referee against is
-the 2.4576 MHz PIT strap's (r13/215 section 1.4).  On the 1.9968 MHz strap
+the 2.4576 MHz PIT strap's.  On the 1.9968 MHz strap
 (divisor 0x4E00, which this decoder does recognise below) the ratio is 6.5 raw
 counts per ARTIC tick, so the probe's `chk_pair` would fail EVERY window and a
 SELFCHECK failure there is the strap, not a sign or order defect - the PITDIV
 line is the discriminator (and a 16-bit PIT wrap in the longest CAL window would
 present as a failure too).
 
-The output ends with the DECISION CONSTANTS block: the numbers the th5-ide
-lane aims for, each with the row it came from.  Nothing here talks to
+The output ends with the DECISION CONSTANTS block: the numbers the IDE timing
+work aims for, each with the row it came from.  Nothing here talks to
 hardware; it is a pure text parser.
 """
 
@@ -92,7 +92,7 @@ ART_ABSURD = 1 << 20           # > ~3.4 s of ARTIC ticks: no window here is that
 def pit_ns(counts: int) -> float:
     return counts * 1e9 / PIT_HZ
 
-# The two candidate axes for the 0x5F anchor question (r13/245 section 6):
+# The two candidate axes for the 0x5F anchor question:
 # is one 005F access the documented 600 ns (30 clk_sys at 50 MHz) or the class
 # table's 81 clk_sys (1620 ns)?  The measured absolute excess decides.
 AXIS_30_NS = 600.0
@@ -138,13 +138,13 @@ def sections(text: str) -> tuple[dict[str, list[str]], list[str], list[str]]:
 def referee(pit: int, art: int) -> tuple[str, str]:
     """(which column to trust, health label) for one raw window.
 
-    Review P1-3: prefer ARTIC whenever its delta is >= 1 tick (no wrap/tear at
+    Prefer ARTIC whenever its delta is >= 1 tick (no wrap/tear at
     these scales); keep PIT only for sub-tick windows.  The 8:1 cross-check is
     a health label at the machine-measured agreement band (0.5-5%): 'ok',
     'WRAP' for the -8192-count reload signature (explicitly rejected), 'neq'
     beyond 5%, 'sub' when the window is sub-tick and PIT serves.
 
-    Small-window rule (review round 2, P2-4): the absolute floors (16 counts,
+    Small-window rule: the absolute floors (16 counts,
     32 for the WRAP check) exist for latch-read quantization, but they are
     CLAMPED to ref so the effective band never exceeds +/-100% on windows
     below ~320 counts (art=1 tick, ref=8: 'ok' now spans pit 0..16, not
@@ -456,7 +456,7 @@ def print_cal(cal: list[dict]) -> dict[str, float]:
                 "    INDETERMINATE - the 0x5F anchor stays open: the measurement is within ~20%"
                 " of neither\n    axis.  Do NOT print a nearest-axis verdict from it.  If"
                 " this number came from a\n    legacy capture, apply the x2 rule first"
-                " (halved-era PIT ns, r13/215 section 1.3:\n    double them) and re-run"
+                " (halved-era PIT ns:\n    double them) and re-run"
                 " the comparison."
             )
         else:
@@ -466,7 +466,7 @@ def print_cal(cal: list[dict]) -> dict[str, float]:
             )
             print(
                 f"    Verdict: closer to {verdict} (within 20%)."
-                f"\n    This decides the 0x5F anchor question (r13/245 section 6):"
+                f"\n    This decides the 0x5F anchor question:"
                 f" quote class\n    times on the axis above.  Note the documented 600 ns"
                 f" may be the inserted WAIT\n    only, not the total access cost - if the"
                 f" measurement lands ~1.6-1.7 us, the 600 ns\n    figure and the total"
@@ -668,7 +668,7 @@ def decode(text: str) -> bool:
         acc, tot = int(m.group(2), 16), int(m.group(3), 16)
         note = "" if tot == 0 or acc * 2 >= tot else " (low coherence: the latch read still tears - timing unaffected, PIT is refereed per window)"
         print(f"  PITDIV diagnostic: 0x{div:04X} coherent pairs {acc}/{tot}{note}")
-        # Review P2f: the divisor is the strap discriminator - 0x4E00 means the
+        # The divisor is the strap discriminator - 0x4E00 means the
         # BIOS work-area 0501 bit-7 strap selects the 1.9968 MHz oscillator and
         # every PIT-derived figure moves 19% (2.4576/1.9968).
         if 0x4800 <= div <= 0x5400:

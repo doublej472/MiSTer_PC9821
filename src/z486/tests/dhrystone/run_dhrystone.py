@@ -21,6 +21,13 @@ DEFAULT_Z386_CACHE = REPO_ROOT / "z386_MiSTer/src/memory/l1_cache.sv"
 BUILD_DIR = THIS_DIR / "build"
 BIN_FILE = BUILD_DIR / "dhrystone.bin"
 HEX_FILE = BUILD_DIR / "dhrystone.hex"
+# --pc98-map: build the current core with the PC-98 memory-map template
+# (`Z486_PC98_MAP_PARAMS, RAM_BOUND_ENABLE) in its own build directory.
+PC98_MAP = False
+
+
+def core_build_name(label: str) -> str:
+    return label + "_pc98" if PC98_MAP and label == "z486_current" else label
 WATCOM_BUILD_SCRIPT = THIS_DIR / "build_watcom.py"
 WATCOM_BIN_FILES = {
     "optimized": BUILD_DIR / "watcom" / "optimized" / "DHRY.BIN",
@@ -262,7 +269,7 @@ def build_core(
     verbose: bool = False,
 ) -> Path:
     core_dir = core_dir.resolve()
-    core_build_dir = BUILD_DIR / label
+    core_build_dir = BUILD_DIR / core_build_name(label)
     exe = core_build_dir / "obj_dir/Vtb_dhrystone"
     if exe.exists() and not rebuild:
         copy_ucode_files(core_dir, core_build_dir)
@@ -324,6 +331,8 @@ def build_core(
         cmd.insert(cmd.index("--top-module"), "+define+Z386_LEGACY_SEG_DESC")
     else:
         cmd.insert(cmd.index("--top-module"), "+define+Z486_CURRENT_CORE")
+        if PC98_MAP:
+            cmd.insert(cmd.index("--top-module"), "+define+DHRY_PC98_MAP")
     cmd.extend(str(path) for path in sources)
     run_checked(cmd, cwd=core_build_dir, verbose=verbose)
     return exe
@@ -354,12 +363,12 @@ def run_core(
     if profile_m0 and label == "z486_current":
         cmd.append("+profile_m0")
     if trace:
-        tracefile = BUILD_DIR / label / "dhrystone.fst"
+        tracefile = BUILD_DIR / core_build_name(label) / "dhrystone.fst"
         cmd.extend(["+trace", f"+tracefile={tracefile}"])
 
     result = subprocess.run(
         cmd,
-        cwd=BUILD_DIR / label,
+        cwd=BUILD_DIR / core_build_name(label),
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -484,7 +493,13 @@ def main() -> int:
         help="report sustained issue and frontend-starvation counters",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="show build commands/output")
+    parser.add_argument(
+        "--pc98-map", action="store_true",
+        help="build z486_current with the PC-98 memory-map template (the PC-9821 core's configuration)",
+    )
     args = parser.parse_args()
+    global PC98_MAP
+    PC98_MAP = args.pc98_map
 
     if args.no_build:
         binary_file = (
@@ -515,7 +530,7 @@ def main() -> int:
     exes: dict[str, Path] = {}
     for core in cores:
         if args.no_build_cores:
-            exes[core] = BUILD_DIR / core / "obj_dir/Vtb_dhrystone"
+            exes[core] = BUILD_DIR / core_build_name(core) / "obj_dir/Vtb_dhrystone"
             if not exes[core].exists():
                 raise FileNotFoundError(f"{exes[core]} does not exist")
         else:
@@ -546,7 +561,7 @@ def main() -> int:
             lines = [line for line in result.output.splitlines()
                      if line.startswith("M0_")]
             if lines:
-                profile_log = BUILD_DIR / result.core / "m0_profile.log"
+                profile_log = BUILD_DIR / core_build_name(result.core) / "m0_profile.log"
                 profile_log.write_text(result.output)
                 print(f"\n[{result.core}] M0 profile")
                 print("\n".join(lines))

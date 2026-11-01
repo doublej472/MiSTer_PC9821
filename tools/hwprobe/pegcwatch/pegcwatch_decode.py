@@ -7,7 +7,7 @@ Usage:
 
 PEGCWATCH (tools/hwprobe/pegcwatch/pegcwatch.s) runs a child under two chained
 hooks and prints the PEGC state it left behind. THE ONE QUESTION this reads off
-is the owner's: does DOOM's `pc9821.drv` need only PEGC's display half (packed
+is: does DOOM's `pc9821.drv` need only PEGC's display half (packed
 scanout + the 256-entry palette + the VRAM route - 41-51 LABs) or also its
 plane/dot engine (69-76 LABs)?
 

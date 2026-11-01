@@ -5,7 +5,7 @@ WHY THIS EXISTS. `tools/bench.py` is the one bench runner and its engine is Veri
 which is 2-STATE: a register with no initialiser and no reset reads as 0, so a bench
 whose whole point is "this self-fed counter must not X-lock" cannot fail under the gate
 at all. Six benches carry that claim (`audio_volume_x`, `cdda_div_reset`, `cg_win_seed`,
-`crtc_stat_seed`, `kbd_warmreset`, `system_reset_seed`; audit-tests-debt section 4.1).
+`crtc_stat_seed`, `kbd_warmreset`, `system_reset_seed`).
 A claim the shipped run cannot falsify is not evidence, so this script gives the
 falsifiable ones their own explicitly named 4-state run.
 
@@ -44,7 +44,7 @@ rejection as a catch, which is the "a check that cannot fail" class again).
 
 COVERAGE IS NOT UNIFORM, and the script says so out loud rather than in prose: see
 COVERS/UNCOVERED below. `system_reset_seed` is listed and NOT run -- pc9821_system does
-not elaborate under iverilog at all, and the FIRST error is not in this lane's RTL but in
+not elaborate under iverilog at all, and the FIRST error is not in the bench's own RTL but in
 the frozen vendored `src/opna/jt12/hdl/jt12_top.v`. Its banner was weakened to say so.
 Registers whose power-up value the 4-state run reaches are named per bench in
 COVERS[...]['registers'].
@@ -140,9 +140,9 @@ COVERS: dict[str, dict] = {
 UNCOVERED: dict[str, str] = {
     "system_reset_seed": (
         "pc9821_system still does not elaborate in iverilog, but NOT for the two reasons "
-        "audit F4 named: those are fixed (pc9821_dmac.sv:479 (dout_comb = 8'hFF;) is now a "
+        "this bench once listed: those are fixed (pc9821_dmac.sv:548 (dout_comb = 8'hFF;) is now a "
         "legal l-value, and its iobus sibling "
-        "src/pc9821/core/pc9821_iobus.sv:336 (assign dbg_itf_stage = itf_stage;) now "
+        "src/pc9821/core/pc9821_iobus.sv:417 (assign dbg_itf_stage = itf_stage;) now "
         "follows its declaration). What iverilog reports FIRST is a frozen file: "
         "src/opna/jt12/hdl/jt12_top.v labels two generate blocks `gen_adpcm` "
         "(use_adpcm==1 and use_adpcm==2), which iverilog rejects even "

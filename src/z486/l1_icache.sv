@@ -404,8 +404,21 @@ end
 // enters S_FILL. Every reader samples cpu_line only with cpu_resp_valid
 // (paging_unit's pf_rdata: "the prefetcher samples pf_rdata only on an ack
 // edge", which is a completion cycle for every ack that carries data).
-assign cpu_line = lookup_read_hit_now ? lookup_way_line : fill_line;
+// The line select is the registered resp_valid_r instead of lookup_read_hit_now
+// (a tag compare, the snoop conflict and the state: fo ~150 in front of 128
+// line bits, the fitted req_addr_r -> lookup_read_hit_now -> cpu_line ->
+// prefetch queue -> k1q_r / entry-ROM path).  resp_valid_r is set only on an
+// S_FILL edge (to S_IDLE or held in S_FILL) and cleared on every other, so it
+// is never set in S_LOOKUP: whenever cpu_resp_valid holds, this select picks
+// the same line as lookup_read_hit_now would (fused below), and cpu_line is
+// read only with cpu_resp_valid (z486.sv fuses the prefetcher's consumers).
+assign cpu_line = resp_valid_r ? fill_line : lookup_way_line;
 assign cpu_resp_valid = lookup_read_hit_now || resp_valid_r;
+// synthesis translate_off
+always @(posedge clk)
+    if (!reset && resp_valid_r && (state == S_LOOKUP))
+        $fatal(1, "l1_icache: a fill response in S_LOOKUP (cpu_line select contract)");
+// synthesis translate_on
 
 wire tag_reset_write = (state == S_RESET_INIT);
 // The flush sweep yields to a registered snoop, whose clear writes a different

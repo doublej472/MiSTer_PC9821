@@ -4,22 +4,22 @@
 // TB_PC9821_VIDEO_MIXER:
 // The graphics side of the scanout: the four planes fold to the 4-bit index {E,G,R,B} -- one bit per lane per dot, B bit 0, R bit 1, G bit 2, E bit 3, MSB first -- the palette reads that index out of the 16-entry analogue table or, in 8-colour digital mode, out of the pack the machine's own power-on bytes imply (0xA8/AA/AC/AE = 37/15/26/04 -> black, blue, red, magenta, green, cyan, yellow, white), a 256-colour index bypasses the fold into the 256-entry FULL-byte table (NP2kai pal_make9821 renders the bytes verbatim) whose registered read delays BOTH arms by one clk_sys in 256-colour mode only - the uniform one-dot delay, with the boundary capture still showing the old TEXT dot - while the 16-colour path moves not one dot (a 24-vector sweep against the closed-form old path), the 256-colour index is the full 8-bit byte (0x16 is not 0x06), and the 200-line odd-line gate is dropped in packed mode and kept in 16-colour mode, and the D4 compositor puts an opaque text dot over the graphics pixel, shows graphics under a transparent one, and changes its answer when the rule select is flipped.
 
-// Both halves of this bench exist because of one decision: r12/33 D3 keeps the
+// Both halves of this bench exist because of one decision: the design keeps the
 // plane fold and the palette in SEPARATE modules (so PEGC's packed 256-colour
-// mode can bypass the fold without a second datapath) and D4 writes the
+// mode can bypass the fold without a second datapath) and writes the
 // compositor as ONE two-way priority mux behind a rule select, because the rule
-// NP2kai implements is a model and not a measurement (r12/19 section 5.3).
+// NP2kai implements is a model and not a measurement.
 // The bench therefore drives the fold, the palette and the mixer independently
 // and then asserts that the compositor's answer CHANGES when the select does.
 //
-// The analogue table is pc9821_gfx_palette's ping-pong RAM now (r13/225 #2), so
+// The analogue table is pc9821_gfx_palette's ping-pong RAM now, so
 // the bench loads it through the CPU write port and swaps the banks with the
 // frame-boundary commit, exactly as pc9821_gdc_text drives it; and because the
 // MLAB read is registered, the mixer presents the NEXT dot's index - the section
 // that pins the line-buffer read address says what that does to the sequencer.
 //
 // Everything here is a synthetic vector list -- there is no photograph to take
-// and none is needed: what r12/07's M4 probe settles is which rule the hardware
+// and none is needed: what a hardware probe settles is which rule the hardware
 // uses, not what any rule computes. The mapping the default arm computes is
 // NP2kai's, and the machine's own power-on digital palette bytes are the input
 // that pins the digital table's channel order. The watchdog below is the bound.
@@ -199,7 +199,7 @@ module tb_pc9821_video_mixer;
   // Check one pixel: the 24-bit value the framework must see.
   task automatic check_pixel(input [8*96-1:0] what, input [23:0] want);
     begin
-      // The palette's output is REGISTERED (r13/225 #2), so a changed input needs a
+      // The palette's output is REGISTERED, so a changed input needs a
       // clock edge before the framework's bytes can show it.
       @(posedge clk);
       #1;
@@ -333,7 +333,7 @@ module tb_pc9821_video_mixer;
       end
 
     // All four planes lit is the whole index; the order of the index bits is
-    // B = bit 0, R = bit 1, G = bit 2, E = bit 3 (r12/33 D3).
+    // B = bit 0, R = bit 1, G = bit 2, E = bit 3.
     column = 32'hFFFF_FFFF;
     dot = 3'd0;
     #1;
@@ -404,7 +404,7 @@ module tb_pc9821_video_mixer;
     end
 
     // ---------------------------------------------------------------
-    // 4. PEGC 256-colour bypasses the fold (r12/33 D3).
+    // 4. PEGC 256-colour bypasses the fold.
     // ---------------------------------------------------------------
     // The line buffer's word is all zero, so the fold's answer is index 0. A
     // packed pixel of 6 must reach the palette instead of the fold's 0 when the
@@ -472,7 +472,7 @@ module tb_pc9821_video_mixer;
     end
 
     // ---------------------------------------------------------------
-    // 6. The compositor (r12/33 D4): one two-way priority mux, and its select.
+    // 6. The compositor: one two-way priority mux, and its select.
     // ---------------------------------------------------------------
     // Graphics: every plane lit at every dot -> index 15 -> bright white in the
     // power-on table.
@@ -516,7 +516,7 @@ module tb_pc9821_video_mixer;
     check_pixel("the text-only arm still shows the text plane", expand(12'hABC));
 
     // Graphics display off: the carried P2 -- this core paints black under the
-    // text rather than NP2kai's palette entry 0 (r12/33 section 6).
+    // text rather than NP2kai's palette entry 0.
     comp_rule = 2'b00;
     text_opaque = 1'b0;
     grph_disp = 1'b0;
@@ -535,7 +535,7 @@ module tb_pc9821_video_mixer;
     v_active = 1'b1;
 
     // ---------------------------------------------------------------
-    // 7. The line-buffer read port (r12/33 D5), the seam with pc9821_gvram.
+    // 7. The line-buffer read port, the seam with pc9821_gvram.
     // ---------------------------------------------------------------
     // The buffer's read is REGISTERED, so the word for a column must be presented
     // for the WHOLE of that column: a dot is 2.375 clk_sys, so the read has

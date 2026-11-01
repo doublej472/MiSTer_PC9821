@@ -45,11 +45,11 @@ module pc9821_gvram_mem (
 
   // THE WRITE DECODE IS EXPLICIT PER LANE, NOT A NESTED (ce, we, byteena) TREE. The
   // nested `if (a_en) if (a_we) if (a_be[i])` let the inferred altsyncram wrapper decode
-  // the three terms per block - the lightoc fit's worst family (ext_addr_r -> u_gmem's
+  // the three terms per block - a fit's worst family (ext_addr_r -> u_gmem's
   // porta_we_reg) spent `mem0~0` + `mem1_rtl_0|auto_generated|decode2` (two LUT levels,
   // the second fanning out over the array's blocks) between the arbiter's gma_we cone and
   // every block's portawe pin. Each lane's enable is exactly `a_en && a_we && a_be[i]`.
-  // MEASURED CAVEAT (FIX_REPORT section 5, fact 1): the explicit product did NOT remove
+  // MEASURED CAVEAT: the explicit product did NOT remove
   // the wrapper's second level - the RAM inference re-splits the shared form below
   // (`{4{wr_any}} & a_be`) back into a (wren, byteena) pair, and the fit's tail is again
   // `wr_any~3` + `decode2` + portawe. The remaining increment inside this seam is to

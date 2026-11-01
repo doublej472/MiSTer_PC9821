@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The five-state INTA bridge driven through the exact protocol of its own header comments - the first INTA answers with one dummy ready and din=0, the second pulses pic_interrupt_done for exactly one clk and the PIC's acknowledge-latched vector is read back a cycle later before ready drops and the FSM returns to idle - and the five corners that hide a protocol bug pinned: a strobe held high answers the first INTA once, an INTA with no pending request passes the PIC's spurious vector through unchanged, back-to-back interrupts re-arm because inta_responded clears between them, the vector handed over is the one on pic_interrupt_vector at the transfer (the acknowledge latch is the PIC's, r13/120, not the bridge's - recorded rather than asserted), and reset_n in each of the five states returns to idle without a stray acknowledge.
+// The five-state INTA bridge driven through the exact protocol of its own header comments - the first INTA answers with one dummy ready and din=0, the second pulses pic_interrupt_done for exactly one clk and the PIC's acknowledge-latched vector is read back a cycle later before ready drops and the FSM returns to idle - and the five corners that hide a protocol bug pinned: a strobe held high answers the first INTA once, an INTA with no pending request passes the PIC's spurious vector through unchanged, back-to-back interrupts re-arm because inta_responded clears between them, the vector handed over is the one on pic_interrupt_vector at the transfer (the acknowledge latch is the PIC's, not the bridge's - recorded rather than asserted), and reset_n in each of the five states returns to idle without a stray acknowledge.
 //
 // ---- where the sequence comes from ----
 // [source 1: the module's own comments] src/pc9821/interrupts/pc9821_inta_bridge.sv's
@@ -234,7 +234,7 @@ module tb_pc9821_inta_bridge;
     // The boundary, RECORDED rather than asserted: the bridge is not itself a latch - it
     // reads pic_interrupt_vector at the transfer. A change AFTER the acknowledge pulse
     // therefore passes straight through, which is the documented division of labour (the
-    // latch is the PIC's, r13/120), not a bridge defect. The line prints what the bridge
+    // latch is the PIC's), not a bridge defect. The line prints what the bridge
     // would hand over so the seam is visible; it is deliberately not a pass/fail case,
     // because asserting pass-through would forbid a future bridge-side latch and asserting
     // the old value would fail against a contract the module does not own.

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_POST_WALK: the EGC's POSTED two-word write burst (r13/159) and the GVRAM's per-word fallback walk (r13/138's m_mode burst fallback) must not corrupt each other, against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram. The post advances the EGC on the D1 ACCEPT, so a 32-bit access presents its second 16-bit unit while the GVRAM still walks the first unit's two words; the fallback is entered when the destination word is DIRTY in the write-combining buffer, and its address used to be the LIVE cc_addr the posted EGC moves. The bench dirties the destination word, runs a 32-bit EGC 0x3100 put, and asserts every word of the destination dword takes the source value - it fails (words 0x1001/0x1002 never written) before the walk latches its base word.
+// TB_PC9821_EGC_POST_WALK: the EGC's POSTED two-word write burst and the GVRAM's per-word fallback walk (the m_mode burst fallback) must not corrupt each other, against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram. The post advances the EGC on the D1 ACCEPT, so a 32-bit access presents its second 16-bit unit while the GVRAM still walks the first unit's two words; the fallback is entered when the destination word is DIRTY in the write-combining buffer, and its address used to be the LIVE cc_addr the posted EGC moves. The bench dirties the destination word, runs a 32-bit EGC 0x3100 put, and asserts every word of the destination dword takes the source value - it fails (words 0x1001/0x1002 never written) before the walk latches its base word.
 //
 // The second scenario pins the walk's DIRECTION latch (m_write). A 16-bit EGC write whose two-column
 // burst is not legal falls back to the same per-word walk; the EGC advances on the ACCEPT, so it
@@ -40,8 +40,8 @@ module tb_pc9821_egc_post_walk;
   reg         cpu_line_read = 1'b0;
   reg         cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -66,9 +66,9 @@ module tb_pc9821_egc_post_walk;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -108,7 +108,7 @@ module tb_pc9821_egc_post_walk;
       cpu_write  = wr;
       cpu_valid  = 1'b1;
       while (!cpu_ready) @(negedge clk);
-      // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+      // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
       // before the pipelined produce's response cycle - held into it, the S_IDLE accept
       // takes the request twice. Read values are unchanged (EGCREAD.CSV / the machine vectors).
       // `egc_gate` is the machine's EGC arming level (0x6A num 2 AND 0x7C bit 7), not a per-access
@@ -296,7 +296,7 @@ module tb_pc9821_egc_post_walk;
     k = 0;
     while (!cpu_ready && (k < 4000)) begin @(negedge clk); k = k + 1; end
     if (!cpu_ready) fail("walk direction: the read behind the posted write never completed");
-    // Released at the ready edge (z486's shape, src/z486/memory.sv:519-523 `ext_valid_r <= 1'b0`),
+    // Released at the ready edge (z486's shape, src/z486/bus_unit.sv:348-350 `ext_valid_r <= 1'b0`),
     // before the pipelined produce's response cycle (see plane_op): held into it, the S_IDLE
     // accept takes the request twice (R6/R8). `egc_gate` is the arming level and stays.
     cpu_valid = 1'b0; cpu_write = 1'b0; cpu_be = 4'hF;

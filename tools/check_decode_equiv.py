@@ -58,9 +58,9 @@ FILES = {
 ADDR_RE = re.compile(r"\b(cpu_addr|d_addr|route_addr)\b")
 
 # Mutations of the NEW (shipped) text.  Each must make the tool report a mismatch.
-#   ide_rom_bit13   the lane's own caught error: the 8 KiB option-ROM window kept only
+#   ide_rom_bit13   an error this check caught in a rewrite: the 8 KiB option-ROM window kept only
 #                   bits [15:14] (=10), i.e. it also claimed 0xDC000-0xDFFFF.
-#   absent_half     the lane's own caught error: the absent-ROM area's half-block escape
+#   absent_half     an error this check caught in a rewrite: the absent-ROM area's half-block escape
 #                   (block D with bit 15 clear) was dropped, so 0xD0000-0xD7FFF went
 #                   missing.
 #   s16m_ge         a `<`/`<=`-class slip: the 15-16 MiB mirror's `>= 8'hFA` became
@@ -236,7 +236,7 @@ def run_whole_module(key, old_text, new_text, workdir):
 
     The renamed source copies the flow needs are written to a temp directory and removed
     again -- leaving module copies in the tree makes every bare-name citation ambiguous
-    (AGENTS.md).  Only the yosys logs are kept, under <workdir>/wm/.
+    (AGENTS.md: temporary files never in the tree).  Only the yosys logs are kept, under <workdir>/wm/.
     """
     logdir = os.path.join(workdir, "wm")
     os.makedirs(logdir, exist_ok=True)

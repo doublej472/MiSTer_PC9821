@@ -28,13 +28,13 @@ commits while the benches kept being written and reviewed, and what it checks dr
 77 of 202 benches no longer carry the manifest claim verbatim, 44 are missing one or more
 of the DUT/CHECKS/VERDICT banners, 5 are shaped so a failing run still exits 0 and 1 has
 no `$fatal(1, ...)` at all. None of that is the checker's opinion -- it is what the tree
-says -- and none of it can be fixed from tools/: the benches belong to the tests lane.
+says -- and none of it can be fixed from tools/: the fixes belong in the benches.
 
 A checker that simply fails on all of it cannot be added to the gate, and one kept out of
 the gate is a check nobody runs, which is the defect class this repository's own
 check_lint.py docstring names. So the debt is ENUMERATED here instead of hidden: the four
 sets below name the benches that carry each class of debt TODAY, and the bench name is a
-work order for the tests lane. What the ledger does NOT do is tolerate
+work order for that bench. What the ledger does NOT do is tolerate
 anything new:
 
   * a bench that is in no set must be clean -- ONE new bench with a diverged claim, no
@@ -61,7 +61,7 @@ SILENT_PASS = re.compile(r'if\s*\(\s*errors\s*==\s*0\s*\)\s*\$display', re.S)
 # was a ledger. This pattern is the shape itself, whatever the counter is called: a FAIL
 # $display followed by $finish and NOTHING BETWEEN, with no $fatal on that path.
 #
-# THE `end` IS THE POINT (audit-benches F1, 2026-09-25). The first form of this pattern was
+# THE `end` IS THE POINT. The first form of this pattern was
 # `\s*` between the two statements, and `\s*` cannot cross an `end` -- so the same silent
 # verdict WRAPPED IN begin/end read as clean, because whitespace is not the only thing that
 # can sit between a FAIL display and its $finish. The wrapper is optional textually (a
@@ -86,7 +86,7 @@ HARD_FAIL = re.compile(r"\$fatal\s*\(\s*1\s*,", re.S)
 SECTIONS = ["WHAT THIS PROVES", "DUT", "CHECKS", "VERDICT"]
 OPTIONAL_SECTIONS = ["STIMULUS"]
 
-INTEGRATED = ["boot", "portharness", "userdisk", "throttle"]
+INTEGRATED = ["boot", "portharness", "userdisk", "throttle", "dma_snoop_throttle"]
 
 # ---------------------------------------------------------------------------------------
 # THE LEDGER: benches that carry each class of debt today. See the module docstring.
@@ -95,7 +95,7 @@ INTEGRATED = ["boot", "portharness", "userdisk", "throttle"]
 # updated for a change and the banner was not, or the other way round). The fix is to make
 # the banner the manifest claim, word for word, which is what tests/pc9821/
 # tb_pc9821_gvram_decouple.sv:6 "manifest claim VERBATIM" already states as the convention.
-# PAID (audit-tests-debt, 2026-09-25): all 71 benches now open their banner with the claim
+# PAID: all 71 benches now open their banner with the claim
 # verbatim, so the class is enforced for every bench rather than owed. Six claims were
 # CORRECTED rather than copied, because the bench and the claim disagreed about what is
 # proved and the bench was right: kbd_codes (99 agree / 2 divergences, not 98/3),
@@ -106,9 +106,9 @@ INTEGRATED = ["boot", "portharness", "userdisk", "throttle"]
 # subject).
 CLAIM_DRIFT = set()
 
-# One or more of the DUT / CHECKS / VERDICT banners is absent. Owed by the tests lane:
+# One or more of the DUT / CHECKS / VERDICT banners is absent. Owed by the bench:
 # either the banners or the rule, but a bench that cannot be read structurally is how a
-# bench loses its claim quietly. PAID (audit-tests-debt, 2026-09-25): every bench now names
+# bench loses its claim quietly. PAID: every bench now names
 # its four sections, so the class is enforced for every bench rather than owed. The banners
 # were placed where the block they name begins (DUT = the declaration/instance block, CHECKS
 # = the check helpers and the run, VERDICT = the verdict), and a few benches whose header
@@ -119,7 +119,7 @@ MISSING_BANNERS = set()
 # `if (errors == 0) $display(PASS)` with no `$fatal` at all: a run that found a mismatch
 # prints no PASS marker but exits 0, so a hand-run looks green. tools/bench.py still fails
 # such a bench (it requires the marker AND exit 0), which is why this was debt rather than
-# an emergency. PAID (audit-tests-debt, 2026-09-25): both remaining benches carried the
+# an emergency. PAID: both remaining benches carried the
 # shape and now raise the exit code, so the set is empty and the class is enforced for
 # every bench -- a new one that can pass silently is a hard failure, not ledger debt.
 # Note the detector is `if (errors == 0) $display` textually: a bench whose verdict is
@@ -336,7 +336,7 @@ def _cases() -> list:
     return [
         ("the correct verdict (the control)", set(), good, {}),
         ("a FAIL $display then $finish", {"silent-pass"}, silent_bare, {}),
-        ("the same FAIL $display inside begin/end (F1)", {"silent-pass"}, silent_wrapped, {}),
+        ("the same FAIL $display inside begin/end", {"silent-pass"}, silent_wrapped, {}),
         ("a bare trailing $fatal", {"bare-trailing-fatal"}, trailing_fatal, {}),
         ("no $fatal(1, ...) at all", {"bound", "no-fatal"}, no_fatal, dict(bound=False)),
         ("no bound", {"bound"}, good, dict(bound=False)),
@@ -393,6 +393,7 @@ def check_tree(table: dict, quiet: bool = False) -> int:
                        "expectation exits non-zero and an unknown op is reported rather than "
                        "ignored.",
         "throttle": "The OSD CPU Speed throttle slows the CPU and only the CPU, through the real CPU, bridge, memory and I/O path: at 8 MHz and at 1 MHz a 4096-iteration DEC/JNZ takes the clock ratio times its full-speed time (within 3%), a 12288-dword REP STOSD takes at least one throttled CPU edge per dword (the throttle acts inside the REP, which an instruction-boundary throttle cannot), every timed interval is its CPU-edge count at the selected rate, and the guest's architectural results - a data-dependent checksum over the region re-read after a whole-L1 flush, and the region itself - are identical at every setting, with a CPU reset, an I/O read, burst line fills, the 0x043F flush and an INTA all crossing the gated-clock bridge on the way; and at every setting an IRQ0 the 8259 raises a few platform cycles after it acknowledges IRQ2 (its INT low for less than one throttled CPU clock) is still taken once the IRQ2 handler's IRET sets IF (a 486 samples INTR as a level, so INTR need not be seen low between two requests).",
+        "dma_snoop_throttle": "TB_PC9821_DMA_SNOOP_THROTTLE: DMA writes accepted by the backend inside a gated (cpu_ce=0) CPU run still invalidate every line they land in - one FDC byte held for the next enabled edge, then TWO back-to-back bytes of a software-request channel-0 transfer in ONE disabled run, each into a different cached line, with both re-reads coherent. It runs the REAL pc9821_system (real z486, real gated cpu_clk, real bridge, real iobus/FDC/uPD71071) at OSD CPU Speed = 1 MHz, so a disabled run spans the uPD71071's ~8-cycle byte cadence: a one-deep snoop hold would let the second accept replace the first address and leave the first line stale, and the bench also asserts no write was accepted while the bridge held a snoop (the back-pressure).",
         "userdisk": 'The AUTHENTIC firmware against a user IDE image reaches the IPL at 1FC0:0000, and before that it passes the CG-window configuration record asserted by the ITF\'s own writes (no repair store at 0x811, the accept-only stage 0x05). That is a control-flow criterion and cannot see wrong sector data; this is the only tier that exercises the disk at all, it is skipped when PC98_USERDISK is unset, and its instruments run during the run rather than on a timeout path.',
     }
     for name, entry in sorted(table.items()):

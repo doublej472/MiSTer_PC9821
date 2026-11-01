@@ -23,10 +23,10 @@ set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS OFF
 # BEGIN build_profile.py settings
 # Active profile: base
-# Active clock rate: 80_000_000 Hz (clk_sys, the SDRAM's clock too)
-# Active SDRAM phase: 8652 ps (derived)
-# Active config: {"alsa_en":false,"cdrom_audio_en":true,"cdrom_en":true,"cdrom_log_en":false,"clk_sys_hz":80000000,"fit_technique":"AREA","io_latency_profile":0,"mpu_en":false,"name":"base","perf_log_en":false,"preset":null,"sdram_phase_ps":8652,"sdram_phase_source":"derived","trace_en":false,"yc_en":false}
-# 80 MHz clk_sys, SDRAM on clk_sys (80/80), production AREA fit (no seed) - the default and shipping build (past timing closure)
+# Active clock rate: 90_000_000 Hz (clk_sys, the SDRAM's clock too)
+# Active SDRAM phase: 7263 ps (derived)
+# Active config: {"alsa_en":true,"cdrom_audio_en":true,"cdrom_en":true,"cdrom_log_en":false,"clk_sys_hz":90000000,"fit_technique":"AREA","io_latency_profile":0,"mpu_en":true,"name":"base","perf_log_en":false,"preset":null,"sdram_dq_ddio":true,"sdram_out_ddio":true,"sdram_phase_ps":7263,"sdram_phase_source":"derived","trace_en":false,"vga_dbl_en":true}
+# 90 MHz clk_sys, SDRAM on clk_sys (90/90, CL2), production AREA fit (no seed) - the default and shipping build (past timing closure)
 set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING OFF
 set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 set_global_assignment -name FITTER_EFFORT "AUTO FIT"
@@ -55,7 +55,6 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT LOW
 set_global_assignment -name OPTIMIZE_POWER_DURING_SYNTHESIS OFF
 set_global_assignment -name ROUTER_REGISTER_DUPLICATION ON
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
-set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
 set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
 # END build_profile.py settings
 set_global_assignment -name VERILOG_MACRO "Z486_QUARTUS_M10K_UCODE=1"
@@ -393,7 +392,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/z486/z486.sv
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 
-# The ebuf M10K DPRAMs (r13/231) plus Quartus resource-aware RAM inference (default ON) demote
+# The ebuf M10K DPRAMs plus Quartus resource-aware RAM inference (default ON) demote
 # the small single-port RAMs (gvram line_buf 8,192b, debug_uart_fifo 4,096b) to registers when
-# the M10K budget looks tight (r13/232) - force the block RAM inference.
+# the M10K budget looks tight - force the block RAM inference.
 set_global_assignment -name SYNTH_RESOURCE_AWARE_INFERENCE_FOR_BLOCK_RAM OFF
+
+# build_profile.py (sdram_out_ddio): the SDRAM DQ output enable is a fabric register - keep this the LAST FAST_OUTPUT_ENABLE_REGISTER line
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER OFF -to SDRAM_DQ[*]

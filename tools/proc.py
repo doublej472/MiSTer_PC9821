@@ -17,7 +17,7 @@ rules in one place so that no tool has to restate them:
   * ANYTHING THAT OUTLIVES ITS LAUNCHER IS STARTED IN ITS OWN SESSION. run_detached()
     (and stream(new_session=True)) pass start_new_session=True, so the child is not
     in the launcher's process group and a SIGHUP to the launcher -- a killed shell, a
-    timed-out agent tool -- cannot reach it. This is the seed-sweep fix.
+    timed-out parent process -- cannot reach it. This is the seed-sweep fix.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def stream(argv, *, log: Path | str | None = None, cwd: Path | str | None = None
 
 # A child that floods its output (a bench stuck in a printing loop) must not take the host down:
 # capture() once held a runaway bench's whole output in memory and the OOM killer reaped it at
-# 53 GB resident, along with the interactive session (2026-10-08). Past this many bytes the child
+# 53 GB resident, along with the interactive login. Past this many bytes the child
 # is killed and the run reported as overflowed; no bench writes within orders of magnitude of it.
 CAPTURE_MAX_BYTES = int(os.environ.get("PC9821_CAPTURE_MAX_BYTES", 256 * 1024 * 1024))
 
@@ -186,7 +186,7 @@ def run_detached(argv, *, log, cwd=None, env=None) -> subprocess.Popen:
 
     start_new_session=True is the whole point: the child is a session and process
     group leader, so a SIGHUP or SIGINT sent to this tool's process group -- which is
-    what a killed shell or a timed-out agent tool delivers -- does not reach it. A
+    what a killed shell or a timed-out parent process delivers -- does not reach it. A
     build launched here finishes even if everything that launched it dies.
     """
     argv = _spawn_argv(argv)

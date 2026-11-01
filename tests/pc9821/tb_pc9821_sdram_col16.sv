@@ -8,7 +8,7 @@
 //    controller issues length-1 CAS reads, so a burst's cells are the request's
 //    dwords in increasing column order, restarting at column 0 when the burst
 //    crosses into the next row (and, at row 8191 of a bank, into the next bank's
-//    row 0 -- review F5). The chip model's (bank,row,column) key makes a wrong
+//    row 0). The chip model's (bank,row,column) key makes a wrong
 //    column read the wrong cell, so the readback below is the reference.
 //  * THE OLD FORMULA:
 //    within a row segment col16 = {rd_col_base + (rd_issued>>1), rd_issued[0]},
@@ -63,7 +63,6 @@ module tb_pc9821_sdram_col16;
 
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .FAST_GRADE(1'b1)
   ) dut (
       .clk(clk), .resetn(resetn), .nce(1'b0), .refresh_allowed(1'b1),
@@ -82,7 +81,7 @@ module tb_pc9821_sdram_col16;
       .SDRAM_CKE(CKE)
   );
 
-  sdram_chip_model #(.CAS(CAS), .T_RP(2), .T_WR(2)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(2), .T_WR(2), .FREQ_HZ(FREQ), .GRADE(6)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );

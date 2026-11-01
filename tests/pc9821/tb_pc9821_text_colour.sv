@@ -48,8 +48,8 @@ module tb_pc9821_text_colour;
   reg [3:0] cpu_be = 0;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
   wire tram_we;
@@ -64,8 +64,6 @@ module tb_pc9821_text_colour;
   reg [10:0] font_ld_addr = 0;
   reg [15:0] font_ld_data = 0;
   reg font_ld_we = 0;
-  wire [15:0] cg_code_win;
-  wire cg_lr_win;
   reg [4:0] cg_win_byte_sel = 0;
   reg cg_win_rd = 0;
   wire [7:0] cg_win_dout;
@@ -79,7 +77,7 @@ module tb_pc9821_text_colour;
   wire vsync_active, vsync_irq, disp_on, gfx_access_page;
   wire vsync_irq_arm;
   // The text plane leaves pc9821_gdc_text as a colour and two opacity flags now
-  // (r12/33 D4: "no text here" is no longer the same three bytes as black).
+  // ("no text here" is no longer the same three bytes as black).
   // This bench reconstructs what the framework used to see, so its pixel
   // assertions keep exactly the meaning they had.
   wire        text_opaque, text_cell;
@@ -101,14 +99,19 @@ module tb_pc9821_text_colour;
   // ==== DUT ====
   // The TRAM arm of the one byte-window responder the TRAM bridge and the CG window are
   // now (route_cg = 0); its CG byte port is idle on this route.
+  wire       unused_dma_ready, unused_dma_resp;
+  wire [7:0] unused_dma_dout;
   pc9821_window_responder u_bridge (
       .clk(clk), .reset(reset), .route_cg(1'b0),
       .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),
       .cpu_line_read(cpu_line_read), .cpu_valid(cpu_valid),
       .cpu_write(cpu_write), .cpu_dout(cpu_dout),
-      .cpu_line_dout(cpu_line_dout), .cpu_ready(cpu_ready),
+      .cpu_line_word(cpu_line_word), .cpu_ready(cpu_ready),
       .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
+      // The DMA port is idle here: no bus-master byte reaches the text RAM in this bench.
+      .dma_valid(1'b0), .dma_write(1'b0), .dma_addr(14'd0), .dma_din(8'h00),
+      .dma_ready(unused_dma_ready), .dma_resp_valid(unused_dma_resp), .dma_dout(unused_dma_dout),
       .tram_addr(tram_addr), .tram_din(tram_din), .tram_we(tram_we),
       .tram_dout(tram_dout),
       .byte_sel(byte_sel_unused), .byte_rd(byte_rd_unused),
@@ -126,7 +129,6 @@ module tb_pc9821_text_colour;
       .tram_cpu_we(tram_we), .tram_cpu_dout(tram_dout),
       .font_ld_addr(font_ld_addr), .font_ld_data(font_ld_data),
       .font_ld_we(font_ld_we),
-      .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
       .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
       .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
       .font_req_addr(font_req_addr), .font_req(font_req),
@@ -260,7 +262,7 @@ module tb_pc9821_text_colour;
   // 0xA3FE2 + 4i = 48 05 0C 00 01 40 00 81).
   // The memory-switch record, as the machine currently reports it. Switch 5 was 0x40
   // in the 2026-09-12 capture and is 0x00 now: it is the keyboard-LED and shift-state
-  // cell, SETUP rewrites it, and the owner's SETUP change is
+  // cell, SETUP rewrites it, and a SETUP change is
   // what moved it. The assertion below is that the attribute fill cannot change any of
   // these eight bytes -- which is the property under test -- so the values must be the
   // machine's, not historical.

@@ -35,6 +35,22 @@ module tb_pc9821_userdisk;
   reg [24:0] ps2_mouse = 25'd0;   // hps_io's packet: {toggle, Y, X, flags[7:3], M, R, L}
   reg img_mounted = 0, img_readonly = 1;
   reg [63:0] img_size = 0;
+  // +FDD_FILE=<path>: a floppy image (D88/HDM/FDD) on hps_io slot 1 (FDD1), served by this host
+  // model's third leg from the file; the guest's writes land in an in-memory overlay.
+  wire [31:0] fdd_lba;
+  wire [5:0]  fdd_blk_cnt;
+  wire        fdd_rd, fdd_wr;
+  reg         fdd_ack = 0;
+  wire [15:0] fdd_buff_din;
+  reg         fdd_mounted = 0;
+  // +FDD2_FILE=<path>: the second floppy (FDD2, hps_io's fdd1 slot), served the same way.
+  wire [31:0] fdd1_lba;
+  wire [5:0]  fdd1_blk_cnt;
+  wire        fdd1_rd, fdd1_wr;
+  reg         fdd1_ack = 0;
+  wire [15:0] fdd1_buff_din;
+  reg         fdd1_mounted = 0;
+  reg  [63:0] fdd1_size = 0;
   // +CD_FILE=<path>: the CD-ROM's image (ISO or PCD, tools/cue2pcd.py) on hps_io slot 4, served
   // by this host model's second leg (the leg that once served the removed second hard disk).
   // Only in a build with -DUSERDISK_CD (USERDISK_CD=1 for run_userdisk.sh), which builds
@@ -52,6 +68,14 @@ module tb_pc9821_userdisk;
 `else
   localparam TB_CDROM = 1'b0;
 `endif
+  // The run-time SDRAM_CLK phase instrument (-DUSERDISK_SDPH): its guest ports and its scan-clock
+  // engine, against a PLL model that counts the steps (no real phase moves in simulation).
+`ifdef USERDISK_SDPH
+  localparam TB_SDPH = 1'b1;
+`else
+  localparam TB_SDPH = 1'b0;
+`endif
+  wire sdph_req, sdph_up, sdph_ack, sdph_fault;
   wire [31:0] img_lba;
   wire [5:0] img_blk_cnt;
   wire img_rd, img_wr;
@@ -78,6 +102,37 @@ module tb_pc9821_userdisk;
   reg  [31:0] ext_mem2_dout = 32'd0;
   reg         ext_mem2_resp_valid = 1'b0;
   reg  [31:0] pcm_mem [0:8191];
+`ifdef USERDISK_SDPH
+  // The engine on clk_sys (the card runs it on the 50 MHz reference) and a DPS model: PHASEDONE
+  // falls 3 clocks after a PHASEEN rise and rises 8 later, and the model counts the net steps.
+  wire sdph_pen, sdph_updn;
+  wire [4:0] sdph_cntsel;
+  reg  sdph_pdone = 1'b1, sdph_pen_d = 1'b0;
+  integer sdph_busy = 0, sdph_steps = 0, sdph_pulses = 0;
+  pc9821_sdram_dps sdph_dps (
+      .clk(clk_sys), .step_req_async(sdph_req), .step_up_async(sdph_up),
+      .phase_done_async(sdph_pdone), .phase_en(sdph_pen), .updn(sdph_updn), .cntsel(sdph_cntsel),
+      .step_ack(sdph_ack), .fault(sdph_fault));
+  always @(posedge clk_sys) begin
+    sdph_pen_d <= sdph_pen;
+    if (sdph_pen && !sdph_pen_d) begin
+      sdph_busy <= 11;
+      sdph_pulses <= sdph_pulses + 1;
+    end else if (sdph_busy != 0) begin
+      sdph_busy <= sdph_busy - 1;
+      if (sdph_busy == 8) sdph_pdone <= 1'b0;
+      if (sdph_busy == 1) begin
+        sdph_pdone <= 1'b1;
+        sdph_steps <= sdph_updn ? sdph_steps + 1 : sdph_steps - 1;
+      end
+    end
+  end
+  final $display("SDPH: pulses=%0d net_steps=%0d fault=%0d", sdph_pulses, sdph_steps, sdph_fault);
+`else
+  assign sdph_ack = 1'b0;
+  assign sdph_fault = 1'b0;
+`endif
+
   always @(posedge clk_sys) begin
     ext_mem2_resp_valid <= 1'b0;
     if (ext_mem2_valid) begin
@@ -113,12 +168,12 @@ module tb_pc9821_userdisk;
   // 0x48000, for 64 KiB (pc9821_memory_subsystem's ems_page_base). The model must cover it
   // EVEN WITHOUT +SDRAM_FULL, or the window's stores are dropped and its reads return
   // all-ones, and the ITF's own 64 KiB fill/verify (BANK4@0xF82C7) fails as EMS ERROR on a
-  // core that is correct (r13/28).
+  // core that is correct.
   //
-  // The TOP-WINDOW SHADOW (r13/23) sits 0x10000 past the page
+  // The TOP-WINDOW SHADOW sits 0x10000 past the page
   // (fw_shadow_base = pack_base + PACK_BYTES + 0x58000, 32 KiB), so the bound must reach
   // 0x160000 above the guest base or every shadow read returns all-ones and a dirty shadow
-  // turns the ITF's own 0xF8000 fetch into the CS=0 runaway (r13/39 s5, measured: the fetch
+  // turns the ITF's own 0xF8000 fetch into the CS=0 runaway (measured: the fetch
   // at 0xF9A10 filled 0xFFFF_FFFF instead of the bank's code).
   //
   // THE BLOCK ABOVE THE PACK IS NOW GVRAM FIRST. The GVRAM moved back into SDRAM and takes
@@ -207,12 +262,12 @@ module tb_pc9821_userdisk;
   reg       ext_mem0_ready_r = 1'b1;
   reg [7:0] lat_cnt = 8'd0;
   // A READ IS ANSWERED ONE BEAT PER WORD, `ext_mem0_burstcount` of them, exactly as
-  // src/memory/sdram.v answers a burst (sdram.v:21). The GVRAM's write-combining buffer
-  // prefetches a short run of consecutive words on a miss (pc9821_gvram.sv, the r13/82
+  // src/memory/sdram.v answers a burst (sdram.v:7). The GVRAM's write-combining buffer
+  // prefetches a short run of consecutive words on a miss (pc9821_gvram.sv, the
   // coalescer), so a model that answered ONE beat per REQUEST - which is all this tier
   // needed while cb_burstcount was hard-wired to 1 - leaves the buffer's fill waiting for
   // beats that never come. The rest of the burst walks the address, and the controller is
-  // ONE transaction at a time (sdram.v:359-379), so `ready` stays low until its last beat.
+  // ONE transaction at a time (sdram.v:1169, `IDLE: if (~nce) begin`), so `ready` stays low until its last beat.
   reg [7:0]  rd_left = 8'd0;
   reg [31:0] rd_addr = 32'd0;
   assign ext_mem0_ready = ext_mem0_ready_r && (rd_left == 8'd0);
@@ -280,6 +335,14 @@ module tb_pc9821_userdisk;
   // record - is the setting.
   reg gdc_5mhz = 1'b0;
   initial if ($test$plusargs("GDC_CLOCK_5MHZ")) gdc_5mhz = 1'b1;
+  // +FDD_FIXED: the FDD-mode switch at Fixed (0x00BE bit 2 = 1, the measured unit); default Auto.
+  reg fdd_fixed = 1'b0;
+  initial if ($test$plusargs("FDD_FIXED")) fdd_fixed = 1'b1;
+  // +FDD_MODE=<n>: the OSD's Boot order list position (cfg_fdd_mode: 0 Auto, 1 640K, 2 1M, ...),
+  // the 0xA3FF2 memory-switch nibble the BIOS boot helper reads (BANK7@0x5991).
+  reg [2:0] fdd_mode = 3'd0;
+  integer   fdd_mode_arg = 0;
+  initial if ($value$plusargs("FDD_MODE=%d", fdd_mode_arg)) fdd_mode = fdd_mode_arg[2:0];
   // The strap as the FIRMWARE published it, sampled rather than read once, so a
   // measurement run cut short (+STOP_AT_CYCLE) still carries the answer: bit 5 is the
   // BIOS's direct copy of port 0x31 bit 7 (BIOS.ROM@0xFD93C) and bit 2 is what the games
@@ -413,9 +476,9 @@ module tb_pc9821_userdisk;
           $fatal(1, "CG TRACE: sampled bytes differ from CPU word response (sample=%08x bus=%08x)",
                  cg_trace_assembled[31:0], dut.memory.win_cpu_dout);
         cg_trace_active <= 1'b0;
-      end else if (cg_trace_active && dut.memory.win_cpu_line_resp_valid) begin
+      end else if (cg_trace_active && dut.memory.win_cpu_line_word_valid) begin
         if (cg_trace_lanes != 16'hFFFF ||
-            cg_trace_assembled !== dut.memory.win_cpu_line_dout)
+            cg_trace_assembled !== dut.memory.win_cpu_line_word)
           $fatal(1, "CG TRACE: sampled bytes differ from CPU line response");
         cg_trace_active <= 1'b0;
       end
@@ -454,8 +517,8 @@ module tb_pc9821_userdisk;
   // tools/check_pack.py before the run, so the loads below are exact and the
   // byte ranges they cover are the ones the pack describes. The array must reach
   // the pack's highest word -- the PC-9801-86 SOUND.ROM window at +0xC6800, whose
-  // last word is 0x653FF -- because $readmemh loads the whole mirror (which the
-  // rom-memmap lane grew with the 16 KiB sound region; it ends above the font at
+  // last word is 0x653FF -- because $readmemh loads the whole mirror (which
+  // grew with the 16 KiB sound region; it ends above the font at
   // +0x80000, whose last word is 0x633FF).
   reg [15:0] pack_words [0:19'h653ff];
   reg [15:0] disk_words [0:IMG_WORDS-1];
@@ -470,27 +533,68 @@ module tb_pc9821_userdisk;
   reg [31:0] ram [0:8912895];
   integer idx, lane;
 
+  // THE GLYPH PORT (hps SDRAM port 1, pc9821_memory_subsystem's fmem): the JIS reads of port
+  // 0xA9 / the CG window and the text scanout's row-cache walker fetch 8-dword bursts of the
+  // pack's FONT.ROM copy here. It was left unconnected (ready 0), so the first JIS glyph a
+  // guest read through port 0xA9 held the I/O bus for ever. Served from the same SDRAM model
+  // the pack lives in: accept when idle, then one dword per cycle.
+  wire [31:0] ext_mem1_addr, ext_mem1_din;
+  wire [3:0]  ext_mem1_be;
+  wire [7:0]  ext_mem1_burstcount;
+  wire        ext_mem1_valid, ext_mem1_write;
+  reg  [31:0] ext_mem1_dout = 32'd0;
+  reg         ext_mem1_resp_valid = 1'b0;
+  reg  [7:0]  f1_left = 8'd0;
+  reg  [31:0] f1_addr = 32'd0;
+  wire        ext_mem1_ready = (f1_left == 8'd0);
+  always @(posedge clk_sys) begin
+    ext_mem1_resp_valid <= 1'b0;
+    if (f1_left != 8'd0) begin
+      ext_mem1_dout <= ram[f1_addr[31:2]];
+      ext_mem1_resp_valid <= 1'b1;
+      f1_addr <= f1_addr + 32'd4;
+      f1_left <= f1_left - 8'd1;
+    end else if (ext_mem1_valid && !ext_mem1_write) begin
+      f1_addr <= ext_mem1_addr;
+      f1_left <= (ext_mem1_burstcount == 8'd0) ? 8'd1 : ext_mem1_burstcount;
+    end
+  end
+
   // WHICH I/O-LATENCY PROFILE this tier builds. The bench default is the min table
   // (IO_LATENCY_PROFILE 0, the same one the card runs); `-DIO_FAITHFUL` selects 2, the
   // machine's own measured access TIMES (docs/probes/IO.TXT), which is the compile-time
-  // devkit switch the io-latency lane left.
+  // devkit switch.
   // One source, one variable, so a boot A/B is one build per side and the delta is
   // attributable. The faithful table prices 0x005F by direction (826 ns read / IO.TXT's
   // 1621 ns write), while the min profile charges its ONE value, 1621 ns, in both directions
   // (a wr-dependent value there trips a Quartus fitter bug); that port is what the BIOS's own
   // delay loops are calibrated on.
   // The CD-DA ring (src/soc/cdda.v), as occupancy only: the player's stereo samples go in on
-  // cdda_wr and drain at 44.1 kHz (one per 50 MHz / 44100 = 1134 clk_sys), and CDDA_REQ is
-  // up while fewer than its 2048 samples are queued. So a PLAY AUDIO takes its real length here
-  // and the READ SUB-CHANNEL status moves 0x11 -> 0x13 when it would on the core.
+  // cdda_wr and drain at 44.1 kHz (one per 50 MHz / 44100 = 1134 clk_sys); CDDA_REQ is up while
+  // a sector fits in its 6144 samples (CDDA_REQ4 while four do), CDDA_PLAYED pulses per 588
+  // samples drained, and the player's flush empties it. So a PLAY AUDIO takes its real length
+  // here and the READ SUB-CHANNEL status moves 0x11 -> 0x13 when it would on the core.
   wire cdda_wr;
-  reg  [11:0] cdda_fill = 12'd0;
+  wire cdda_flush;
+  reg  [12:0] cdda_fill = 13'd0;
   reg  [10:0] cdda_div = 11'd0;
-  wire cdda_req = TB_CDROM && cdda_fill < 12'd2048;
+  reg  [9:0]  cdda_pn = 10'd0;
+  reg         cdda_played = 1'b0;
+  wire cdda_req  = TB_CDROM && cdda_fill <= 13'd5548;   // 6144 - 588 - 8
+  wire cdda_req4 = TB_CDROM && cdda_fill <= 13'd3784;   // 6144 - 2352 - 8
+  wire cdda_drain = (cdda_div == 11'd1133 && cdda_fill != 13'd0);
   always @(posedge clk_sys) begin
     cdda_div <= (cdda_div == 11'd1133) ? 11'd0 : cdda_div + 11'd1;
-    cdda_fill <= cdda_fill + (cdda_wr ? 12'd1 : 12'd0)
-                           - ((cdda_div == 11'd1133 && cdda_fill != 12'd0) ? 12'd1 : 12'd0);
+    cdda_played <= 1'b0;
+    if (cdda_flush) begin
+      cdda_fill <= 13'd0; cdda_pn <= 10'd0;
+    end else begin
+      cdda_fill <= cdda_fill + (cdda_wr ? 13'd1 : 13'd0) - (cdda_drain ? 13'd1 : 13'd0);
+      if (cdda_drain) begin
+        if (cdda_pn == 10'd587) begin cdda_pn <= 10'd0; cdda_played <= 1'b1; end
+        else cdda_pn <= cdda_pn + 10'd1;
+      end
+    end
   end
 
 `ifdef IO_FAITHFUL
@@ -499,10 +603,25 @@ module tb_pc9821_userdisk;
   localparam [1:0] TB_IO_PROFILE = 2'd0;
 `endif
 
+  // USERDISK_SYSFREQ / USERDISK_CACHE_BITS (run_userdisk.sh): build the tier at the card's
+  // clk_sys and cache geometry, so a guest whose behaviour depends on the CPU-to-device rate
+  // ratio can be run as the 90 MHz card runs it (z486_mister.sv: CLOCK_RATE_HZ, *_SET_BITS).
+`ifdef TB_SYS_FREQ
+  localparam integer TB_FREQ = `TB_SYS_FREQ;
+`else
+  localparam integer TB_FREQ = 50_000_000;
+`endif
+`ifdef TB_CACHE_BITS
+  localparam integer TB_CBITS = `TB_CACHE_BITS;
+`else
+  localparam integer TB_CBITS = 4;
+`endif
+
   pc9821_system #(
-      .SYS_FREQ(50_000_000), .DCACHE_SET_BITS(4), .ICACHE_SET_BITS(4),
+      .SYS_FREQ(TB_FREQ), .DCACHE_SET_BITS(TB_CBITS), .ICACHE_SET_BITS(TB_CBITS),
       .ENABLE_X87(1'b0), .IO_LATENCY_PROFILE(TB_IO_PROFILE),
-      .CDROM_EN(TB_CDROM), .CDROM_AUDIO_EN(TB_CDROM), .CDROM_LOG_EN(TB_CDROM)
+      .CDROM_EN(TB_CDROM), .CDROM_AUDIO_EN(TB_CDROM), .CDROM_LOG_EN(TB_CDROM),
+      .SDRAM_PHASE_DYN(TB_SDPH)
   // ==== DUT ====
   ) dut (
       // Video runs on the dot clock; the bench drives it at clk_sys with
@@ -518,6 +637,10 @@ module tb_pc9821_userdisk;
       .ext_mem0_be(ext_mem0_be), .ext_mem0_burstcount(ext_mem0_burstcount),
       .ext_mem0_ready(ext_mem0_ready),
       .ext_mem0_valid(ext_mem0_valid), .ext_mem0_write(ext_mem0_write),
+      .ext_mem1_addr(ext_mem1_addr), .ext_mem1_din(ext_mem1_din), .ext_mem1_dout(ext_mem1_dout),
+      .ext_mem1_resp_valid(ext_mem1_resp_valid), .ext_mem1_be(ext_mem1_be),
+      .ext_mem1_burstcount(ext_mem1_burstcount), .ext_mem1_ready(ext_mem1_ready),
+      .ext_mem1_valid(ext_mem1_valid), .ext_mem1_write(ext_mem1_write),
       .ext_mem2_addr(ext_mem2_addr), .ext_mem2_din(ext_mem2_din), .ext_mem2_dout(ext_mem2_dout),
       .ext_mem2_resp_valid(ext_mem2_resp_valid), .ext_mem2_be(ext_mem2_be),
       .ext_mem2_burstcount(ext_mem2_burstcount), .ext_mem2_ready(1'b1),
@@ -530,28 +653,37 @@ module tb_pc9821_userdisk;
       .img_rd(img_rd), .img_wr(img_wr), .img_ack(img_ack),
       .img_buff_addr(img_buff_addr), .img_buff_din(img_buff_din),
       .img_buff_dout(img_buff_dout), .img_buff_wr(img_buff_wr),
+      .fdd_mounted(fdd_mounted), .fdd_size(img_size), .fdd_lba(fdd_lba),
+      .fdd_blk_cnt(fdd_blk_cnt), .fdd_rd(fdd_rd), .fdd_wr(fdd_wr), .fdd_ack(fdd_ack),
+      .fdd_buff_din(fdd_buff_din),
+      .fdd1_mounted(fdd1_mounted), .fdd1_size(fdd1_size), .fdd1_lba(fdd1_lba),
+      .fdd1_blk_cnt(fdd1_blk_cnt), .fdd1_rd(fdd1_rd), .fdd1_wr(fdd1_wr), .fdd1_ack(fdd1_ack),
+      .fdd1_buff_din(fdd1_buff_din),
       .cd_mounted(hdd1_mounted), .cd_size(hdd1_size), .cd_lba(hdd1_lba),
       .cd_blk_cnt(hdd1_blk_cnt), .cd_rd(hdd1_rd), .cd_ack(hdd1_ack),
-      .cdda_req(cdda_req), .cdda_wr(cdda_wr), .cdda_data(),
+      .cdda_req(cdda_req), .cdda_req4(cdda_req4), .cdda_played(cdda_played),
+      .cdda_flush(cdda_flush), .cdda_wr(cdda_wr), .cdda_data(),
       // 32 MiB guest RAM: pc9821_system's size code is log2(MiB), so 3'd5 is the
       // size the documentation describes and the screen's memory line is measured at.
       // This bench models a module whose CEILING is that same 32 MiB, so the pack is
-      // placed at pack_base == 32 MiB exactly as before the size/pack split (r13/47)
+      // placed at pack_base == 32 MiB exactly as before the size/pack split
       // and the bench's SDRAM content model below needs no change.
       .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ram_size(ram_size),
       .ram_size_max(ram_size),
       // The OSD's BIOS set: +BIOS_MODEL_XE selects the PC-9821Xe strap.
       .bios_set(bios_set),
       // The OSD's GDC Clock field: +GDC_CLOCK_5MHZ selects 0x73 (port 0x31 bit 7 clear).
-      .gdc_clock_5m(gdc_5mhz),
+      .gdc_clock_5m(gdc_5mhz), .fdd_dip_fixed(fdd_fixed),
+      .cfg_fdd_mode(fdd_mode),
       // 5 MHz: this bench mounts disks into the real firmware and so must not change the
       // display's GDC line step. The strap decode and the step have their own benches.
       .bios_setup(1'b0),
       // The debug UART FIFO and its accept handshake live in the top level (z486_mister.sv),
       // which this tier does not build - and nothing here reads dbg_uart_byte either. Tying
-      // accept high lets the report emitter free-run at one byte per clk_sys (r13/326 leaves
+      // accept high lets the report emitter free-run at one byte per clk_sys (the design leaves
       // the emitted byte stream unchanged when the FIFO always has room).
-      .dbg_uart_accept(1'b1),
+      .dbg_uart_accept(1'b1), .sdph_step_req(sdph_req), .sdph_step_up(sdph_up),
+      .sdph_step_ack(sdph_ack), .sdph_fault(sdph_fault),
       .trace_trig(),
       .debug_post_code(debug_post_code), .debug_post_write(debug_post_write),
       .debug_bios_loaded(debug_bios_loaded), .cpu_cs(cpu_cs),
@@ -603,8 +735,8 @@ module tb_pc9821_userdisk;
   reg [15:0] disk_index = 0;
   reg [15:0] disk_total = 0;   // words in this handshake: (img_blk_cnt+1) * 256
   // +IMG_FILE=<path>: serve every sector straight from the image file instead of the
-  // preloaded disk_words array, so an image larger than a Verilator array can hold (the
-  // owner's 542 MB disk is 284M words; Verilator refuses a vector over 2^30 bits) runs
+  // preloaded disk_words array, so an image larger than a Verilator array can hold (a
+  // 542 MB disk is 284M words; Verilator refuses a vector over 2^30 bits) runs
   // whole. disk_words still holds the first SECTORS for the IPL-data check. One
   // session (up to 64 blocks) is read into file_buf when the request arrives.
   integer    img_fd = 0;
@@ -620,7 +752,7 @@ module tb_pc9821_userdisk;
     // writes lands in img_ovl (word-addressed, lba*256+word) and every later read of it is
     // served from there. Without this the drive is read-only and the guest's first WRITE
     // SECTORS aborts, which the IDE BIOS answers with an endless RECALIBRATE/retry loop -
-    // the owner's disk does that under VEM486+HSB, while the MiSTer mounts it writable.
+    // a real disk does that under VEM486+HSB, while the MiSTer mounts it writable.
     if ($test$plusargs("IMG_RW")) begin
       if (img_fd == 0) $fatal(1, "TB_PC9821_USERDISK: FAIL (+IMG_RW needs +IMG_FILE)");
       img_readonly = 1'b0;
@@ -655,6 +787,51 @@ module tb_pc9821_userdisk;
     end
   endtask
   integer hdd1_rd_log = 0;
+  integer    fdd_fd = 0;
+  reg        srvf = 0;          // the session in flight is slot 1's (FDD1)
+  reg [15:0] fdd_ovl [longint];
+  integer    fdd_rd_log = 0;
+  initial begin : fdd_file_open
+    reg [1023:0] fdd_path;
+    if ($value$plusargs("FDD_FILE=%s", fdd_path)) begin
+      fdd_fd = $fopen(fdd_path, "rb");
+      if (fdd_fd == 0) $fatal(1, "TB_PC9821_USERDISK: FAIL (+FDD_FILE could not be opened)");
+      $display("FDD_FILE slot 1 (FDD1) served from the image file (fd %0d)", fdd_fd);
+    end
+  end
+  integer    fdd2_fd = 0;
+  reg        srvf2 = 0;         // the session in flight is the fdd1 slot's (FDD2)
+  reg [15:0] fdd2_ovl [longint];
+  initial begin : fdd2_file_open
+    reg [1023:0] fdd2_path;
+    if ($value$plusargs("FDD2_FILE=%s", fdd2_path)) begin
+      fdd2_fd = $fopen(fdd2_path, "rb");
+      if (fdd2_fd == 0) $fatal(1, "TB_PC9821_USERDISK: FAIL (+FDD2_FILE could not be opened)");
+      $display("FDD2_FILE (FDD2) served from the image file (fd %0d)", fdd2_fd);
+    end
+  end
+  task automatic fdd2_file_read(input [31:0] lba, input [15:0] words);
+    integer w, lo, hi;
+    begin
+      void'($fseek(fdd2_fd, lba * 512, 0));
+      for (w = 0; w < words; w = w + 1) begin
+        lo = $fgetc(fdd2_fd); hi = $fgetc(fdd2_fd);
+        file_buf[w] = (lo < 0 || hi < 0) ? 16'd0 : {hi[7:0], lo[7:0]};
+        if (fdd2_ovl.exists(longint'(lba) * 256 + w)) file_buf[w] = fdd2_ovl[longint'(lba) * 256 + w];
+      end
+    end
+  endtask
+  task automatic fdd_file_read(input [31:0] lba, input [15:0] words);
+    integer w, lo, hi;
+    begin
+      void'($fseek(fdd_fd, lba * 512, 0));
+      for (w = 0; w < words; w = w + 1) begin
+        lo = $fgetc(fdd_fd); hi = $fgetc(fdd_fd);
+        file_buf[w] = (lo < 0 || hi < 0) ? 16'd0 : {hi[7:0], lo[7:0]};
+        if (fdd_ovl.exists(longint'(lba) * 256 + w)) file_buf[w] = fdd_ovl[longint'(lba) * 256 + w];
+      end
+    end
+  endtask
   task automatic img_file_read(input [31:0] lba, input [15:0] words);
     integer w, lo, hi;
     begin
@@ -669,7 +846,7 @@ module tb_pc9821_userdisk;
   // +HPS_DELAY=<n> / +HPS_GAP=<g>: the host's latency, which this model otherwise leaves out (its
   // ack is the next cycle and its words back to back). The MiSTer's hps_io acks a request only
   // when the ARM services it and then delivers one word per SPI strobe; n cycles before the ack
-  // and g idle cycles between words stand in for that, for both slots.
+  // and g idle cycles between words stand in for that, for both slots and both floppy files.
   int unsigned hps_delay = 0, hps_gap = 0;
   int unsigned hps_wait = 0, hps_gapc = 0;
   initial begin
@@ -679,12 +856,53 @@ module tb_pc9821_userdisk;
   always @(posedge clk_sys) begin
     img_buff_wr <= 1'b0;
     case (disk_state)
-      0: if ((hdd1_rd || hdd1_wr || img_rd || img_wr) && hps_wait < hps_delay) begin
+      0: if ((hdd1_rd || hdd1_wr || img_rd || img_wr || (fdd_rd && fdd_fd != 0) ||
+             (fdd1_rd && fdd2_fd != 0)) && hps_wait < hps_delay) begin
         hps_wait <= hps_wait + 1;
+      end else if (fdd_rd && fdd_fd != 0) begin
+        hps_wait <= 0;
+        srv1 <= 1'b0; srvf <= 1'b1; srvf2 <= 1'b0;
+        fdd_ack <= 1'b1;
+        disk_index <= 0;
+        fdd_file_read(fdd_lba, ({10'd0, fdd_blk_cnt} + 16'd1) << 8);
+        disk_total <= ({10'd0, fdd_blk_cnt} + 16'd1) << 8;
+        if (fdd_rd_log < 400)
+          $display("FDD READ lba=%0d blocks=%0d cyc=%0d", fdd_lba, fdd_blk_cnt + 1, tb_cycle);
+        fdd_rd_log = fdd_rd_log + 1;
+        disk_state <= 1;
+      end else if (fdd1_rd && fdd2_fd != 0) begin
+        hps_wait <= 0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b1;
+        fdd1_ack <= 1'b1;
+        disk_index <= 0;
+        fdd2_file_read(fdd1_lba, ({10'd0, fdd1_blk_cnt} + 16'd1) << 8);
+        disk_total <= ({10'd0, fdd1_blk_cnt} + 16'd1) << 8;
+        if (fdd_rd_log < 400)
+          $display("FDD2 READ lba=%0d blocks=%0d cyc=%0d", fdd1_lba, fdd1_blk_cnt + 1, tb_cycle);
+        fdd_rd_log = fdd_rd_log + 1;
+        disk_state <= 1;
+      end else if (fdd1_wr && fdd2_fd != 0) begin
+        hps_wait <= 0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b1;
+        fdd1_ack <= 1'b1;
+        disk_index <= 0;
+        img_buff_addr <= 13'd0;
+        disk_total <= ({10'd0, fdd1_blk_cnt} + 16'd1) << 8;
+        $display("FDD2 WRITE lba=%0d blocks=%0d cyc=%0d", fdd1_lba, fdd1_blk_cnt + 1, tb_cycle);
+        disk_state <= 3;
+      end else if (fdd_wr && fdd_fd != 0) begin
+        hps_wait <= 0;
+        srv1 <= 1'b0; srvf <= 1'b1; srvf2 <= 1'b0;
+        fdd_ack <= 1'b1;
+        disk_index <= 0;
+        img_buff_addr <= 13'd0;
+        disk_total <= ({10'd0, fdd_blk_cnt} + 16'd1) << 8;
+        $display("FDD WRITE lba=%0d blocks=%0d cyc=%0d", fdd_lba, fdd_blk_cnt + 1, tb_cycle);
+        disk_state <= 3;
       end else if (hdd1_rd && img1_fd != 0) begin
         hps_wait <= 0;
         // Slot 3: the same read session, from the second file.
-        srv1 <= 1'b1;
+        srv1 <= 1'b1; srvf <= 1'b0; srvf2 <= 1'b0;
         hdd1_ack <= 1'b1;
         disk_index <= 0;
         img1_file_read(hdd1_lba, ({10'd0, hdd1_blk_cnt} + 16'd1) << 8);
@@ -704,7 +922,7 @@ module tb_pc9821_userdisk;
         disk_state <= 3;
       end else if (img_rd) begin
         hps_wait <= 0;
-        srv1 <= 1'b0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0;
         img_ack <= 1'b1;
         disk_index <= 0;
         if (img_fd != 0) img_file_read(img_lba, ({10'd0, img_blk_cnt} + 16'd1) << 8);
@@ -716,7 +934,7 @@ module tb_pc9821_userdisk;
         disk_state <= 1;
       end else if (img_wr && !img_readonly) begin
         hps_wait <= 0;
-        srv1 <= 1'b0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0;
         // Write session: the host reads the drive's sector buffer, presenting the
         // address and sampling img_buff_dout. The buffer read is registered, so each
         // address is held two cycles (states 3, 4) before the word is taken (state 5).
@@ -732,7 +950,9 @@ module tb_pc9821_userdisk;
       3: disk_state <= 4;
       4: disk_state <= 5;
       5: begin
-        if (srv1) img1_ovl[longint'(hdd1_lba) * 256 + disk_index] = hdd1_buff_din;
+        if (srvf) fdd_ovl[longint'(fdd_lba) * 256 + disk_index] = fdd_buff_din;
+        else if (srvf2) fdd2_ovl[longint'(fdd1_lba) * 256 + disk_index] = fdd1_buff_din;
+        else if (srv1) img1_ovl[longint'(hdd1_lba) * 256 + disk_index] = hdd1_buff_din;
         else      img_ovl[longint'(img_lba) * 256 + disk_index] = img_buff_dout;
         if (disk_index == (disk_total - 16'd1)) disk_state <= 2;
         else begin
@@ -746,7 +966,7 @@ module tb_pc9821_userdisk;
         hps_gapc <= 0;
         img_buff_wr <= 1'b1;
         img_buff_addr <= disk_index[12:0];
-        img_buff_din <= (img_fd != 0 || srv1) ? file_buf[disk_index[13:0]] :
+        img_buff_din <= (img_fd != 0 || srv1 || srvf || srvf2) ? file_buf[disk_index[13:0]] :
             (img_lba*32'd256 + {16'd0, disk_index}) < IMG_WORDS ?
             disk_words[img_lba*32'd256 + {16'd0, disk_index}] : 16'd0;
         if (disk_index == (disk_total - 16'd1)) disk_state <= 2;
@@ -755,6 +975,8 @@ module tb_pc9821_userdisk;
       2: begin
         img_ack <= 1'b0;
         hdd1_ack <= 1'b0;
+        fdd_ack <= 1'b0;
+        fdd1_ack <= 1'b0;
         disk_state <= 0;
       end
       default: disk_state <= 0;
@@ -762,22 +984,74 @@ module tb_pc9821_userdisk;
   end
 
   wire [31:0] pc_now = cpu_cs_base + cpu_eip;
+  // +FDCIRQ_AFTER=<cycle>: every change of the FDC's interrupt level or its pending-drive set
+  // after that cycle (the first 400), with the controller state - for an IRQ11 the guest did
+  // not ask for.
+  longint fdcirq_after = 0; integer fdcirq_cnt = 0;
+  reg fdcirq_q = 1'b0; reg [3:0] fdcpend_q = 4'd0;
+  initial void'($value$plusargs("FDCIRQ_AFTER=%d", fdcirq_after));
+  always @(posedge clk_sys) begin
+    fdcirq_q <= dut.iobus.fdc.irq; fdcpend_q <= dut.iobus.fdc.pend;
+    if (fdcirq_after != 0 && tb_cycle >= fdcirq_after && fdcirq_cnt < 400 &&
+        (dut.iobus.fdc.irq != fdcirq_q || dut.iobus.fdc.pend != fdcpend_q)) begin
+      fdcirq_cnt <= fdcirq_cnt + 1;
+      $display("FDCIRQ irq=%0d pend=%b st=%0d res_irq=%0d armed=%b%b ins_dly=%0d/%0d pc=%08x cyc=%0d",
+               dut.iobus.fdc.irq, dut.iobus.fdc.pend, dut.iobus.fdc.st, dut.iobus.fdc.res_irq,
+               dut.iobus.fdc.armed[1], dut.iobus.fdc.armed[0], dut.iobus.fdc.ins_dly[0],
+               dut.iobus.fdc.ins_dly[1], pc_now, tb_cycle);
+    end
+  end
+  // +FDC_TRACE[=n]: every byte the guest writes to the FDC data port and every byte it reads
+  // back from it (the first n, default 4000), with the FDC's track registers and the media's
+  // request - the controller's own view of a floppy boot.
+  integer fdc_trace_n = 0, fdc_trace_cnt = 0;
+  reg fdd_err_q = 1'b0;
+  initial if ($test$plusargs("FDC_TRACE")) begin
+    fdc_trace_n = 4000;
+    void'($value$plusargs("FDC_TRACE=%d", fdc_trace_n));
+  end
+  always @(posedge clk_sys) if (fdc_trace_cnt < fdc_trace_n) begin
+    if (dut.iobus.fdc.cs && dut.iobus.fdc.addr == 3'd1 && (dut.iobus.fdc.wr || dut.iobus.fdc.rd)) begin
+      $display("FDC %s %02x st=%0d x_st=%0d treg0=%02x pc=%08x cyc=%0d", dut.iobus.fdc.wr ? "W" : "R",
+               dut.iobus.fdc.wr ? dut.iobus.fdc.din : dut.iobus.fdc.dout,
+               dut.iobus.fdc.st, dut.iobus.fdc.x_st, dut.iobus.fdc.treg[0], pc_now, tb_cycle);
+      fdc_trace_cnt = fdc_trace_cnt + 1;
+    end
+    if (dut.iobus.fdc.media_req) begin
+      $display("FDC MEDIA req u=%0d c=%02x h=%02x r=%02x n=%02x hdr=%0d wr=%0d cyc=%0d",
+               dut.iobus.fdc.media_unit, dut.iobus.fdc.media_c, dut.iobus.fdc.media_h,
+               dut.iobus.fdc.media_r, dut.iobus.fdc.media_n, dut.iobus.fdc.media_req_hdr,
+               dut.iobus.fdc.media_wr, tb_cycle);
+      fdc_trace_cnt = fdc_trace_cnt + 1;
+    end
+    if (dut.fdd_err && !fdd_err_q) begin
+      $display("FDC MEDIA err cyc=%0d", tb_cycle);
+      fdc_trace_cnt = fdc_trace_cnt + 1;
+    end
+  end
+  always @(posedge clk_sys) fdd_err_q <= dut.fdd_err;
+  reg [2:0] fdc_st_q = 3'd0;
+  always @(posedge clk_sys) begin
+    fdc_st_q <= dut.iobus.fdc.st;
+    if (fdc_trace_cnt < fdc_trace_n && dut.iobus.fdc.st != fdc_st_q)
+      $display("FDC ST %0d->%0d res0=%02x res1=%02x x_st=%0d cyc=%0d", fdc_st_q, dut.iobus.fdc.st,
+               dut.iobus.fdc.res0, dut.iobus.fdc.res1, dut.iobus.fdc.x_st, tb_cycle);
+  end
   reg [15:0] previous_cs = 16'hffff;
   // TEMP INVESTIGATION PROBE (cell divergences): log every CPU access to 0x481.
   always @(posedge clk_sys) begin
     if (dut.z_valid && ({dut.z_addr, 2'b00} == 32'h00000481))
       $display("PROBE481 pc=%08x wr=%0d data=%08x be=%b cyc=%0d", pc_now, dut.z_write, dut.z_dout, dut.z_be, tb_cycle);
   end
-  // --- r13/79: the HPS block handshake, priced (R3) ---------------------------
-  // r13/68 s4 R3. `sd_rd -> sd_ack -> req_done` is the one term no tier has ever
-  // measured. pc9821_ata serializes it behind the PIO drain: the next block request
-  // is issued only after the guest read the last word of the current sector
-  // (pc9821_ata.sv:503-518), so this round trip is on the boot's critical path once
-  // per sector. This bench mounts the image in-process and acks in the SAME cycle
+  // --- the HPS block handshake, priced ------------------------------------------
+  // `sd_rd -> sd_ack -> req_done` is the one term no tier has ever
+  // measured. pc9821_ata issues its block requests from the PIO drain (the
+  // `lba_plus1` note in pc9821_ata.sv says when), so this round trip is on the boot's
+  // critical path once per sector. This bench mounts the image in-process and acks in the SAME cycle
   // (disk_state 0 above), so the numbers below are the MODEL's handshake latency,
   // NOT the HPS's. The real figure is the ARM reading the sector from SD and
   // streaming 256 words through sys/hps_io.sv; it is measured on the CARD, not here
-  // (r13/79 s3 names the telemetry field). `rd2ack` is sd_rd high to sd_ack high;
+  // (the telemetry field). `rd2ack` is sd_rd high to sd_ack high;
   // `ack2done` is sd_ack high to the adapter's req_done pulse; `total` is the whole
   // request. One request streams exactly 256 words = one 512-byte sector.
   reg        hps_inflight   = 1'b0;
@@ -844,7 +1118,7 @@ module tb_pc9821_userdisk;
     if (dut.ata.dbg_cmd_cnt !== ata_cnt_seen && ata_evt_n < 4000) begin
       ata_cnt_seen <= dut.ata.dbg_cmd_cnt;
       ata_evt_n = ata_evt_n + 1;
-      // r13/53: the task file the command was issued with, so a geometry mismatch or a
+      // The task file the command was issued with, so a geometry mismatch or a
       // stated-drive disagreement is readable at the moment the ROM commits to it.
       $display("ATA CMD n=%0d last=%02x abort=%0d pc=%08x cyc=%0d cnt=%02x num=%02x cyl=%02x/%02x dh=%02x chs=%b%b idp_hmax=%02x idp_sec=%02x cap=%0d",
                dut.ata.dbg_cmd_cnt, dut.ata.dbg_last_cmd, dut.ata.dbg_abort_cnt,
@@ -871,7 +1145,7 @@ module tb_pc9821_userdisk;
   // flight, and it exists because a bare "held N cycles" is actively misleading. A
   // long string instruction (rep stosd, repe scasd) leaves the architectural EIP on
   // its NEXT instruction for the whole duration, so a 128 KiB compare and a jmp $
-  // wedge produce the same same-PC run - and this message sent a lane hunting for a
+  // wedge produce the same same-PC run - and this message once sent a hunt for a
   // boot-device blocker at what was the ITF's extended-memory test. The counter is
   // NOT weakened for it: a genuine wedge is still caught by the MEMWEDGE instrument
   // in this file, and a wedge that is itself inside a string op shows up here as a
@@ -1097,17 +1371,20 @@ module tb_pc9821_userdisk;
   // first trap visit (real-mode code, the HMA included), for offline disassembly.
   string trap_ramfile = "";
   initial void'($value$plusargs("TRAP_RAMFILE=%s", trap_ramfile));
+  // +TRAP_RAMBYTES=<n>: dump n bytes instead (extended memory, e.g. 400000 for 4 MiB).
+  longint trap_rambytes = 64'h110000;
+  initial void'($value$plusargs("TRAP_RAMBYTES=%h", trap_rambytes));
   task automatic trap_dump_ram;
     integer fd, a;
     reg [31:0] w;
     begin
       fd = $fopen(trap_ramfile, "wb");
-      for (a = 0; a < 32'h110000 / 4; a = a + 1) begin
+      for (a = 0; a < trap_rambytes / 4; a = a + 1) begin
         w = ram[a];
         $fwrite(fd, "%c%c%c%c", w[7:0], w[15:8], w[23:16], w[31:24]);
       end
       $fclose(fd);
-      $display("TRAP ram 0..0x10FFFF written to %s", trap_ramfile);
+      $display("TRAP ram 0..0x%0h written to %s", trap_rambytes - 1, trap_ramfile);
       trap_ramfile = "";
     end
   endtask
@@ -1204,7 +1481,93 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/39 s5.3 CS=0 separation probe ------------------------------------
+  // --- a long-boot progress view (any build) -------------------------------------
+  // +PC_SAMPLE=<n>: one line of CS:EIP and the mode bits every n cycles, so a guest that
+  // spins for minutes can be located without a trap address. +TEXT_EVERY=<n>: the text
+  // screen every n cycles. +IOLOG_AFTER=<cycle> (+IOLOG_N=<n>, default 4000): every device
+  // I/O access after that cycle, with the instruction that made it. +IOLOG_CS=<hex>: start
+  // the log instead at the first instruction issued with that CS (a guest's own segment).
+  longint unsigned pc_sample = 0, text_every = 0, iolog_after = 0;
+  integer iolog_n = 4000, iolog_cnt = 0;
+  reg [15:0] iolog_cs = 16'h0;
+  reg iolog_all = 1'b0, iolog_land_q = 1'b0;
+  initial begin
+    iolog_all = $test$plusargs("IOLOG_ALL");
+    void'($value$plusargs("IOLOG_CS=%h", iolog_cs));
+    void'($value$plusargs("PC_SAMPLE=%d", pc_sample));
+    void'($value$plusargs("TEXT_EVERY=%d", text_every));
+    void'($value$plusargs("IOLOG_AFTER=%d", iolog_after));
+    void'($value$plusargs("IOLOG_N=%d", iolog_n));
+  end
+  // +ITRACE_CSEIP=<cs:eip as 8 hex digits> (+ITRACE_N=<n>, default 200; +ITRACE_HITS=<k>,
+  // default 4): from each of the first k issues at that CS:IP, the next n issued
+  // instructions with SP, EFLAGS and SS base, and every CPU memory write accepted meanwhile -
+  // the same view as the hardware's --dbg-trig ring, for a side-by-side comparison.
+  reg [31:0] itrace_cseip = 32'h0;
+  integer itrace_n = 200, itrace_hits = 4, itrace_left = 0, itrace_seen = 0;
+  // +ITRACE_AFTER=<cycle>: ignore issues at ITRACE_CSEIP before that cycle (a hot address).
+  longint unsigned itrace_after = 0;
+  initial begin
+    void'($value$plusargs("ITRACE_AFTER=%d", itrace_after));
+    void'($value$plusargs("ITRACE_CSEIP=%h", itrace_cseip));
+    void'($value$plusargs("ITRACE_N=%d", itrace_n));
+    void'($value$plusargs("ITRACE_HITS=%d", itrace_hits));
+  end
+  always @(posedge clk_sys) begin
+    if (itrace_cseip != 0 && dut.cpu_dbg_issue) begin
+      if (itrace_left == 0 && itrace_seen < itrace_hits && tb_cycle >= itrace_after &&
+          cpu_cs == itrace_cseip[31:16] &&
+          dut.cpu_dbg_issue_eip[15:0] == itrace_cseip[15:0]) begin
+        itrace_left = itrace_n;
+        itrace_seen = itrace_seen + 1;
+        $display("ITRACE hit %0d at cyc=%0d", itrace_seen, tb_cycle);
+      end
+      if (itrace_left != 0) begin
+        $display("ITRACE %04x:%08x sp=%04x fl=%04x ssb=%08x cyc=%0d", cpu_cs,
+                 dut.cpu_dbg_issue_eip, dut.cpu_dbg_SP, dut.cpu_dbg_eflags[15:0],
+                 dut.cpu.desc_cache[2].base, tb_cycle);
+        itrace_left = itrace_left - 1;
+      end
+    end
+    if (itrace_left != 0 && dut.cpu_mem_valid && dut.mem_cpu_ready)
+      $display("ITRACE   MEM %s a=%08x be=%b d=%08x line=%0d cyc=%0d", dut.z_write ? "WR" : "RD",
+               {dut.z_addr, 2'b00}, dut.z_be, dut.z_dout, dut.z_line_read, tb_cycle);
+    if (pc_sample != 0 && tb_cycle != 0 && (tb_cycle % pc_sample) == 0)
+      $display("PCS cyc=%0d %04x:%08x lin=%08x pe=%0d vm=%0d", tb_cycle, cpu_cs, cpu_eip,
+               pc_now, cpu_pe, dut.cpu.dbg_vm);
+    if (text_every != 0 && tb_cycle != 0 && (tb_cycle % text_every) == 0) begin
+      $display("TEXT at cyc=%0d", tb_cycle);
+      dump_tram_text;
+    end
+    if (iolog_cs != 0 && iolog_after == 0 && cpu_cs == iolog_cs) begin
+      iolog_after = tb_cycle;
+      $display("IOLOG start: CS=%04x at cyc=%0d", iolog_cs, tb_cycle);
+    end
+    // +IOLOG_ALL: every port the I/O bus serves (FDC, DMA, PIT, system ports included), read
+    // from the bus's own last-access latch the cycle after it lands; the default view is the
+    // device fabric only.
+    iolog_land_q <= (dut.iobus.state == dut.iobus.S_BYTE &&
+                     !(dut.iobus.device_port && !dut.iobus.request_write && dut.iobus.device_rd_wait)) ||
+                    dut.iobus.state == dut.iobus.S_DEVWAIT;
+    if (iolog_all && iolog_after != 0 && tb_cycle >= iolog_after && iolog_cnt < iolog_n &&
+        iolog_land_q) begin
+      $display("IOLOG %s %04x %s=%02x at %04x:%08x pe=%0d vm=%0d cyc=%0d",
+               dut.dbg_last_io_wr ? "OUT" : "IN ", dut.dbg_last_io_addr,
+               dut.dbg_last_io_wr ? "d" : "q", dut.dbg_last_io_data,
+               cpu_cs, cpu_eip, cpu_pe, dut.cpu.dbg_vm, tb_cycle);
+      iolog_cnt = iolog_cnt + 1;
+    end
+    if (!iolog_all && iolog_after != 0 && tb_cycle >= iolog_after && iolog_cnt < iolog_n &&
+        (dut.device_io_wr || dut.device_io_rd)) begin
+      $display("IOLOG %s %04x %s=%02x at %04x:%08x pe=%0d vm=%0d cyc=%0d",
+               dut.device_io_wr ? "OUT" : "IN ", dut.device_io_addr,
+               dut.device_io_wr ? "d" : "q", dut.device_io_wr ? dut.device_io_din : dut.device_io_dout,
+               cpu_cs, cpu_eip, cpu_pe, dut.cpu.dbg_vm, tb_cycle);
+      iolog_cnt = iolog_cnt + 1;
+    end
+  end
+
+  // --- CS=0 separation probe ------------------------------------
   // The ITF's phase-1 tail copies a 240-byte script to physical 0 and jumps to
   // it. Two failures look identical on the PC: the copy never landed (a
   // store-path or memory-map defect) or it landed and the FETCH served something
@@ -1216,7 +1579,7 @@ module tb_pc9821_userdisk;
   //   - the I-cache lines the CPU was actually SERVED (not the pack's bytes),
   //   - the firmware top window's shadow/pack bytes and the z486 external bus,
   //   - whether the tail block (0xF8167..0xF8180) ever ran at all.
-  // r13/39 s5 is the run that used it, and it decided the failure was NOT the
+  // The run that used it decided the failure was NOT the
   // 0x181 `jmp 0:0` and NOT L1 coherence: the fetch at 0xF9A10 was served the
   // firmware-window SHADOW (see pc9821_memory_map's fw_shadow_read).
   reg        cs0_probed = 1'b0;
@@ -1257,11 +1620,13 @@ module tb_pc9821_userdisk;
         (dut.memory.cpu_addr >= 32'h000F_9000) && (dut.memory.cpu_addr <= 32'h000F_A2FF) &&
         (cs0_win_n < 16)) begin
       cs0_win_n = cs0_win_n + 1;
-      $display("CS0 WINRD cyc=%0d addr=%08x bc=%0d line=%b shadow=%b dirty=%b gate=%b top_bank=%0d lout=%032x",
+      // The 128-bit line mux this probe used to print is gone (P3): a line read is four word
+      // beats, so the probe shows the beat the boundary is presenting this cycle.
+      $display("CS0 WINRD cyc=%0d addr=%08x bc=%0d line=%b shadow=%b dirty=%b gate=%b top_bank=%0d word=%08x",
                tb_cycle, dut.memory.cpu_addr, dut.memory.cpu_burstcount,
                dut.memory.cpu_line_read, dut.memory.top_shadow_en,
                dut.memory.fw_shadow_dirty, dut.memory.bios_ram_gate,
-               dut.memory.top_bank, dut.memory.cpu_line_dout);
+               dut.memory.top_bank, dut.memory.cpu_dout);
     end
   end
   function automatic [7:0] ram_byte(input [31:0] addr);
@@ -1375,11 +1740,11 @@ module tb_pc9821_userdisk;
   integer    ho_lines = 0;
   localparam integer HO_TICK_DIV = 500_000;
   localparam integer HO_MAX      = 200;
-  // The IDE option ROM's ARTIC-based delay (BANK3@0x8B16-0x8B3E): r10/02 flags it as
+  // The IDE option ROM's ARTIC-based delay (BANK3@0x8B16-0x8B3E): its disassembly flags it as
   // "unbounded in form - relying on port 0x5E advancing", called from the ATA soft reset
   // and the long retry pacing. Latched entry/exit names the cycle it starts and ends, and
   // artic_cnt says whether the counter moved, so a wedge here cannot be read as a stall.
-  // r13/53 extends the line with the delay's CALLER, the three cells r13/46 s6.1 named
+  // The line also carries the delay's CALLER, the three cells an earlier run named
   // (the BIOS work area's IDE word at 0x642, the ROM's I/O-wait accounting [es:0x2060]
   // and its sector count [es:0x200A]), the ATA task file, and the requested time in
   // 0x5E units. The window is the delay routine alone, so the caller pc is real.
@@ -1458,8 +1823,8 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/79: every ARTIC-based wait routine, counted ------------------------
-  // r13/68 s5.3 left one number unmeasured: HOW MANY times a boot pays a 4-second
+  // --- every ARTIC-based wait routine, counted ------------------------
+  // An earlier measurement left one number unmeasured: HOW MANY times a boot pays a 4-second
   // settle. The option ROM's 202 M-cycle delay (BANK3@0x8B16) is only one home of
   // the ARTIC wait; the firmware carries three more, and the option ROM's own settle
   // routine (0x81F3, which runs `delay(121*(0x28-[es:0x2060]))` = 4,840 units at
@@ -1497,7 +1862,7 @@ module tb_pc9821_userdisk;
   // request `cx` units of 0x5E (one unit = 256 ARTIC ticks) and id3 requests `bx`
   // ticks of the 16-bit 0x5C view. One ARTIC tick is 50e6/307200 = 162.76 clk_sys,
   // so the ticks below x 162.76 is what the wait would cost unaccelerated - the one
-  // number r13/68 s5.3 could not get from a boosted run.
+  // number a boosted run cannot give.
   longint    wait_ticks[0:4];
   integer    wait_big     = 0;   // id=1 entries whose cx is the 4,840-unit settle
   // id=3's request is BX, and the four `call far 0xF760:0x1811` sites in BANK7 pass
@@ -1511,7 +1876,7 @@ module tb_pc9821_userdisk;
   // entry and names the real `call far` for the first logged entries.
   reg [31:0] pc_d1 = 0, pc_d2 = 0, pc_d3 = 0, pc_d4 = 0, pc_d5 = 0, pc_d6 = 0;
   integer    wait_log     = 0;
-  // FDDLOOP (r13/312): the floppy pass counted by the probe pcs, with the FDD work
+  // FDDLOOP: the floppy pass counted by the probe pcs, with the FDD work
   // area it reads. `0xFF6CC` issues the four RECALIBRATEs, `0xFF6D5`/`0xFF701`/`0xFF709`
   // are the probe and its two `[0x55E]` polls, `0xFF194` the readiness ARTIC wait, and
   // `0xFFDCA` the SENSE DRIVE STATUS read helper. A boot whose probe resolves runs the
@@ -1582,12 +1947,12 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/53: the SIM-ONLY ARTIC-unit override ------------------------------
-  // r13/46 s6.2. The option ROM's wait (BANK3@0x8B16) polls port 0x5E = the ARTIC
+  // --- the SIM-ONLY ARTIC-unit override ------------------------------
+  // The option ROM's wait (BANK3@0x8B16) polls port 0x5E = the ARTIC
   // counter's bits 15:8, so one "unit" is 256 ticks = 41,700 clk_sys cycles and the pacing
-  // call at 0x8222 asks for 0x79*(0x28-[es:0x2060]) = 4,840 units = 202 M cycles. r13/46
+  // call at 0x8222 asks for 0x79*(0x28-[es:0x2060]) = 4,840 units = 202 M cycles. An earlier run
   // read that as the first step of a 4.1e9-cycle ladder; measured, the routine is entered
-  // six times in the whole boot and that reading does not hold (r13/53 s4) - but one
+  // six times in the whole boot and that reading does not hold - but one
   // 202 M-cycle wait is already more than this tier's budget, which is why the wedge has
   // looked like a hang.
   //
@@ -1596,10 +1961,10 @@ module tb_pc9821_userdisk;
   // elapsed ARTIC time (the counter ends
   // at the same value it would reach unaided), the ROM's control flow is untouched, and
   // OUTSIDE those windows the counter keeps its exact 307200 Hz rate, so no other firmware
-  // timeout moves. The window was extended in r13/57 to the MAIN BIOS's copy of the
+  // timeout moves. The window was extended to the MAIN BIOS's copy of the
   // delay (window offset 0xE11 = linear 0xF8E11, reached only after the FDD probe starts
   // completing): without it the boot advances past the FDD poll and then spends every
-  // retry in that copy at the authentic rate (r13/53 s7.3 named the gap). r13/79 widened
+  // retry in that copy at the authentic rate. It was widened
   // it once more to EVERY ARTIC wait routine `artic_wait_id` names (the BANK6 copy at
   // 0xF5B62 and the two BANK7 loops at 0xF8E12 / 0xFEE42 as well), because a full boot
   // past the IPL meets waits this tier had never walked; the ENTRY COUNT is the
@@ -1607,10 +1972,15 @@ module tb_pc9821_userdisk;
   // no synthesis effect, and OFF unless the run passes +ARTIC_BOOST=<units of 0x5E per
   // cycle> (1 is ample).
   integer    artic_boost    = 0;
+  // +BOOST_UNTIL=<cycle>: both boosts (ARTIC and VSYNC) end at that cycle, so the firmware's
+  // waits run fast and the guest code after it runs at the authentic rates. 0 = never end.
+  longint unsigned boost_until = 0;
+  initial void'($value$plusargs("BOOST_UNTIL=%d", boost_until));
+  wire boost_live = (boost_until == 0) || (tb_cycle < boost_until);
   integer    artic_boost_n  = 0;
   reg        artic_forced   = 1'b0;
   always @(posedge clk_sys) begin
-    if ((artic_boost != 0) && (artic_wait_id(pc_now) != 3'd0)) begin
+    if ((artic_boost != 0) && boost_live && (artic_wait_id(pc_now) != 3'd0)) begin
       force dut.iobus.artic_cnt = dut.iobus.artic_cnt + (32'(artic_boost) * 32'd256);
       if (!artic_forced) begin
         artic_forced <= 1'b1;
@@ -1628,7 +1998,7 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/133: VSYNC_BOOST, the text-GDC analogue of ARTIC_BOOST ------------
+  // --- VSYNC_BOOST, the text-GDC analogue of ARTIC_BOOST ------------
   // The boot's text-output path synchronises to the text-GDC vsync once per character
   // printed and once per IDE-sector gate, i.e. one 440-line frame each time. At the
   // authentic rate that is ~373k clk_vid cycles per sync, which is why the DOS disk
@@ -1641,7 +2011,7 @@ module tb_pc9821_userdisk;
   integer    vsync_boost   = 0;
   reg        vsync_forced  = 1'b0;
   always @(posedge clk_sys) begin
-    if (vsync_boost != 0) begin
+    if ((vsync_boost != 0) && boost_live) begin
       // Toggle the firmware-visible vsync status bit (bit 5 of the 0x60 read) instead
       // of forcing vline: forcing vline floods the scanout's per-line SDRAM fetch and
       // starves the CPU. The toggle is tb_cycle[9] (512 clk_sys), so each BIOS vsync
@@ -1659,8 +2029,8 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/53: the option ROM's own decision sites ----------------------------
-  // r13/46 s6.1 names three candidate failing steps and could not tell them apart. Each
+  // --- the option ROM's own decision sites ----------------------------
+  // An earlier run named three candidate failing steps and could not tell them apart. Each
   // is one comparison in BANK3, so each is watched with the values it compares, from the
   // bench's own SDRAM model and the ATA model's registers (i.e. what the ROM's `in` will
   // read). Site addresses are file offsets of BANK3.BIN + 0xD8000:
@@ -1782,7 +2152,7 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/53: the option ROM's task-file traffic -----------------------------
+  // --- the option ROM's task-file traffic -----------------------------
   // Bounded by construction: one line per (pc, port) the FIRST time it is seen and
   // thereafter only when the byte CHANGES, which is what turns a 2.5e6-iteration poll
   // into one line carrying the value it spun on. `n=` is that site's access count, so
@@ -1829,7 +2199,7 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- FDCTRACE: every access the BIOS makes to the FDC trio (r13/57) ----------
+  // --- FDCTRACE: every access the BIOS makes to the FDC trio ----------
   // Ports 0x90 (main status), 0x92 (data) and 0x94 (DOR/CCR) are decoded as
   // SYSTEM ports, so they never reach device_io and the IO HISTORY ring above
   // cannot see them. The BIOS's FDD path is the only code that touches them, and
@@ -1889,8 +2259,8 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // --- r13/53b: is the guest PROGRESSING, and what does it spin on -------------
-  // Once the ARTIC wait is walked the run reaches code r13/46 never saw, so two more
+  // --- is the guest PROGRESSING, and what does it spin on -------------
+  // Once the ARTIC wait is walked the run reaches code earlier runs never saw, so two more
   // instruments are needed. Both are bounded. PROGRESS prints the retired-instruction
   // count per interval, which separates "running slowly" from "wedged": a wedge moves
   // the PC a few times a second, a slow loop thousands. IDEPOLL watches the one poll the
@@ -2261,10 +2631,10 @@ module tb_pc9821_userdisk;
       $display("TIMEOUT MEMHS cpu_mem_valid=%0d mem_ready=%0d resp_valid=%0d z_valid=%0d z_io=%0d z_addr=%08x line_read=%0d",
                dut.cpu_mem_valid, dut.mem_cpu_ready, dut.mem_cpu_resp_valid,
                dut.z_valid, dut.z_io, {dut.z_addr, 2'b00}, dut.z_line_read);
-      // r13/133: WHERE the accepted request is stuck. mem_valid/mem_ready/mem_resp_valid are the
+      // WHERE the accepted request is stuck. mem_valid/mem_ready/mem_resp_valid are the
       // BACKEND handshake (the SDRAM through the clock bridge); the rest is the route queue that
       // decides which route's response this is.
-      // gvsel is the GVRAM route's select: the GVRAM array is block RAM now (r13/283) and makes
+      // gvsel is the GVRAM route's select: the GVRAM array is block RAM now and makes
       // NO backend request, so the route field it replaced no longer exists either (the response's
       // route is the response itself, pc9821_memory_subsystem's route-queue note).
       $display("TIMEOUT MEMROUTE mvalid=%0d mready=%0d mresp=%0d loader=%0d gvsel=%0d mapacc=%0d rt_wr=%0d rt_rd=%0d rt_left=%0d",
@@ -2285,7 +2655,7 @@ module tb_pc9821_userdisk;
                dut.memory.map_ready, dut.memory.mapper.cpu_valid,
                dut.memory.mapper.local_accept, dut.memory.mapper.out_of_range,
                dut.memory.mapper.fw_write_blocked);
-      // r13/133 section 4: the PAGING UNIT's own state, which decides whether the stuck write is
+      // The PAGING UNIT's own state, which decides whether the stuck write is
       // in PG_MEM_TLB (translated, waiting an accept) or PG_WALKING (its page walk is the stuck
       // access), and why it is non-posting (write_will_post).
       $display("TIMEOUT PGU state=%0d wr=%0d lin=%08x willpost=%0d dlygrace=%0d wrwait=%0d cantr=%0d tlbhit=%0d tlbdirty=%0d dirtyok=%0d livev=%0d liveposts=%0d fastpend=%0d crossing=%0d off=%0d",
@@ -2316,9 +2686,13 @@ module tb_pc9821_userdisk;
                dut.cpu.memory_inst.ext_valid_r, dut.cpu.memory_inst.bus_unit_inst.ext_src_r,
                dut.cpu.memory_inst.bus_unit_inst.ext_write_r, dut.cpu.memory_inst.bus_unit_inst.ext_dcache_accept,
                dut.cpu.memory_inst.ready);
-      // r13/206: the z486 memory fabric's own handshake. The stall holds
+      // The z486 memory fabric's own handshake. The stall holds
       // fast_path_pending with the demand request ACCEPTED and the bus idle, so
       // these are the terms that decide whether the read ever reported complete.
+      $display("TIMEOUT CG code=%04x jis=%0d rd_hold=%0d fnt_act=%0d fnt_step=%0d base=%05x jis_base=%05x wk_act=%0d wk_state=%0d wk_req=%0d font_req=%0d font_left=%0d mem1_valid=%0d mem1_ready=%0d mem1_resp=%0d",
+               dut.u_cg.cg_code, dut.u_cg.cg_jis, dut.u_cg.cg_rd_hold, dut.u_cg.fnt_act, dut.u_cg.fnt_step,
+               dut.u_cg.fnt_base_r, dut.u_cg.cg_jis_base, dut.u_cg.wk_act, dut.u_cg.wk_state, dut.u_cg.wk_req,
+               dut.font_req, dut.memory.font_left, dut.ext_mem1_valid, dut.ext_mem1_ready, dut.ext_mem1_resp_valid);
       $display("TIMEOUT FABRIC z_valid=%0d z_ready=%0d z_resp=%0d z_wr=%0d z_io=%0d z_addr=%08x | reqv=%0d acc=%0d comp=%0d vga=%0d isio=%0d isinta=%0d | extv=%0d extsrc=%0d dirpend=%0d dcpupend=%0d dcrdpend=%0d icrdpend=%0d | gv(tcr=%0d own=%0d ownplain=%0d st=%0d rdy=%0d rsp=%0d)",
                dut.cpu.memory_inst.valid, dut.cpu.memory_inst.ready,
                dut.cpu.memory_inst.resp_valid, dut.cpu.memory_inst.write,
@@ -2402,7 +2776,7 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // ---- r13/206: the pre-IPL fast-path stall at 0xFA641 -----------------------
+  // ---- the pre-IPL fast-path stall at 0xFA641 -----------------------
   // The stall held the paging unit's fast_path_pending with the demand read already
   // ACCEPTED (ext_valid_r cleared, mem_servicing stuck) and the page unit back in
   // PG_IDLE, so the question was whether the fabric ever reports that read complete.
@@ -2454,7 +2828,7 @@ module tb_pc9821_userdisk;
     // contract violation that wedged this boot: the memory subsystem's responder contract
     // requires the accept and the response on separate cycles, and the paging unit latches
     // fast_path_pending on the accept edge, so a same-cycle completion is seen with the latch
-    // still low and then never again (r13/206). Writes complete ON the accept by design and the
+    // still low and then never again. Writes complete ON the accept by design and the
     // map's combinational local RAM/ROM path answers in the accept cycle by design, so both are
     // excluded; the plane/device routes (GVRAM, GRCG, EGC, CG window, TRAM) are not.
     if (dut.cpu.memory_inst.dcache_req_accepted &&
@@ -2662,6 +3036,17 @@ module tb_pc9821_userdisk;
   initial fb_last = $test$plusargs("FB_LAST");
   integer cap_frame = 0;
   reg     vsync_d = 1'b0;
+  // +FB_EVERY=<n> (with +FB_LAST): the last complete frame, every n cycles, as fb_<cycle>.ppm
+  // in the run directory - a long guest run's screen history.
+  longint unsigned fb_every = 0;
+  initial void'($value$plusargs("FB_EVERY=%d", fb_every));
+  always @(posedge clk_sys)
+    if (fb_every != 0 && tb_cycle != 0 && (tb_cycle % fb_every) == 0) begin : fb_every_dump
+      reg [1023:0] p;
+      p = {1024{1'b0}};
+      $sformat(p, "fb_%0d.ppm", tb_cycle);
+      dump_screen(p);
+    end
   always @(posedge clk_sys) begin
     vsync_d <= video_vsync;
     if (video_vsync && !vsync_d) cap_frame <= 0;
@@ -2805,10 +3190,10 @@ module tb_pc9821_userdisk;
   // ---- the memory-size chain, traced --------------------------------------
   // The ITF checks an image-PRESENT flag at CG code 0x7257 row 0x27 and reads
   // its extended-memory size out of code 0x7157 row 0x27. Both are named in
-  // r12/66 section 3 and the owner's /MEMSW capture reads 00 at both on the
+  // the ITF's disassembly and the machine's /MEMSW capture reads 00 at both on the
   // machine. The store address packs the window's {code[14:8], code[0], lr,
   // row}, so code 0x7157 row 0x27 IS 0x1C67 and 0x7257 row 0x27 IS 0x1CA7 -
-  // the very addresses r12/66 names, which is how the packing is confirmed.
+  // the very addresses the disassembly names, which is how the packing is confirmed.
   //
   // This prints who writes each cell and with what, and what each read saw, so
   // the chain from the 0x530/0x531 register file to the printed size is
@@ -2836,21 +3221,21 @@ module tb_pc9821_userdisk;
         $display("CGWR %s addr=%04x data=%02x code=%04x lr=%0d cyc=%0d pc=%08x",
                  (dut.u_cg.cg_wr_addr == CELL_SIZE) ? "SIZE" : "PRES",
                  dut.u_cg.cg_wr_addr, dut.u_cg.cg_wr_data,
-                 dut.u_cg.cg_code_win, dut.u_cg.cg_lr_win, tb_cycle, pc_now);
+                 dut.u_cg.cg_code, dut.u_cg.cg_lr, tb_cycle, pc_now);
         msw_evt_n = msw_evt_n + 1;
       end
       if (cfg_bus_read && (cfg_bus_store == CELL_SIZE || cfg_bus_store == CELL_PRES)) begin
         $display("CGRD %s addr=%04x bus=%02x code=%04x lr=%0d cyc=%0d pc=%08x",
                  (cfg_bus_store == CELL_SIZE) ? "SIZE" : "PRES",
                  cfg_bus_store, cfg_bus_byte,
-                 dut.u_cg.cg_code_win, dut.u_cg.cg_lr_win, tb_cycle, pc_now);
+                 dut.u_cg.cg_code, dut.u_cg.cg_lr, tb_cycle, pc_now);
         msw_evt_n = msw_evt_n + 1;
       end
     end
   end
 
   // ---- the route-isolation collision, captured ---------------------------
-  // The design's own assertion at pc9821_memory_subsystem.sv:490 aborts the run
+  // The design's own route-isolation assertion (pc9821_memory_subsystem) aborts the run
   // BEFORE the ITF's memory-switch block is ever reached (this run shows zero
   // 0x530 writes), so that abort is what currently masks the memory-size defect.
   // But WHICH routes answer together, and at what address, is what separates a
@@ -2862,15 +3247,16 @@ module tb_pc9821_userdisk;
   // `win_*`), so the two old columns collapse into one -- which is exactly what the merge
   // claims: they can no longer answer two requests at once, because they are one engine and
   // the route select feeds it one request at a time.
+  // A line read's beats are the routes' OWN responses now (P3): the two walking routes strobe
+  // their word beats, the constant routes (open bus, PEGC regs) answer on cpu_resp_valid, and
+  // the map route has no line form at all.
   wire [3:0] route_resp_n =
       {3'b000, dut.memory.map_cpu_resp_valid} +
       {3'b000, dut.memory.gvram_cpu_resp_valid} +
       {3'b000, dut.memory.win_cpu_resp_valid} +
       {3'b000, dut.memory.open_cpu_resp_valid} +
-      {3'b000, dut.memory.map_cpu_line_resp_valid} +
-      {3'b000, dut.memory.gvram_cpu_line_resp_valid} +
-      {3'b000, dut.memory.win_cpu_line_resp_valid} +
-      {3'b000, dut.memory.open_cpu_line_resp_valid};
+      {3'b000, dut.memory.gvram_cpu_line_word_valid} +
+      {3'b000, dut.memory.win_cpu_line_word_valid};
   reg collision_seen = 1'b0;
   always @(posedge clk_sys) begin
     if (memsw_trace && !collision_seen && route_resp_n >= 2) begin
@@ -2881,10 +3267,8 @@ module tb_pc9821_userdisk;
                dut.memory.map_cpu_resp_valid, dut.memory.gvram_cpu_resp_valid,
                dut.memory.win_cpu_resp_valid,
                dut.memory.open_cpu_resp_valid);
-      $display("  line: map=%0d gvram=%0d win=%0d open=%0d",
-               dut.memory.map_cpu_line_resp_valid, dut.memory.gvram_cpu_line_resp_valid,
-               dut.memory.win_cpu_line_resp_valid,
-               dut.memory.open_cpu_line_resp_valid);
+      $display("  line beats: gvram=%0d win=%0d",
+               dut.memory.gvram_cpu_line_word_valid, dut.memory.win_cpu_line_word_valid);
     end
   end
 
@@ -2970,13 +3354,24 @@ module tb_pc9821_userdisk;
       $display("FDDISR entered at cyc=%0d (the BIOS FDD ISR body, F800:7AF7)", tb_cycle);
     end
   end
+  // +INTAWATCH_AFTER=<cycle> (+INTAWATCH_N=<n>, default 200): n more INTAWATCH lines from that
+  // cycle on, past the first 40 - the vectors of a guest's interrupt traffic late in a run.
+  longint unsigned intaw_after = 0;
+  integer intaw_n = 200, intaw_cnt = 0;
+  initial begin
+    void'($value$plusargs("INTAWATCH_AFTER=%d", intaw_after));
+    void'($value$plusargs("INTAWATCH_N=%d", intaw_n));
+  end
   always @(posedge clk_sys) begin
     z_inta_d <= dut.z_inta;
-    if (dut.z_inta && !z_inta_d && (inta_n < 40)) begin
+    if (dut.z_inta && !z_inta_d && ((inta_n < 40) ||
+        ((intaw_after != 0) && (tb_cycle >= intaw_after) && (intaw_cnt < intaw_n)))) begin
+      if (inta_n >= 40) intaw_cnt = intaw_cnt + 1;
       inta_n = inta_n + 1;
-      $display("INTAWATCH #%0d cyc=%0d pc=%08x vector=%02x fdc_irq=%b ata_irq=%b imr=%02x irr=%02x isr=%02x",
+      $display("INTAWATCH #%0d cyc=%0d pc=%08x vector=%02x fdc_irq=%b ata_irq=%b imr=%02x irr=%02x isr=%02x | slave ir=%02x imr=%02x irr=%02x isr=%02x",
                inta_n, tb_cycle, pc_now, dut.inta_din[7:0], dut.fdc_irq, dut.ata_irq,
-               dut.irq_dbg_imr, dut.irq_dbg_irr, dut.irq_dbg_isr);
+               dut.irq_dbg_imr, dut.irq_dbg_irr, dut.irq_dbg_isr, dut.interrupts.slave_irq,
+               dut.interrupts.slave_dbg_imr, dut.interrupts.slave_dbg_irr, dut.interrupts.slave_dbg_isr);
     end
   end
   always @(posedge clk_sys) begin
@@ -3007,7 +3402,7 @@ module tb_pc9821_userdisk;
     // SAMPLE AT THE RESPONSE, NOT THE ACCEPT. The map's cpu_dout is the backend's
     // REGISTERED output, so on the accept cycle it still holds the PREVIOUS access's
     // value -- sampling it there reported 0x00 ("the ROM probes no slot") on trees where
-    // the ROM went on to issue IDENTIFY, and r13/28/r13/53 read that zero as the guest's
+    // the ROM went on to issue IDENTIFY, and earlier runs read that zero as the guest's
     // decision. The accept is latched; the byte is taken when the response lands.
     if (!drv_rd_seen && !drv_rd_pending && dut.memory.cpu_valid && dut.memory.cpu_ready &&
         !dut.memory.cpu_write && (dut.memory.cpu_addr == 32'h000F_8E90) &&
@@ -3063,11 +3458,10 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // STRAPREAD: what a read of 0xF0 ACTUALLY returns here, because the diagnosis
-  // handed to this lane says the device_port priority shadows the 0xA9 arm at
-  // pc9821_iobus.sv:972, while reading the port classifier says 0xF0 is in
-  // is_system_port (line 429, inside the function spanning 393-519) and NOT in
-  // is_device_port (340-391) -- so the arm should be reached. One trace settles
+  // STRAPREAD: what a read of 0xF0 ACTUALLY returns here, because one diagnosis
+  // held that the device-port priority shadows the 0xA9 strap arm, while the port
+  // classifier puts 0xF0 among the system ports and NOT the device ports -- so the
+  // arm should be reached. One trace settles
   // which, and the ITF's own bitmap arithmetic makes the value testable: 0xA9
   // gives bitmap 0x04, and anything with bits 5 and 6 both set gives 0x00.
   reg         strap_first_seen = 0;
@@ -3148,7 +3542,7 @@ module tb_pc9821_userdisk;
   // `pc_now == 0xFC6B7` (the failure jump) fire on every run, passing or
   // failing: measured, `DIPSUM AA55 CHECK FAILED` printed in a run where AA55
   // was accepted and `DIPSUM SUM CHECK FAILED` printed in a run where the sum
-  // was 0x500 and no repair ever ran (and this lane's own cold run printed BOTH "AA55 CHECK FAILED" and "the sum
+  // was 0x500 and no repair ever ran (and an earlier cold run printed BOTH "AA55 CHECK FAILED" and "the sum
   // loop is REACHED" while the marker check was failing). The two probes that
   // answered it are below and are guest writes the ITF makes, not fetches.
   reg [31:0] dip_addr = 0;
@@ -3401,7 +3795,7 @@ module tb_pc9821_userdisk;
       for (k = 16; k >= 1; k = k - 1)
         if (pc_idx >= k) $display("    %08x", pc_hist[(pc_idx - k) % PC_HIST]);
       $display("  SDIP as stored (bank A idx0..11, then bank B idx0..11):");
-      // The read is the stored byte VERBATIM (audit-iobus F4: the machine returns
+      // The read is the stored byte VERBATIM (the machine returns
       // what it stored - docs/probes/RDBACK.TXT:162 reads back the even-parity
       // 0x0C it wrote), so the separate `readback` column this dump used to print
       // (sdip_read_value's odd-parity recompute, now gone from the RTL) carried the
@@ -3422,15 +3816,15 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // ---- THE OWNER'S TRIGGER: change the GDC Clock, then machine-reset three times ----
+  // ---- THE REPORTED TRIGGER: change the GDC Clock, then machine-reset three times ----
   //
-  // The owner's report, verbatim (2026-09-27, rank-1 evidence for the SYMPTOM):
+  // The hardware report, verbatim (rank-1 evidence for the SYMPTOM):
   //   "On the second reset after changing the GDC setting I can get the reset software
   //   dip switch loop to come back, but further resets fix it. That is the only way
   //   I've been able to trigger it."
   //
   // +DIP_GDC_SEQ replays exactly that: boot 0 runs the authentic ITF, the OSD GDC Clock
-  // field flips mid-run (the owner's menu change), then three machine resets, each boot
+  // field flips mid-run (an OSD menu change), then three machine resets, each boot
   // running to the destructive part of the POST (stage 1A's KANJI CG RAM test wipes the
   // record at codes 0x2056..0x7F57 - store 0x800..0x1FFF - AFTER the check, every boot,
   // by design) before the next reset. At every check pass the bench evaluates THE ITF'S
@@ -3579,7 +3973,7 @@ module tb_pc9821_userdisk;
   always @(posedge clk_sys) begin
     if (seq_en) begin
       seq_stage05_prev <= (dut.iobus.dbg_itf_stage == 8'h05);
-      // The owner's OSD change: flip the live field mid-run, 2000 cycles after boot 0's
+      // The OSD change: flip the live field mid-run, 2000 cycles after boot 0's
       // check has been recorded (the strap latch must not move until the next reset).
       if (!seq_flip_done && seq_phase == 1 && seq_boot == 0 && (seq_timer == 2000)) begin
         gdc_5mhz <= 1'b1;
@@ -3770,7 +4164,7 @@ module tb_pc9821_userdisk;
       if (wedge_cycles == 20000) begin
         wedge_reported <= 1'b1;
         // The GVRAM's own backend taps are its SDRAM D1-boundary FSM now: the 256 KiB array is
-        // SDRAM-resident again (r13/35, reversing the earlier move out of SDRAM into block RAM),
+        // SDRAM-resident again (reversing the earlier move out of SDRAM into block RAM),
         // so a wedge here is the datapath FSM not completing, and the line prints its phase and
         // its D1 accept/completion (cc_*) instead.
         $display("MEMWEDGE addr=%08x wr=%b line=%b cyc=%0d | sel tram=%b open=%b cg=%b gvram=%b map=%b backend=%b | ready win=%b open=%b gvram=%b map=%b | gvram gstate=%0d cc_valid=%b cc_ready=%b cc_done=%b cpu_resp=%b line_resp=%b | loader_owns=%b",
@@ -3783,7 +4177,7 @@ module tb_pc9821_userdisk;
                  dut.memory.map_cpu_ready, dut.memory.u_gvram_arb.gstate,
                  dut.memory.u_gvram_arb.cc_valid,
                  dut.memory.u_gvram_arb.cc_ready, dut.memory.u_gvram_arb.cc_done,
-                 dut.memory.u_gvram_arb.cpu_resp_valid, dut.memory.u_gvram_arb.cpu_line_resp_valid,
+                 dut.memory.u_gvram_arb.cpu_resp_valid, dut.memory.u_gvram_arb.cpu_line_word_valid,
                  dut.memory.loader_owns);
         $display("MEMWEDGE2 gvram cpu_valid=%b cs=%0d owns_plain=%b owns_grcg=%b owns_egc=%b egc_gate=%b grcg_expand_gate=%b c_cl_valid=%b cc_write=%b cc_addr=%04x win_plane=%0d win_offset=%04x c_lane=%0d",
                  dut.memory.u_gvram_arb.cpu_valid, dut.memory.u_gvram_arb.cs,
@@ -3811,7 +4205,7 @@ module tb_pc9821_userdisk;
   // value it finds there. This core's answer at that address is a constant
   // 0xFFFF_FFFF from the absent-memory responder - which is also a perfectly
   // plausible data value - so the probe cannot tell "no memory" from "memory
-  // holding all-ones", and the guest ends up in the retry loop r12/70 describes
+  // holding all-ones", and the guest ends up in the retry loop
   // (MEMORY ERROR 0002000000 FFFFFFFF, then compare/diagnose/compare forever).
   // WHICH ROUTE answers the boundary access is what separates the two candidate
   // mechanisms, and nothing else in the log names it. Gated, so it costs nothing
@@ -3977,7 +4371,7 @@ module tb_pc9821_userdisk;
       send_word(27'h0070000 + i * 2, pack_words[18'h38000 + i]);
     // The character generator: the whole FONT.ROM, verbatim, at pack +0x80000
     // (the 1 MiB reserve's high half). Nothing in this bench reads a glyph -- the
-    // character-generator read path is a separate lane -- but the model has to
+    // character-generator read path is a separate concern -- but the model has to
     // hold the pack the card holds, or the first bench that does read one reads
     // the result of a dropped write rather than a font.
     // EXPERIMENT: font region not sent
@@ -4020,9 +4414,42 @@ module tb_pc9821_userdisk;
       img_size = 64'($ftell(img_fd));
       $display("IMG_FILE size %0d bytes", img_size);
     end
-    img_mounted = 1'b1;
-    @(negedge clk_sys);
-    img_mounted = 1'b0;
+    if (!$test$plusargs("NO_HDD")) begin
+      img_mounted = 1'b1;
+      @(negedge clk_sys);
+      img_mounted = 1'b0;
+    end
+    if (fdd_fd != 0) begin
+      repeat (2) @(negedge clk_sys);
+      void'($fseek(fdd_fd, 0, 2));
+      img_size = 64'($ftell(fdd_fd));
+      $display("FDD_FILE size %0d bytes", img_size);
+      // +FDD_RW mounts the floppy writable (writes go to fdd_ovl, never the file).
+      begin : fdd_ro
+        reg ro_save;
+        ro_save = img_readonly;
+        img_readonly = !$test$plusargs("FDD_RW");
+        fdd_mounted = 1'b1;
+        @(negedge clk_sys);
+        fdd_mounted = 1'b0;
+        img_readonly = ro_save;
+      end
+    end
+    if (fdd2_fd != 0) begin
+      repeat (2) @(negedge clk_sys);
+      void'($fseek(fdd2_fd, 0, 2));
+      fdd1_size = 64'($ftell(fdd2_fd));
+      $display("FDD2_FILE size %0d bytes", fdd1_size);
+      begin : fdd2_ro
+        reg ro_save;
+        ro_save = img_readonly;
+        img_readonly = !$test$plusargs("FDD_RW");
+        fdd1_mounted = 1'b1;
+        @(negedge clk_sys);
+        fdd1_mounted = 1'b0;
+        img_readonly = ro_save;
+      end
+    end
     if (img1_fd != 0 && !cd_late) begin
       // hps_io's img_size is one register, valid for the mount that pulses: set it to the
       // second file's size for slot 3's own pulse.
@@ -4060,9 +4487,9 @@ module tb_pc9821_userdisk;
       void'($value$plusargs("STOP_AT_PC_HITS=%d", stop_pc_hits));
       if ($value$plusargs("STOP_AT_CYCLE=%d", stop_cycle)) stop_at_cycle_valid = 1'b1;
       void'($value$plusargs("STOP_ON_STALL=%d", stop_on_stall));
-      // r13/53: the sim-only ARTIC override (0 = authentic). See its declaration.
+      // The sim-only ARTIC override (0 = authentic). See its declaration.
       void'($value$plusargs("ARTIC_BOOST=%d", artic_boost));
-        // r13/133: the sim-only text-GDC vsync override (0 = authentic).
+        // The sim-only text-GDC vsync override (0 = authentic).
         void'($value$plusargs("VSYNC_BOOST=%d", vsync_boost));
       // +PAST_IPL is a MEASUREMENT mode, not an acceptance one: it keeps the run
       // going after 1FC0:0000 so the DOS boot and EMM386 can be exercised, and the
@@ -4157,7 +4584,7 @@ module tb_pc9821_userdisk;
     $display("RESET VECTOR: re-entered F800:4000 after the out 0xF0 reset = %0d", reset_vector_entry);
   $display("PACKWATCH pack_lo=%08x pack_writes=%0d above_ram_writes=%0d sdram_top=%08x",
            sdram_pack_lo, pack_writes, above_ram_writes, sdram_top);
-  // r13/79: the two counts this lane exists for. ARTICWAIT names every ARTIC wait the
+  // The two counts this instrument exists for. ARTICWAIT names every ARTIC wait the
   // boot entered, per home (id1..id4 above), with big-settle = the 4,840-unit calls;
   // HPS names the block-handshake latency the tiers cannot see. Under +ARTIC_BOOST
   // the ARTIC cyc columns are the model's collapsed price, not the authentic one.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read a Quartus map.rpt's synthesis-side RAM facts, the half resource_hierarchy.py does not.
+"""Read a Quartus map.rpt's synthesis-side RAM facts (also the parser tools/res_exp_map.py uses).
 
 A per-ENTITY table diff (ALUTs / regs / bits / DSP) cannot answer the question this tool
 is about: did a memory INFER, or was it built from LUTs?
@@ -19,8 +19,8 @@ Usage:
   python3 tools/res_exp_ram.py NEW.map.rpt --compare BASE.map.rpt --ram 'pc9821_kbd|pc9821_crtc'
   python3 tools/res_exp_ram.py NEW.map.rpt --settings RESOURCE_AWARE
 
-Exit status is nonzero when a requested regex matches nothing (the same fail-loud shape as
-resource_hierarchy.py), so "the row I expected is not there" cannot read as a pass.
+Exit status is nonzero when a requested regex matches nothing (fail-loud), so "the row I
+expected is not there" cannot read as a pass.
 """
 
 from __future__ import annotations

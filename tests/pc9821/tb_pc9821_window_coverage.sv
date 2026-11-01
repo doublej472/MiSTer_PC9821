@@ -44,12 +44,15 @@ module tb_pc9821_window_coverage;
   wire        gvram_window;
   wire [1:0]  gvram_win_plane;
   wire [14:0] gvram_win_offset;
+  // The map's exported window-0 pair (P2): the post-bias address and its flag. Unused here.
+  wire [31:0] d_addr;
+  wire        win0_moved;
   wire [31:0] cpu_dout, mem_addr, mem_din;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   wire [3:0]  mem_be;
   wire [7:0]  mem_burstcount;
   wire        mem_line_read, mem_valid, mem_write;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   wire        absent_area;
 
   // ==== DUT ====
@@ -58,7 +61,7 @@ module tb_pc9821_window_coverage;
   wire [1:0]  ems_state;
   wire [31:0] ems_page_base;
   wire        ems_open_bus;
-  // The PEGC extended-VRAM window (r13/48): off here, so the window-coverage walk is
+  // The PEGC extended-VRAM window: off here, so the window-coverage walk is
   // unchanged. Its own routing is tb_pc9821_sys16m.sv's and its bytes are tb_pc9821_pegvram.sv's.
   reg         peg_window = 1'b0;
   reg  [31:0] peg_base = 32'd0;

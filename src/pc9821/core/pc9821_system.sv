@@ -83,10 +83,9 @@ module pc9821_system (
     output        ext_mem3_valid,
     output        ext_mem3_write,
 
-    // NOTE: there is deliberately no separate video clock input. The PC-98 dot
-    // rate (21.0526 MHz, 24 kHz text mode) is produced as an enable on clk_sys
-    // and exported as video_ce, which the top level passes to the framework as
-    // CE_PIXEL while CLK_VIDEO = clk_sys. See pixel_ce below for why.
+    // NOTE: there is deliberately no video clock input. The PC-98 dot rate (400/19 MHz,
+    // 24 kHz text mode) is an enable on clk_sys, exported as video_ce with the picture; the top
+    // level carries it into the video clock domain (pc9821_video_out). See pixel_ce below.
 
     // MiSTer HPS-side boot/media path
     input         ioctl_download,
@@ -136,6 +135,9 @@ module pc9821_system (
     output        cd_rd,
     input         cd_ack,
     input         cdda_req,
+    input         cdda_req4,     // the ring has room for four sectors (the drive's read-ahead)
+    input         cdda_played,   // one pulse per sector's worth of samples sent to the speakers
+    output        cdda_flush,    // one cycle: the player stopped, paused or moved; empty the ring
     output        cdda_wr,
     output [31:0] cdda_data,
 
@@ -155,16 +157,15 @@ module pc9821_system (
 
     // Debug stream up to UART bridge. dbg_uart_accept is that FIFO's handshake back: it is high
     // in a cycle the byte on dbg_uart_byte was TAKEN, and pc9821_dbg_record holds the byte and
-    // its strobe until it sees it, so a 621-byte report cannot outrun the FIFO. It is a
+    // its strobe until it sees it, so a report cannot outrun the FIFO. It is a
     // level, and it is the FIFO's whole enqueue decision - the reset banner and the instruction
     // trace outrank this source there, so "room" alone is not the condition.
     output  [7:0] dbg_uart_byte,
     output        dbg_uart_we,
-    // One-cycle: the INT21 record captured a DOS arena-error return (pc9821_int21_msg
-    // arena_err) - the instruction ring's freeze trigger. 0 when PERF_LOG_EN=0.
+    // One-cycle: the instruction ring's freeze trigger (the end of a GVRAM drawing burst, or a
+    // display/access page flip, rate-limited). 0 when PERF_LOG_EN=0.
     output        trace_trig,
-    // PC-98 crash-recorder / probe taps (z486 dbg_* outputs, re-exposed by the
-    // 2026-10-03 fork's pc98(debug) commit). Pure observation of existing CPU state;
+    // PC-98 crash-recorder / probe taps (z486 dbg_* outputs). Pure observation of existing CPU state;
     // the crash recorder, its OSD debug view and its snapshot window read them at the
     // top level. A tap left unread there is dropped by the fitter.
     output        cpu_dbg_gate_read,  // one pulse per accepted IDT/IVT gate read
@@ -183,6 +184,21 @@ module pc9821_system (
     input         dbg_uart_accept,
     /* verilator lint_on UNUSEDSIGNAL */
     output        mpu_uart_tx,
+    // Whether the MPU-PC98II is present to the guest: z486_mister.sv's OSD UART mode is MIDI.
+    // A runtime select of device presence, meaningful only with MPU_EN (see the card's block).
+    /* verilator lint_off UNUSEDSIGNAL */   // MPU_EN=0: no card to present
+    input         mpu_present,
+    /* verilator lint_on UNUSEDSIGNAL */
+    // The run-time SDRAM_CLK phase instrument (SDRAM_PHASE_DYN, a test-only build): the step
+    // handshake to the top level's pc9821_sdram_dps, which drives the main PLL's phase-shift ports
+    // on the PLL's scan clock. With SDRAM_PHASE_DYN 0 the outputs are constant 0 and the inputs
+    // are unread.
+    output        sdph_step_req,
+    output        sdph_step_up,
+    /* verilator lint_off UNUSEDSIGNAL */   // SDRAM_PHASE_DYN=0: no instrument reads these
+    input         sdph_step_ack,
+    input         sdph_fault,
+    /* verilator lint_on UNUSEDSIGNAL */
 
     input   [2:0] ram_size,       // OSD guest RAM size, log2(MiB): 0..6 = 1..64 MiB
     // The installed SDRAM module's guest-size CEILING (z486_mister's ram_size_max: code 4/5/7
@@ -190,6 +206,7 @@ module pc9821_system (
     // exists because the pack's base is the ceiling rather than the selected size.
     input   [2:0] ram_size_max,
     input         bios_setup,     // OSD: hold HELP from reset so the ITF enters SETUP
+    input         kbd_layout_jis, // OSD Keyboard: 1 = JIS host layout, 0 = US (pc9821_kbd)
     // OSD: WHICH MACHINE'S PORT-0xF0 MACHINE-ID STRAP to answer, a four-bit field. 0 =
     // PC-9821Xe10 (the measured strap, and the config-less default), 1 = PC-9821Xe,
     // 2..15 reserved. The pack file IS the firmware set (the MGL chooses it); the port-0xF0
@@ -207,6 +224,15 @@ module pc9821_system (
     // and nothing else. Like bios_set, the arm reads a reset-qualified latch
     // (gdc_strap_eff), so the selection applies at machine reset / reload only.
     input         gdc_clock_5m,
+    // OSD: the FDD-mode switch, 0x00BE bit 2: 0 = Auto-Detection (the default), 1 = Fixed.
+    // Latched on reset inside pc9821_fdc (POST samples it); see its dip_fixed port.
+    input         fdd_dip_fixed,
+    // OSD: the CD audio volume, already decoded by pc9821_osd into pc9821_audio_volume's 5-bit
+    // gain code (31 = 0 dB, 2 dB per step, 0 = mute). It drives vol_cd_l/r below; without the
+    // CD drive's player (CDROM_AUDIO_EN 0) it is unread and the CD channel is the constant 0.
+    /* verilator lint_off UNUSEDSIGNAL */   // CDROM_AUDIO_EN=0: no CD-DA channel to scale
+    input   [4:0] cd_volume_code,
+    /* verilator lint_on UNUSEDSIGNAL */
     // OSD: the ONE HARDWARE-switch field the `P1` DIP Switch page still owns, `Boot order`.
     // It reaches pc9821_crtc's TRAM seed and nothing else. IT CARRIES A LIST POSITION, NOT A
     // VALUE: position 0 is the measured machine (the 0x00 FDD nibble), and pc9821_crtc
@@ -225,6 +251,9 @@ module pc9821_system (
     // slows: the bus, I/O and every device keep their real rates (src/z486/docs/throttle.md).
     input   [3:0] cpu_speed_sel,
 	output wire        video_ce,
+	// 0x09A8 bit 0 (pc9821_iobus's latch): the raster runs on the 31 kHz dot clock. A level on
+	// clk_sys; the top moves the video PLL to the matching clock (pc9821_vpll_ctl).
+	output wire        video_31k,
 	output wire        video_blank_n,
 	output wire        video_hsync,
 	output wire        video_vsync,
@@ -234,7 +263,7 @@ module pc9821_system (
 
 	// The PC-9801-86 card: the OPNA YM2608 and the 86-PCM, summed WIDE and
 	// delivered UNCLAMPED here (the chain's LAST saturation is at the final DAC,
-	// z486_mister's mix_dry - NP2kai's _saturation_s16; review2/datapaths.md F1).
+	// z486_mister's mix_dry - NP2kai's _saturation_s16).
 	// 20 bits: the FM+ADPCM sum is clamped to +-32,767 at the jt08_acc junction
 	// (ymfm's clamp16, ymfm_opn.cpp:1410-1414), the AC-COUPLED (zero-mean) SSG is
 	// added after that clamp (up to +-12,276 at the <<2 join), and a full-scale
@@ -280,10 +309,10 @@ module pc9821_system (
 
 parameter SYS_FREQ = 50_000_000;
 // L1 caches: 4 KiB data + 4 KiB instruction (SET_BITS=6 = 64 sets x 4 ways x 16 B).
-// The size is set ONCE at z486_mister.sv:149-150, which overrides this default; this
+// The size is set ONCE at z486_mister.sv:274-275 (`DCACHE_SET_BITS`), which overrides this default; this
 // parameter exists only as pc9821_system's interface to the vendored z486. Kept small to
 // free M10K blocks (the GVRAM owns 256 and the Kanji font needs room) - the 486's 8 KiB
-// unified cache is not needed by DOS/Touhou. Owner decision - accept the smaller cache.
+// unified cache is not needed by DOS/Touhou; the smaller cache is a deliberate choice.
 parameter DCACHE_SET_BITS = 6;
 parameter ICACHE_SET_BITS = 6;
 parameter ENABLE_X87 = 1'b0;
@@ -299,11 +328,16 @@ parameter PERF_LOG_EN = 1'b0;
 parameter [1:0] IO_LATENCY_PROFILE = 2'd0;
 // WHETHER THE MPU-PC98II SOUND CARD EXISTS on the device bus: its registers at 0xE0D0/0xE0D2,
 // its 31250-baud MIDI-out line, and its IRQ. COMPILED OUT, NOT DISABLED, unless the build turns
-// it on (z486_mister.sv's MPU_EN, which build_profile.py rewrites for the 'midilink' profile):
+// it on (z486_mister.sv's MPU_EN, which build_profile.py writes from mpu_en, on in every preset except trace):
 // with 0 the device decode drops the card's two match lines, the device-select's mpu_cs is a
 // constant 0, the module instance below does not exist, and mpu_uart_tx is the idle mark it
 // always was. See pc9821_mpu.sv for what the card is.
 parameter MPU_EN = 1'b0;
+// THE RUN-TIME SDRAM_CLK PHASE INSTRUMENT (z486_mister.sv's SDRAM_PHASE_DYN; build_profile.py
+// --dbg-sdram-phase, off in every preset): pc9821_sdram_phase_ctl on the device bus at
+// 0x5FF0/0x5FF2. With 0 the select is a constant 0, the instance below does not exist and the
+// read mux's arm is unreachable, so nothing is built.
+parameter SDRAM_PHASE_DYN = 1'b0;
 // THE CD-ROM (z486_mister.sv's CDROM_EN, build_profile.py's cdrom_en): pc9821_atapi as bank 1's
 // master. With 0 the instance does not exist, its read-mux arm and IRQ term are constant 0 and
 // bank 1 is an empty connector (port 0xF0 bit 6 set); the hard disk is bank 0's master either way. CDROM_AUDIO_EN adds the CD-DA player (PLAY/PAUSE/SUB-CHANNEL
@@ -313,8 +347,8 @@ parameter CDROM_AUDIO_EN = 1'b0;
 // The CD drive's command log (pc9821_atapi LOG_EN) on dbg_uart_byte/dbg_uart_we, which carry it only
 // when the telemetry (PERF_LOG_EN) is compiled out. A debug instrument; off in every preset.
 parameter CDROM_LOG_EN = 1'b0;
-// THE DEBUG-UART INSTRUMENT FRAMEWORK (build_profile.py --dbg-*; AGENTS.md,
-// "Testing on a real MiSTer"). Each is a compile-time parameter, off in every preset,
+// THE DEBUG-UART INSTRUMENT FRAMEWORK (build_profile.py --dbg-*; docs/mister-testing.md,
+// "The debug UART"). Each is a compile-time parameter, off in every preset,
 // and the unselected instrument does not exist: the generate-if below instantiates nothing, the
 // mux is absent and dbg_uart_byte/we are the constants they always were. They share the CD log's
 // UART arm (so they need PERF_LOG_EN = 0) and pc9821_dbg_mux interleaves them on record boundaries.
@@ -354,22 +388,19 @@ reg z_ready, z_resp_valid;
 wire zc_valid, zc_inta, zc_ready, zc_resp_valid;
 wire [31:0] zc_din;
 wire z_intr;
-// The 2026-10-03 fork rebase dropped the OLD observation ports (dbg_irq_state and
-// the dbg_il/im/dl/dm L1 pulses) and the INT-vector telemetry (dbg_vec_fetch/num,
-// dbg_EAX/EBX/CF): the watchdog/perf/int21 formatters still see tied-off 0 inputs
-// below. The fork's pc98(debug) commit then re-exposed a DIFFERENT, richer set -
-// the crash-recorder taps - which are the module's own output ports (declared in the
-// header), driven by the z486 instance and passed up unchanged.
+// The CPU exports no L1 lookup/miss pulses, no internal interrupt state and no register
+// taps, so the telemetry records carry no fields for them. Its observation ports are the
+// crash-recorder taps, which are this module's own output ports (declared in the header),
+// driven by the z486 instance and passed up unchanged.
 reg  [7:0] inta_count;
 reg        z_inta_d;
 
 // INTA pulses actually issued by the CPU. If the PIC holds pending, unmasked
 // requests (IMR/IRR in the telemetry) and this stays 0, the CPU never reached
 // its interrupt-acknowledge path at all, which separates "not delivered" from
-// "delivered but mishandled". Reset state (review r2-resets F6): the counter is
-// PER RESET EPOCH and starts at 0/0 - unreset it X-locked in 4-state sim (the
-// `!=` is X, the arm never fires) and ran across warm resets, so no run's count
-// was ever readable.
+// "delivered but mishandled". Reset state: the counter is PER RESET EPOCH and
+// starts at 0/0 - unreset it would X-lock in 4-state sim (the `!=` is X, the arm
+// never fires) and run across warm resets, so no run's count would be readable.
 always @(posedge clk_sys) begin
     if (reset) begin
         z_inta_d  <= 1'b0;
@@ -393,14 +424,17 @@ wire io_cpu_ready, io_cpu_resp_valid;
 wire device_io_wr, device_io_rd;
 wire [15:0] device_io_addr;
 wire [7:0] device_io_din, device_io_dout, gdc_io_dout;
-/* verilator lint_off UNUSEDSIGNAL */   // vsync_active is brought out; this core reads gdc_vsync_irq instead
-wire gdc_vsync, gdc_vsync_irq, gdc_disp, gdc_de;
-/* verilator lint_on UNUSEDSIGNAL */
+wire gdc_vsync_irq, gdc_disp, gdc_de;
 // The EGC gate (FF2 num 2 AND 0x7C bit 7) and its register file. The registers
 // are latched by pc9821_iobus from 0x04A0-0x04AE; the engine that consumes them
 // is pc9821_egc.sv, instantiated in the memory subsystem so its VRAM accesses go
 // through the same backend port as every other GVRAM access.
 wire gdc_egc_gate;
+// mode2_egc's NEXT state, from pc9821_crtc: pc9821_egc_mem_gate registers the EGC x GRCG gate
+// from both sources' next state.
+wire gdc_egc_gate_nx;
+// 0x09A8 bit 0 (pc9821_iobus): the 31 kHz dot clock (pc9821_dot_ce) and monitor range (pc9821_crtc).
+wire crt31k;
 // The 0x9A0 extended-video query state (pc9821_crtc -> pc9821_iobus, which owns
 // the port): the bits NP2kai's gdc_i9a0 query table reads.
 wire [10:0] gdc_ff2_state;
@@ -409,11 +443,13 @@ wire [10:0] gdc_ff2_state;
 // VOPBIT_GRCG, i386c/cpumem.c:287-295), so `gdc_egc_mem_gate` is the mode AND the
 // GRCG's expand gate the GRCG exports back through the memory subsystem.
 wire mem_grcg_expand;
-// The GRCG's live mode register. The 0x7C guest read no longer answers it - the
-// port is write-only and reads open bus 0xFF (docs/probes/RDBACK.TXT:152) - so
-// this wire reaches only pc9821_crtc's unconsumed grcg_mode_r input.
-wire [7:0] mem_grcg_mode_r;
-wire gdc_egc_mem_gate = gdc_egc_gate && mem_grcg_expand;
+// mode bit 7's NEXT state, from pc9821_grcg through pc9821_memory_subsystem.
+wire mem_grcg_expand_nx;
+// The EGC x GRCG memory gate, REGISTERED from both sources' next state (pc9821_egc_mem_gate,
+// instantiated below once rst_n_sys is available): a true pipeline relocate, so gate(t) is
+// bit-identical to the combinational `gdc_egc_gate && mem_grcg_expand` in every cycle, while
+// the flop cuts the crtc-launched GVRAM-M10K cone (docs/timing.md).
+wire gdc_egc_mem_gate;
 wire [15:0] egc_access, egc_fgbg, egc_ope, egc_fg, egc_mask, egc_bg,
              egc_sft, egc_leng;
 wire        egc_shift_we;
@@ -453,24 +489,61 @@ wire top_shadow_en;
 wire sys16m_en;
 wire [15:0] unmapped_writes, unmapped_reads, last_unmapped_port;
 
-// The ARTIC counter's upper half, straight from the iobus. The watchdog message's U FIELD now
-// reports THIS rather than the last unmapped port. The reason is what is informative at the
-// stall it exists to diagnose: the machine boots the whole ITF and then spins forever in the
-// IDE option ROM's delay() helper at BANK3@0x0B2A, which reads this exact value with in ax,0x5E.
-// U read a constant 0x00BE there - no unmapped port is involved at all - so it was the least
-// informative field in the message while this one is the whole question. `last_unmapped_port`
-// is unchanged and still exported below, so nothing that measured it loses it.
+// The ARTIC counter's upper half, straight from the iobus. The watchdog message's U FIELD
+// reports THIS rather than the last unmapped port, because it is what is informative at the
+// stall it exists to diagnose: a machine that boots the whole ITF and then spins forever in the
+// IDE option ROM's delay() helper at BANK3@0x0B2A, which reads this exact value with in ax,0x5E
+// (no unmapped port is involved there). `last_unmapped_port` is still exported below.
 /* verilator lint_off UNUSEDSIGNAL */   // PERF_LOG_EN=0: the watchdog's I/O taps here lose their only reader
 wire [15:0] artic_hi;
 wire [7:0] io_post_code;
 wire io_post_write;
 wire [3:0] io_dbg_gate;
 // The core's native whole-L1 cache flush (src/z486/docs/platform-integration.md):
-// iobus pulses cache_flush_req on every flush trigger, z486 walks both L1s
-// (136 cycles) and answers cache_flush_done; the write completes on it.
+// iobus pulses cache_flush_req on every MAPPING/guest flush trigger, z486 walks
+// both L1s (136 cycles) and answers cache_flush_done; the write completes on it.
+// The DMA side does not ask for a walk: it snoops per accepted bus-master write
+// (dma_snoop_valid below), which is the machine's EADS# and costs the CPU no stall
+// (T24). The I/O family still uses the walk because a bank/EMS/window remap moves
+// a whole region's physical names at once, not one written line.
 wire cache_flush_req;
 wire cache_flush_busy;
 wire cache_flush_done;
+
+// The DMA-side external snoop (the 486's EADS#), from pc9821_iobus's uPD71071
+// bus-master port: the write AS THE BACKEND ACCEPTS IT invalidates its line in
+// both L1s (z486 routes snoop_addr/snoop_valid to the D$ and to the I$ invalidate
+// port, src/z486/memory.sv). A real 486 snoops per external write and software
+// does not flush after a floppy DMA, so without this the disk buffer stays stale.
+// Gating on the accept (dma_mem_ready) is what
+// makes it correct: the invalidate cannot run before the byte has landed, and a
+// CPU line cached between two writes of the same line is invalidated again by the
+// next write to that line's set. Because this pulse is in the clk_sys domain and z486
+// samples it on the GATED cpu_clk (l1_cache.sv:928), it is routed through
+// pc9821_cpu_bus_bridge, which holds it for the CPU's next enabled edge - a pulse
+// fed straight in would be lost whenever cpu_ce is 0 (any OSD CPU Speed but Full).
+// A whole-L1 walk per DMA/FDC completion would hold cpu_ready low for 136 cycles.
+wire dma_snoop_valid = dma_mem_req && dma_mem_we && dma_mem_ready;
+
+// THE DMA-WRITE BACK-PRESSURE. The bridge's snoop hold is ONE entry, so a
+// second DMA write accepted before the CPU's next enabled edge would take its place in
+// the address mux and the first write's line would never be invalidated - silently on
+// hardware (the bridge's check is simulation-only). While a snoop waits (dma_snoop_busy),
+// the next DMA WRITE byte is therefore neither PRESENTED (dma_mem_req_pres drives the
+// memory subsystem's mem_valid DMA arm, pc9821_memory_subsystem.sv:1498 `assign mem_valid`) nor ACCEPTED
+// (dma_mem_ack is the dma_ready the DMAC sees, :1333). Both terms are needed: the
+// subsystem's owner lock releases on mem_ready (:1311 `else if (mem_ready || !mem_valid)`),
+// so gating the accept alone would let it re-present the same byte and the backend
+// re-accept it every cycle. The uPD71071 holds mem_req as a LEVEL through S_MEM until
+// mem_ready (pc9821_dmac.sv:497 `S_MEM: if (mem_ready) begin`), so the byte waits for the
+// CPU edge; reads are never snooped and are not gated. The cost is at most one CPU clock
+// period per written byte - the pacing a real 486's EADS# imposes (one invalidate per CPU
+// clock), and still 8x the FDC's 62.5 kB/s at the slowest 0.5 MHz setting on an 80 MHz
+// build. The bridge's $fatal stays as the loud backstop if the gating itself breaks.
+wire dma_snoop_busy;                              // pc9821_cpu_bus_bridge's hold occupancy
+wire dma_write_hold   = dma_mem_we && dma_snoop_busy;
+wire dma_mem_req_pres = dma_mem_req && !dma_write_hold;   // what the subsystem may present
+wire dma_mem_ack      = dma_mem_ready && !dma_write_hold; // what the DMAC may take as ready
 wire [7:0] io_itf_stage;
 // The most recent I/O access, latched in pc9821_iobus and reported by the watchdog message's
 // IO/DR/IV fields so a freeze loop's polled port shows up in a serial capture.
@@ -585,13 +658,12 @@ wire device_rd_hold;
 wire device_wr_wait;
 // The machine-reset seed's one-cycle strobe from pc9821_iobus: the store loads use it there
 // and the CG-record restore in pc9821_cg uses it here, so both configuration stores reset on
-// the same event (one cycle at the reset assertion). THE OSD `Reset DIPs`/`Zero DIPs` ACTIONS
-// ARE GONE (owner requirement, lane dip-settings): the two stores' restore walks have this
+// the same event (one cycle at the reset assertion). The two stores' restore walks have this
 // one source.
 wire sdip_seed_pulse;
 
 pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
-               .IDE_UNIT2_PRESENT(CDROM_EN)) iobus (
+               .IDE_UNIT2_PRESENT(CDROM_EN), .MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN)) iobus (
       .ide_unit0_present(ide_unit0_present),
     .clk(clk_sys), .reset(reset || !cpu_run),
     // The OSD's Machine field: which port-0xF0 machine-ID strap to answer. See the port
@@ -601,6 +673,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .bios_set(bios_set),
     // Same reset/reload strobe for the GDC-clock strap's latch (gdc_strap_eff inside).
     .gdc_clock_5m(gdc_clock_5m),
+    .fdd_dip_fixed(fdd_dip_fixed),
     .cpu_addr({z_addr, 2'b00}), .cpu_din(z_dout), .cpu_be(z_be),
     .cpu_valid(z_valid && z_io && !z_inta), .cpu_write(z_write),
     .cpu_dout(io_cpu_dout), .cpu_ready(io_cpu_ready),
@@ -609,6 +682,12 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .device_io_addr(device_io_addr), .device_io_din(device_io_din),
     .device_io_dout(device_io_dout), .device_rd_wait(device_rd_wait),
     .device_rd_hold(device_rd_hold), .device_wr_wait(device_wr_wait),
+    // The one device-bus decode (its instance is inside the iobus): the chip selects every
+    // device below takes. gdc_cs's wire is declared above its first reader.
+    .pic_master_cs(pic_master_cs), .pic_slave_cs(pic_slave_cs), .pit_cs(pit_cs),
+    .interrupt_cs(interrupt_cs), .cal_cs(cal_cs), .kbd_cs(kbd_cs),
+    .ata_cs(ata_cs), .opna_cs(opna_cs), .pcm_cs(pcm_cs), .gameport_cs(gameport_cs),
+    .mpu_cs(mpu_cs), .sdph_cs(sdph_cs), .gdc_cs(gdc_cs),
     .cal_cdat(cal_cdat),
     // The memory-switch pair's strap cell is seeded from the same size the CG seed uses (see
     // pc9821_gdc_text's configuration-image block and).
@@ -627,13 +706,13 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .fdd_wp({2'b00, fdd_media_wp}),
     .fdd_chg({2'b00, fdd_media_chg}), .fdd_frame_tick(gdc_vsync_edge),
     .fdd_req(fdd_req), .fdd_req_hdr(fdd_req_hdr), .fdd_unit(fdd_unit),
-    .fdd_c(fdd_c), .fdd_h(fdd_h), .fdd_r(fdd_r), .fdd_n(fdd_n), .fdd_idx(fdd_idx),
+    .fdd_c(fdd_c), .fdd_h(fdd_h), .fdd_tc(fdd_tc), .fdd_hd(fdd_hd), .fdd_mf(fdd_mf), .fdd_2hd(fdd_2hd), .fdd_rpm(fdd_rpm), .fdd_r(fdd_r), .fdd_n(fdd_n), .fdd_idx(fdd_idx),
     .fdd_ready(fdd_ready), .fdd_rdy(fdd_rdy), .fdd_hdrv(fdd_hdrv), .fdd_err(fdd_err),
     .fdd_dout(fdd_dout), .fdd_hr(fdd_hr), .fdd_hn(fdd_hn), .fdd_hs(fdd_hs),
     .fdd_adv(fdd_adv), .fdd_req_wr(fdd_req_wr), .fdd_din(fdd_din), .fdd_abort(fdd_abort),
-    .dma_mem_addr(dma_mem_addr), .dma_mem_din(dma_mem_din), .dma_mem_be(dma_mem_be),
+    .dma_mem_addr(dma_mem_addr), .dma_mem_gvwin(dma_mem_gvwin), .dma_mem_din(dma_mem_din), .dma_mem_be(dma_mem_be),
     .dma_mem_req(dma_mem_req), .dma_mem_we(dma_mem_we),
-    .dma_mem_ready(dma_mem_ready), .dma_mem_dout(dma_mem_dout),
+    .dma_mem_ready(dma_mem_ack), .dma_mem_dout(dma_mem_dout),
     .dma_mem_resp_valid(dma_mem_resp_valid),
     .mouse_irq(mouse_irq), .ps2_mouse(ps2_mouse),
     .bios_ram_gate(bios_ram_gate),
@@ -655,7 +734,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .dbg_fdc_result(dbg_fdc_result), .dbg_fdc_chrn(dbg_fdc_chrn),
     .post_write(io_post_write),
     .cache_flush_req(cache_flush_req), .cache_flush_busy(cache_flush_busy),
-    .cache_flush_done(cache_flush_done), .dbg_gate(io_dbg_gate),
+    .cache_flush_done(cache_flush_done), .crt31k(crt31k), .dbg_gate(io_dbg_gate),
     .dbg_itf_stage(io_itf_stage),
     .egc_gate(gdc_egc_gate),
     .gdc_ff2_state(gdc_ff2_state),
@@ -664,8 +743,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .egc_sft(egc_sft), .egc_leng(egc_leng), .egc_shift_we(egc_shift_we)
 );
 
-// window-0's overlay verdict for the z486 L1 classification (aliases.md
-// A5/A6). 0x0461 maps the 128 KiB window at 0x80000-0x9FFFF onto the pages
+// window-0's overlay verdict for the z486 L1 classification. 0x0461 maps the 128 KiB window at 0x80000-0x9FFFF onto the pages
 // (value & 0xFE) and +1 at value*0x10000. ANY moved window is kept out of the
 // L1 (NO_ALLOC), not only one whose target is a device window or past RAM:
 // the translation happens outside the CPU, so a window over plain RAM is ONE
@@ -677,11 +755,11 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
 // storeq_empty, l1_cache.sv). RESIDUAL: a store THROUGH the window does not
 // invalidate a line cached under the canonical name. z486 already routes the
 // external snoop to BOTH L1s (memory.sv: dcache_inst and the I$ invalidate
-// port, set-wide on the D$), and this platform ties it off (.snoop_valid(1'b0)
-// below), so closing it is a platform change - driving the snoop with the
-// translated address on a window store - not a fork one. The real
-// machine's window cacheability (KEN#) is uncaptured. Cost: accesses through a
-// moved window are uncached.
+// port, set-wide on the D$), and the platform drives it from the DMA's
+// accepted writes (dma_snoop_valid below, T24); closing THIS residual is a
+// separate platform change - driving the snoop with the translated address on a
+// CPU window store, not a fork one. The real machine's window cacheability
+// (KEN#) is uncaptured. Cost: accesses through a moved window are uncached.
 wire win0_unmapped = win0_sel_moved;   // == (win0_sel != 8'h08) every cycle (pc9821_iobus)
 
 // ---- the CPU throttle (OSD CPU Speed) ----
@@ -701,6 +779,8 @@ cpu_throttle #(.CLOCK_RATE_KHZ(CPU_THROTTLE_KHZ)) u_cpu_throttle (
 );
 pc9821_cpu_clk u_cpu_clk (.clk(clk_sys), .ena(cpu_ce), .gclk(cpu_clk));
 wire zc_flush_req, zc_flush_busy, zc_flush_done, zc_triple_fault;
+wire zc_snoop_valid;   // the DMA snoop after the bridge's pulse-hold (see the bridge)
+wire [31:0] zc_snoop_addr;
 wire [2:0] zc_dbg_pulse;   // dbg_issue, dbg_gate_read, dbg_page_fault (one CPU cycle each)
 pc9821_cpu_bus_bridge u_cpu_bridge (
     .clk(clk_sys), .reset_n(cpu_reset_n), .cpu_ce(cpu_ce),
@@ -710,6 +790,9 @@ pc9821_cpu_bus_bridge u_cpu_bridge (
     .p_flush_req(cache_flush_req), .c_flush_req(zc_flush_req),
     .c_flush_busy(zc_flush_busy), .p_flush_busy(cache_flush_busy),
     .c_flush_done(zc_flush_done), .p_flush_done(cache_flush_done),
+    .p_snoop_valid(dma_snoop_valid), .p_snoop_addr(dma_mem_addr),
+    .c_snoop_valid(zc_snoop_valid), .c_snoop_addr(zc_snoop_addr),
+    .p_snoop_busy(dma_snoop_busy),
     .c_triple_fault(zc_triple_fault), .p_triple_fault(triple_fault_reset),
     .c_dbg_pulse(zc_dbg_pulse),
     .p_dbg_pulse({cpu_dbg_page_fault, cpu_dbg_gate_read, cpu_dbg_issue})
@@ -727,20 +810,19 @@ z486 #(
     // x87 is off by default (ENABLE_X87 = 0 above) and no OSD bit turns it on: the
     // FPU's ports are not modelled. The parameter reaches the CPU from here.
     .ENABLE_X87(ENABLE_X87),
-    // DEVICE-MMIO WINDOW: OFF (2026-10-05). It was ENABLE_DEVICE_MMIO(1) with
-    // DEVICE_MMIO_MASK 32'hFE00_0000 and device_mmio_base 32'h0200_0000 below, which
-    // classifies 32-64 MiB as device memory. That 32 MiB literal is the PACK BASE FOR A
+    // DEVICE-MMIO WINDOW: OFF. Enabling it with DEVICE_MMIO_MASK 32'hFE00_0000 and
+    // device_mmio_base 32'h0200_0000 below would classify 32-64 MiB as device memory. That 32 MiB literal is the PACK BASE FOR A
     // 64 MB SDRAM MODULE (the pack sits at the module ceiling), not a property of the
     // machine: the real Xe10 tops out at 32 MB, but the OSD's guest RAM reaches 96 MiB
     // on a 128 MB module and then 32 MiB of REAL GUEST RAM inside the window is served
-    // L1-bypassed and uncached. The window was added so the memory-size probe reads open
+    // L1-bypassed and uncached. Such a window would make the memory-size probe read open
     // bus rather than its own cache-patched write, but the runtime no-allocate bound two
     // lines below (ram_cache_top = guest_ram_bytes with RAM_BOUND_ENABLE) already gives
     // exactly that -- "never install a line", so an uncached load waits for storeq_empty
     // and a probe write cannot survive in L1 -- for EVERY address at or above the guest
     // RAM top, and the L1 tag reach leaves everything above 128 MiB uncacheable anyway.
     // The window's range is a SUBSET of that bound when the guest is <= 32 MiB and a
-    // subset of guest RAM when it is more, so it was redundant at best and wrong at
+    // subset of guest RAM when it is more, so it would be redundant at best and wrong at
     // worst. Upstream's own A0000-BFFFF role for this classifier is served here by the
     // device aperture in `Z486_PC98_MAP_PARAMS (C0000-FFFFF added to it), so nothing is
     // lost.
@@ -757,14 +839,8 @@ z486 #(
     // guest RAM top: cacheable RAM is exactly [0, guest_ram_bytes). See
     // docs/z486-local-patch.md and memory.sv's RAM_BOUND_ENABLE.
     .RAM_BOUND_ENABLE(1)
-    // The 2026-10-03 fork rebase dropped ENABLE_DEBUG_TELEMETRY, FILL_MODE and
-    // SNOOP_INVALIDATE_SET_WIDE: the rewritten core has a single fill datapath (no
-    // BEAT/BOTH/LINE selector) and no observation ports, so the platform's telemetry
-    // formatters read tied-off 0 inputs (see the perf/watchdog/int21 instantiations
-    // below) rather than the CPU. The memory-map template and the whole-L1
-    // cache_flush port are unchanged.
-    // The 0ebf0d0 re-vendor removed CLOCK_RATE_MHZ and cpu_speed_sel: z486 has no speed
-    // input; a throttled CPU sees fewer clock edges (src/z486/docs/throttle.md).
+    // z486 has no speed input: a throttled CPU sees fewer clock edges
+    // (src/z486/docs/throttle.md).
 ) cpu (
     .clk(cpu_clk), .reset_n(cpu_reset_n),
     .device_mmio_enable(1'b0), .device_mmio_base(32'h0),   // OFF: see ENABLE_DEVICE_MMIO above
@@ -777,11 +853,14 @@ z486 #(
     .dout(z_dout), .valid(zc_valid), .ready(zc_ready), .write(z_write),
     .io(z_io), .resp_valid(zc_resp_valid), .line_resp_valid(1'b0),
     .intr(z_intr), .nmi(1'b0), .inta(zc_inta),   // NMI is never generated: no source, no OSD bit
-    // No real DMA snoop exists on this platform, so the CPU's external
-    // invalidate input is tied off: a future snoop is correctly tag-matched at
-    // SNOOP_INVALIDATE_SET_WIDE = 0, and coherence is the native cache_flush
-    // below (src/z486/docs/platform-integration.md).
-    .snoop_addr(32'd0), .snoop_valid(1'b0),
+    // A real DMA snoop exists on this platform: the uPD71071's accepted writes
+    // drive the external invalidate through the bridge's pulse-hold (zc_snoop_valid
+    // above), so it is captured on an enabled CPU edge even when cpu_ce is gated (the
+    // same hold the flush request gets). z486 forwards it to
+    // both L1s - the D$ clears the snooped SET (set-wide, l1_cache.sv) and the I$
+    // tag-matches the line - and the native cache_flush below still serves the
+    // I/O family's mapping changes (src/z486/docs/platform-integration.md).
+    .snoop_addr(zc_snoop_addr), .snoop_valid(zc_snoop_valid),
     .cache_flush(zc_flush_req), .cache_flush_busy(zc_flush_busy),
     .cache_flush_done(zc_flush_done),
     .a20_enable(a20_enable),
@@ -801,8 +880,9 @@ z486 #(
     .dbg_issue(zc_dbg_pulse[0]), .dbg_issue_eip(cpu_dbg_issue_eip),
     .triple_fault_reset(zc_triple_fault),
     // 486 LOCK#. No bus master on this platform honours it: the uPD71071 DMA is kept
-    // coherent by the whole-L1 flush at terminal count, and the snoop port is tied
-    // off (src/z486/docs/platform-integration.md, "Bus lock").
+    // coherent by the per-write external snoop above (the machine's EADS#, held for
+    // the gated CPU clock by the bridge), and `lock` is sampled only for the L1's
+    // locked-access path (src/z486/docs/platform-integration.md, "Bus lock").
     /* verilator lint_off PINCONNECTEMPTY */
     .lock()
     /* verilator lint_on PINCONNECTEMPTY */
@@ -814,10 +894,6 @@ wire [7:0] tram_din, tram_dout;
 wire tram_we;
 // Memory-mapped CG window: the store stays in the GDC and the responder in the
 // memory subsystem, so the two views of the selected glyph cannot disagree.
-/* verilator lint_off UNUSEDSIGNAL */   // gdc_text brings these out; the memory subsystem owns the live copy
-wire [15:0] cg_code_win;
-wire cg_lr_win;
-/* verilator lint_on UNUSEDSIGNAL */
 wire [4:0] cg_win_byte_sel;
 wire cg_win_rd;
 wire [7:0] cg_win_dout, cg_win_din;
@@ -849,7 +925,7 @@ wire         sub_mem_gath;
 wire [440:0] sub_mem_gath_extra;
 wire         sub_mem_ready, sub_mem_resp_valid;
 
-// The GRCG's register port (0x7C mode, 0x7E tiles). The engine now lives inside
+// The GRCG's register port (0x7C mode, 0x7E tiles). The engine lives inside
 // pc9821_gvram_arb, so what crosses this boundary is only the two device-bus bytes
 // that configure it.
 wire grcg_port_we = device_io_wr && (device_io_addr == 16'h007C ||
@@ -862,25 +938,24 @@ wire grcg_port_we = device_io_wr && (device_io_addr == 16'h007C ||
 //
 // The line origin is GDC2 SCROLL's display address counter, which pc9821_gdc_text
 // already maintains (bit 15 is the 0xA4 display page, bits 14:0 the offset inside
-// that page) -- D5's line-addressable fetch is exactly that shape, and it is what
+// that page) -- the line-addressable fetch is exactly that shape, and it is what
 // lets the 2.5 MHz strap's doubled pitch and the 480-/200-line modes work without
 // the fetch assuming pitch == 80. gdc_gfx_walk_page is the PACKED walk's own page
 // bit (the SCROLL start word's bit 14, pc9821_gdc2's gfx_walk_page): the packed
 // fetch folds it with the 0xA4 term, the planar fetch takes scan_page alone.
 wire [15:0] gdc_gfx_line_addr;
 wire        gdc_gfx_walk_page;
-// The line tick. The raster comes from the GDC's SYNC block now (pc9821_crtc's geometry),
+// The line tick. The raster comes from the GDC's SYNC block (pc9821_crtc's geometry),
 // so the tick is ONE clk_sys pulse at the last dot of the line, and its counter is reset by
 // the SAME condition as the raster's
 // own counter so the tick's phase cannot drift across the line. Both properties are
 // load-bearing: pc9821_gvram's fetch treats the tick as a pulse and TOGGLES the
 // ping-pong select on it, so a multi-clk level makes the displayed line advance by
 // (level width mod 2), and a tick whose phase sits inside the active region toggles
-// the buffer part-way along the line -- a static vertical shear. Both are the
-// owner's graphics-plane bounce, and both are measured in
-// which owns the evidence.
+// the buffer part-way along the line -- a static vertical shear. Both show on screen as
+// a bouncing graphics plane.
 // pixel_ce is the video-domain clock enable. It is declared here because the raster counter
-// below is its first reader; its generator (the fractional accumulator) is further down.
+// below is its first reader; its generator (pc9821_dot_ce, the exact 400/19 MHz enable) is further down.
 wire pixel_ce;
 // The line length the guest's SYNC block programs: 848 dots for the machine's power-on
 // block (pc9821_crtc's geometry section), 800..896 for any block the 24 kHz clamp lets
@@ -926,8 +1001,8 @@ wire         gvram_gr_owned, gvram_eg_owned, gvram_pw_owned;
 // CPU/GRCG/EGC writes and the page the scanout's line fetch is latched on. pc9821_perf_msg
 // counts the cycles a GVRAM store is in flight while the two are EQUAL (PC) and reports both
 // as status fields (SP/AP). The store-in-flight arm is the union of all three owners above:
-// it was the GRCG's alone until 2026-10-03, which made the probe blind to exactly the shape
-// Farland Story draws with (see the arbiter's dbg_pw_owned).
+// the GRCG's alone would make the probe blind to exactly the shape Farland Story draws with
+// (see the arbiter's dbg_pw_owned).
 wire         gvram_access_page, gvram_scan_page_q;
 /* verilator lint_on UNUSEDSIGNAL */
 // The graphics GDC's draw-engine visit (the GDC2 WRITE slice): pc9821_gdc2's WRITE path
@@ -963,16 +1038,19 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     .pegc_256(gdc_pegc_256), .pegc_256e(gdc_pegc_256e), .scan_dot(gdc_pix_dot[2:0]),
     .scan_dot_ce(pixel_ce), .scan_dot_act(gdc_pix_h_active),
     .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
-    // The uPD71071's bus-master port (Phase 1 is write-only: a floppy READ stores into
-    // memory, so no response is ever owed - see the subsystem's port comment).
-    .dma_addr(dma_mem_addr), .dma_din(dma_mem_din), .dma_be(dma_mem_be),
-    .dma_valid(dma_mem_req), .dma_write(dma_mem_we),
+    // The uPD71071's bus-master port: a floppy READ stores into memory and owes no response,
+    // a floppy WRITE reads memory and is answered on dma_resp_valid/dma_dout (see the
+    // subsystem's port comment). dma_valid is
+    // the back-pressured presentation: a WRITE byte is withdrawn from the
+    // subsystem while the bridge still holds a snoop for the CPU.
+    .dma_addr(dma_mem_addr), .dma_gvwin(dma_mem_gvwin), .dma_din(dma_mem_din), .dma_be(dma_mem_be),
+    .dma_valid(dma_mem_req_pres), .dma_write(dma_mem_we),
     .dma_ready(dma_mem_ready), .dma_dout(dma_mem_dout),
     .dma_resp_valid(dma_mem_resp_valid),
     .gvram_access_page(gdc_access_page),
     .grcg_we(grcg_port_we), .grcg_addr(device_io_addr[7:0]),
     .grcg_din(device_io_din), .grcg_expand(mem_grcg_expand),
-    .grcg_mode_r(mem_grcg_mode_r),
+    .grcg_expand_nx(mem_grcg_expand_nx),
     // The EGC is ON, gated by the GDC's own enable (FF2 num 2 AND 0x7C bit 7) exactly
     // as the machine wires it. The EGC issues column accesses on the GVRAM port, so the
     // GRCG can never re-expand its writes as tile writes.
@@ -1064,40 +1142,25 @@ assign ext_mem0_write      = sub_mem_write;
 assign sub_mem_dout            = ext_mem0_dout;
 assign sub_mem_resp_valid      = ext_mem0_resp_valid;
 assign sub_mem_ready           = ext_mem0_ready;
-// The 128-bit line response plumbing that used to sit here (z_line_din/
-// z_line_resp_valid, registered before the icache's patch cone) is DELETED with the
-// beat-uniform fill (trade-candidates T22): pc9821_memory_subsystem splits every line
-// fill into four word beats at its own boundary and the z486 builds only its beat fill
-// path (FILL_MODE above), so there is no line response left to register.
+// There is no 128-bit line response (the beat-uniform fill, trade-candidates T22):
+// pc9821_memory_subsystem splits every line fill into four word beats at its own
+// boundary and the z486 builds only its beat fill path.
 
-// The video domain is clk_sys gated by pixel_ce: one dot per enable. video_ce
-// carries that enable to the top level for the framework's CE_PIXEL.
-// PIXEL_HZ is the PC-98 dot rate: a MODELLING ASSUMPTION, not a measurement - this core does not
-// measure the machine's dot clock. The in-tree corroboration is the raster: the machine's probed
-// horizontal blank is 208/848 = 24.53% of a line (the probe's own
-// sample count of 0x60 bit 6), i.e. an 848-dot line at the ~24 kHz mode that this dot rate and
-// the ~24.8 kHz line rate at :129-130 describe. The standard-rate derivation, 0.15 ppm from the
-// exact 50 MHz x 8/19, is in docs/pc9821-port-status.md ("Pixel clock and the video pipeline").
-// PIXEL_CE_INC below divides this by SYS_FREQ, so the dot rate is the same at every build profile.
-localparam integer PIXEL_HZ = 21_052_600;
+// The video domain is clk_sys gated by pixel_ce: one dot per enable, at exactly 400/19 MHz
+// (pc9821_dot_ce, below, carries the rate's provenance). video_ce carries that enable to the top
+// level, where pc9821_video_out moves each dot into the video clock domain.
 
-// One decode for the whole device bus, in its own module (pc9821_device_select.sv),
-// which documents the alias's equality form and the exhaustive sweep that holds it.
-// The module owns every claim on the bus, including: the second IDE task-file mirror
-// 0x0740-0x074E, the PC-9801-86's two devices, the OPNA's four ports and the 86-PCM block's
-// seven,
-// and the PC-9801-118's game port at 0x1480-0x1487. All of them must be claimed
-// here because gdc_cs is the complement of the whole list.
+// One decode for the whole device bus. It lives in pc9821_device_select.sv, which documents
+// the alias's equality form and the exhaustive sweep that holds it, and it is INSTANTIATED
+// INSIDE pc9821_iobus: the same decode also produces the
+// device-bus CLAIM (`dev_bus_cs`), which is what the I/O fabric's own FSM needs, so the claim and
+// the chip selects are one product of one module instead of two hand-kept lists. The module owns
+// every claim on the bus, including: the second IDE task-file mirror 0x0740-0x074E, the
+// PC-9801-86's two devices, the OPNA's four ports and the 86-PCM block's seven, and the
+// PC-9801-118's game port at 0x1480-0x1487. All of them must be claimed there because gdc_cs is
+// the complement of the whole list. The selects arrive here as the iobus's outputs.
 wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
-     ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs;   // gdc_cs is declared above its first reader
-pc9821_device_select #(.MPU_EN(MPU_EN)) device_select (
-    .addr(device_io_addr),
-    .pic_master_cs(pic_master_cs), .pic_slave_cs(pic_slave_cs), .pit_cs(pit_cs),
-    .interrupt_cs(interrupt_cs), .cal_cs(cal_cs), .kbd_cs(kbd_cs),
-    .ata_cs(ata_cs), .opna_cs(opna_cs), .pcm_cs(pcm_cs), .gameport_cs(gameport_cs),
-    .mpu_cs(mpu_cs),
-    .gdc_cs(gdc_cs)
-);
+     ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs;   // gdc_cs is declared above its first reader
 wire [7:0] cal_io_dout, cal_mode_dout, cal_tick_dout;
 // Only the GDC's I/O reads come out of block RAM (its CG and ANK arrays), one
 // cycle behind the address, so it is the only device that asks the I/O bus for
@@ -1110,7 +1173,7 @@ wire opna_rd_wait, opna_irq, pcm86_irq;
 assign device_rd_wait = gdc_cs || opna_rd_wait;   // declared above the iobus instance
 // The write back-pressure: the OPNA register queue and the 86-PCM 0xA46C FIFO say
 // "not now" through these, and pc9821_iobus stalls the guest's I/O write instead
-// of letting either buffer silently drop it (S2/S6). The OPNA's own term is
+// of letting either buffer silently drop it. The OPNA's own term is
 // op_sel-wide (most of the address space), so it takes the opna_cs qualifier
 // here; the pcm86 term is already window-decoded to 0xA468-0xA46F inside
 // pc9821_pcm86 (so a word/dword OUT straddling 0xA46C stalls before its first
@@ -1129,7 +1192,7 @@ wire [7:0] cd_log_byte;
 wire       cd_log_we;
 wire       cd_log_accept;   // the debug mux's grant of the CD log's byte (else the FIFO's)
 wire [7:0] interrupt_io_dout, kbd_io_dout, ata_io_dout, opna_io_dout, pcm86_io_dout,
-           gameport_io_dout, mpu_io_dout;
+           gameport_io_dout, mpu_io_dout, sdph_io_dout;
 // the wide board sum: clamped FM+ADPCM junction + AC-coupled SSG<<2 + PCM86 (F1: no join clamp)
 wire signed [19:0] opna_snd_l, opna_snd_r;
 wire signed [15:0] pcm86_snd_l, pcm86_snd_r;
@@ -1160,7 +1223,29 @@ assign device_io_dout = interrupt_cs ? interrupt_io_dout :
                         opna_cs      ? opna_io_dout      :
                         pcm_cs       ? pcm86_io_dout     :
                         gameport_cs  ? gameport_io_dout  :
-                        mpu_cs       ? mpu_io_dout       : gdc_io_dout;
+                        mpu_cs       ? mpu_io_dout       :
+                        sdph_cs      ? sdph_io_dout      : gdc_io_dout;
+
+// ---------------------------------------------------------------
+// The run-time SDRAM_CLK phase instrument (test builds only)
+// ---------------------------------------------------------------
+// pc9821_sdram_phase_ctl.sv says what it is. Its step handshake leaves on sdph_step_req/up and its
+// answer arrives on sdph_step_ack/fault from the top level's scan-clock engine.
+generate
+if (SDRAM_PHASE_DYN) begin : g_sdph
+    pc9821_sdram_phase_ctl #(.CLOCK_RATE_HZ(SYS_FREQ)) u_sdph (
+        .clk(clk_sys), .reset(reset),
+        .cs(sdph_cs), .addr(device_io_addr), .wr(device_io_wr),
+        .din(device_io_din), .dout(sdph_io_dout),
+        .step_req(sdph_step_req), .step_up(sdph_step_up),
+        .step_ack_async(sdph_step_ack), .fault_async(sdph_fault)
+    );
+end else begin : g_no_sdph
+    assign sdph_io_dout  = 8'hFF;
+    assign sdph_step_req = 1'b0;
+    assign sdph_step_up  = 1'b0;
+end
+endgenerate
 
 // ---------------------------------------------------------------
 // Roland MPU-PC98II (MIDI)
@@ -1172,17 +1257,34 @@ assign device_io_dout = interrupt_cs ? interrupt_io_dout :
 // (NP2kai cbus/mpu98ii.c:98's table indexed by the 0x82 option, pccore.c:873) - which is
 // master_aux_irq's bit 3 (pc9821_interrupts's `ir_in({slave_int, master_aux_irq, ...})`:
 // [6] = IRQ6). With MPU_EN 0 both are constants and the aux lines stay the 4'b0000 they were.
+//
+// PRESENT ONLY IN MIDI MODE. The card exists for the guest only while the OSD's UART mode is
+// MIDI (mpu_present): otherwise software that finds an MPU would send its music to a MIDI line
+// nobody listens to instead of the FM it falls back to. Absent, the card's ports read 0xFF, the
+// open-bus value the same ports read with MPU_EN 0, and the card is HELD IN RESET: that is what
+// gates its IRQ6 (the reset empties the response queue the IRQ follows) and drops writes (the
+// reset branch outranks them), and it brings the card back in its power-on state, so a mode
+// change in the middle of a guest's transaction cannot leave it wedged. Only the read data needs
+// its own gate, since a card in reset still drives its idle 0x80. The device decode itself is not
+// touched (mpu_cs still claims 0xE0D0/0xE0D2 whenever MPU_EN built the card), so the gate adds
+// nothing to the device-select path; the presence level is registered once here, and an access
+// to the absent card takes the same bus time as the MPU_EN 0 open-bus read
+// (tb_pc9821_mpu_system measures both).
 wire mpu_irq;
 wire mpu_uart_tx_int;
 generate
 if (MPU_EN) begin : g_mpu
+    reg  mpu_present_r;   // follows mpu_present one clk later; no power-up value needed
+    always @(posedge clk_sys) mpu_present_r <= mpu_present;
+    wire [7:0] mpu_card_dout;
     pc9821_mpu #(.SYS_CLOCK_HZ(SYS_FREQ)) u_mpu (
-        .clk(clk_sys), .reset(reset),
+        .clk(clk_sys), .reset(reset || !mpu_present_r),
         .cs(mpu_cs), .addr(device_io_addr),
         .wr(device_io_wr), .rd(device_io_rd),
-        .din(device_io_din), .dout(mpu_io_dout),
+        .din(device_io_din), .dout(mpu_card_dout),
         .uart_tx(mpu_uart_tx_int), .irq(mpu_irq)
     );
+    assign mpu_io_dout = mpu_present_r ? mpu_card_dout : 8'hFF;
 end else begin : g_no_mpu
     assign mpu_io_dout    = 8'hFF;
     assign mpu_uart_tx_int = 1'b1;      // the line's idle MARK, as before the card existed
@@ -1310,7 +1412,7 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(SYS_FREQ)) pcm86 (
     /* verilator lint_off PINCONNECTEMPTY */   // bench instrument only, see the note above
     .dbg_count(),
     /* verilator lint_on PINCONNECTEMPTY */
-    // The 32 KiB sample buffer now lives in SDRAM, on the controller's third port (see
+    // The 32 KiB sample buffer lives in SDRAM, on the controller's third port (see
     // src/pcm86/pc9821_pcm86_buf.sv). Its base sits above the firmware pack and the GVRAM
     // reserve the SDRAM module must already cover: pack_base + PACK_BYTES + 256 KiB.
     .buf_base(pack_base + 32'h0014_0000),
@@ -1354,7 +1456,13 @@ pc9821_interrupts #(.SYS_CLOCK_HZ(SYS_FREQ)) interrupts (
     // calendar tick). Keep the width visible: 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 8.
     .slave_irq({cal_irq, 1'b0, mouse_irq, opna_irq | pcm86_irq, fdc_irq,
                 fdc_irq10, ata_irq | cd_irq, 1'b0}),
-    .cpu_intr(z_intr), .cpu_inta(z_inta), .cpu_inta_din(inta_din),
+    // THE STROBE IS THE CPU'S OWN: z486's inta output, NOT the bridge's masked
+    // p_inta. During an accept held for a disabled CPU cycle the bridge drops p_inta, so a
+    // flag keyed on it would clear without the CPU ever releasing the strobe - the
+    // one-answer-per-asserted-strobe invariant (pc9821_inta_bridge's R5/R6/R8 checks)
+    // would stop being provable. zc_inta is a CPU-domain LEVEL held for a whole CPU cycle,
+    // so sampling it on clk_sys is exactly the level the checks assume.
+    .cpu_intr(z_intr), .cpu_inta(zc_inta), .cpu_inta_din(inta_din),
     .cpu_inta_ready(inta_ready), .pit_out0(pit_out0), .pit_out1(pit_out1),
     .pit_out2(pit_out2)
 );
@@ -1365,6 +1473,7 @@ pc9821_kbd #(.SYS_CLOCK_HZ(SYS_FREQ)) keyboard (
     .din(device_io_din), .dout(kbd_io_dout), .irq(kbd_irq),
     .ps2_key(ps2_key),
     .bios_setup(bios_setup),
+    .layout_jis(kbd_layout_jis),
     .led_status(kbd_led_status),
     .dbg_events(kbd_dbg_events), .dbg_delivered(kbd_dbg_delivered),
     .dbg_rd_data(kbd_dbg_rd_data), .dbg_wr_ctrl(kbd_dbg_wr_ctrl),
@@ -1388,6 +1497,15 @@ wire [15:0] ata_buf_rd_data;
 wire [31:0] hdd_sd_lba;
 wire [5:0] hdd_sd_blk_cnt;
 wire hdd_sd_rd, hdd_sd_wr;
+// The HDI detector's seam to the shared engine: the drive's requests (its side of the
+// pc9821_hdd_image instance below) and the engine's completions and word stream back.
+wire        hdd_a_req_read, hdd_a_req_write;
+wire [31:0] hdd_a_req_lba;
+wire        hdd_a_req_window;
+wire        hdd_a_req_done, hdd_a_req_error;
+wire        hdd_a_buf_we;
+wire [ 7:0] hdd_a_buf_addr;
+wire [15:0] hdd_a_buf_data;
 // The last completed HPS block transfer's cycles (HP): pc9821_block_io counts it and the
 // watchdog record publishes it, because the per-block HPS round trip is the one term in the disk
 // path that no bench models and no other telemetry field sees. Declared here, above its first use,
@@ -1402,10 +1520,10 @@ wire [31:0] ata_dbg_lba;
 wire [15:0] ata_dbg_sec;
 /* verilator lint_on UNUSEDSIGNAL */
 
-// THE IDE LAYOUT IS FIXED (owner, 2026-10-11): the one hard disk (hps_io slot 0) is ALWAYS bank
+// THE IDE LAYOUT IS FIXED: the one hard disk (hps_io slot 0) is ALWAYS bank
 // 0's master (IDE unit 0) and the CD-ROM, when built, ALWAYS bank 1's master (unit 2); with the
 // CD left out bank 1 is empty. That is the stock CD-equipped Xe10's layout and NP2kai's default
-// (HDD at unit 0, CD at unit 2); the owner's Xe10 has its disk on bank 1 only because a CF card
+// (HDD at unit 0, CD at unit 2); the measured Xe10 has its disk on bank 1 only because a CF card
 // sits in its CD connector. Port 0xF0 bit 5 reports the disk (so the ITF's IDE drive bitmap
 // includes unit 0 and the IDE ROM probes and boots it) and bit 6 the CD build (the iobus's
 // IDE_UNIT2_PRESENT); neither moves with a CD mount or eject.
@@ -1427,6 +1545,25 @@ pc9821_ata ata (
     .dbg_cmd(ata_dbg_cmd),
     .dbg_lba(ata_dbg_lba),
     .dbg_sec(ata_dbg_sec)
+);
+
+// ------------------------------------------------------------------ HDI image detection
+// The ATA keeps its one-drive contract; this seam reads the mounted image's first sector
+// before reporting ready and adds the HDI header's sector offset to every guest LBA. A raw
+// image (or any header that does not validate) passes through with offset 0 and the file's
+// own size, which is the behaviour this core had before HDI existed. The module's header
+// states the format, the validation and why the offset survives a platform reset.
+pc9821_hdd_image hdd_image (
+    .clk(clk_sys), .rst_n(!reset),
+    .img_mounted(img_mounted), .img_readonly(img_readonly), .img_size(img_size),
+    .mounted(hdd_mounted), .readonly(hdd_readonly), .capacity(hdd_capacity),
+    .req_read(ata_block_read), .req_write(ata_block_write), .req_lba(ata_block_lba),
+    .req_done(ata_block_done), .req_error(ata_block_error), .busy(hdd_busy),
+    .buf_we(ata_buf_we), .buf_addr(ata_buf_addr), .buf_data(ata_buf_data),
+    .a_req_read(hdd_a_req_read), .a_req_write(hdd_a_req_write), .a_req_lba(hdd_a_req_lba),
+    .a_req_window(hdd_a_req_window),
+    .a_req_done(hdd_a_req_done), .a_req_error(hdd_a_req_error),
+    .a_buf_we(hdd_a_buf_we), .a_buf_addr(hdd_a_buf_addr), .a_buf_data(hdd_a_buf_data)
 );
 
 // ------------------------------------------------------------------ the CD-ROM (CDROM_EN)
@@ -1457,7 +1594,8 @@ pc9821_atapi #(.AUDIO_EN(CDROM_AUDIO_EN), .LOG_EN(CDROM_LOG_EN && !PERF_LOG_EN),
     .img_mounted(cd_mounted), .img_size(cd_size),
     .sd_lba(cd_lba), .sd_blk_cnt(cd_blk_cnt), .sd_rd(cd_rd), .sd_ack(cd_ack),
     .sd_buff_wr(cd_buff_wr), .sd_buff_addr(cd_buff_addr), .sd_buff_dout(cd_buff_dout),
-    .cdda_req(cdda_req), .cdda_wr(cdda_wr), .cdda_data(cdda_data),
+    .cdda_req(cdda_req), .cdda_req4(cdda_req4), .cdda_played(cdda_played),
+    .cdda_flush(cdda_flush), .cdda_wr(cdda_wr), .cdda_data(cdda_data),
     .log_byte(cd_log_byte), .log_we(cd_log_we), .log_accept(cd_log_accept)
 );
 end else begin : g_no_cdrom
@@ -1470,10 +1608,11 @@ assign cd_lba     = 32'd0;
 assign cd_blk_cnt = 6'd0;
 assign cd_rd      = 1'b0;
 assign cdda_wr    = 1'b0;
+assign cdda_flush = 1'b0;
 assign cdda_data  = 32'd0;
 // No CD: its slot pins and the CD-DA request have no reader.
 /* verilator lint_off UNUSEDSIGNAL */
-wire cd_unused = cd_mounted | (|cd_size) | cd_ack | cdda_req | cd_buff_wr | (|cd_buff_addr) | (|cd_buff_dout);
+wire cd_unused = cd_mounted | (|cd_size) | cd_ack | cdda_req | cdda_req4 | cdda_played | cd_buff_wr | (|cd_buff_addr) | (|cd_buff_dout);
 /* verilator lint_on UNUSEDSIGNAL */
 end endgenerate
 
@@ -1488,11 +1627,21 @@ pc9821_block_share block_share (
     .clk(clk_sys), .rst_n(!reset),
 
     // ---- slot 0: the hard disk (pc9821_ata) ----
+    // The ATA reaches the engine through pc9821_hdd_image above (the HDI header detector):
+    // the engine's A port speaks the detector's translated LBAs, and the detector gates the
+    // probe's words away from the drive's sector buffer.
     .a_img_mounted(img_mounted), .a_img_readonly(img_readonly), .a_img_size(img_size),
-    .a_mounted(hdd_mounted), .a_readonly(hdd_readonly), .a_capacity(hdd_capacity),
-    .a_req_read(ata_block_read), .a_req_write(ata_block_write), .a_req_lba(ata_block_lba),
-    .a_req_done(ata_block_done), .a_req_error(ata_block_error), .a_busy(hdd_busy),
-    .a_buf_we(ata_buf_we), .a_buf_addr(ata_buf_addr), .a_buf_data(ata_buf_data),
+    /* verilator lint_off PINCONNECTEMPTY */   // the A-side metadata and busy are the
+    // detector's (it holds the guest-visible capacity/readonly and publishes busy)
+    .a_mounted(), .a_readonly(), .a_capacity(),
+    /* verilator lint_on PINCONNECTEMPTY */
+    .a_req_read(hdd_a_req_read), .a_req_write(hdd_a_req_write), .a_req_lba(hdd_a_req_lba),
+    .a_req_window(hdd_a_req_window),
+    .a_req_done(hdd_a_req_done), .a_req_error(hdd_a_req_error),
+    /* verilator lint_off PINCONNECTEMPTY */   // the detector's `busy` replaces it
+    .a_busy(),
+    /* verilator lint_on PINCONNECTEMPTY */
+    .a_buf_we(hdd_a_buf_we), .a_buf_addr(hdd_a_buf_addr), .a_buf_data(hdd_a_buf_data),
     .a_buf_rd_addr(ata_buf_rd_addr), .a_buf_rd_data(ata_buf_rd_data),
     .a_sd_lba(hdd_sd_lba), .a_sd_blk_cnt(hdd_sd_blk_cnt),
     .a_sd_rd(hdd_sd_rd), .a_sd_wr(hdd_sd_wr),
@@ -1556,6 +1705,11 @@ wire [7:0]  fdd_din;      // the byte a write stores at fdd_adv
 wire        fdd_abort;    // the FDC abandoned the request in flight
 wire [1:0]  fdd_unit;
 wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx;
+wire [7:0]  fdd_tc;    // the physical track the sector is looked for on (pc9821_fdc's media_tc)
+wire        fdd_hd;
+wire        fdd_mf;    // the command's MF bit (pc9821_fdc's media_mf)
+wire        fdd_2hd;   // the media mode the request is read in (pc9821_fdc's media_2hd)
+wire        fdd_rpm;
 wire        fdd_ready, fdd_rdy, fdd_hdrv, fdd_err;
 wire [7:0]  fdd_dout, fdd_hr, fdd_hn, fdd_hs;
 
@@ -1589,7 +1743,7 @@ pc9821_fdd_media fdd_media (
     .blk_req_wr(fdd_blk_wr), .blk_rd_addr(fdd_blk_rd_addr), .blk_rd_data(fdd_blk_rd_data),
     .present(fdd_media_present), .writeprotect(fdd_media_wp), .chg(fdd_media_chg),
     .req(fdd_req), .req_hdr(fdd_req_hdr), .req_wr(fdd_req_wr), .unit(fdd_unit),
-    .req_c(fdd_c), .req_h(fdd_h), .req_r(fdd_r), .req_n(fdd_n), .req_idx(fdd_idx),
+    .req_c(fdd_c), .req_h(fdd_h), .req_tc(fdd_tc), .req_hd(fdd_hd), .req_mf(fdd_mf), .req_2hd(fdd_2hd), .req_rpm(fdd_rpm), .req_r(fdd_r), .req_n(fdd_n), .req_idx(fdd_idx),
     .ready(fdd_ready), .rdy(fdd_rdy), .hdrv(fdd_hdrv), .err(fdd_err),
     .dout(fdd_dout), .adv(fdd_adv), .din(fdd_din), .abort(fdd_abort),
     .hdr_r(fdd_hr), .hdr_n(fdd_hn), .hdr_sects(fdd_hs)
@@ -1597,15 +1751,52 @@ pc9821_fdd_media fdd_media (
 
 // The uPD71071's bus-master port, from pc9821_iobus to the memory subsystem's arbiter.
 wire [31:0] dma_mem_addr, dma_mem_din;
+wire [1:0]  dma_mem_gvwin;   // dma_mem_addr's plane-window class, registered with it (pc9821_dmac)
 wire [3:0]  dma_mem_be;
 wire        dma_mem_req, dma_mem_we, dma_mem_ready, dma_mem_resp_valid;
 wire [31:0] dma_mem_dout;
 
-// Both GDC domains are held in reset until the firmware pack has loaded
-// (cpu_run). Named so the video-domain diagnostics below share the reset
-// instead of repeating the expression, which could drift out of step.
+// Both GDC domains are held in reset until the firmware pack has loaded (cpu_run);
+// `rst_n_sys` names that strobe. `rst_n_vid` is the RASTER POSITION COUNTER's own reset
+// and is DIFFERENT (see below): it is freed from `cpu_run` so the machine emits its
+// power-on defsyncm24 raster with no firmware pack - the analog OSD is drawn in the core's
+// own timing, so without a raster the analog picture and its OSD cannot exist and a ROM
+// cannot be loaded from that OSD.
 wire rst_n_sys = !(reset || !cpu_run);
-wire rst_n_vid = !(reset || !cpu_run);
+// The raster position counter runs from `!reset` (rst_n_vid, below), so with no ROM it
+// still emits the power-on defsyncm24 raster even though cpu_run never rises - the analog
+// OSD is drawn in the core's own timing and cannot be placed without a raster.
+//
+// When a pack DOES load, cpu_run rises while the counter is mid-frame. The counter is
+// RE-SEEDED to 0 on that one cycle (cpu_run_rise), so the raster phase the guest then sees
+// is the phase it was held at before (rst_n_sys == !cpu_run until then). This is what keeps
+// every guest-visible raster time - the boot's VSYNC-locked cycle count above all -
+// unchanged; without it the free-running counter's phase at cpu_run would move them.
+//
+// Single-cycle-event discipline: the re-seed is a synchronous reset with exactly one
+// consumer (the CRTC's hdot/vline always block); it collides with no other writer of those
+// registers. The delayed cpu_run is its own register (the telemetry disk-mount latch's
+// cpu_run_d is compiled out with PERF_LOG_EN), reset by `reset`, so the pulse is
+// deterministic (no X in 4-state).
+reg raster_cpu_run_d;
+always @(posedge clk_sys) begin
+  if (reset) raster_cpu_run_d <= 1'b0;
+  else       raster_cpu_run_d <= cpu_run;
+end
+wire cpu_run_rise = cpu_run & ~raster_cpu_run_d;
+wire rst_n_vid = !(reset || cpu_run_rise);
+
+// The EGC x GRCG memory-dispatch gate: `gdc_egc_gate` (pc9821_crtc's
+// FF2 num-2 latch) is ANDed with `mem_grcg_expand` (pc9821_grcg's 0x7C bit 7) and the AND is
+// REGISTERED FROM BOTH SOURCES' NEXT STATE. That is a true pipeline relocate - the register is
+// bit-identical to the combinational gate in every cycle - and it is placed here, near the
+// memory subsystem, so the crtc-launched GVRAM-M10K cone is cut (docs/timing.md).
+pc9821_egc_mem_gate u_egc_mem_gate (
+    .clk(clk_sys), .reset(!rst_n_sys),
+    .egc_gate(gdc_egc_gate), .egc_gate_nx(gdc_egc_gate_nx),
+    .grcg_expand(mem_grcg_expand), .grcg_expand_nx(mem_grcg_expand_nx),
+    .gate(gdc_egc_mem_gate)
+);
 
 // pc9821_crtc's video-domain outputs, declared before the instance that brings them
 // out: the text-plane opaque/cell/colour triple the mixer below combines.
@@ -1671,7 +1862,9 @@ wire [7:0]  crtc_tram_vid_q;
 wire [7:0]  crtc_o_v_pitch;
 wire        crtc_o_v_col40;
 wire [15:0] crtc_o_v_sad;
-wire        crtc_o_v_row0_stale;
+wire        crtc_o_wk_go;
+wire [9:0]  crtc_o_wk_k;
+wire [1:0]  crtc_o_wk_bank;
 wire [9:0]  crtc_o_vline;
 wire [9:0]  crtc_o_vtotal;
 wire [5:0]  crtc_o_vbp;
@@ -1682,11 +1875,13 @@ wire        crtc_o_stat_blank, crtc_o_stat_vsync;
 wire [7:0]  crtc_io_dout, cg_io_dout, gdc2_io_dout;
 
 pc9821_crtc u_crtc (
-    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce),
+    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .rst_n_vid(rst_n_vid), .pixel_ce(pixel_ce),
+    // The slave's graphics window extends the displayed lines (NP2kai's MAX(grphymax, textymax)).
+    .gfx_win_on(gdc_gfx_grph_on),
+    .crt31k(crt31k),
     .io_wr(device_io_wr && gdc_cs), .io_rd(device_io_rd && gdc_cs),
     .io_addr(device_io_addr[7:0]),
     .io_din(device_io_din), .io_dout(crtc_io_dout),
-    .grcg_mode_r(mem_grcg_mode_r),
     // The ONE HARDWARE-switch field the OSD owns; pc9821_crtc latches it on rst_n_sys and
     // seeds the 0xA3FF2 cell with it (0xA3FEA's base memory is hardcoded to 640 KB).
     .cfg_fdd_mode(cfg_fdd_mode),
@@ -1699,17 +1894,25 @@ pc9821_crtc u_crtc (
     .jc_rd_word(crtc_jc_rd_word), .jc_rd_q(cg_jc_rd_q),
     .cg_ram_vid_addr(crtc_cg_ram_vid_addr), .cg_ram_vid_q(cg_cg_ram_vid_q),
     .o_v_pitch(crtc_o_v_pitch), .o_v_col40(crtc_o_v_col40),
-    .o_v_sad(crtc_o_v_sad), .o_v_row0_stale(crtc_o_v_row0_stale),
+    // o_v_row0_stale is the row-0 re-walk flag pc9821_crtc folds into its own walk request
+    // (o_wk_go); the benches read it, the core does not.
+    /* verilator lint_off PINCONNECTEMPTY */
+    .o_v_sad(crtc_o_v_sad), .o_v_row0_stale(), .o_wk_go(crtc_o_wk_go),
+    /* verilator lint_on PINCONNECTEMPTY */
+    .o_wk_k(crtc_o_wk_k), .o_wk_bank(crtc_o_wk_bank),
     .o_vline(crtc_o_vline), .o_hdot(crtc_o_hdot),
     .o_htotal(crtc_o_htotal), .o_vtotal(crtc_o_vtotal), .o_vbp(crtc_o_vbp),
     .o_frame_end(crtc_o_frame_end), .o_cfg_snap(crtc_o_cfg_snap),
     .o_cfg_pending(crtc_o_cfg_pending),
     .o_display_page(crtc_o_display_page), .o_stat_blank(crtc_o_stat_blank),
     .o_stat_vsync(crtc_o_stat_vsync),
-    .vsync_active(gdc_vsync), .vsync_edge(gdc_vsync_edge),
+    /* verilator lint_off PINCONNECTEMPTY */   // the level is unused: this core reads vsync_irq
+    .vsync_active(), .vsync_edge(gdc_vsync_edge),
+    /* verilator lint_on PINCONNECTEMPTY */
     .vsync_irq_arm(gdc_vsync_arm), .vsync_irq(gdc_vsync_irq),
     .disp_on(gdc_disp), .gfx_access_page(gdc_access_page),
     .gfx_egc_gate(gdc_egc_gate),
+    .gfx_egc_gate_nx(gdc_egc_gate_nx),
     .gdc_ff2_state(gdc_ff2_state),
     .dbg_sad(gdc_dbg_sad), .dbg_pitch(gdc_dbg_pitch),
     .dbg_col40(gdc_dbg_col40), .dbg_disp(gdc_dbg_disp),
@@ -1755,14 +1958,16 @@ pc9821_gdc2 u_gdc2 (
     /* verilator lint_off PINCONNECTEMPTY */   // gfx_disp/gfx_win_off are gfx_grph_on's two terms, read by the benches only
     .gfx_disp(), .gfx_win_off(),
     /* verilator lint_on PINCONNECTEMPTY */
-    .gfx_grph_on(gdc_gfx_grph_on), .pegc_256(gdc_pegc_256)
+    .gfx_grph_on(gdc_gfx_grph_on), .pegc_256(gdc_pegc_256),
+    // The 5 MHz GDC clock: both FF2 clock bits (pc9821_crtc's gdc_ff2_state [7] and [8],
+    // 0x6A dat 0x83 and 0x85) - the packed walk's PITCH select (NP2kai vram/makegrex.c:288).
+    .gdc_5m(gdc_ff2_state[7] && gdc_ff2_state[8])
 );
 
 pc9821_cg u_cg (
     .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce),
     .io_wr(device_io_wr && gdc_cs), .io_rd(device_io_rd && gdc_cs),
     .io_addr(device_io_addr[7:0]), .io_din(device_io_din), .io_dout(cg_io_dout),
-    .cg_code_win(cg_code_win), .cg_lr_win(cg_lr_win),
     .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
     .cg_win_dout(cg_win_dout), .cg_win_din(cg_win_din), .cg_win_we(cg_win_we),
     .cg_win_byte_hold(cg_win_byte_hold),
@@ -1782,8 +1987,9 @@ pc9821_cg u_cg (
     .cg_ram_vid_addr(crtc_cg_ram_vid_addr), .cg_ram_vid_q(cg_cg_ram_vid_q),
     .tram_vid_q(crtc_tram_vid_q),
     .v_pitch(crtc_o_v_pitch), .v_col40(crtc_o_v_col40),
-    .v_sad(crtc_o_v_sad), .v_row0_stale(crtc_o_v_row0_stale),
-    .vline(crtc_o_vline), .hdot(crtc_o_hdot),
+    .v_sad(crtc_o_v_sad),
+    .wk_go(crtc_o_wk_go), .wk_k(crtc_o_wk_k), .wk_bank_in(crtc_o_wk_bank),
+    .hdot(crtc_o_hdot),
     .wk_tr_read(cg_wk_tr_read), .wk_tr_addr(cg_wk_tr_addr),
     .dbg_wk_skips(gdc_dbg_wk_skips)
 );
@@ -1796,25 +2002,22 @@ assign gdc_io_dout =
     crtc_io_dout;
 
 // The graphics plane's line-buffer read port is pc9821_gvram's, and pc9821_gvram
-// lives inside pc9821_memory_subsystem (D5; the wires are at the scanout
+// lives inside pc9821_memory_subsystem (the wires are at the scanout
 // block above). The mixer below is that port's reader and the only one: it owns
 // the read sequencer, so the graphics side of the picture is the fetched line as
 // soon as graphics display is enabled (R7), with no second route to the planes.
 
 // The compositor rule: 2'b00 is NP2kai's p_2 rule (a glyph-covered dot opaque
 // in the attribute colour, everything else showing graphics). It is a select
-// and not a hard wire because that rule is a model, not a measurement
-// M4 replaces this constant when it lands.
+// and not a hard wire because that rule is a model, not a measurement.
 localparam [1:0] COMP_RULE = 2'b00;
-// The graphics display enable is the slave GDC's START/STOP latch AND its SYNC window. It was a
-// localparam tied low, with a note saying the 0xA2 command that sets it went
-// undecoded; pc9821_gdc2 decodes it now and exports it as gdc_gfx_grph_on, so
-// the compositor follows the guest instead of a constant. Reset leaves it off,
-// so a guest that never issues START still paints black where a graphics pixel
-// would be, which is what the tied-low constant did.
+// The graphics display enable is the slave GDC's START/STOP latch AND its SYNC window.
+// pc9821_gdc2 decodes the 0xA2 command that sets it and exports it as gdc_gfx_grph_on, so
+// the compositor follows the guest. Reset leaves it off, so a guest that never issues
+// START paints black where a graphics pixel would be.
 
 pc9821_video_mixer video_mixer (
-    .clk(clk_sys), .rst_n(rst_n_vid),
+    .clk(clk_sys), .rst_n(rst_n_sys),
     .dot_x(gdc_pix_dot),
     .h_active(gdc_pix_h_active), .v_active(gdc_pix_v_active),
     .gfx_odd_line(gdc_gfx_odd_line),
@@ -1844,27 +2047,16 @@ pc9821_video_mixer video_mixer (
 // The mixer is pc9821_gvram's scanout read-port reader; pc9821_gvram owns the line fetch,
 // the ping-pong line buffer and the pacing behind it.
 //
-// Pixel enable at the PC-98 dot rate (21.0526 MHz) derived from clk_sys. MiSTer requires
-// CLK_VIDEO to be a fast clock and takes the pixel rate from CE_PIXEL (developer/emu.md: the
-// video clock must be greater than 40 MHz, and CE_PIXEL must be based on CLK_VIDEO), so the
-// video domain is clk_sys gated by this enable rather than a separate 21 MHz clock: a slow
-// CLK_VIDEO is what made the scaler produce nothing on HDMI while the OSD still drew.
-//
-// PIXEL_CE_INC is the dot rate as a fraction of the system clock in 24-bit fixed point:
-// round(PIXEL_HZ * 2^24 / SYS_FREQ), so the enable averages PIXEL_HZ at every build profile.
-// At 50 MHz that is 7064080, giving 21.0526 MHz - the 848 * 440 * 56.42 Hz PC-98 24 kHz-mode
-// frame rate.
-localparam [23:0] PIXEL_CE_INC =
-    24'((64'(PIXEL_HZ) * 64'd16_777_216 + 64'(SYS_FREQ) / 64'd2) / 64'(SYS_FREQ));
-reg [23:0] pixel_ce_acc;
-wire [24:0] pixel_ce_sum = {1'b0, pixel_ce_acc} + PIXEL_CE_INC;
-assign pixel_ce = pixel_ce_sum[24];   // declared at the raster counter, its first reader
-always @(posedge clk_sys) begin
-    if (reset) pixel_ce_acc <= 24'd0;
-    else       pixel_ce_acc <= pixel_ce_sum[23:0];
-end
-
+// Pixel enable at the PC-98 dot rate, exactly 400/19 MHz (21.0526 MHz) at every SYS_FREQ, or the
+// 31 kHz mode's 25.168 MHz while 0x09A8 bit 0 is set (pc9821_vclk_pkg): the raster
+// and everything guest-visible stay on clk_sys, gated by it. The OUTPUT leaves on its own dot-locked
+// video clock (z486_mister.sv: pc9821_video_out, the video PLL), which is what CLK_VIDEO must be for
+// a jitter-free analog picture; the two dot rates are the same exact ratio of the 50 MHz reference.
+pc9821_dot_ce #(.SYS_FREQ(SYS_FREQ)) dot_ce (
+    .clk(clk_sys), .reset(reset), .c31(crt31k), .ce(pixel_ce)
+);
 assign video_ce = pixel_ce;   // the framework's CE_PIXEL (see pixel_ce above)
+assign video_31k = crt31k;
 assign video_blank_n = gdc_de;
 
 // The keyboard's PS/2 response pins are idle (the guest is driven through ps2_key).
@@ -1888,7 +2080,7 @@ assign cd_log_accept = dbg_uart_accept;   // the CD log is compiled out with the
 // trigger's `start`), so the digits of one record are one instant however long the paced
 // emission waits.
 
-// DO NOT READ THE CADENCE INSTEAD: z_valid is a LEVEL (src/z486/memory.sv:100), so arrival and
+// DO NOT READ THE CADENCE INSTEAD: z_valid is a LEVEL (src/z486/memory.sv:173 `output valid`), so arrival and
 // completion give the same 2 s spacing, which is why the byte exists.
 localparam [31:0] WDG_STALL = 32'(SYS_FREQ) / 32'd5;
 // The stall trigger alone cannot see a *loop*: a guest that spins while still
@@ -1906,10 +2098,6 @@ wire        wdg_start;    // begin a record
 wire  [8:0] wdg_idx;
 wire  [8:0] prf_idx;
 wire  [6:0] gfx_idx;
-// The INT21 pair's own byte/emit handshake, owned by pc9821_dbg_record like the three above.
-wire  [7:0] int21_idx;
-wire        int21_ack;       // one-cycle: the record was taken (pc9821_int21_msg releases it)
-wire        int21_active;    // the INT21 record is in flight (pc9821_int21_msg's `emitting`)
 wire        dbg_report_active;   // one report (all three records) is in flight; drives `hold`
 pc9821_wdg_trigger #(
     .WDG_STALL (WDG_STALL),
@@ -1969,7 +2157,8 @@ pc9821_watchdog_msg u_wdg_msg (
         // 32 bits but assigns it only 32'h0 or {24'h0, vector}, so bits 31:8 are always zero.
         // Narrowing it is a three-file change (that port, pc9821_interrupts.sv, this wire) and
         // belongs to the module that declares the width, not to this instantiation.
-        .cpu_irq_state(8'd0), .inta_count(inta_count),
+        // CPU: {IF, 5'b0, INTR, 1'b0} - EFLAGS.IF and the CPU's interrupt request input.
+        .cpu_irq_state({cpu_dbg_eflags[9], 5'd0, z_intr, 1'b0}), .inta_count(inta_count),
         .artic_hi(artic_hi), .io_itf_stage(io_itf_stage),
         .last_io_addr(dbg_last_io_addr), .last_io_data(dbg_last_io_data),
         .last_io_rd(dbg_last_io_rd), .last_io_wr(dbg_last_io_wr),
@@ -2010,7 +2199,7 @@ reg       vid_vs_d_v;
 reg [7:0] vid_lit_cnt_v;
 reg       vid_lit_seen_v;
 always @(posedge clk_sys) begin
-    if (!rst_n_vid) begin
+    if (!rst_n_sys) begin
         vid_frame_cnt_v <= 8'd0;
         vid_vs_d_v      <= 1'b0;
         vid_lit_cnt_v   <= 8'd0;
@@ -2057,7 +2246,7 @@ end
 // port (ext_mem0_*, the mapper's CPU RAM and the firmware loader). That port does NOT carry the
 // GVRAM, which is on-chip M10K and emits no SDRAM traffic at all; the scanout's line
 // fetch and the font fetch have their own SDRAM ports besides. The graphics record
-// reports the GVRAM path counters, and this record now reports the EGC/GRCG operation counts too.
+// reports the GVRAM path counters, and this record reports the EGC/GRCG operation counts too.
 pc9821_perf_msg u_perf_msg (
     .clk(clk_sys), .reset(reset),
     .cpu_req(z_valid), .cpu_ack(z_ready),
@@ -2068,8 +2257,6 @@ pc9821_perf_msg u_perf_msg (
     .sd1_valid(ext_mem1_valid), .sd1_ready(ext_mem1_ready),
     .sd2_valid(ext_mem2_valid), .sd2_ready(ext_mem2_ready),
     .sd3_valid(ext_mem3_valid), .sd3_ready(ext_mem3_ready),
-    .dbg_il(1'b0), .dbg_im(1'b0),
-    .dbg_dl(1'b0), .dbg_dm(1'b0),
     .dbg_walk_start(gvram_walk_start), .dbg_walk_cycle(gvram_walk_cycle),
     .dbg_egc_txn(gvram_egc_txn), .dbg_egc_unit(gvram_egc_unit),
     .dbg_grcg_store(gvram_grcg_store),
@@ -2109,29 +2296,6 @@ pc9821_gfx_msg u_gfx_msg (
     .snap(wdg_start),
     .idx(gfx_idx), .ch(gfx_char)
 );
-// The INT21 record: one call's entry/return pair, formatted and captured in its own module.
-// It has no report-accept snapshot of its own - the pair IS the snapshot, latched at the
-// trigger and the return, and it is emitted BETWEEN reports (see pc9821_dbg_record).
-// INT21 trigger: the z486 vector-fetch pulse is GONE after the 2026-10-03 fork
-// rebase (the rewritten core dropped dbg_vec_fetch/dbg_vec_num), so the trigger is
-// tied off and the INT21 record never fires until the telemetry is re-added or a
-// replacement trigger is wired.
-wire int21_vec_fetch = 1'b0;
-wire [7:0] int21_char;
-wire       int21_pending;
-/* verilator lint_off UNUSEDSIGNAL */   // the drop count has no §1.4 field yet; observable, not emitted
-wire [7:0] int21_drops;
-/* verilator lint_on UNUSEDSIGNAL */
-wire       int21_arena_err;
-pc9821_int21_msg u_int21_msg (
-    .clk(clk_sys), .reset(reset),
-    .vec_fetch(int21_vec_fetch),
-    .dbg_EAX(32'd0), .dbg_EBX(32'd0), .dbg_CF(1'b0),
-    .cpu_cs(cpu_cs), .cpu_eip(cpu_eip),
-    .idx(int21_idx), .ack(int21_ack), .emitting(int21_active),
-    .ch(int21_char), .pending(int21_pending), .drops(int21_drops),
-    .arena_err(int21_arena_err)
-);
 
 // THE TRACE'S SECOND TRIGGER: the end of a GRCG drawing burst - the event a game's dialog redraws
 // ARE, and the one the OOM trigger cannot see. WHY THE BURST'S END AND NOT ITS START: the trace ring
@@ -2144,11 +2308,10 @@ pc9821_int21_msg u_int21_msg (
 // redrew the screen". That is rare enough that the trace's ~16 s dump is not swamped, and it is what
 // makes pc9821_trace's per-pulse re-arm safe: one interaction, one dump.
 // WHICH STORES COUNT: the WRITE owners only - the GRCG's store pulse and the plain client's
-// ownership level. The plain arm was added 2026-10-03 because the GRCG's alone does not see
-// Farland Story's drawing: its later heartbeats move GW/GC/PW while GS/GR/GT stay flat, so its
-// page-to-page copies are plain window stores and a GRCG-only trigger never fired on them (the
-// ten traces captured on 2026-10-03 contain the game's wait loops and none of its copy at
-// 1459:05C7). READS are deliberately excluded - a client that polls a GVRAM byte every frame
+// ownership level. The plain arm is there because the GRCG's alone does not see Farland
+// Story's drawing: its heartbeats move GW/GC/PW while GS/GR/GT stay flat, so its page-to-page
+// copies are plain window stores and a GRCG-only trigger never fires on them (its copy loop
+// is at 1459:05C7). READS are deliberately excluded - a client that polls a GVRAM byte every frame
 // would reset the quiet timer forever and the trigger would never fire. THE EGC IS ALSO
 // EXCLUDED, not overlooked: an EGC-driven game (Flame Zapper) may never go quiet, so it needs
 // its own trigger shape rather than being folded in here untested.
@@ -2163,21 +2326,19 @@ reg        trace_burst_active;
 reg        trace_disp_prev, trace_acc_prev;
 wire       trace_burst_end = trace_burst_active && (trace_burst_quiet >= TRACE_BURST_QUIET);
 wire       trace_store_evt = gvram_grcg_store || gvram_pw_owned;
-// THE SECOND TRIGGER IS THE FLIP, and this is the part that had to change. Waiting for the game
-// to STOP drawing sounded right and never fired: Farland makes ~1000 GVRAM accesses per frame at
-// 56.4 fps, so `trace_burst_quiet` never reaches its limit and the capture that motivated this
-// change holds 29 heartbeats and ZERO trace dumps - including one taken on a static map screen,
-// which is the quietest state a running game has. A frame-buffer flip is the event that MARKS a
+// THE SECOND TRIGGER IS THE FLIP. Waiting for the game to STOP drawing alone never fires on
+// Farland: it makes ~1000 GVRAM accesses per frame at 56.4 fps, so `trace_burst_quiet` never
+// reaches its limit, even on a static map screen, the quietest state a running game has. A frame-buffer flip is the event that MARKS a
 // redraw, and the ring holds the PAST, so triggering on the flip dumps the drawing that just
 // happened. Both `0xA4` (the display page) and `0xA6` (the access page) count, because a game may
 // double-buffer with either; each is a one-cycle pulse (the register differs from its own
 // previous value) and neither needs a new port - pc9821_crtc already exports the first and
 // pc9821_system already carries the second.
 //
-// THE SAME TIMER NOW RATE-LIMITS instead of detecting silence: a flip may fire a dump only when
+// THE SAME TIMER ALSO RATE-LIMITS: a flip may fire a dump only when
 // TRACE_BURST_QUIET has elapsed since the last one, or a 56 fps flipper would emit a 114 KB dump
-// every frame. The quiet arm is KEPT as a fallback for a game that does go idle (that is how the
-// 2026-10-03 Farland capture got its first ten dumps, between dialog advances).
+// every frame. The quiet arm is KEPT as a fallback for a game that does go idle (between
+// dialog advances, for example).
 wire       trace_flip_evt = (crtc_o_display_page != trace_disp_prev) ||
                             (gdc_access_page     != trace_acc_prev);
 wire       trace_rate_ok  = (trace_burst_quiet >= TRACE_BURST_QUIET);
@@ -2203,20 +2364,18 @@ always @(posedge clk_sys) begin
     end
 end
 wire trace_flip_trig = trace_flip_evt && trace_rate_ok;
-assign trace_trig = int21_arena_err | trace_burst_end | trace_flip_trig;
+assign trace_trig = trace_burst_end | trace_flip_trig;
 // The report's byte order, and the pacing that keeps it from outrunning the FIFO, live in
 // pc9821_dbg_record: the three formatters above are pure functions of their index over the
-// report's counter snapshot, the INT21 formatter carries its own pair snapshot, and the
-// sequencing between all four is the part with a handshake and its own bench.
+// report's counter snapshot, and the sequencing between them is the part with a handshake and
+// its own bench.
 pc9821_dbg_record u_dbg_record (
     .clk_sys(clk_sys), .reset(reset),
     .dbg_uart_accept(dbg_uart_accept),
     .wdg_start(wdg_start), .wdg_path(wdg_path), .wdg_char(wdg_char),
     .prf_char(prf_char), .gfx_char(gfx_char),
-    .int21_char(int21_char), .int21_pending(int21_pending),
     .dbg_byte(dbg_uart_byte), .dbg_we(dbg_uart_we), .report_active(dbg_report_active),
-    .wdg_idx(wdg_idx), .prf_idx(prf_idx), .gfx_idx(gfx_idx),
-    .int21_idx(int21_idx), .int21_ack(int21_ack), .int21_active(int21_active)
+    .wdg_idx(wdg_idx), .prf_idx(prf_idx), .gfx_idx(gfx_idx)
 );
 end else begin : g_no_telemetry
 // The telemetry section's only outputs are these two ports: dbg_report_active is read nowhere
@@ -2295,12 +2454,11 @@ assign software_reset = triple_fault_reset;
 // nothing else is added downstream. The one compromise here is deliberate: the
 // two devices share the slot's volume control (vol_voice below), which is right
 // for one card and is what the framework's OSD master volume sits behind
-// anyway. THE SUM IS WIDE AND UNCLAMPED (review2/datapaths.md F1): the two DACs
+// anyway. THE SUM IS WIDE AND UNCLAMPED: the two DACs
 // (YM2608 FM+SSG and the LC7881) meet at one analog sum whose only clip is the
 // output stage, modelled at the FINAL DAC (z486_mister's mix_dry saturator).
-// The intermediate sat16 that used to live here flat-topped the join whenever
-// FM+SSG passed 16 bits, even with a cancelling negative PCM86 sample still to
-// come. The FM+ADPCM sum is clamped once at the jt08_acc junction (ymfm's clamp16
+// An intermediate 16-bit saturation here would flat-top the join whenever FM+SSG
+// passed 16 bits, even with a cancelling negative PCM86 sample still to come. The FM+ADPCM sum is clamped once at the jt08_acc junction (ymfm's clamp16
 // point, ymfm_opn.cpp:1410-1414); this join carries that clamped junction, the
 // AC-coupled (zero-mean) SSG added after it, and PCM86. 20 bits holds the exact range: [+255,996, -239,616].
 wire signed [19:0] snd86_l = $signed(opna_snd_l)
@@ -2335,17 +2493,31 @@ assign vol_master_r = 5'd31;
 // (vol_master above) is the OSD control. 5'd0 here would mute the slot.
 assign vol_voice_l = 5'd31;
 assign vol_voice_r = 5'd31;
-// THE CD PATH IS MUTED HERE, and that is what this 5'd0 does: the mixer sums
-// `vol_en[2] ? cd_l : 0` (z486_mister), and cd_l is the CD-DA stream scaled by
-// vol_cd - so with vol_en enabled and vol_cd 0 the CD contributes exactly zero.
-// The hps_ext -> cdda -> volume path itself is wired and running; only this
-// volume zeroes it. Whether to raise it is an owner decision (the OSD has no CD
-// volume field either), so it is left unchanged.
-// WITH THE CD DRIVE'S PLAYER (CDROM_AUDIO_EN) the stream is real, and the CD channel is opened
-// at full scale like the OPNA's above; the CD-DA vs FM balance is OWNER-PENDING (no capture of
-// the machine's CD audio level exists).
-assign vol_cd_l = CDROM_AUDIO_EN ? 5'd31 : 5'd0;
-assign vol_cd_r = CDROM_AUDIO_EN ? 5'd31 : 5'd0;
+// THE CD CHANNEL'S GAIN: the mixer sums `vol_en[2] ? cd_l : 0` (z486_mister), and cd_l is the
+// CD-DA stream scaled by vol_cd. WITHOUT THE CD DRIVE'S PLAYER (CDROM_AUDIO_EN 0) vol_cd is the
+// constant 0, so the CD contributes exactly zero. WITH IT, vol_cd is the OSD's "CD audio volume"
+// field (cd_volume_code, decoded by pc9821_osd), a user control like the volume wheel on a real
+// CD drive, both channels at the same code. Its default (list position 0) is 0 dB, the unity
+// level shipped before the field (NP2kai's -6 dB default is a step); the drive's level is still
+// uncaptured (todo item 106), which is why it is a control rather than a constant.
+// THE CROSSING: cd_volume_code comes from hps_io's status word on clk_sys, and
+// pc9821_audio_volume samples vol_cd on CLK_AUDIO with no synchroniser - the quasi-static OSD
+// level convention every vol_* input follows (docs/clock-domains.md, "Quasi-static levels").
+// The register below makes the crossing's source one flop per bit rather than the decode's
+// combinational logic, so the only transient is the one sample a change can land mid-way.
+generate
+if (CDROM_AUDIO_EN) begin : g_vol_cd
+    /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+    reg [4:0] vol_cd_q = 5'd0;
+    /* verilator lint_on PROCASSINIT */
+    always @(posedge clk_sys) vol_cd_q <= cd_volume_code;
+    assign vol_cd_l = vol_cd_q;
+    assign vol_cd_r = vol_cd_q;
+end else begin : g_no_vol_cd
+    assign vol_cd_l = 5'd0;
+    assign vol_cd_r = 5'd0;
+end
+endgenerate
 assign vol_midi_l = 5'd0;
 assign vol_midi_r = 5'd0;
 assign vol_line_l = 5'd0;

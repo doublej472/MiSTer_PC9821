@@ -1,27 +1,27 @@
-// tb_pc9821_ata_dbg — the ATA's two diagnostic bytes, which the stall watchdog prints.
+// tb_pc9821_ata_dbg - the ATA's two diagnostic bytes, which the stall watchdog prints.
 //
 // Why this exists. The watchdog message's A, K, X and Z fields are these two outputs,
 // and they are the project's ONLY view of the drive on real hardware: a MiSTer
 // was diagnosed from a capture whose `A=0x40` and `K=0/X=0/Z=0` came from here. Three
-// benches declare and connect these wires and NOT ONE of them asserts a value — so the
+// benches declare and connect these wires and NOT ONE of them asserts a value - so the
 // byte the machine is read through has never been checked. That is the "a check that
 // cannot fail is not a check" class this project has already found six times.
 //
 // Where the expectations come from, because a test must capture how the MACHINE behaves
 // and not how the RTL is written:
 //
-//   * 0x40 on a card with an image mounted and no IDE bank selected — this is the
-//     owner's own capture, and it is the first assertion in this file. It decodes as
+//   * 0x40 on a card with an image mounted and no IDE bank selected - this is a
+//     real card's capture, and it is the first assertion in this file. It decodes as
 //     device_present=0, mounted=1, channel_reg[0]=0, X_IDLE, BSY=0, DRQ=0. The
 //     interesting part is that it is CORRECT: the Xe10's ITF never writes 0x0432 at all
 //     (the bytes 32 04 do not occur anywhere in bios/xe10/BANK4.BIN), so at the point
 //     the ITF stalls the bank really is unprogrammed and the drive really is not present.
-//   * 0x00 for both counters when nothing has been issued — the same capture.
+//   * 0x00 for both counters when nothing has been issued - the same capture.
 //   * The field ORDER is not an internal detail: it is what tools/decode_telemetry.py
 //     reads, so it is a contract between this module and the telemetry decoder, which is
 //     why the order is pinned by construction below rather than by inspection.
 //
-// The port comment used to describe this byte as {DP,MOUNT,CH0,DRV4,state,BSY,DRQ} — a
+// The port comment used to describe this byte as {DP,MOUNT,CH0,DRV4,state,BSY,DRQ} - a
 // seven-field list for a six-field concatenation, with no DRV4 in the RTL. It is fixed
 // in the module, and this bench is what stops the two drifting apart again.
 
@@ -29,7 +29,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_DBG:
-// The ATA's two diagnostic bytes, which the watchdog prints as the telemetry's A, K, X and Z fields and from which a MiSTer was diagnosed, are asserted for the first time: the state byte packs {device_present, mounted, channel_reg[0], xfer_state, BSY, DRQ} and reads 0xC0 with an image mounted and the bank at its power-up 0x00 - the disk's bank 0 since the layout was fixed (the owner's historical A=0x40 is the same byte with the disk on bank 1) - selecting bank 0x01 drops device_present (0x60) and re-selecting bank 0x00 raises it again and so bit 7, the command word packs {aborts, last_cmd, commands, reason} and is zero on a card that has issued nothing, an accepted command increments only the command count while a rejected one increments both and carries its reason, and the IDENTIFY state is visible in the packed xfer_state field with DRQ set and BSY clear.
+// The ATA's two diagnostic bytes, which the watchdog prints as the telemetry's A, K, X and Z fields and from which a MiSTer was diagnosed, are asserted for the first time: the state byte packs {device_present, mounted, channel_reg[0], xfer_state, BSY, DRQ} and reads 0xC0 with an image mounted and the bank at its power-up 0x00 - the disk's bank 0 since the layout was fixed (an A=0x40 is the same byte with the disk on bank 1) - selecting bank 0x01 drops device_present (0x60) and re-selecting bank 0x00 raises it again and so bit 7, the command word packs {aborts, last_cmd, commands, reason} and is zero on a card that has issued nothing, an accepted command increments only the command count while a rejected one increments both and carries its reason, and the IDENTIFY state is visible in the packed xfer_state field with DRQ set and BSY clear.
 
 module tb_pc9821_ata_dbg;
 
@@ -133,7 +133,7 @@ module tb_pc9821_ata_dbg;
     //    the ITF stalls. Two fields carry the meaning -- mounted=1 says the host has the
     //    image, device_present=0 says the guest has not selected the interface -- and
     //    they are deliberately different facts.
-    //    SINCE THE LAYOUT WAS FIXED (owner, 2026-10-11) the disk is bank 0's master, so the
+    //    SINCE THE LAYOUT WAS FIXED the disk is bank 0's master, so the
     //    unprogrammed bank 0x00 IS the disk's bank and the same card now reads 0xC0: the
     //    capture's 0x40 was the old layout, the disk on bank 1. Step 3 makes the 0x40-shaped
     //    case (mounted, not present) at bank 0x01, where it now lives.

@@ -64,6 +64,21 @@ fi
 if [[ ${USERDISK_CD:-0} == 1 ]]; then
   VARIANT_SUFFIX="$VARIANT_SUFFIX-cd"
 fi
+# USERDISK_SDPH=1: the run-time SDRAM_CLK phase instrument's build (-DUSERDISK_SDPH): the guest
+# ports 0x5FF0/0x5FF2 exist and step a PLL MODEL (no real phase moves), so a DOS program that
+# drives them (tools/hwprobe/sdshmoo) runs its whole control path here.
+if [[ ${USERDISK_SDPH:-0} == 1 ]]; then
+  VARIANT_SUFFIX="$VARIANT_SUFFIX-sdph"
+fi
+# USERDISK_SYSFREQ=<hz> / USERDISK_CACHE_BITS=<n>: the system's clk_sys and cache set bits
+# (default 50 MHz, 4); the card runs CLOCK_RATE_HZ and z486_mister.sv's *_SET_BITS.
+FREQ_DEFINE=()
+if [[ -n ${USERDISK_SYSFREQ:-} ]]; then
+  VARIANT_SUFFIX="$VARIANT_SUFFIX-f$USERDISK_SYSFREQ"; FREQ_DEFINE+=(-DTB_SYS_FREQ="$USERDISK_SYSFREQ")
+fi
+if [[ -n ${USERDISK_CACHE_BITS:-} ]]; then
+  VARIANT_SUFFIX="$VARIANT_SUFFIX-c$USERDISK_CACHE_BITS"; FREQ_DEFINE+=(-DTB_CACHE_BITS="$USERDISK_CACHE_BITS")
+fi
 if [[ -n $VARIANT_SUFFIX ]]; then
   RUN_DIR=$BUILD/userdisk$VARIANT_SUFFIX
   OBJ=$RUN_DIR/obj
@@ -182,6 +197,9 @@ done
 
 source tests/pc9821/z486_rtl.sh
 RTL=("${PC9821_Z486_RTL[@]}" tests/pc9821/tb_pc9821_userdisk.sv)
+if [[ ${USERDISK_SDPH:-0} == 1 ]]; then
+  RTL+=(src/pc9821/core/pc9821_sdram_phase_ctl.sv src/pc9821/core/pc9821_sdram_dps.sv)
+fi
 
 # Bounded on purpose, not -j 0: this is the integrated tier and several lanes may
 # run it at once, so N lanes each taking every core on one machine is
@@ -192,9 +210,10 @@ verilator --binary --timing -j "${VERILATOR_JOBS:-8}" -O2 -Wall -Wno-fatal \
   -Wno-PINMISSING -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
   -Wno-SYNCASYNCNET \
   -DIMG_WORDS="$WORDS" \
-  "${IO_DEFINE[@]}" \
+  "${IO_DEFINE[@]}" "${FREQ_DEFINE[@]}" \
   $([[ $LATE_MOUNT == 1 ]] && echo -DLATE_MOUNT) \
   $([[ ${USERDISK_CD:-0} == 1 ]] && echo -DUSERDISK_CD) \
+  $([[ ${USERDISK_SDPH:-0} == 1 ]] && echo -DUSERDISK_SDPH) \
   -I"$Z" -I"$X" --top-module tb_pc9821_userdisk --Mdir "$OBJ" "${RTL[@]}"
 
 if [[ $COMPILE_ONLY == 1 ]]; then

@@ -20,7 +20,7 @@ Two jobs, both on the SAME manifest the probe prints:
           master/4, square clock/(16*TP); NP2kai keydisp_bindpsg)
           level = the die's 32-entry table, index (level<<1)|1
      DRUM vol = 94 - IL - TL, mul = 15 - (vol & 7), shift = vol >> 3,
-          gain = mul / 2^(1+shift) (die == ymfm == ours; opna-lle-audit 4.2)
+          gain = mul / 2^(1+shift) (die == ymfm == ours)
 
 2. EMIT the segment table: one row per segment with the class, the frequency,
    the register-level gain and the MEASURED duration (the ARTIC delta the probe

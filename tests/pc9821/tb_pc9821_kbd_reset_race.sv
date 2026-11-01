@@ -1,10 +1,10 @@
-// tb_pc9821_kbd_reset_race — the keyboard reset vs a same-cycle deliver/enqueue.
+// tb_pc9821_kbd_reset_race - the keyboard reset vs a same-cycle deliver/enqueue.
 //
 // ==== WHAT THIS PROVES ====
-// The 8251 bit-3 keyboard reset is a priority fold over the receive side's same-cycle updates (review r2-pulses H6, the Single-Cycle Event Discipline): a key enqueued one cycle before the reset write delivers INTO the reset write's cycle, and the reset must still win - fifo indices zeroed, no RXRDY/IRQ resurrection with the pre-reset byte, rx_latch untouched - and the next key must still be the next key.
+// The 8251 bit-3 keyboard reset is a priority fold over the receive side's same-cycle updates (the Single-Cycle Event Discipline): a key enqueued one cycle before the reset write delivers INTO the reset write's cycle, and the reset must still win - fifo indices zeroed, no RXRDY/IRQ resurrection with the pre-reset byte, rx_latch untouched - and the next key must still be the next key, while a key held across the reset keeps its dedup state (NP2kai keeps keystat.ref), so a duplicate make stays silent and its break still delivers.
 //
 // The 8251 bit-3 keyboard reset (the ITF's 0x3A -> 0x32 pair) is a PRIORITY
-// FOLD over the receive side's same-cycle updates (review r2-pulses H6). A key
+// FOLD over the receive side's same-cycle updates. A key
 // enqueued one cycle before the reset write delivers INTO the reset write's
 // cycle - `deliver_key` fires exactly one cycle after any enqueue while !RXRDY -
 // and before the fix the deliver/enqueue NBAs (later in the same always block
@@ -125,7 +125,7 @@ module tb_pc9821_kbd_reset_race;
     write_port(1'b1, 8'h05);
     write_port(1'b1, 8'h3A);
 
-    // ==== THE COLLISIONS (review r2-pulses H6's collision test) ====
+    // ==== THE COLLISIONS ====
     // T6 moved the event DECISION one clk_sys deeper (the dedup table's read is clocked), so
     // the reset is placed against the decision now, and the pre-T6 shape is kept as well.
     // Both are collisions the reset must own:
@@ -188,10 +188,16 @@ module tb_pc9821_kbd_reset_race;
       errors = errors + 1;
     end
 
-    // ...and the key whose make was in flight is NOT left held: its next make delivers.
+    // ...and the key whose make was in flight is still held, as NP2kai keeps its
+    // keystat.ref across keyboard_resetsignal: a duplicate make is silent (M2) and
+    // the physical BREAK still reaches the guest (the old epoch bump cleared the
+    // dedup here, so the break was swallowed and the key stuck down).
     write_port(1'b1, 8'h05);               // re-enable RX/TX
-    send_key(1'b1, 1'b0, 8'h1D);           // keep W held, make it again: the generation tag
-    read_byte(8'h11);                      // ...cleared the word, so this must DELIVER
+    send_key(1'b1, 1'b0, 8'h1D);           // keep W held, make it again
+    repeat (4) @(posedge clk); #1;
+    if (irq) fail("a duplicate make after the bit-3 reset was delivered: the dedup state did not survive");
+    send_key(1'b0, 1'b0, 8'h1D);           // the held key's break must DELIVER
+    read_byte(8'h91);
 
     // ==== VERDICT ====
     if (errors == 0) begin

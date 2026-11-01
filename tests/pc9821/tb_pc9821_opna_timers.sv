@@ -33,21 +33,21 @@
 //     NP2kai sound/opntimer.c:30 `l = 18 * (1024 - ...)` and :59
 //     `l = 288 * (256 - opna->s.reg[0x26])`, in 2.4576 MHz-base CPU clocks scaled
 //     by 1536/625 (:36), i.e. 18 us per Timer A count and 288 us per Timer B
-//     count - within 0.2% of 144/7.9872 MHz and 2304/7.9872 MHz (bench-audit).
+//     count - within 0.2% of 144/7.9872 MHz and 2304/7.9872 MHz.
 //   * Phi M for this board is 7.9872 MHz: NP2kai sound/opngen.h:13 has
 //     OPNA_CLOCK = 3993600 and sound/opna.c:123 doubles it for the FM engine,
-//     and the glue's clock-enable comment (pc9821_opna.sv:38-42) cites that.
+//     and the glue's clock-enable comment (pc9821_opna.sv:88-92) cites that.
 //   * Which bit does what is NP2kai sound/opntimer.c:172-231 (opna_settimer),
 //     cross-checked against sound/opntimer.c:104-145 (fmport_a/fmport_b):
 //     0x27 bit0 starts Timer A, bit1 starts Timer B, bit2 enables A's IRQ,
 //     bit3 enables B's IRQ, bit4 clears A's flag, bit5 clears B's flag; the
 //     flags are status bits 0 and 1. jt12's register decode takes the same six
-//     bits in the same order (jt12/hdl/jt12_mmr.v:362-358).
+//     bits in the same order (jt12/hdl/jt12_mmr.v:361-366).
 //   * That the flags are visible in a status read is jt12/hdl/jt12_dout.v:42 -
 //     the low-bank read is {busy, 5'd0, flag_B, flag_A} - and NP2kai returns
 //     the chip's status byte for 0x188 (cbus/board86.c:29-33).
 //   * Timer A's value split, high eight bits into 0x24 and low two into 0x25,
-//     is jt12_mmr.v:360-351 (REG_CLKA1/REG_CLKA2) and NP2kai opntimer.c:34
+//     is jt12_mmr.v:358-359 (`REG_CLKA1`/`REG_CLKA2`) and NP2kai opntimer.c:34
 //     reads it the same way.
 //   * That Timer B is the one that must work is PMD's own documentation,
 //     rec98/libs/kaja/pmddata.doc: AH=13h is the Timer B user interrupt and
@@ -63,7 +63,7 @@
 // the quantity PMD's tempo derives from.
 
 module tb_pc9821_opna_timers;
-  // 50 MHz, the core's own SYS_FREQ (pc9821_system.sv:260), so the glue's
+  // 50 MHz, the core's own SYS_FREQ (pc9821_system.sv:285), so the glue's
   // clock-enable divider runs at the ratio it runs at on hardware.
   localparam integer SYS_CLOCK_HZ  = 50_000_000;
   localparam real    CLK_NS        = 1_000_000_000.0 / SYS_CLOCK_HZ;  // 20 ns
@@ -270,7 +270,7 @@ module tb_pc9821_opna_timers;
     repeat (40) @(posedge clk);
     @(negedge clk); reset = 0;
     // The glue stretches the chip's reset over 16 clk&cen cycles
-    // (pc9821_opna.sv:100-112); let it finish before any register access.
+    // (pc9821_opna.sv:114-127, `rst_cnt <= 5'd16;`); let it finish before any register access.
     repeat (2000) @(posedge clk);
 
     // ---- 1. nothing has fired and no IRQ is up --------------------------
@@ -386,7 +386,7 @@ module tb_pc9821_opna_timers;
     // it - a convenience of that model. The chip has an explicit flag reset
     // (0x27 bit 4 for A, bit 5 for B) and jt12 implements exactly that:
     // jt12_timer sets the flag only on its overflow and clears it only on
-    // clr_flag (jt12_timers.v:96-101). So stopping a timer must LEAVE its flag
+    // clr_flag (jt12_timers.v:120-126). So stopping a timer must LEAVE its flag
     // standing - a driver that stops a timer and then reads the flag is
     // reading why it stopped. Asserting NP2kai's behaviour here would have
     // made this bench demand something the hardware does not do.

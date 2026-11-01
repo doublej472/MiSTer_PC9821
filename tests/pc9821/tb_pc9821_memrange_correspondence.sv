@@ -17,7 +17,7 @@
 // the OR of every mechanism the CPU classifies with: the window list (`z486_classify_phys`),
 // the paging unit's non-paging VGA decode, and the separate DEVICE_MMIO window - which is a
 // mechanism of its own and NOT part of the window list, so a bench that called the classifier
-// function directly would not have caught the 32-64 MiB device window this session fixed. This
+// function directly would not have caught the 32-64 MiB device-window misclassification. This
 // bench reads the real `memory` unit's own signal, with the platform's own parameters, so it
 // sees whichever mechanisms are actually built.
 //
@@ -69,7 +69,7 @@ module tb_pc9821_memrange_correspondence;
       .ICACHE_SET_BITS(6),
       .ENABLE_X87(1'b0),
       // The shipped platform configuration (pc9821_system.sv), read from that file:
-      // the device-MMIO window is OFF there (memory-window-audit-REPORT.md), and the
+      // the device-MMIO window is OFF there, and the
       // aperture/alias/win0/no-alloc windows come from the preset.
       .ENABLE_DEVICE_MMIO(1'b0), .DEVICE_MMIO_MASK(32'hFE00_0000),
       `Z486_PC98_MAP_PARAMS,
@@ -92,7 +92,7 @@ module tb_pc9821_memrange_correspondence;
       .dcache_vipt_probe_valid(1'b0), .dcache_vipt_probe_offset(12'h0),
       .dcache_vipt_probe_ready(), .dcache_vipt_probe_accepted(),
       .dcache_vipt_probe_direct_accepted(),
-      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0),
+      .dcache_vipt_resolve_valid(1'b0), .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
       .dcache_vipt_resolve_hit(), .dcache_vipt_resolve_data(),
       .x87_req_selected(), .x87_req_accepted(1'b0), .x87_req_complete(1'b0),
       .x87_read_complete(1'b0), .x87_rdata(32'h0),
@@ -135,17 +135,20 @@ module tb_pc9821_memrange_correspondence;
   reg   [7:0] cpu_burstcount = 8'd0;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b1, cpu_write = 1'b0;
   wire [31:0] cpu_dout, mem_addr, mem_din;
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   wire  [3:0] mem_be;
   wire  [7:0] mem_burstcount;
   wire        mem_line_read, mem_valid, mem_write;
   reg  [31:0] mem_dout = 32'h0;
   reg [127:0] mem_line_dout = 128'h0;
   reg         mem_ready = 1'b0, mem_resp_valid = 1'b0, mem_line_resp_valid = 1'b0;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   wire        gvram_window;
   wire  [1:0] gvram_win_plane;
   wire [14:0] gvram_win_offset;
+  // The map's exported window-0 pair (P2): the post-bias address and its flag. Unused here.
+  wire [31:0] d_addr;
+  wire        win0_moved;
   wire        absent_area, ems_open_bus, fw_shadow_store;
   wire        pegc_packed, pegc_reg_win, pegc_nc;
   wire [31:0] pack_base = PACK_BASE;
@@ -248,7 +251,7 @@ module tb_pc9821_memrange_correspondence;
     end
 
     // ---- 16 MiB..96 MiB, every MiB (the extended RAM, and the 32-64 MiB window that was
-    //      classified as device memory before this session's fix) ----
+    //      once misclassified as device memory) ----
     for (b = 0; b < 80; b = b + 1) begin
       check(32'h0100_0000 + 32'(b * 32'h10_0000), "16-96MiB MiB start");
       check(32'h0100_0000 + 32'(b * 32'h10_0000 + 32'hF_FFFF), "16-96MiB MiB end");

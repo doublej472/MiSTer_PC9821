@@ -42,6 +42,7 @@
 `define Z486_BLOCK_RAM_NO_RW_CHECK (* ram_style = "block" *)
 `define Z486_DISTRIBUTED_RAM       (* ram_style = "distributed" *)
 `define Z486_KEEP                  (* keep = "true" *)
+`define Z486_KEEP_COMB             (* keep = "true" *)
 `define Z486_NO_PRUNE              (* dont_touch = "true" *)
 `define Z486_REPLICATE             (* max_fanout = 32 *)
 `define Z486_NO_RETIME
@@ -50,6 +51,8 @@
 `define Z486_BLOCK_RAM_NO_RW_CHECK (* ramstyle = "M10K, no_rw_check" *)
 `define Z486_DISTRIBUTED_RAM       (* ramstyle = "MLAB, no_rw_check" *)
 `define Z486_KEEP                  (* preserve *)
+// A combinational net synthesis keeps as a LUT boundary (a cofactored arm).
+`define Z486_KEEP_COMB             (* keep *)
 `define Z486_NO_PRUNE              (* noprune *)
 `define Z486_REPLICATE             (* syn_replicate = 1 *)
 // Module attribute: the fitter's physical-synthesis register retiming leaves
@@ -60,6 +63,7 @@
 `define Z486_BLOCK_RAM_NO_RW_CHECK
 `define Z486_DISTRIBUTED_RAM
 `define Z486_KEEP
+`define Z486_KEEP_COMB
 `define Z486_NO_PRUNE
 `define Z486_REPLICATE
 `define Z486_NO_RETIME

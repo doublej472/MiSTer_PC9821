@@ -1,4 +1,4 @@
-// tb_pc9821_ata — focused PC-98 ATA task-file, PIO read and PIO write checks.
+// tb_pc9821_ata - focused PC-98 ATA task-file, PIO read and PIO write checks.
 
 `timescale 1ns / 1ps
 
@@ -224,7 +224,7 @@ module tb_pc9821_ata;
     if (value !== 8'h41) fail("0x0430 connection report (measured 0x41)");
     // The task file is a window on the interface at the selected bank: it
     // answers at the hard disk's bank (0x00: bank 0's master, the core's fixed layout)
-    // and floats at a bank with nothing behind it (0x01 without the CD; the owner's
+    // and floats at a bank with nothing behind it (0x01 without the CD; the probed
     // machine shows an empty bank's whole block at 0x0E in probes/JOY.TXT and
     // probes/WIN.TXT). The bank
     // values, the float, and the command-after-bank-select case are asserted by
@@ -412,7 +412,7 @@ module tb_pc9821_ata;
     write_byte(16'h064E, 8'h08);          // DEVICE RESET
     // The machine, not NP2kai: its own DIAG section polls 0x064E for !BSY and then
     // reads 0x0642 -- "after 0x08 status = 51 ; after 0x08 ERROR(0642) = 04"
-    // (docs/probes/IDE.TXT:343, tools/hwprobe/ideprobe/ideprobe.s:746-760 (/* DEVICE RESET */)). The ATA
+    // (docs/probes/IDE.TXT:343, tools/hwprobe/ideprobe/ideprobe.s:826 (`/* DEVICE RESET */`)). The ATA
     // definition says the same thing: a DEVICE RESET is an ABORT, so STATUS takes ERR
     // and ERROR takes ABRT. The old 0x50/0x01 pair was another drive's AMNF presence
     // signature, so a guest classifying the reset by STATUS.ERR (the ATA contract)

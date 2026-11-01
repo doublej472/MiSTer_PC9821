@@ -51,7 +51,7 @@ module tb_pc9821_artic_layout;
 // ---- the bench's own account of where each expectation comes from ----
 // The port map is NP2kai's, verbatim: io/artic.c attaches 0x5D AND 0x5E to the same
 // cnt[15:8] handler (artic_i5d) and 0x5F to cnt[23:16] (artic_i5f), so `in ax,0x5E` is
-// cnt[23:8]. The real machine agrees: of the fourteen 0x5C..0x5F snapshots in the owner's
+// cnt[23:8]. The real machine agrees: of the fourteen 0x5C..0x5F snapshots in the Xe10
 // captures, six read 0x5E EQUAL to 0x5D and seven read 0x5D + 1 - an agreement two
 // independent adjacent bytes would show one time in 256, not six times in fourteen. The
 // old four-independent-byte layout was this tree reading that carry as evidence AGAINST a
@@ -171,7 +171,7 @@ module tb_pc9821_artic_layout;
     end
 
     // PRELOAD the counter so its three bytes DIFFER and check 3's window crosses a carry
-    // into cnt[23:16] (bench-audit 2026-10-12; after check 1, whose 0xFF test is for an
+    // into cnt[23:16] (after check 1, whose 0xFF test is for an
     // undecoded port and would read a live 0xFF byte as one). From reset the counter reaches only ~550
     // ticks in this bench, so cnt[23:16] - and the byte a wrong 0x5E or 0x5F decode would
     // return instead - is 0x00 everywhere it is read: a 0x5E wired to cnt[23:16], or a

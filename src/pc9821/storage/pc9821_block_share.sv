@@ -3,8 +3,8 @@
 //
 // WHY THIS MODULE EXISTS. pc9821_block_io is the engine that turns hps_io's block handshake
 // into one request / one completion for a drive, with a read-ahead window behind it
-// (pc9821_block_io.sv's own header). It used to be instantiated TWICE - once at the system
-// level for pc9821_ata and once inside pc9821_fdd_media - for two devices that reach the SAME
+// (pc9821_block_io.sv's own header). Two instances of it - one at the system level for
+// pc9821_ata and one inside pc9821_fdd_media - would serve two devices that reach the SAME
 // hps_io channel:
 //
 //   * hps_io presents one slot's request at a time. Its status word carries a single selected
@@ -12,7 +12,7 @@
 //     per status read, and the ARM answers with `sd_ack` for that one slot,
 //     sys/hps_io.sv:331 "sd_ack <= disk[VD:0]; sdn_ack <= io_din[11:8];".
 //   * the payload is ONE bus for both slots: `sd_buff_addr` / `sd_buff_wr` / `sd_buff_dout`
-//     (z486_mister.sv:702 (wire [12:0] sd_buff_addr;) and its neighbours, NOT a per-slot
+//     (z486_mister.sv:874 (wire [12:0] sd_buff_addr;) and its neighbours, NOT a per-slot
 //     array), so two engines could not both ingest a word stream even if both were
 //     acknowledged.
 //
@@ -55,8 +55,8 @@
 // one handshake per device. The loser of a hand-over waits for the winner's in-flight handshake
 // and is served next; a device that keeps streaming cannot starve the other, because ownership
 // is released as soon as the engine is idle (burst tail included) and the next grant goes to
-// the device that did NOT own last. That is latency, which the owner ruled malleable for
-// storage (docs/trade-candidates.md, "Owner precedents"), not a value: no status bit, no
+// the device that did NOT own last. That is latency, which is accepted as malleable for
+// storage (docs/trade-candidates.md), not a value: no status bit, no
 // completion order the guest can observe, and no byte changes.
 //
 // THE ENGINE'S IMAGE IS THE OWNER'S. pc9821_block_io latches ONE image (mounted / readonly /
@@ -91,7 +91,7 @@ module pc9821_block_share (
     input  wire        a_img_readonly,
     input  wire [63:0] a_img_size,
     output reg         a_mounted,
-    output reg         a_readonly,
+    output wire        a_readonly,
     output reg  [31:0] a_capacity,
 
     // The disk's request contract, which is pc9821_ata's own: one-cycle `req_read` /
@@ -101,6 +101,11 @@ module pc9821_block_share (
     input  wire        a_req_read,
     input  wire        a_req_write,
     input  wire [31:0] a_req_lba,
+    // Whether the disk's request belongs to the ENGINE'S read-ahead window image. It is 1 for
+    // every guest request; pc9821_hdd_image drives it 0 for its mount probe so reading the
+    // header sector at LBA 0 neither fills the window nor moves the sequential-read run (a
+    // raw image's first guest access then keeps the exact miss it had before HDI support).
+    input  wire        a_req_window,
     output wire        a_req_done,
     output wire        a_req_error,
     // The disk's block path is busy: its request is queued or the engine is serving it. The
@@ -175,7 +180,7 @@ module pc9821_block_share (
 
     // ---------------------------------------------------------------- the one host channel
     // Shared by both slots, exactly as hps_io presents it: one bus for the whole core, not a
-    // per-slot array -- z486_mister.sv:702 (wire [12:0] sd_buff_addr;) and the three wires
+    // per-slot array -- z486_mister.sv:874 (wire [12:0] sd_buff_addr;) and the three wires
     // beside it.
     input  wire        sd_buff_wr,
     input  wire [12:0] sd_buff_addr,
@@ -231,9 +236,14 @@ module pc9821_block_share (
   reg        c_readonly;
   reg [16:0] c_capacity;
 
+  // a_readonly's power-up 1 sits on an internal register: Quartus ignores a power-up value on
+  // an output port (docs/policies.md, the power-up rule).
+  /* verilator lint_off PROCASSINIT */  // the power-up value, kept by Quartus on an internal register
+  reg a_readonly_r = 1'b1;
+  /* verilator lint_on PROCASSINIT */
+  assign a_readonly = a_readonly_r;
   initial begin
     a_mounted  = 1'b0;
-    a_readonly = 1'b1;
     a_capacity = 32'd0;
     b_readonly = 1'b1;
     b_capacity = 17'd0;
@@ -249,7 +259,7 @@ module pc9821_block_share (
   always @(posedge clk) begin
     if (a_img_mounted) begin
       a_mounted  <= (a_img_size >= 64'd512);
-      a_readonly <= a_img_readonly;
+      a_readonly_r <= a_img_readonly;
       a_capacity <= (|a_img_size[63:41]) ? 32'hFFFFFFFF : a_img_size[40:9];
     end
     if (b_img_mounted) begin
@@ -384,8 +394,10 @@ module pc9821_block_share (
   // IS THIS REQUEST THE WINDOW'S? The window holds one image's blocks and it is the DISK's
   // (pc9821_block_io's header): the disk's requests may hit and fill it, a floppy request is
   // served the single block it asks for and touches neither the window nor its run. `eng_owner`
-  // is the owner the engine is actually loaded with, so this is 1 exactly when the disk is.
-  wire bio_req_window = !eng_owner;
+  // is the owner the engine is actually loaded with, so this is 1 exactly when the disk is -
+  // and the disk's own `a_req_window` can still withdraw a request that is not the window's
+  // (pc9821_hdd_image's mount probe).
+  wire bio_req_window = !eng_owner && a_req_window;
   // ... and the window is invalidated by a replacement of the image it holds - the disk's slot
   // - which is what `img_mounted` on slot A means, mount or eject. A floppy mount does not
   // invalidate it: the tag above is what keeps the two media apart there.
@@ -425,7 +437,9 @@ module pc9821_block_share (
   wire        bio_sd_wr;
   wire [15:0] bio_sd_buff_din;
 
-  pc9821_block_io engine (
+  // SERIAL_REQ: ARB_HELD waits for !bio_busy and a request is sent only from ARB_REQ, so the
+  // engine is idle at every request it gets (see the parameter's note in pc9821_block_io).
+  pc9821_block_io #(.SERIAL_REQ(1)) engine (
       .clk(clk), .rst_n(rst_n),
       .img_mounted(bio_img_mounted), .img_readonly(bio_img_readonly), .img_size(bio_img_size),
       /* verilator lint_off PINCONNECTEMPTY */   // the engine's metadata OUTPUTS are the

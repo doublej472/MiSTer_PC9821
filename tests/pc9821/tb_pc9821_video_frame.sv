@@ -26,7 +26,7 @@ module tb_pc9821_video_frame;
 
   // ==== DUT ====
   // The raster GDC, clocked exactly as pc9821_system clocks it: clk_vid = clk_sys gated
-  // by the pixel enable (pc9821_system.sv:1034, :1132-1134). It owns the raster and the
+  // by the pixel enable (pc9821_system.sv:1149, `The video domain is clk_sys gated by pixel_ce`). It owns the raster and the
   // line origin (gfx_line_addr); every signal below is declared because the (.*) instance
   // matches ports by name, the same shape tb_pc9821_gdc2_scroll.sv uses.
   wire clk_sys    = clk;
@@ -37,7 +37,6 @@ module tb_pc9821_video_frame;
   reg  io_wr = 0, io_rd = 0;
   reg  [7:0] io_addr = 0, io_din = 0;
   wire [7:0] io_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
   wire gfx_access_page;
   wire [15:0] gfx_line_addr;
   wire        gfx_walk_page;   // the packed walk's page bit; parked here so (.*) stays complete
@@ -48,8 +47,6 @@ module tb_pc9821_video_frame;
   reg  [17:0] font_ld_addr = 0;
   reg  [15:0] font_ld_data = 0;
   reg         font_ld_we = 0;
-  wire [15:0] cg_code_win;
-  wire        cg_lr_win;
   wire  [4:0] cg_win_byte_sel = 5'd0;
   wire        cg_win_rd = 1'b0;
   wire  [7:0] cg_win_dout;
@@ -64,7 +61,7 @@ module tb_pc9821_video_frame;
   wire        vsync_active;
   reg         vsync_irq_arm = 0;
   wire        vsync_irq;
-  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on (r13/321); parked for (.*)
+  wire        vsync_edge;   // the frame boundary the vblank IRQ rises on; parked for (.*)
   wire        disp_on;
   wire        gfx_disp;
   wire        gfx_egc_gate;
@@ -74,14 +71,14 @@ module tb_pc9821_video_frame;
   wire [15:0] dbg_sad;
   wire  [7:0] dbg_pitch;
   wire        dbg_col40, dbg_disp;
-  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter (r13/305)
+  wire [15:0] dbg_wk_skips;   // the walker's skipped-walk counter
   wire        text_opaque, text_cell;
   wire [11:0] text_colour;
   wire  [9:0] pix_dot;
   wire        pix_h_active, pix_v_active;
   wire        gfx_mode16;
   wire [31:0] gfx_dig;
-  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB, r13/225 #2).
+  // The analogue palette table's CPU write port (pc9821_gfx_palette's MLAB).
   wire        pal_wr_en;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
@@ -129,8 +126,8 @@ module tb_pc9821_video_frame;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg         grcg_we = 1'b0;
   reg  [7:0]  grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -146,9 +143,9 @@ module tb_pc9821_video_frame;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),
@@ -291,8 +288,8 @@ module tb_pc9821_video_frame;
     // 4. Let the pipeline fill and the ping-pong settle over two frames, then check a
     //    whole frame: the line displayed at raster line k must be picture line k.
     //    The boundary is the raster's own frame_end, NOT a frame_cnt change: frame_cnt is the
-    //    character blink's count and advances once per CSRFORM `timing` frames (audit
-    //    rtl-audit-video F1), so it is no longer a frame counter (it can hold for more than one
+    //    character blink's count and advances once per CSRFORM `timing` frames,
+    //    so it is no longer a frame counter (it can hold for more than one
     //    clk here, pixel_ce is not 1:1).
     while (u_gdc.u_crtc.frame_end) @(negedge clk);
     while (!u_gdc.u_crtc.frame_end) @(negedge clk);

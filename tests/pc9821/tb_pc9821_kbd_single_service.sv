@@ -1,16 +1,16 @@
-// tb_pc9821_kbd_single_service — one byte, ONE request: the re-poke must not double-serve.
+// tb_pc9821_kbd_single_service - one byte, ONE request: the re-poke must not double-serve.
 //
 // ==== WHAT THIS PROVES ====
-// One delivered byte produces exactly ONE interrupt request and the request dies with its 0x41 read: the re-poke's one-clk dip may not arm the edge-latched PIC in a normal service's dispatch-to-read window (the BIOS IRQ1 handler at BIOS.ROM 0x16640 reads 0x41 without checking RXRDY - r6/06-input.md - so any request that survives the read re-processes the stale byte as a second keypress) and a read landing on the dip's recovery cycle cancels that edge atomically - while a genuinely unread byte still re-fires (tb_pc9821_kbd_repoke pins that side).
+// One delivered byte produces exactly ONE interrupt request and the request dies with its 0x41 read: the re-poke's one-clk dip may not arm the edge-latched PIC in a normal service's dispatch-to-read window (the BIOS IRQ1 handler at BIOS.ROM 0x16640 reads 0x41 without checking RXRDY - so any request that survives the read re-processes the stale byte as a second keypress) and a read landing on the dip's recovery cycle cancels that edge atomically - while a genuinely unread byte still re-fires (tb_pc9821_kbd_repoke pins that side).
 //
-// The regression this pins (owner report: "some keys now double-type
+// The regression this pins (reported as "some keys now double-type
 // occasionally"): the re-poke dips the request line once per transfer tick while
 // the byte waits unread. The dip is a falling edge plus a RISING edge, and the
 // rising edge re-arms the PIC's edge latch. If it lands after the acknowledge of
 // the byte's own service and before the handler's 0x41 read, the latch is set
 // again; the read clears RXRDY (and the line) but cannot withdraw that latch, so
 // after EOI IRQ1 fires a second time and the handler - which reads 0x41
-// UNCONDITIONALLY (r6/06-input.md: `in al,0x43; test al,0x38` gates only the
+// UNCONDITIONALLY (the firmware's `in al,0x43; test al,0x38` gates only the
 // error flags, then `in al,0x41`) - re-reads the stale rx_latch and queues the
 // same MAKE again. Stale breaks are harmless (the handler queues makes only),
 // which is why only some keys double-type.

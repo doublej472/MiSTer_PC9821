@@ -80,6 +80,9 @@ module tb_pc9821_z486_sigma_equiv;
     .gate_detect(gate_detect), .any_fault(any_fault),
     .aluop(aluop), .shift_sigma_sel(shift_sigma_sel),
     .forwarded_esp(forwarded_esp),
+    // op_size and the registered decode z486 drives beside it (data_unit's
+    // fuse holds them equal); the sigma cone reads neither.
+    .op_size(2'd0), .op_size_is0(1'b1), .op_size_is1(1'b0),
     .sigma(sigma)
   );
 

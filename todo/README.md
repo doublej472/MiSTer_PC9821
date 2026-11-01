@@ -29,7 +29,6 @@ The repo-root [`TODO.md`](../TODO.md) is the short index.
 
 | # | Section | File |
 |---|---|---|
-| 1 | RTL changes ready to implement from machine captures | `todo/1-rtl-from-captures.md` |
 | 2 | Probe re-runs | `todo/2-probe-corrections.md` |
 | 3 | Capture-pending hardware questions | `todo/3-capture-pending.md` |
 | 4 | Re-verification items | `todo/4-reverification.md` |
@@ -37,7 +36,7 @@ The repo-root [`TODO.md`](../TODO.md) is the short index.
 | 6 | Audio: OPNA/SSG/ADPCM | `todo/6-audio.md` |
 | 6 | Video: display, GDC/CRTC raster | `todo/6-video.md` |
 | 6 | Storage: IDE/ATA, FDC, CD-ROM | `todo/6-storage.md` |
-| 6 | Tools and gates | `todo/6-tools-and-gates.md` |
+| 6 | Memory: the SDRAM controller and its bridges | `todo/6-memory.md` |
 
 ## Items
 
@@ -45,7 +44,7 @@ Item numbers are stable public IDs cited as `item NN` across the tree: never ren
 one. A closed item is DELETED and its number RETIRED (listed below); reword any `item NN`
 reference to it first (`tools/check_todo_split.py` fails on a reference to a retired number).
 
-Retired numbers: 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 14, 16, 19, 20, 25, 29, 30, 32, 33, 39, 40, 41, 44, 45, 46, 48, 49, 50, 51, 52, 54, 55, 57, 58, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 73, 74, 75, 76, 77, 79, 80, 81, 83, 84, 86, 88, 89, 90, 91, 92, 93, 95, 96, 100, 103, 104, 105, 107, 108, 109, 111, 113, 115, 116, 117, 119, 120, 122, 123, 124, 125
+Retired numbers: 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 14, 16, 19, 20, 25, 29, 30, 32, 33, 39, 40, 41, 44, 45, 46, 48, 49, 50, 51, 52, 54, 55, 56, 57, 58, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 79, 80, 81, 83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 95, 96, 100, 101, 102, 103, 104, 105, 107, 108, 109, 111, 113, 115, 116, 117, 118, 119, 120, 122, 123, 124, 125, 127, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 142, 144, 145, 147
 
 | # | Title | File |
 |---|---|---|
@@ -72,26 +71,29 @@ Retired numbers: 1, 2, 4, 5, 6, 7, 8, 9, 11, 12, 14, 16, 19, 20, 25, 29, 30, 32,
 | 43 | DMA bank ports `0x21/0x23/0x25/0x27`: low-nibble width. | `todo/4-reverification.md` |
 | 47 | ADPCM-A rhythm sounds on the core without a driver; the machine's is silent. | `todo/4-reverification.md` |
 | 53 | z486 reset-state divergences. | `todo/5-owner-decisions.md` |
-| 56 | HELP key held through boot. | `todo/5-owner-decisions.md` |
 | 59 | FDC: re-capture with both drives powered. | `todo/6-storage.md` |
 | 66 | In-game disk-load latency (Touhou 5 dialogue loads). | `todo/6-storage.md` |
-| 72 | `audio_clip` bench: re-source the "model twin" rows. | `todo/6-tools-and-gates.md` |
 | 78 | OPNA `0xA466` DAC-control handling. | `todo/6-audio.md` |
 | 82 | I/O access cost per port class: machine bus time or the shortest stall. | `todo/5-owner-decisions.md` |
 | 85 | GDC SYNC raster residuals. | `todo/6-video.md` |
-| 87 | OPNA junction boundary: the die's 18-bit wrap vs the core's sum + clamp16. | `todo/6-audio.md` |
 | 94 | Software-DIP store: the machine's post-POST state. | `todo/3-capture-pending.md` |
 | 97 | The `0x0461` window's page 0/1: alias or hole. | `todo/3-capture-pending.md` |
 | 98 | `0x043B` bit 2: the 15-16 MiB system space's polarity. | `todo/3-capture-pending.md` |
 | 99 | Machine settings the OSD cannot yet offer. | `todo/3-capture-pending.md` |
-| 101 | `src/opna` has no vendor-diff gate, unlike `src/z486`. | `todo/6-tools-and-gates.md` |
-| 102 | The block adapter's `win_flush` window re-mount has no fail-first test. | `todo/6-storage.md` |
 | 106 | CD-ROM: what works and what is unverified. | `todo/6-storage.md` |
 | 110 | The DIP store's write-side parity bits. | `todo/3-capture-pending.md` |
 | 112 | Memory-switch cell `0x79` at a second RAM size. | `todo/3-capture-pending.md` |
 | 114 | Masked-request withdraw on the acking access: IRQ15. | `todo/3-capture-pending.md` |
-| 118 | `0xF6` read-back with A20 masked: the Xe10 reads `5E`, the core `5F`. | `todo/1-rtl-from-captures.md` |
 | 121 | IDE bank placement under Linux's `pc98ide` driver. | `todo/3-capture-pending.md` |
+| 126 | Graphics GDC arc: radius and rounding. | `todo/3-capture-pending.md` |
+| 128 | Text row geometry: 20/30 lines, partitions, smooth scroll. | `todo/3-capture-pending.md` |
+| 140 | Licence of the original MiSTer port's surviving code. | `todo/5-owner-decisions.md` |
+| 141 | Self-modifying code inside the prefetch window: clock-ratio dependence. | `todo/4-reverification.md` |
+| 143 | Same-row write follow-on in the SDRAM controller. | `todo/6-memory.md` |
+| 146 | Review NOTICE's copyright line. | `todo/5-owner-decisions.md` |
+| 148 | DMA into an EMS page or the PEGC bank goes to the SDRAM hole. | `todo/6-memory.md` |
+| 149 | Graphics GDC WRITE pacing. | `todo/5-owner-decisions.md` |
+| 150 | Sync `sys/` with Template_MiSTer. | `todo/6-audio.md` |
 
 ## Adding to the list
 

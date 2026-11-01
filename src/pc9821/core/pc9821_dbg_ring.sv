@@ -1,7 +1,7 @@
 // A byte ring between a debug instrument's serialiser and the debug UART's handshake.
 //
-// Every debug instrument (pc9821_dbg_cpu, pc9821_gdc_log; AGENTS.md,
-// "Testing on a real MiSTer") builds its records into a ring because the UART
+// Every debug instrument (pc9821_dbg_cpu, pc9821_gdc_log; docs/mister-testing.md,
+// "The debug UART") builds its records into a ring because the UART
 // carries ~11,500 bytes/s and an instrument can produce a burst of many times that. The producer
 // pushes at most one byte per cycle; `room` tells it whether a whole record of up to MAX_REC bytes
 // still fits, and it STARTS a record only when it does - so a record is never cut in the middle
@@ -16,8 +16,8 @@
 // more than one depth, with the UART stalled, and checks every byte comes out in order.
 //
 // The memory is written in one always block and read in another, and the read register `q` has
-// no reset and no initial value: either of those refuses block-RAM inference (AGENTS.md, the
-// "silent synthesis traps").
+// no reset and no initial value: either of those refuses block-RAM inference (docs/fitting.md, the
+// "silent inference traps").
 `default_nettype none
 /* verilator lint_off PROCASSINIT */
 module pc9821_dbg_ring #(

@@ -1,6 +1,6 @@
 @ECHO OFF
 REM ============================================================
-REM  PC-9821 real-machine IDE/ATA probe  (r13/243)
+REM  PC-9821 real-machine IDE/ATA probe
 REM  Copy IDEPROBE.COM + this file to a DOS disk. Run:  RUNIDE
 REM  Send back IDE.TXT (or the raw capture if a section hung).
 REM

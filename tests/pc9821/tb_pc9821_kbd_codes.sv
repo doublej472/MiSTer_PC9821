@@ -4,9 +4,9 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// Every Set-2 key the controller maps reaches the guest as the right make and break byte, the modifier keys (SHIFT/CTRL/GRPH/KANA/NFER/XFER) pass through in the order pressed, a re-sent make of an already-held key emits no second byte, and the 0x9D LED query and 0x43 status report what NP2kai reports. The Round-3 remaps (LAlt->NFER, RAlt->XFER, RCtrl->GRPH) and the newly decoded RO/Yen/PrintScreen/Win/Menu keys are asserted and the 0x96 ID byte is 0x83; both Shift keys reach NEC 0x70; KANA (NEC 0x72) is bound to the Menu/Application key and its toggle is driven alongside CAPS; the per-key count (99 agree, 2 wrong value, 3 controller-only, 2 unmapped, 1 mapped by neither) is pinned.
+// Every Set-2 key the controller maps reaches the guest as the right make and break byte, the modifier keys (SHIFT/CTRL/GRPH/KANA/NFER/XFER) pass through in the order pressed, a re-sent make of an already-held key emits no second byte, and the 0x9D LED query and 0x43 status report what NP2kai reports. The Round-3 remaps (LAlt->NFER, RAlt->XFER, RCtrl->GRPH) and the newly decoded RO/Yen/PrintScreen/Win/Menu keys are asserted and the 0x96 ID byte is 0x83; both Shift keys reach NEC 0x70; KANA (NEC 0x72) is bound to the Menu/Application key and its toggle is driven alongside CAPS; read in the JIS layout (NP2kai sdlcnv106 is a JIS 106-key map), the JIS ] key (set-2 0x5D) reaches the PC-98 ] key 0x28, and the per-key count (99 agree, 1 wrong value, 9 controller-only, 2 unmapped, 2 mapped by neither) is pinned.
 //
-// Every Set-2 key the controller maps reaches the guest as the right make and break byte, the modifier keys (SHIFT/CTRL/GRPH/KANA/NFER/XFER) pass through in the order pressed, a re-sent make of an already-held key emits no second byte (the locking keys included: one toggle per PHYSICAL press, M2), and the 0x9D LED query and 0x43 status report what NP2kai reports. The Round-3 remaps (LAlt->NFER, RAlt->XFER, RCtrl->GRPH) and the newly decoded RO/Yen/PrintScreen/Win/Menu keys are asserted and the 0x96 ID byte is 0x83; both Shift keys reach NEC 0x70; KANA (NEC 0x72) is bound to the Menu/Application key and its toggle is driven alongside CAPS; the per-key count (99 agree, 2 wrong value, 3 controller-only, 2 unmapped, 1 mapped by neither) is pinned.
+// Every Set-2 key the controller maps reaches the guest as the right make and break byte, the modifier keys (SHIFT/CTRL/GRPH/KANA/NFER/XFER) pass through in the order pressed, a re-sent make of an already-held key emits no second byte (the locking keys included: one toggle per PHYSICAL press, M2), and the 0x9D LED query and 0x43 status report what NP2kai reports. The Round-3 remaps (LAlt->NFER, RAlt->XFER, RCtrl->GRPH) and the newly decoded RO/Yen/PrintScreen/Win/Menu keys are asserted and the 0x96 ID byte is 0x83; both Shift keys reach NEC 0x70; KANA (NEC 0x72) is bound to the Menu/Application key and its toggle is driven alongside CAPS; read in the JIS layout (NP2kai sdlcnv106 is a JIS 106-key map), the JIS ] key (set-2 0x5D) reaches the PC-98 ] key 0x28, and the per-key count (99 agree, 1 wrong value, 9 controller-only, 2 unmapped, 2 mapped by neither) is pinned.
 //
 // ---- where the expected bytes come from ----
 // [source 1: NP2kai, the primary reference] NP2kai/sdl/kbtrans.c sdlcnv106 is
@@ -21,9 +21,9 @@
 // usage position, which is how each expected byte below was derived.
 //
 // [source 3: the BIOS dump] bios/xe10/BANK7.BIN @0x632B is the ITF's key to
-// ASCII table; [0x0D] = 0x5C '\' and [0x28] = 0x5D ']', which is why the yen
-// key (0x0D) is the path separator the module deliberately routes the US
-// backslash position to.
+// ASCII table; [0x0D] = 0x5C '\' and [0x28] = 0x5D ']': the JIS ] key gives 0x28 here,
+// and the US layout routes the US backslash key to the yen key 0x0D, the path separator
+// (tb_pc9821_kbd_layout).
 
 `default_nettype none
 
@@ -40,7 +40,9 @@ module tb_pc9821_kbd_codes;
   reg        bios_setup = 0;
 
   // ==== DUT ====
-  pc9821_kbd dut (
+  // Shrink the byte-presentation tick so back-to-back keys stay inside read_byte's
+  // budget (the real tick is SYS_CLOCK_HZ / 1280; tb_pc9821_kbd_pace pins the rate).
+  pc9821_kbd #(.XFER_TICK_CYCLES(26'd8)) dut (
       .clk(clk),
       .rst_n(rst_n),
       .cs(cs),
@@ -51,7 +53,10 @@ module tb_pc9821_kbd_codes;
       .dout(dout),
       .irq(irq),
       .ps2_key(ps2_key),
-      .bios_setup(bios_setup)
+      .bios_setup(bios_setup),
+      // The JIS layout: NP2kai sdlcnv106, this bench's reference, is a JIS 106-key map.
+      // tb_pc9821_kbd_layout covers the US layout's four keys against NP2 winkbd.cpp.
+      .layout_jis(1'b1)
   );
 
   integer errors = 0;
@@ -147,9 +152,9 @@ module tb_pc9821_kbd_codes;
   // maps no PC-98 key there). The 0x71/0x72 rows are the two locking keys
   // (CAPS, KANA) and are exercised by their own toggle check below: 0x71 is Caps Lock
   // (Set-2 0x58) and 0x72 is KANA, bound to the Menu/Application key (E0 0x2F) by W1
-  // (r13/320) as a deliberate override of NP2kai's APP 0x79 (the row's case_np2 stays
+  // as a deliberate override of NP2kai's APP 0x79 (the row's case_np2 stays
   // 0x79, so it counts as one wrong-value divergence).
-  localparam integer KBD_CASES = 105;
+  localparam integer KBD_CASES = 111;
   reg [7:0] case_set2 [0:KBD_CASES-1];
   reg       case_ext  [0:KBD_CASES-1];
   reg [7:0] case_nec  [0:KBD_CASES-1];
@@ -160,7 +165,7 @@ module tb_pc9821_kbd_codes;
     case_set2[ 2] = 8'h04; case_ext[ 2] = 1'b0; case_nec[ 2] = 8'h64; case_np2[ 2] = 8'h64;
     case_set2[ 3] = 8'h05; case_ext[ 3] = 1'b0; case_nec[ 3] = 8'h62; case_np2[ 3] = 8'h62;
     case_set2[ 4] = 8'h06; case_ext[ 4] = 1'b0; case_nec[ 4] = 8'h63; case_np2[ 4] = 8'h63;
-    case_set2[ 5] = 8'h07; case_ext[ 5] = 1'b0; case_nec[ 5] = 8'h61; case_np2[ 5] = 8'hff;
+    case_set2[ 5] = 8'h07; case_ext[ 5] = 1'b0; case_nec[ 5] = 8'h53; case_np2[ 5] = 8'hff;
     case_set2[ 6] = 8'h09; case_ext[ 6] = 1'b0; case_nec[ 6] = 8'h6b; case_np2[ 6] = 8'h6b;
     case_set2[ 7] = 8'h0a; case_ext[ 7] = 1'b0; case_nec[ 7] = 8'h69; case_np2[ 7] = 8'h69;
     case_set2[ 8] = 8'h0b; case_ext[ 8] = 1'b0; case_nec[ 8] = 8'h67; case_np2[ 8] = 8'h67;
@@ -221,7 +226,7 @@ module tb_pc9821_kbd_codes;
     // so 0x70 is the byte NP2kai actually puts on the wire and the only one the guest reads.
     case_set2[61] = 8'h5a; case_ext[61] = 1'b0; case_nec[61] = 8'h1c; case_np2[61] = 8'h1c;
     case_set2[62] = 8'h5b; case_ext[62] = 1'b0; case_nec[62] = 8'h1b; case_np2[62] = 8'h1b;
-    case_set2[63] = 8'h5d; case_ext[63] = 1'b0; case_nec[63] = 8'h0d; case_np2[63] = 8'h28;
+    case_set2[63] = 8'h5d; case_ext[63] = 1'b0; case_nec[63] = 8'h28; case_np2[63] = 8'h28;
     case_set2[64] = 8'h61; case_ext[64] = 1'b0; case_nec[64] = 8'h33; case_np2[64] = 8'hff;
     case_set2[65] = 8'h66; case_ext[65] = 1'b0; case_nec[65] = 8'h0e; case_np2[65] = 8'h0e;
     case_set2[66] = 8'h69; case_ext[66] = 1'b0; case_nec[66] = 8'h4a; case_np2[66] = 8'h4a;
@@ -234,10 +239,10 @@ module tb_pc9821_kbd_codes;
     case_set2[73] = 8'h74; case_ext[73] = 1'b0; case_nec[73] = 8'h48; case_np2[73] = 8'h48;
     case_set2[74] = 8'h75; case_ext[74] = 1'b0; case_nec[74] = 8'h43; case_np2[74] = 8'h43;
     case_set2[75] = 8'h76; case_ext[75] = 1'b0; case_nec[75] = 8'h00; case_np2[75] = 8'h00;
-    // F11: mapped by NEITHER side any more. It used to answer 0x60 (STOP) - the
-    // phantom-STOP source tb_pc9821_kbd_stop fails-first on - where NP2kai maps
-    // it to nothing (case_np2 0xff); the controller now agrees and stays silent.
-    case_set2[76] = 8'h78; case_ext[76] = 1'b0; case_nec[76] = 8'hff; case_np2[76] = 8'hff;
+    // F11: VF1 (NP2kai keystat.tbl 0x52; wx/kbtrans.cpp labels WXK_F11 "VF1"), a key
+    // NP2kai's SDL table leaves unmapped (case_np2 0xff). It used to answer 0x60 (STOP) -
+    // the phantom-STOP source tb_pc9821_kbd_stop fails-first on - and must never again.
+    case_set2[76] = 8'h78; case_ext[76] = 1'b0; case_nec[76] = 8'h52; case_np2[76] = 8'hff;
     case_set2[77] = 8'h79; case_ext[77] = 1'b0; case_nec[77] = 8'h49; case_np2[77] = 8'h49;
     case_set2[78] = 8'h7a; case_ext[78] = 1'b0; case_nec[78] = 8'h4c; case_np2[78] = 8'h4c;
     case_set2[79] = 8'h7b; case_ext[79] = 1'b0; case_nec[79] = 8'h40; case_np2[79] = 8'h40;
@@ -261,13 +266,28 @@ module tb_pc9821_kbd_codes;
     case_set2[97] = 8'h7c; case_ext[97] = 1'b1; case_nec[97] = 8'h61; case_np2[97] = 8'hff;
     case_set2[98] = 8'h7d; case_ext[98] = 1'b1; case_nec[98] = 8'h36; case_np2[98] = 8'h36;
     // The keys NP2kai's 106-key table reaches and the controller now decodes too
-    // (RO, Yen, PrintScreen, Win, Win, Menu).
+    // (RO, Yen, Win, Win, Menu).
     case_set2[ 99] = 8'h51; case_ext[ 99] = 1'b0; case_nec[ 99] = 8'h33; case_np2[ 99] = 8'h33;
     case_set2[100] = 8'h6a; case_ext[100] = 1'b0; case_nec[100] = 8'h0d; case_np2[100] = 8'h0d;
-    case_set2[101] = 8'h7f; case_ext[101] = 1'b0; case_nec[101] = 8'h61; case_np2[101] = 8'h61;
+    // Set-2 0x7F is no key: Main_MiSTer's ev2ps2[] sends it for nothing (PrintScreen reaches
+    // the core as hps_io's normalized E0 0x7C, row 97). Mapped by neither.
+    case_set2[101] = 8'h7f; case_ext[101] = 1'b0; case_nec[101] = 8'hff; case_np2[101] = 8'hff;
     case_set2[102] = 8'h1f; case_ext[102] = 1'b1; case_nec[102] = 8'h77; case_np2[102] = 8'h77;
     case_set2[103] = 8'h27; case_ext[103] = 1'b1; case_nec[103] = 8'h78; case_np2[103] = 8'h78;
     case_set2[104] = 8'h2f; case_ext[104] = 1'b1; case_nec[104] = 8'h72; case_np2[104] = 8'h79;
+    // The JIS half/full-width key (Main KEY_GRAVE/KEY_ZENKAKU -> 0x0e): NP2kai sdlcnv106 has
+    // no GRAVE row and neither does the JIS layout (the US layout gives @ there).
+    case_set2[105] = 8'h0e; case_ext[105] = 1'b0; case_nec[105] = 8'hff; case_np2[105] = 8'hff;
+    // The JIS conversion keys (Main KEY_KATAKANA/HENKAN/MUHENKAN -> 0x13/0x64/0x67). NP2kai's
+    // SDL table has no row for them (case_np2 0xff, controller-only); its X11 table maps them
+    // to KANA/XFER/NFER (x/gtk2/gtk_keyboard.c xkeyconv_misc HIRA/HENK/MUHE), as here.
+    case_set2[106] = 8'h13; case_ext[106] = 1'b0; case_nec[106] = 8'h72; case_np2[106] = 8'hff;
+    case_set2[107] = 8'h64; case_ext[107] = 1'b0; case_nec[107] = 8'h35; case_np2[107] = 8'hff;
+    case_set2[108] = 8'h67; case_ext[108] = 1'b0; case_nec[108] = 8'h51; case_np2[108] = 8'hff;
+    // NumLock/ScrollLock -> keypad = / keypad , (keystat.tbl 0x4d/0x4f), the spare host keys
+    // the core gives the two PC-98 keypad keys a PC keypad lacks; NP2kai maps neither.
+    case_set2[109] = 8'h77; case_ext[109] = 1'b0; case_nec[109] = 8'h4d; case_np2[109] = 8'hff;
+    case_set2[110] = 8'h7e; case_ext[110] = 1'b0; case_nec[110] = 8'h4f; case_np2[110] = 8'hff;
   end
 
   // NP2kai maps these two Set-2 keys; the controller maps neither (they are the
@@ -304,7 +324,7 @@ module tb_pc9821_kbd_codes;
     ref_none  = 0;
     for (i = 0; i < KBD_CASES; i = i + 1) begin
       if (case_nec[i] == 8'hff) begin
-        // neither side maps this key (F11): it must produce NOTHING at all
+        // neither side maps this key (0x7F, JIS 0x0E): it must produce NOTHING at all
         send_key(1'b1, case_ext[i], case_set2[i]);
         expect_silent("a key neither side maps");
         send_key(1'b0, case_ext[i], case_set2[i]);
@@ -355,23 +375,23 @@ module tb_pc9821_kbd_codes;
       $display("FAIL: expected 99 NP2kai agreements, got %0d", ref_match);
       errors = errors + 1;
     end
-    if (ref_div !== 2) begin
-      $display("FAIL: expected 2 NP2kai value divergences, got %0d", ref_div);
+    if (ref_div !== 1) begin
+      $display("FAIL: expected 1 NP2kai value divergence (Menu -> KANA), got %0d", ref_div);
       errors = errors + 1;
     end
-    if (ref_extra !== 3) begin
-      $display("FAIL: expected 3 controller-only keys, got %0d", ref_extra);
+    if (ref_extra !== 9) begin
+      $display("FAIL: expected 9 controller-only keys, got %0d", ref_extra);
       errors = errors + 1;
     end
-    if (ref_none !== 1) begin
-      $display("FAIL: expected 1 key mapped by neither side (F11), got %0d", ref_none);
+    if (ref_none !== 2) begin
+      $display("FAIL: expected 2 keys mapped by neither side (0x7F, JIS 0x0E), got %0d", ref_none);
       errors = errors + 1;
     end
     if (ref_missing !== MISSING) begin
       $display("FAIL: expected %0d unmapped NP2kai keys, got %0d", MISSING, ref_missing);
       errors = errors + 1;
     end
-    $display("KBD_REF: 99 agree, 2 wrong value, %0d controller-only, %0d unmapped by controller, %0d mapped by neither",
+    $display("KBD_REF: 99 agree, 1 wrong value, %0d controller-only, %0d unmapped by controller, %0d mapped by neither",
              ref_extra, ref_missing, ref_none);
 
     // ---- 3. Modifier combinations reach the guest in the order pressed. ----
@@ -454,14 +474,13 @@ module tb_pc9821_kbd_codes;
     write_port(1'b0, 8'h99);  read_byte(8'hfa); read_byte(8'hfb);
     $display("KBD_REF: 0x99 -> FA FB, NP2kai treats 0x99 as unknown -> 0xFC");
     cmd_div = cmd_div + 1;
-    // A 0x9D parameter that is neither 0x60 nor 0x7x is silent in NP2kai but
-    // rejected with 0xFC here.
+    // A 0x9D parameter that is neither 0x60 nor 0x7x is silent in NP2kai and
+    // QEMU, and now silent here too (the old 0xFC was a divergence).
     write_port(1'b0, 8'h9d);  read_byte(8'hfa);
-    write_port(1'b0, 8'h50);  read_byte(8'hfc);
-    $display("KBD_REF: 0x9D param 0x50 -> 0xFC, NP2kai answers nothing");
-    cmd_div = cmd_div + 1;
-    if (cmd_div !== 2) begin
-      $display("FAIL: expected 2 NP2kai command divergences, got %0d", cmd_div);
+    write_port(1'b0, 8'h50);
+    expect_silent("0x9D param 0x50 (NP2kai/QEMU answer nothing)");
+    if (cmd_div !== 1) begin
+      $display("FAIL: expected 1 NP2kai command divergence, got %0d", cmd_div);
       errors = errors + 1;
     end
     // 0x9F identity probe: both references answer FA A0 80.

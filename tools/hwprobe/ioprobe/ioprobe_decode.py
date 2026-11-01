@@ -29,11 +29,11 @@ carries today, so the diff is one line per port.
 
 THE 0x5F ANCHOR'S xBASE CURRENCY: the ratio "quote only xBASE" refers to is the clk_sys
 column (the class's excess over its own paired control as a ratio to the WAIT5F
-anchor).  REFEREE (review P1-3): absolute ns prefer the ARTIC column whenever
+anchor).  REFEREE: absolute ns prefer the ARTIC column whenever
 its delta is >= 1 tick (PIT only for sub-tick windows); the 8:1 check is a
 health label at the 0.5-5% band with the -8192-count reload signature
 explicitly rejected.  LEGACY x2: halved-era captures must have their quoted ns
-doubled before axis comparisons (r13/215) - the x2 scaling
+doubled before axis comparisons - the x2 scaling
 this decoder applies to legacy PIT columns is exactly that rule.
 
 Nothing here talks to hardware; it is a pure text parser.
@@ -53,11 +53,11 @@ from pathlib import Path
 WAIT_NS = 600
 WAIT_CLK = 30
 
-# Device-clock rates (machine-confirmed, r13/215 section 1.4): raw PIT counts
+# Device-clock rates (machine-confirmed): raw PIT counts
 # move at 2 457 600/s (1 = 406.901 ns) and the ARTIC counter ticks at
 # 307 200/s (1 = 3255.208 ns), 8 raw counts per tick.  These give ABSOLUTE ns
 # with no run-local scale - the thing the /TIME ladder never had.
-# Review P2f: PIT_HZ follows the strap the measured divisor discriminates -
+# PIT_HZ follows the strap the measured divisor discriminates -
 # a divisor near 0x4E00 means the BIOS work-area 0501 bit-7 strap selects the
 # 1.9968 MHz oscillator and decode() switches the rate (a 19% move).
 PIT_HZ = 2_457_600
@@ -68,7 +68,7 @@ ARTIC_NS = 1e9 / ARTIC_HZ
 def pit_ns(counts: int) -> float:
     return counts * 1e9 / PIT_HZ
 
-# The two candidate axes for the anchor question (r13/245 section 6): one
+# The two candidate axes for the anchor question: one
 # 005F access is either the documented 600 ns (30 clk at 50 MHz) or the class
 # table's 81 clk (1620 ns).  The absolute WAIT5F excess decides.
 TM_N = 1024
@@ -80,7 +80,7 @@ AXIS_81_NS = 1620.0
 # the source.
 #
 # This column used to be a hand-copied table (0x5F 81, text GDC 23, graphics GDC
-# 34, EGC 20, IDE PIO 42, default 42) - the PRE-r13/276 class table.  r13/276
+# 34, EGC 20, IDE PIO 42, default 42) - an earlier class table.  The current one
 # dropped every class but 0x5F and the 8253 to the FSM floor (IO_MIN_HOLD = 4
 # clk_sys), so that table printed a same-looking number for classes the core
 # prices at the floor: exactly the misreading item 82's decision must not be
@@ -96,8 +96,8 @@ TOP_SV = Path(__file__).resolve().parents[3] / "z486_mister.sv"
 # `above_floor` is every census (port, mode) that is NOT the FSM floor - the 0x5F
 # WRITE takes the machine's item-41 1621 ns (the BIOS POST's timer-interrupt test
 # polls with `out 0x5f`, so this is a correctness floor, not a timing choice),
-# while its READ keeps the 600 ns anchor, and the 8253 floor is write-only
-# (audit-iobus F7).  Profiles 1/2 are the faithful class table:
+# while its READ keeps the 600 ns anchor, and the 8253 floor is write-only.
+# Profiles 1/2 are the faithful class table:
 # the same IO_NS_* localparams at 50 MHz, and every census entry is priced by
 # faithful_class() below - a hand-written mirror of the faithful branch, so an
 # arm that moved away from it is a drift, not a re-derivation.
@@ -651,17 +651,17 @@ def excess(x: int, y: int) -> int:
 
 
 def pick_ns(pit_counts: int, art_ticks: int) -> tuple[float, str]:
-    """Absolute ns for one window, refereed per review P1-3.
+    """Absolute ns for one window, refereed (ARTIC whenever its delta is >= 1 tick).
 
     Prefer ARTIC whenever its delta is >= 1 tick: at these scales the 24-bit
     counter cannot wrap or tear, while the PIT's 16-bit raw delta wraps
     silently (a 3-reload window reads ~8192 counts low - INSIDE the old 25%
-    band) and the torn latch word mis-assembles (r13/215 section 1.1).  PIT
+    band) and the torn latch word mis-assembles.  PIT
     survives only for sub-tick windows (art_ticks == 0).  The 8:1 cross-check
     is a health label at the machine-measured 0.5-5% band: ok / WRAP (the
     -8192-count signature, explicitly rejected) / neq / sub.
 
-    Small-window rule (review round 2, P2-4): the absolute floors (16 counts,
+    Small-window rule: the absolute floors (16 counts,
     32 for the WRAP check) exist for latch-read quantization, but they are
     CLAMPED to ref so the effective band never exceeds +/-100% on windows
     below ~320 counts (art=1 tick, ref=8: 'ok' now spans pit 0..16, not
@@ -708,7 +708,7 @@ def print_table(rows: list[dict], scale: int) -> None:
         print(
             "    INDETERMINATE - the 0x5F anchor stays open: within ~20% of neither axis. Do NOT"
             "\n    print a nearest-axis verdict from it.  LEGACY x2 RULE: halved-era captures"
-            "\n    (/TIME and the T2/T2R prints, r13/215) must be doubled"
+            "\n    (/TIME and the T2/T2R prints) must be doubled"
             "\n    before this comparison - T2R's raw 819 ns reads 1638 ns corrected, at the"
             "\n    81-clk axis where TR.TXT (1.63 us) and EGCPORT (1.73 us) already point."
         )
@@ -719,7 +719,7 @@ def print_table(rows: list[dict], scale: int) -> None:
         )
         print(
             f"    Verdict: closer to {verdict} (within 20%)."
-            "\n    This decides the 0x5F anchor question (r13/245 section 6). Note the"
+            "\n    This decides the 0x5F anchor question. Note the"
             "\n    documented 600 ns may be the inserted WAIT only, not the total access cost:"
             "\n    if the measurement lands ~1.6-1.7 us both readings survive and the total is"
             "\n    what io_access_cycles prices.  (Legacy halved-era prints: x2 first.)"
@@ -774,9 +774,9 @@ def print_table(rows: list[dict], scale: int) -> None:
         "  THE 0x5F ANCHOR'S xBASE CURRENCY: the ratio to quote from this table is the clk_sys column\n"
         "  (the class's excess over its own paired control as a ratio to the WAIT5F anchor; the\n"
         "  run's own scale cancels) - \"quote only xBASE\" means this column, not the ns ones.\n"
-        "  xRTL 10x on a floor row is EXPECTED, not a decoder bug: r13/276 dropped every\n"
+        "  xRTL 10x on a floor row is EXPECTED, not a decoder bug: the FSM-floor change dropped every\n"
         "  class but 0x5F and the 8253 to IO_MIN_HOLD deliberately, and that gap is item 82's\n"
-        "  stall-budget decision (OWNER).  What the column is for is making sure the RTL\n"
+        "  stall-budget decision.  What the column is for is making sure the RTL\n"
         "  figure you read is the one the FSM actually carries."
     )
 
@@ -835,7 +835,7 @@ def print_class_summary(rows: list[dict]) -> None:
         f"  documented WAIT alone, so the two are not the same quantity; see docs/probes/IO.TXT).\n"
         "  RTL/RTL_ns is what io_access_cycles() prices that arm today at the profile\n"
         "  clock.  xRTL > 1 is the machine costing more than the core bills it - that gap\n"
-        "  IS item 82's stall-budget decision (OWNER), and r13/276 chose the floor\n"
+        "  IS item 82's stall-budget decision, and the FSM-floor change chose the floor\n"
         "  deliberately, so a large xRTL on an FSM-floor arm is expected rather than a\n"
         "  defect.  Ports whose median is an outlier within their own arm are candidates\n"
         "  for their own arm."
@@ -876,12 +876,12 @@ def decode(text: str) -> list[str]:
     matches EXPECTED_RTL); main() exits non-zero on a non-empty one, because the
     RTL column IS a contract and a wrong price must not read as a note."""
     global PIT_HZ
-    PIT_HZ = 2_457_600  # reset per capture (review round 2, P2-2): one 0x4E00-era
+    PIT_HZ = 2_457_600  # reset per capture: one 0x4E00-era
     # file in a multi-file invocation must not skew every later capture 23%.
     found, opens, closes = sections(text)
 
-    # The halved-era probes printed raw counts / 2 (r13/215:
-    # the mode-3 halving is 2x wrong on this machine).  The current probe prints
+    # The halved-era probes printed raw counts / 2 (the mode-3 halving is 2x wrong on
+    # this machine).  The current probe prints
     # raw counts (its banner says so); a legacy capture is scaled x2 here so the
     # absolute columns mean the same thing either way.
     scale = 1 if "RAW counts" in text else 2
@@ -923,7 +923,7 @@ def decode(text: str) -> list[str]:
     if divisor is not None:
         note = "" if 0x4000 <= divisor <= 0x7000 else " (outside the documented 0x6000/0x4E00; the ratio method does not need it)"
         print(f"  PIT channel-0 measured divisor = 0x{divisor:04X}{note}")
-        # Review P2f: the divisor discriminates the strap - 0x4E00 means the
+        # The divisor discriminates the strap - 0x4E00 means the
         # BIOS work-area 0501 bit-7 strap selects the 1.9968 MHz oscillator.
         if 0x4800 <= divisor <= 0x5400:
             PIT_HZ = 1_996_800

@@ -59,7 +59,8 @@ TRACKED_PLL_QIP2 = Path("rtl/pll/pll_0002.qip")
 
 # Bump when the generation or its post-processing changes, so stale cache entries are not
 # reused (the key covers the template and the image, not this file's code).
-GENERATOR_VERSION = "2"   # 2: two outputs (clk_sys, the SDRAM pin clock), clock-unify
+GENERATOR_VERSION = "3"   # 2: two outputs (clk_sys, the SDRAM pin clock), clock-unify
+                          # 3: the dynamic-phase-shift ports on every wrapper (sdram_phase_dyn)
 
 # The three files the build needs, relative to the PLL directory (rtl/).
 PLL_FILES = (Path("pll.v"), Path("pll.qip"), Path("pll/pll_0002.v"))
@@ -242,6 +243,12 @@ def derive_sdram_phase(clk_hz: int) -> dict:
 class PllRequest:
     clk_sys_hz: int        # outputs 0 (clk_sys, the SDRAM controller's clock too) and 1
     phase_ps: int          # output 1's phase: the SDRAM_CLK pin clock
+    # The wizard's dynamic-phase-shift ports (gui_en_dps_ports), for the run-time SDRAM_CLK phase
+    # instrument (build_profile.py sdram_phase_dyn, a test-only build). Off: the wizard's ordinary
+    # PLL, whose wrapper postprocess() gives the same five port names tied off, so z486_mister.sv
+    # instantiates `pll` one way in every build and the instance path (emu|pll|pll_inst) the SDC
+    # names never moves.
+    dps: bool = False
 
     def as_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -260,6 +267,7 @@ def render_pll_v(req: PllRequest, template_text: str | None = None) -> str:
         "@OUT0_MHZ@": mhz_text(req.clk_sys_hz),
         "@OUT1_MHZ@": mhz_text(req.clk_sys_hz),
         "@PHASE1_PS@": str(req.phase_ps),
+        "@EN_DPS@": "true" if req.dps else "false",
     }
     for key, value in subs.items():
         if text.count(key) != 1:
@@ -309,7 +317,40 @@ def cache_key(req: PllRequest, digest: str) -> str:
     return h.hexdigest()[:24]
 
 
-def postprocess(work: Path, device: str) -> None:
+# The wizard's dynamic-phase-shift port declarations on the `pll` wrapper (qmegawiz with
+# gui_en_dps_ports = true writes exactly these, in this order, after `locked`).
+DPS_PORTS = ("phase_en", "scanclk", "updn", "cntsel", "phase_done")
+DPS_WRAPPER_PORTS = (
+    "\t\tinput  wire       phase_en,   //   (tools/profile_gen.py: tied off, no DPS)\n"
+    "\t\tinput  wire       scanclk,\n"
+    "\t\tinput  wire       updn,\n"
+    "\t\tinput  wire [4:0] cntsel,\n"
+    "\t\toutput wire       phase_done\n")
+# The assignment the wizard's DPS generation puts in pll_0002.qip in place of the ordinary
+# generation's PLL_AUTO_RESET OFF / PLL_BANDWIDTH_PRESET AUTO pair (both of which are the Quartus
+# defaults for this PLL). The tracked qip is used for both, so a DPS build is fitted with the same
+# PLL settings as the base one; UNFORCE_MERGE only frees the fitter to keep counters unmerged, and
+# outputs 0 and 1 differ in phase, so they cannot be merged anyway.
+DPS_QIP_LINE = ('set_instance_assignment -name UNFORCE_MERGE_PLL_OUTPUT_COUNTER ON -to '
+                '"*pll_0002*|altera_pll:altera_pll_i*|*"')
+
+
+def add_tied_dps_ports(text: str) -> str:
+    """The ordinary wrapper with the DPS port names declared and tied off (phase_done = 0)."""
+    if any(re.search(rf"\b{p}\b", text.split("endmodule")[0]) for p in DPS_PORTS):
+        raise GenerationError("the non-DPS pll.v already names a DPS port")
+    text, n = re.subn(r"(\t\toutput wire\s+locked)(\s+)(//[^\n]*)\n(\t\);)",
+                      lambda m: f"{m.group(1)},{m.group(2)}{m.group(3)}\n{DPS_WRAPPER_PORTS}{m.group(4)}",
+                      text, count=1)
+    if n != 1:
+        raise GenerationError("qmegawiz's pll.v has no `locked` port to follow with the DPS ports")
+    text, n = re.subn(r"\n(endmodule)", "\n\tassign phase_done = 1'b0;\n\n\\1", text, count=1)
+    if n != 1:
+        raise GenerationError("qmegawiz's pll.v has no endmodule")
+    return text
+
+
+def postprocess(work: Path, device: str, dps: bool = False) -> None:
     """What a GUI generation has and the project-less CLI cannot know."""
     pll_v = work / "pll.v"
     text = pll_v.read_text()
@@ -317,6 +358,8 @@ def postprocess(work: Path, device: str) -> None:
                       lambda m: m.group(1) + device + m.group(2), text)
     if n != 1:
         raise GenerationError("qmegawiz's pll.v has no single device generic to restore")
+    if not dps:
+        text = add_tied_dps_ports(text)
     pll_v.write_text(text)
 
     qip = work / "pll.qip"
@@ -364,10 +407,15 @@ def read_back(pll_dir: Path) -> dict:
         out[f"phase{i}_ps"] = int(m.group(1))
     m = re.search(r'\.number_of_clocks\((\d+)\)', v2)
     out["number_of_clocks"] = int(m.group(1)) if m else None
+    m = re.search(r'\.pll_subtype\("([^"]*)"\)', v2)
+    out["pll_subtype"] = m.group(1) if m else None
     pv = (pll_dir / "pll.v").read_text()
+    head = pv.split("endmodule")[0]
+    out["wrapper_ports"] = [p for p in DPS_PORTS if re.search(rf"\b{p}\b", head)]
+    out["dps_connected"] = re.search(r"\.phase_en\s*\(\s*phase_en\s*\)", head) is not None
     req: dict = {}
     for key in ("gui_number_of_clocks", "gui_output_clock_frequency0",
-                "gui_output_clock_frequency1", "gui_phase_shift1", "device"):
+                "gui_output_clock_frequency1", "gui_phase_shift1", "device", "gui_en_dps_ports"):
         m = re.search(rf'<generic name="{key}" value="([^"]*)" />', pv)
         req[key] = m.group(1) if m else None
     out["requested"] = req
@@ -431,6 +479,23 @@ def verify_readback(req: PllRequest, rb: dict) -> list[str]:
         problems.append(f"pll.v requests phase {r.get('gui_phase_shift1')} ps, not {req.phase_ps}")
     if r.get("device") in (None, "Unknown"):
         problems.append("pll.v carries no device (the post-processing did not restore it)")
+    # The dynamic-phase-shift ports: requested, generated (pll_subtype DPS) and connected exactly
+    # when the configuration asks for the run-time phase instrument; the wrapper declares the five
+    # port names either way (z486_mister.sv instantiates it one way).
+    want = "true" if req.dps else "false"
+    if r.get("gui_en_dps_ports") not in (None, want):
+        problems.append(f"pll.v requests gui_en_dps_ports = {r.get('gui_en_dps_ports')}, the "
+                        f"configuration means {want}")
+    sub = rb.get("pll_subtype")
+    if sub is not None and (sub == "DPS") != req.dps:
+        problems.append(f"pll_0002.v is pll_subtype {sub}: the configuration "
+                        f"{'needs' if req.dps else 'must not have'} the DPS ports")
+    if "wrapper_ports" in rb and list(rb["wrapper_ports"]) != list(DPS_PORTS):
+        problems.append(f"pll.v declares {rb['wrapper_ports']} of the DPS ports {list(DPS_PORTS)}: "
+                        "z486_mister.sv connects all five")
+    if "dps_connected" in rb and rb["dps_connected"] != req.dps:
+        problems.append("pll.v " + ("does not pass" if req.dps else "passes") +
+                        " the DPS ports to the PLL")
     return problems
 
 
@@ -461,9 +526,18 @@ def generate_pll(req: PllRequest, dest_rtl: Path, *, project_dir: Path = PROJECT
             log(f"==> generating the PLL (clk_sys {req.clk_sys_hz:_} Hz, SDRAM pin-clock phase "
                 f"{req.phase_ps} ps) with qmegawiz in {image}")
             run_qmegawiz(work, runtime, image)
-            postprocess(work, device)
+            postprocess(work, device, req.dps)
             tracked = project_dir / TRACKED_PLL_QIP2
-            if tracked.exists() and (work / "pll" / "pll_0002.qip").read_bytes() != tracked.read_bytes():
+            got_qip = (work / "pll" / "pll_0002.qip").read_text()
+            if req.dps:
+                lines = [l.strip() for l in got_qip.splitlines() if l.strip()]
+                want = [l.strip() for l in tracked.read_text().splitlines()
+                        if l.strip() and "PLL_AUTO_RESET" not in l
+                        and "PLL_BANDWIDTH_PRESET" not in l] + [DPS_QIP_LINE]
+                if lines != want:
+                    raise GenerationError(f"qmegawiz's DPS pll/pll_0002.qip is not the tracked one "
+                                          f"with {DPS_QIP_LINE}: {lines}")
+            elif tracked.exists() and got_qip.encode() != tracked.read_bytes():
                 raise GenerationError(f"qmegawiz's pll/pll_0002.qip differs from the tracked "
                                       f"{TRACKED_PLL_QIP2}")
             (work / "pll" / "pll_0002.qip").unlink()
@@ -503,6 +577,226 @@ def generate_pll(req: PllRequest, dest_rtl: Path, *, project_dir: Path = PROJECT
 
 
 # ---------------------------------------------------------------------------------------
+# The video PLL: a second, fixed-ratio PLL for CLK_VIDEO (pc9821_video_out)
+# ---------------------------------------------------------------------------------------
+#
+# The analog picture needs a video clock that is an EXACT multiple of the dot rate the raster runs on,
+# so every pixel and sync period is a constant number of clocks. The video PLL is a FRACTIONAL-N PLL
+# on the 50 MHz reference, N bypassed, C0 = 19: CLK_VIDEO = 50 MHz x (M + K/2^32) / 19, and
+# pc9821_vpll_ctl reprograms it at run time between (src/pc9821/video/pc9821_vclk_pkg.sv holds the
+# numbers; VCLK_SETTINGS below must equal them):
+#   24 kHz  M 16, K 0           800/19 MHz = 42.105 263 MHz   (2 x 400/19 MHz)
+#   31 kHz  M 19, K 0x20B00000  50.336 015 MHz                 (2 x the captured 25.168 MHz, -0.94 ppm)
+# The wizard GENERATES it at the build's fastest clock, the 31 kHz configuration, so the fitter times
+# the video domain at that period (19.866 ns). pc9821_vpll_ctl writes N, M and K on every
+# reconfiguration, so the generated values matter only for the timing analysis and the first lock.
+# The read-back checks the wizard's counters and fraction, not just its rounded frequency text.
+VPLL_TEMPLATE = PROFILE_DIR / "vpll_template.v"
+VPLL_FILES = (Path("vpll.v"), Path("vpll.qip"), Path("vpll/vpll_0002.v"), Path("vpll/vpll_0002.qip"))
+VPLL_SIDE_FILES = ("vpll.bsf", "vpll.cmp", "vpll.ppf", "vpll.sip", "vpll.spd", "vpll_sim",
+                   "vpll_sim.f")
+VPLL_GENERATOR_VERSION = "2"
+# The run-time settings (pc9821_vclk_pkg): {name: (M, K)}.
+VCLK_SETTINGS = {"24k": (16, 0), "31k": (19, 0x20B0_0000)}
+VPLL_C = 19
+# {VpllRequest.tv: (requested MHz text, the wizard's reported frequency, M hi/lo, K, VCO text)}
+# The 31 kHz generation (tv False) is the only one: there is no TV converter, so no other rate is
+# ever generated. The `tv` key stays so the request (and the stamp it is recorded in) is unchanged.
+VPLL_CONFIGS = {
+    False: ("50.336015", "50.336014 MHz", (10, 9), 0x20B0_0000, "956.384266 MHz"),
+}
+VPLL_C0 = (10, 9)            # C0 = 19: high 10, low 9 (odd division)
+
+
+def vpll_generated_hz(tv: bool) -> Fraction:
+    _, _, m_hilo, k, _ = VPLL_CONFIGS[tv]
+    return Fraction(50_000_000) * (sum(m_hilo) + Fraction(k, 1 << 32)) / VPLL_C
+
+
+VCLK_PKG = Path("src/pc9821/video/pc9821_vclk_pkg.sv")
+
+
+def vclk_pkg_problems(text: str) -> list[str]:
+    """pc9821_vclk_pkg (what the RTL programs and the dot enable runs at) against VCLK_SETTINGS and
+    VPLL_C (what the generator and its read-back assume), and the base generation at 31 kHz."""
+    def val(name):
+        m = re.search(rf"localparam\s+int\s+unsigned\s+{name}\s*=\s*(32'h([0-9A-Fa-f_]+)|(\d+))\s*;", text)
+        if not m:
+            return None
+        return int(m.group(2).replace("_", ""), 16) if m.group(2) else int(m.group(3))
+    problems = []
+    for key, suffix in (("24k", "24"), ("31k", "31")):
+        got = (val(f"VPLL_M{suffix}"), val(f"VPLL_K{suffix}"))
+        if got != VCLK_SETTINGS[key]:
+            problems.append(f"{VCLK_PKG}: the {key} setting is M {got[0]} K {got[1]}, tools/profile_gen.py "
+                            f"VCLK_SETTINGS says M {VCLK_SETTINGS[key][0]} K {VCLK_SETTINGS[key][1]}")
+    if val("VPLL_C") != VPLL_C:
+        problems.append(f"{VCLK_PKG}: VPLL_C is {val('VPLL_C')}, the generated PLL's C0 is {VPLL_C}")
+    gen = VPLL_CONFIGS[False]
+    if (sum(gen[2]), gen[3]) != VCLK_SETTINGS["31k"]:
+        problems.append("the base build's video PLL is not generated at the 31 kHz setting (VPLL_CONFIGS)")
+    return problems
+
+
+# The video clock's period as generated (ns), for the SDC's crossing bound.
+VPLL_PERIOD_NS = {tv: Fraction(10 ** 9) / vpll_generated_hz(tv) for tv in VPLL_CONFIGS}
+
+
+@dataclasses.dataclass(frozen=True)
+class VpllRequest:
+    tv: bool               # always False: the 31 kHz generation (VPLL_CONFIGS) is the only one
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+def render_vpll_v(req: VpllRequest, template_text: str | None = None) -> str:
+    text = VPLL_TEMPLATE.read_text() if template_text is None else template_text
+    subs = {"@VPLL_MHZ@": VPLL_CONFIGS[req.tv][0],
+            "@VPLL_M@": str(sum(VPLL_CONFIGS[req.tv][2])),
+            "@VPLL_K@": str(VPLL_CONFIGS[req.tv][3])}
+    for key, value in subs.items():
+        if text.count(key) != 1:
+            raise GenerationError(f"{VPLL_TEMPLATE}: expected exactly one {key}")
+        text = text.replace(key, value)
+    return text
+
+
+def read_back_vpll(pll_dir: Path) -> dict:
+    """The generated video PLL's frequency, counters and reconfigurability (vpll/vpll_0002.v)."""
+    v2 = (pll_dir / "vpll" / "vpll_0002.v").read_text()
+
+    def one(pattern: str, what: str) -> str:
+        m = re.search(pattern, v2)
+        if not m:
+            raise GenerationError(f"vpll_0002.v has no {what}")
+        return m.group(1)
+    out = {
+        "freq0": one(r'\.output_clock_frequency0\("([^"]*)"\)', "output_clock_frequency0"),
+        "vco": one(r'\.pll_output_clk_frequency\("([^"]*)"\)', "pll_output_clk_frequency"),
+        "m": (int(one(r'\.m_cnt_hi_div\((\d+)\)', "m_cnt_hi_div")),
+              int(one(r'\.m_cnt_lo_div\((\d+)\)', "m_cnt_lo_div"))),
+        "c0": (int(one(r'\.c_cnt_hi_div0\((\d+)\)', "c_cnt_hi_div0")),
+               int(one(r'\.c_cnt_lo_div0\((\d+)\)', "c_cnt_lo_div0"))),
+        "n_bypass": one(r'\.n_cnt_bypass_en\("([^"]*)"\)', "n_cnt_bypass_en"),
+        "frac_vco": one(r'\.fractional_vco_multiplier\("([^"]*)"\)', "fractional_vco_multiplier"),
+        "k": int(one(r'\.pll_fractional_division\("(\d+)"\)', "pll_fractional_division")),
+        "subtype": one(r'\.pll_subtype\("([^"]*)"\)', "pll_subtype"),
+        "reconf_ports": "reconfig_to_pll" in (pll_dir / "vpll.v").read_text(),
+    }
+    m = re.search(r'\.number_of_clocks\((\d+)\)', v2)
+    out["number_of_clocks"] = int(m.group(1)) if m else None
+    return out
+
+
+def verify_readback_vpll(req: VpllRequest, rb: dict) -> list[str]:
+    _, freq_text, m_hilo, k, vco = VPLL_CONFIGS[req.tv]
+    problems = []
+    if rb["freq0"] != freq_text:
+        problems.append(f"the video PLL runs at {rb['freq0']}, expected {freq_text}")
+    if (tuple(rb["m"]) != m_hilo or rb.get("k") != k or tuple(rb["c0"]) != VPLL_C0
+            or rb["n_bypass"] != "true"):
+        problems.append(f"the video PLL's counters are M {tuple(rb['m'])} K {rb.get('k')} C0 "
+                        f"{tuple(rb['c0'])} N bypass {rb['n_bypass']}, expected M {m_hilo} K {k} "
+                        f"C0 {VPLL_C0} N bypass true (50 MHz x (M + K/2^32) / 19)")
+    if rb.get("frac_vco") != "true":
+        problems.append(f"the video PLL is not fractional-N (fractional_vco_multiplier "
+                        f"{rb.get('frac_vco')}): pc9821_vpll_ctl's K writes need it")
+    if rb["vco"] != vco:
+        problems.append(f"the video PLL's VCO is {rb['vco']}, expected {vco}")
+    if rb["subtype"] != "Reconfigurable" or not rb["reconf_ports"]:
+        problems.append(f"the video PLL is {rb['subtype']} (reconfiguration ports "
+                        f"{rb['reconf_ports']}), expected Reconfigurable: pc9821_vpll_ctl moves it "
+                        "between the 24 kHz and 31 kHz dot clocks in every build")
+    if rb.get("number_of_clocks") not in (None, 1):
+        problems.append(f"the video PLL has {rb['number_of_clocks']} outputs, expected 1")
+    return problems
+
+
+def generate_vpll(req: VpllRequest, dest_rtl: Path, *, project_dir: Path = PROJECT_DIR,
+                  log=print) -> dict:
+    """Write the requested video PLL's files under dest_rtl; return its read-back record."""
+    runtime, image = container_runtime(), container_image()
+    digest = image_digest(runtime, image)
+    root = cache_root(project_dir)
+    h = hashlib.sha256()
+    for part in (json.dumps(req.as_dict(), sort_keys=True).encode(), VPLL_TEMPLATE.read_bytes(),
+                 digest.encode(), ("vpll" + VPLL_GENERATOR_VERSION).encode()):
+        h.update(part)
+        h.update(b"\0")
+    entry = root / ("vpll-" + h.hexdigest()[:24])
+    record_path = entry / "readback.json"
+    if not record_path.exists():
+        template_text = VPLL_TEMPLATE.read_text()
+        device = template_device(template_text)
+        root.mkdir(parents=True, exist_ok=True)
+        work = root / f"{entry.name}.tmp-{os.getpid()}"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        try:
+            (work / "vpll.v").write_text(render_vpll_v(req, template_text))
+            log(f"==> generating the video PLL ({VPLL_CONFIGS[req.tv][0]} MHz, fractional, "
+                f"reconfigurable) with qmegawiz in {image}")
+            cmd = [runtime, "run", "--rm", "-v", f"{work}:/work:Z", "-w", "/work", image,
+                   "bash", "-lc", f"{QMEGAWIZ} -silent vpll.v"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if proc.returncode != 0 or not (work / "vpll" / "vpll_0002.v").exists():
+                raise GenerationError(f"qmegawiz failed on the video PLL (exit {proc.returncode}):\n"
+                                      f"{proc.stdout[-2000:]}{proc.stderr[-2000:]}")
+            # The device a project-less generation cannot know, as for the main PLL.
+            for name, pat, fmt in (
+                    ("vpll.v", r'(<generic name="device" value=")[^"]*(" />)', None),):
+                path = work / name
+                text, n = re.subn(pat, lambda m: m.group(1) + device + m.group(2), path.read_text())
+                if n != 1:
+                    raise GenerationError(f"qmegawiz's {name} has no single device generic to restore")
+                path.write_text(text)
+            qip = work / "vpll.qip"
+            key = base64.b64encode(b"device").decode()
+            text, n = re.subn(rf"{key}::[A-Za-z0-9+/=]*::{key}",
+                              f"{key}::{base64.b64encode(device.encode()).decode()}::{key}",
+                              qip.read_text())
+            if n != 1:
+                raise GenerationError("qmegawiz's vpll.qip has no single device parameter to restore")
+            grade = base64.b64encode(b"gui_device_speed_grade").decode().rstrip("=")
+            qip.write_text("".join(line for line in text.splitlines(keepends=True) if grade not in line))
+            for name in VPLL_SIDE_FILES:
+                path = work / name
+                if path.is_dir():
+                    shutil.rmtree(path)
+                elif path.exists():
+                    path.unlink()
+            rb = read_back_vpll(work)
+            problems = verify_readback_vpll(req, rb)
+            if problems:
+                raise GenerationError("the generated video PLL is not the requested one:\n  "
+                                      + "\n  ".join(problems))
+            rb["request"] = req.as_dict()
+            rb["image_digest"] = digest
+            (work / "readback.json").write_text(json.dumps(rb, indent=2, sort_keys=True) + "\n")
+            try:
+                os.rename(work, entry)
+            except OSError:
+                shutil.rmtree(work, ignore_errors=True)
+        except BaseException:
+            shutil.rmtree(work, ignore_errors=True)
+            raise
+    else:
+        log(f"==> video PLL cache hit {entry}")
+    rb = json.loads(record_path.read_text())
+    for rel in VPLL_FILES:
+        dst = dest_rtl / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes((entry / rel).read_bytes())
+    problems = verify_readback_vpll(req, read_back_vpll(dest_rtl))
+    if problems:
+        raise GenerationError("the installed video PLL is not the requested one:\n  "
+                              + "\n  ".join(problems))
+    rb["cache_entry"] = str(entry)
+    return rb
+
+
+# ---------------------------------------------------------------------------------------
 # The SDC
 # ---------------------------------------------------------------------------------------
 
@@ -516,10 +810,134 @@ def render_sdc_block(name: str, clk_sys_hz: int) -> str:
     ])
 
 
-def render_sdc(name: str, clk_sys_hz: int) -> str:
+# SDRAM_CLK structure (compile-time, one decision: sdram_clk_ddio):
+#  * DDIO off (clk_sys < 100 MHz, today's build): SDRAM_CLK is PLL output 1 (general[1]), phase-shifted
+#    by derive_sdram_phase; the SDRAM runs CL2, tAC max 6.0 ns.
+#  * DDIO on (clk_sys >= 100 MHz, the CL3 builds): SDRAM_CLK is clk_sys inverted through an output
+#    DDIO cell (z486_mister.sv sdram_clk_ddr), T/2 fixed, so the generated clock's source is the clk_sys
+#    pin itself (general[0]; output 1 is spare, derive_sdram_phase moot) and it is `-invert`ed. tAC max
+#    is the CL3 figure, 5.4 ns (AS4C32M16SB Rev 1.4 Table 16, tAC `CL* = 3`: max 5 (-6) / 5.4 (-7), the
+#    -7 bound; the SDRAM controller runs CL3 from 100 MHz, sdram.v CAS_I). Load derating not modelled.
+#    The IO_MODEL is NOT used for the DDIO structure (its phase axis does not exist there); the
+#    fitted four-corner slacks are the evidence (+0.06..+0.09 ns worst at 110/120 MHz).
+SDRAM_TAC_CL2_NS = "6.0"
+SDRAM_TAC_CL3_NS = "5.4"
+SDRAM_DDIO_MIN_HZ = 100_000_000   # == sdram.v's CL3 threshold; z486_mister.sv SDRAM_CLK_DDIO
+
+
+def sdram_clk_ddio(clk_sys_hz: int) -> bool:
+    return clk_sys_hz >= SDRAM_DDIO_MIN_HZ
+
+
+# The SDRAM DQ read capture (build_profile.py sdram_dq_ddio -> sdram.v DQ_IN_DDIO). Either way it
+# is the IOE input cell's rising-edge register, so the I/O model above (measured on the packed
+# register) describes both; what differs is the register's NAME in the fitted netlist, which the
+# SDC's capture collection must match exactly 16 times:
+#  * on (the default): sdram.v instantiates altddio_in as `dq_cap` (in generate block g_dq_ddio);
+#    Quartus expands it into 16 cyclonev_ddio_in atoms (db/ddio_in_*.tdf), and TimeQuest names
+#    each one's rising-edge register after its output, `...|altddio_in:g_dq_ddio.dq_cap|
+#    ddio_in_*:auto_generated|dataout_h[n]` (read back from the netlist). The falling-edge half
+#    has no consumer, but the FITTED netlist keeps it as a timing node, `...|ddio_ina[n]~DFFLO`
+#    (absent post-map); timed single-cycle on the falling edge it reports a false ~-5 ns setup
+#    failure on every pin (fitted seed 9, census sdram_io_in), so its input path is cut.
+#  * off: g_dq_ff's `dq_r_ff`, a fabric register the qsf's FAST_INPUT_REGISTER packs into the cell.
+DQ_DDIO_INSTANCE = "altddio_in:dq_cap"
+DQ_CAPTURE_REGS = {
+    True: "*|sdram:ctrl|*dq_cap|*dataout_h[*]",
+    False: "*|sdram:ctrl|*dq_r_ff[*]",
+}
+DQ_DDIO_LO_REGS = "*|sdram:ctrl|*dq_cap|*ddio_ina[*]~DFFLO"
+
+
+def render_dq_lo_cut(dq_ddio: bool) -> str:
+    if not dq_ddio:
+        return "# (the packed register is a single-edge cell: no low half to cut)"
+    return "\n".join([
+        "# The input DDIO cells' unused falling-edge halves: timing nodes in the fitted netlist",
+        "# (16), absent from the post-map one (0); anything else means the pattern went stale.",
+        f"set pc9821_sdram_dq_lo [get_registers -nowarn {{{DQ_DDIO_LO_REGS}}}]",
+        "set pc9821_sdram_dq_lo_n [get_collection_size $pc9821_sdram_dq_lo]",
+        "if {$pc9821_sdram_dq_lo_n != 0 && $pc9821_sdram_dq_lo_n != 16} {",
+        '    error "PC9821: expected 0 (post-map) or 16 (fitted) unused SDRAM DQ input DDIO low halves"',
+        "}",
+        "if {$pc9821_sdram_dq_lo_n == 16} {",
+        "    set_false_path -from [get_ports SDRAM_DQ[*]] -to $pc9821_sdram_dq_lo",
+        "}",
+    ])
+
+
+# The SDRAM output registers (build_profile.py sdram_out_ddio -> sdram.v OUT_DDIO). Either way each
+# output pin leaves from its I/O cell's register, loaded on the rising clk_sys edge, and the output
+# constraints are on the PORTS, so they need no register names; what the cells add is the clock-phase
+# mux of an output DDIO (cyclonev_ddio_out: DFFHI and DFFLO both load on the rising edge, and the
+# clock selects DFFHI while high, DFFLO while low). TimeQuest times that select as a clock-as-data
+# path from BOTH clk_sys edges to the pin; with datain_h == datain_l the falling-edge switch picks
+# an equal value and moves nothing, so the falling-edge launch to the SDRAM outputs is cut (it read
+# a false ~-4.6 ns on a one-module fit). The rising-edge select path and the OE cell's register are
+# the real launches and stay timed. The guard counts the cells, so a build whose parameter did not
+# reach sdram.v (no cells, packed registers) cannot pass with the exception silently inert.
+OUT_DDIO_INSTANCES = ("altddio_out:cmd_out", "altddio_out:ca_out", "altddio_out:dq_out_cell")
+# Read back from a fitted netlist (and its post-map one: the same 90 names): each altddio_out bit
+# is `...|sdram:ctrl|altddio_out:g_out_ddio.ca_out|ddio_out_*:auto_generated|ddio_outa[n]~DFFHI0`
+# and `...~DFFLO` (cmd_out 3 bits, ca_out 18, dq_out_cell 16), each OE cell
+# `...|sdram:ctrl|g_out_ddio.dq_oe_q[n]` (16: the per-pin DQ output-enable registers, fabric
+# registers by design, see sdram.v; their path to the pins is timed by the output delays below).
+OUT_CELL_REGS = "*|sdram:ctrl|*_out*|*ddio_outa[*]~DFF* *|sdram:ctrl|*dq_oe_q[*]"
+OUT_CELL_COUNT = 2 * (3 + 18 + 16) + 16
+
+
+def render_out_cut(out_ddio: bool) -> str:
+    if not out_ddio:
+        return "# (the packed output registers are single-edge cells: no clock-phase mux to cut)"
+    return "\n".join([
+        "# The output cells (sdram.v OUT_DDIO): the DDIO clock-phase mux's falling-edge switch selects",
+        "# a value equal to the one already on the pin (datain_h == datain_l), so it launches nothing.",
+        f"set pc9821_sdram_out_cells [get_registers -nowarn {{{OUT_CELL_REGS}}}]",
+        f"if {{[get_collection_size $pc9821_sdram_out_cells] != {OUT_CELL_COUNT}}} {{",
+        f'    error "PC9821: expected {OUT_CELL_COUNT} SDRAM output-cell registers ({OUT_CELL_REGS})"',
+        "}",
+        "set_false_path -fall_from $pc9821_clk_sys -to $pc9821_sdram_out",
+    ])
+
+
+# The main PLL's output-counter clock names: the ordinary altera_pll names them
+# general[N].gpll~PLL_OUTPUT_COUNTER, the dynamic-phase-shift one (pll_subtype DPS, sdram_phase_dyn)
+# cyclonev_pll|counter[N].output_counter (read back from a fitted DPS build's sta.rpt Clocks table).
+def pll_counter(n: int, dps: bool) -> str:
+    return f"cyclonev_pll|counter[{n}].output_counter" if dps else f"general[{n}]"
+
+
+def render_sdc(name: str, clk_sys_hz: int, tv: bool = False, dq_ddio: bool = True,
+               out_ddio: bool = True, clk_ddio: bool | None = None, dps: bool = False) -> str:
     text = SDC_TEMPLATE.read_text()
     if text.count(SDC_BLOCK_PLACEHOLDER) != 1:
         raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {SDC_BLOCK_PLACEHOLDER}")
+    # The clk_sys <-> video clock crossings are bounded by one period of the destination: the video
+    # clock's GENERATED (fastest) configuration (50.336 MHz), and clk_sys's own period.
+    for token, value in (("@VCLK_PERIOD_NS@", f"{float(VPLL_PERIOD_NS[tv]):.3f}"),
+                         ("@CLK_SYS_PERIOD_NS@", f"{1e9 / clk_sys_hz:.3f}")):
+        if text.count(token) != 1:
+            raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {token}")
+        text = text.replace(token, value)
+    # clk_ddio: the configuration's SDRAM_CLK structure (build_profile.py Config.sdram_clk_ddio), which
+    # is sdram_clk_ddio(clk_sys_hz) except in a --dbg-sdram-cl2 measurement build.
+    ddio = sdram_clk_ddio(clk_sys_hz) if clk_ddio is None else clk_ddio
+    if text.count("@CLK_SYS_COUNTER@") != 1:
+        raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one @CLK_SYS_COUNTER@")
+    text = text.replace("@CLK_SYS_COUNTER@", pll_counter(0, dps))
+    for token, off, on in (
+            ("@SDRAM_PIN_CLK_COUNTER@", pll_counter(PIN_CLOCK_OUTPUT, dps), pll_counter(0, dps)),
+            ("@SDRAM_CLK_INVERT@", "", " -invert"),
+            ("@SDRAM_TAC_NS@", SDRAM_TAC_CL2_NS, SDRAM_TAC_CL3_NS)):
+        if text.count(token) != 1:
+            raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {token}")
+        text = text.replace(token, on if ddio else off)
+    for token, value in (("@SDRAM_DQ_CAPTURE_REGS@", DQ_CAPTURE_REGS[dq_ddio]),
+                         ("@SDRAM_DQ_LO_CUT@", render_dq_lo_cut(dq_ddio)),
+                         ("@SDRAM_OUT_CELL_CUT@", render_out_cut(out_ddio))):
+        if text.count(token) < 1:
+            raise GenerationError(f"{SDC_TEMPLATE}: expected {token}")
+        text = text.replace(token, value)
     return text.replace(SDC_BLOCK_PLACEHOLDER, render_sdc_block(name, clk_sys_hz))
 
 

@@ -288,8 +288,8 @@ module pc9821_pit #(
       end
 
       // A read consumes the latched value. Without this the latch set by one
-      // command stayed pending for the rest of the session, so the channel
-      // reported a frozen count forever and every read returned the LSB
+      // command would stay pending for good, so the channel would report a
+      // frozen count forever and every read returned the LSB
       // regardless of the programmed access mode.
       if (cs && rd && addr != 2'd3) begin
         if (read_stat_pend[addr]) begin
@@ -306,8 +306,8 @@ module pc9821_pit #(
             // TWO independent jobs here. The byte PHASE (read_hi) advances on
             // every word read, live or latched; the latch is consumed over two
             // word reads in that phase's order (NP2kai's PIT_FLAG_R / PIT_FLAG_L
-            // split, io/pit.c:331-358). Folding both into one bit is what let a
-            // latch reset the phase (review-pit N1).
+            // split, io/pit.c:331-358). Folding both into one bit would let a
+            // latch reset the phase.
             read_hi[addr] <= ~read_hi[addr];
             if (read_latched[addr]) begin
               read_latched[addr]   <= 1'b0;
@@ -375,7 +375,7 @@ module pc9821_pit #(
               lsb_written[ch] <= 1'b0;
               // A mode-set control word is the ONLY thing that resets the
               // word-read byte phase (NP2kai's pit_setflag clears
-              // PIT_FLAG_R|W, io/pit.c:246-249; review-pit N2a).
+              // PIT_FLAG_R|W, io/pit.c:246-249).
               read_hi[ch] <= 1'b0;
               // A mode-set control word arms NULL COUNT: the 8254 flags the
               // count register as not loaded until a count write completes it
@@ -458,7 +458,7 @@ module pc9821_pit #(
       // THE R4 MERGE: output_ff's one and only writer. Two events want it in
       // one cycle -- a tick OUT transition (an edge the PIC's edge detector
       // must see; losing one is losing an IRQ0) and a count reload's idle level
-      // -- and the old source order let the reload eat the transition
+      // -- and resolving them by source order lets the reload eat the transition
       // (mode 0: the terminal-count rise `<= 1'b1` swallowed by the reload's
       // `<= 1'b0`). Resolution, named and total: the TRANSITION lands this
       // cycle, the reload's level is DEFERRED to the first cycle with no tick

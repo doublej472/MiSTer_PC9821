@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // Every flush trigger collapses to one whole-L1 cache_flush request, and the write waits for done.
 //
-// Every flush trigger through the real pc9821_iobus write path collapses to exactly ONE whole-L1 cache_flush request to the core - a one-cycle cache_flush_req pulse, released before the next launch - and the write completes only after the core answers cache_flush_done: the 0x043F=0xA0 guest flush, a bank or shadow change, an ems_state change (the 0x043F 0x2x writes AND the silent ems_state <= 0 in the other 0x043F writes), a 0x043B sys16m remap, a 0x0461 window-0 change and a 0x053D gate change each pulse exactly once, while a redundant no-change write pulses nothing and no request is ever issued while the core's walk is busy.
+// Every flush trigger through the real pc9821_iobus write path collapses to exactly ONE whole-L1 cache_flush request to the core - a one-cycle cache_flush_req pulse, released before the next launch - and the write completes only after the core answers cache_flush_done: the 0x043F=0xA0 guest flush, a bank or shadow change, an ems_state change (the 0x043F 0x2x writes AND the silent ems_state <= 0 in the other 0x043F writes), a 0x043B sys16m remap, a 0x0461 window-0 change, a 0x053D gate change and a 0x063C select that changes the 0xD8000 window's bank each pulse exactly once, while a redundant no-change write pulses nothing and no request is ever issued while the core's walk is busy.
 //
 // This is the PLATFORM half of the cache-flush migration (fork
 // src/z486/docs/platform-integration.md, "Native cache-flush port"): the old
@@ -44,6 +44,7 @@ module tb_pc9821_cache_flush;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
+  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
   wire        beep_mute;
   wire [1:0]  beep_vol;   // 0x871E bits [3:2], the beeper volume (see pc9821_iobus)
   wire ide_rom_enable, bios_ram_gate;
@@ -95,6 +96,7 @@ module tb_pc9821_cache_flush;
   // territory). The model keeps the core's own rule that a request observed while
   // busy is IGNORED (and counts it, so the check is not vacuous).
   wire cache_flush_req;
+  wire crt31k;   // 0x09A8 bit 0 (pc9821_iobus), named so .* binds it
   reg  cache_flush_busy = 1'b0;
   reg  cache_flush_done = 1'b0;
   reg  [3:0] model_left = 4'd0;
@@ -141,8 +143,14 @@ module tb_pc9821_cache_flush;
   wire        fdd_req, fdd_req_hdr, fdd_adv;
   wire [1:0]  fdd_unit;
   wire [7:0]  fdd_c, fdd_h, fdd_r, fdd_n, fdd_idx, fdd_dout, fdd_hr, fdd_hn, fdd_hs;
+  wire [7:0]  fdd_tc;   // pc9821_iobus's physical-track pair (pc9821_fdc media_tc/media_hd)
+  wire        fdd_hd;
+  wire        fdd_mf;
+  wire        fdd_2hd;   // pc9821_iobus's media-mode pair (pc9821_fdc media_2hd/media_rpm)
+  wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
+  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -158,6 +166,11 @@ module tb_pc9821_cache_flush;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // P5: the device-bus chip selects are pc9821_iobus outputs now (its own one decode).
+  // This bench drives no device select of its own, so they are named here for the wildcard
+  // instantiation and left unused.
+  wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
+       ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
       .ide_unit0_present(1'b0),.*);
 
@@ -278,6 +291,27 @@ module tb_pc9821_cache_flush;
     check_one_flush("0x0461 window-0 change");
     write_byte(16'h0461, 8'h0A);
     check_no_flush("0x0461 redundant window-0 write");
+
+    // ==== A 0x063C select that changes what the 0xD8000 window shows ====
+    // What each select shows is the machine's (docs/probes/D8BANK-XE10.TXT): 0 and 2 the
+    // IDE option ROM, 1 BANK0 0x0000-0x3FFF, 3 BANK0 0x4000-0x7FFF. The Xe10 BIOS's INT 1Fh
+    // AH=CEh thunk (BIOS.ROM F560:00E5-00F7: `mov dx,0x63c` ... `retf`) writes 0x063C and far-returns straight into
+    // D800:0018 with no cache flush of its own, and the machine runs BANK0's code there, so
+    // the old window's lines must not survive the write. Without this pulse the L1 kept
+    // IDE-ROM lines of D800:0000-013F and Windows 95's EMM386 /T ran the IDE ROM's INT 1Bh
+    // entry on BANK0's stack frame (hardware --dbg-trig capture).
+    write_byte(16'h063C, 8'hFD);                 // reset 0xFC: select 0 -> 1
+    check_one_flush("0x063C select 0 -> 1 (IDE ROM -> BANK0 low)");
+    write_byte(16'h063C, 8'hFD);
+    check_no_flush("0x063C redundant select write");
+    write_byte(16'h063C, 8'hFF);                 // 1 -> 3
+    check_one_flush("0x063C select 1 -> 3 (BANK0 low -> high)");
+    write_byte(16'h063C, 8'hFE);                 // 3 -> 2
+    check_one_flush("0x063C select 3 -> 2 (BANK0 high -> IDE ROM)");
+    write_byte(16'h063C, 8'hFC);                 // 2 -> 0: both show the IDE ROM
+    check_no_flush("0x063C select 2 -> 0 (same window)");
+    write_byte(16'h063C, 8'h7C);                 // only the read-back bits 7:2 move
+    check_no_flush("0x063C read-back-only bits");
 
     // ==== VERDICT ====
     if (errors == 0) begin

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GVRAM:
-// The one four-plane GVRAM datapath (r12/33 D1/D2/D5/D7): a CPU plane-window store becomes one D1 column access per enabled byte and lands in that plane's byte lane of the byte-interleaved word at gvram_base + page*0x20000 + 4*column, the per-plane byte enables gate writes, the GRCG and the EGC BOTH reach all four planes through the same port (a TDW fill, an RMW merge with and without the old value, the active-low plane mask, the four-window fold, and an EGC 0x1400 WS_PATREG fill), and the scanout fetches 80 columns of a line into a ping-pong buffer one line ahead at no more than one request per 8 clk_sys and advances that buffer EXACTLY ONCE per line tick, however wide the producer's pulse is -- a multi-clk_sys LEVEL (which pc9821_system used to send, and which is why games bounced) must not advance it twice. It does NOT cover the pixel pipeline, the palette or the compositor, which are a later lane's.
+// The one four-plane GVRAM datapath: a CPU plane-window store becomes one D1 column access per enabled byte and lands in that plane's byte lane of the byte-interleaved word at gvram_base + page*0x20000 + 4*column, the per-plane byte enables gate writes, the GRCG and the EGC BOTH reach all four planes through the same port (a TDW fill, an RMW merge with and without the old value, the active-low plane mask, the four-window fold, and an EGC 0x1400 WS_PATREG fill), and the scanout fetches 80 columns of a line into a ping-pong buffer one line ahead at no more than one request per 8 clk_sys and advances that buffer EXACTLY ONCE per line tick, however wide the producer's pulse is -- a multi-clk_sys LEVEL (which pc9821_system used to send, and which is why games bounced) must not advance it twice. It does NOT cover the pixel pipeline, the palette or the compositor, which are a later lane's.
 module tb_pc9821_gvram;
   reg clk = 0;
   always #5 clk = ~clk;
@@ -19,8 +19,8 @@ module tb_pc9821_gvram;
   reg        cpu_line_read = 0;
   reg        cpu_valid = 0, cpu_write = 0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 0;
   reg  [7:0] grcg_addr = 0, grcg_din = 0;
@@ -38,7 +38,7 @@ module tb_pc9821_gvram;
   wire [31:0] line_data;
   wire        line_sel, line_ready;
 
-  // The walk's telemetry pulses (r13/310), counted here so section 11 can assert what they mean.
+  // The walk's telemetry pulses, counted here so section 11 can assert what they mean.
   wire        dut_walk_start, dut_walk_cycle;
 
   pc9821_gvram_dut #(.SYS_CLOCK_HZ(100_000_000)) dut (
@@ -47,9 +47,9 @@ module tb_pc9821_gvram;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -124,7 +124,7 @@ module tb_pc9821_gvram;
       cpu_write = 0;
       cpu_be    = 4'hF;
       // Let EVERY owner return to idle before the next op and before the GW/GC counters are
-      // sampled: r13/322 makes a store ACCEPTED at its ready and completed BEHIND the CPU, so
+      // sampled: the decoupled store is ACCEPTED at its ready and completed BEHIND the CPU, so
       // `ready` no longer means the walk is over. The array FSM, the GRCG's sequencer, the
       // EGC's produce and the plain client's column walk are all waited out.
       while ((dut.u_arb.gstate != 3'd0) || dut.u_arb.m_mode || (dut.u_arb.cs != 4'd0) ||
@@ -137,7 +137,7 @@ module tb_pc9821_gvram;
                           output [31:0] data);
     begin
       // 0x7C = 0 before every plane read-back: with the GRCG armed at 0x80 the SAME
-      // plane-window read is NP2kai's memtcr tile-compare (r13/179), not the plane byte.
+      // plane-window read is NP2kai's memtcr tile-compare, not the plane byte.
       port_w(8'h7C, 8'h00);
       @(negedge clk);
       win_plane = plane;
@@ -200,7 +200,7 @@ module tb_pc9821_gvram;
 
   // THE BENCH NO LONGER OWNS THE ARRAY. It used to hold its own copy and model the backend; the
   // storage is inside the DUT now, so a fill goes through the plane windows the guest uses.
-  // fill_all(0) is a no-op: the array is SDRAM-resident (r13/35) and starts zeroed. The non-zero
+  // fill_all(0) is a no-op: the array is SDRAM-resident and starts zeroed. The non-zero
   // fills are the ones that matter and they are done per plane, because a CPU store writes ONE
   // plane's byte.
 
@@ -329,8 +329,7 @@ module tb_pc9821_gvram;
     expect_planes(15'h0400, 32'h1111_1111, 32'h2222_2222,
                   32'h3333_3333, 32'h4444_4444);
 
-    // A store through ANY window aliases to all four planes (r12/33 sections
-    // 2/3.3; NP2kai mem/memvram.c:42,107,143). The intensity window included.
+    // A store through ANY window aliases to all four planes (NP2kai mem/memvram.c:42,107,143). The intensity window included.
     port_w(8'h7C, 8'h80);
     put_tiles(8'h55, 8'h55, 8'h55, 8'h55);
     cpu_store(2'd3, 15'h0500, 32'hFFFF_FFFF, 4'hF);
@@ -379,7 +378,7 @@ module tb_pc9821_gvram;
     // 5. The EGC, on the SAME port. 0x1400 WS_PATREG|SHIFT_CPU: the write
     //    quad is the foreground colour register, per plane, and the CPU's data
     //    is not the source. All four planes change, which is exactly what the
-    //    pre-EGC core could not do (r12/07 P0-3).
+    //    pre-EGC core could not do.
     // ------------------------------------------------------------------
     fill_all(32'h0000_0000);
     port_w(8'h7C, 8'h00);                    // GRCG off: the EGC owns the store
@@ -498,7 +497,7 @@ module tb_pc9821_gvram;
     //    line whose origin is a plain store's bytes, and after that tick the
     //    display buffer holds the line presented at the previous one (0x2100),
     //    while the new line sits in the other buffer. Nothing here assumes
-    //    pitch == 80 (r12/33 section 5, NP2kai's pitch rule).
+    //    pitch == 80 (NP2kai's pitch rule).
     // ------------------------------------------------------------------
     scan_line_base = 15'h2200;
     @(negedge clk);
@@ -570,7 +569,7 @@ module tb_pc9821_gvram;
     // ------------------------------------------------------------------
 
     // ------------------------------------------------------------------
-    // 11. The walk's TELEMETRY pulses (r13/310). dbg_walk_start fires ONCE
+    // 11. The walk's TELEMETRY pulses. dbg_walk_start fires ONCE
     //    per one-visit array walk and dbg_walk_cycle is high for every clk_sys
     //    of it, so a capture's GC/GW is the mean walk and GW counts the client
     //    accesses that walked. Three shapes pin it: a dword store walks four
@@ -609,7 +608,7 @@ module tb_pc9821_gvram;
 
     // ------------------------------------------------------------------
     // 12. A display RE-ENABLE arms the line fetch the cycle it rises, not
-    //    at the next line tick (r13/321, report section 5.4). The tick-only
+    //    at the next line tick (report section 5.4). The tick-only
     //    arm waited for the next raster tick - up to a whole line - so a
     //    re-enabled display showed the stale buffer for up to two blank lines
     //    the real GDC does not lose. The tick is NEVER sent after the re-enable

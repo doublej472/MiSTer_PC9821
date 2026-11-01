@@ -1,3 +1,4 @@
+// TEST REFERENCE: a frozen copy of src/pc9821/audio/pc9821_audio_out.sv before its FIR MAC rewrite, kept as the equivalence reference of tb_pc9821_audio_out_equiv; not maintained, except the saturation-rail fix both carry (see y_l below).
 // The 48 kHz output stage: the core's audio register, decimated from the mixer's 2.4576 MHz
 // grid to the framework's 48 kHz sample rate with a real anti-alias filter.
 //
@@ -290,7 +291,7 @@ endmodule
 //
 // The CLK_AUDIO domain has no reset in this design (the mixer it feeds has none either), so
 // every register carries a power-up seed and the machine is self-recovering - the same
-// convention as pc9821_audio_volume (review r2-resets F2).
+// convention as pc9821_audio_volume.
 //
 // ==== LOCAL CHANGE (resaudit-audioio P0, 2026-09-27) ================================
 // The module is RE-IMPLEMENTED as one more instance of the shared pc9821_audio_fir_engine_ref
@@ -316,7 +317,7 @@ endmodule
 // 560 registers -> 124 ALMs / 148 ALUTs / 225 registers, +2 M10K +2 DSP (this instance's own two history
 // RAMs and two multipliers; the baseline fit carried 71 free M10K and 57 free DSP).
 //
-// What it COSTS (a latency trade, raised for the owner): compute latency grows by ~18 CLK_AUDIO
+// What it COSTS (a latency trade): compute latency grows by ~18 CLK_AUDIO
 // cycles (~0.74 us) - a run is TAPS+3 = 19
 // clk after the trigger valid (+2 clk start handoff) where the adder cascade answered in
 // ~3 clk. Both finish inside the 40-clk group (2.4576 MHz valid spacing), runs never
@@ -561,16 +562,19 @@ module pc9821_audio_fir_engine_ref #(
     // Pipeline stage 3: accumulator. 34-bit products with 7 bits of tap growth (TAPS <= 128).
     reg signed [41:0] acc_l, acc_r;
 
-    // Q17 accumulator -> 16-bit, saturating (the filters' DC gain is unity, so this only
-    // ever catches arithmetic, never the signal). The accumulator's 42 bits are products
-    // (34) plus tap growth (<= 7); SHIFT+15 is the sign bit of the 16-bit result, so
-    // anything above it that is not that sign is an overflow.
+    // Q17 accumulator -> 16-bit, saturating. The accumulator's 42 bits are products (34)
+    // plus tap growth (<= 7); SHIFT+15 is the sign bit of the 16-bit result, so anything
+    // above it that is not that sign is an overflow, saturated toward the sign of the true
+    // sum, acc[41]. FIXED here as in the engine: the 3b134fe4 text took the rail from
+    // acc[OSB], which on an overflow is the inverted sign (+overshoot -> -32768), and the
+    // filters' step overshoot (5-9%) does reach this clamp from the signal; with the old
+    // rail kept here the equivalence bench agreed with the same bug in the RTL.
     localparam integer OSB = SHIFT + 15;               // 32
     localparam integer OVW = 41 - OSB;                 // 9
     wire ovf_l = (acc_l[41:OSB+1] != {OVW{acc_l[OSB]}});
     wire ovf_r = (acc_r[41:OSB+1] != {OVW{acc_r[OSB]}});
-    wire signed [15:0] y_l = ovf_l ? (acc_l[OSB] ? 16'sh8000 : 16'sh7FFF) : acc_l[OSB -: 16];
-    wire signed [15:0] y_r = ovf_r ? (acc_r[OSB] ? 16'sh8000 : 16'sh7FFF) : acc_r[OSB -: 16];
+    wire signed [15:0] y_l = ovf_l ? (acc_l[41] ? 16'sh8000 : 16'sh7FFF) : acc_l[OSB -: 16];
+    wire signed [15:0] y_r = ovf_r ? (acc_r[41] ? 16'sh8000 : 16'sh7FFF) : acc_r[OSB -: 16];
 
     always @(posedge clk) begin
         done <= 1'b0;

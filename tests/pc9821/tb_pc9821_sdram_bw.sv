@@ -2,19 +2,20 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SDRAM_BW: the four-stream SDRAM demand fits inside the machine's own deadline through the REAL sdram_sync_bridge at the deployed settings (the controller on clk_sys, FREQ = clk_sys = 80 MHz by default, HAS_DQM=0, ADQM=1, FAST_GRADE=0, GATHER_K=4) against sdram_chip_model - the PEGC packed scanout's 160-dword line completes inside the 40.28 us line budget (3222 clk_sys at 80 MHz) and the CPU is served under a saturating cache-line stream, its MB/s REPORTED against the old 40 MB/s requirement (tb_pc9821_sdram_tdm's, a 50/100 split-clock number the same-clock build does not meet and the owner's T36 trade accepted), while the single-port engine ceiling (15-dword read and single-word write MB/s) and the all-four-saturating adversarial aggregate are REPORTED, not asserted, so the instrument decides whether the serial transaction engine limits the current demand.
+// TB_PC9821_SDRAM_BW: the four-stream SDRAM demand fits inside the machine's own deadline through the REAL sdram_sync_bridge at the deployed settings (the controller on clk_sys, FREQ = clk_sys = 90 MHz by default, the shipping build, ADQM=1, FAST_GRADE=0, GATHER_K=4) against sdram_chip_model with its AUTO REFRESH gap held to tREFI under this load - the PEGC packed scanout's 160-dword line completes inside the SHORTER of the machine's two raster lines - the 31 kHz line (800 dots at the Xe10's 25.168 MHz 31 kHz dot clock, pc9821_vclk_pkg / docs/probes/CRT31K.TXT: 31.79 us = 2860 clk_sys at 90 MHz, the 640x480 256-colour mode's line), not only the 24 kHz 40.28 us one (3625) and the CPU is served under a saturating cache-line stream, its MB/s REPORTED against the old 40 MB/s requirement (tb_pc9821_sdram_tdm's, a 50/100 split-clock number the same-clock build does not meet, the accepted T36 trade), while the single-port engine ceiling (15-dword read and single-word write MB/s) and the all-four-saturating adversarial aggregate are REPORTED, not asserted, so the instrument decides whether the serial transaction engine limits the current demand.
 // (The claim above is the manifest's, word for word, per the house convention.)
 //
 // TB_PC9821_SDRAM_BW is the SDRAM bandwidth/headroom INSTRUMENT the floor analysis
 // asked for: it drives the
-// REAL sdram_sync_bridge at the DEPLOYED settings (the controller on clk_sys at SYS_MHZ, 80 by
-// default, HAS_DQM=0, ADQM=1, FAST_GRADE=0, GATHER_K=4 - z486_mister.sv's split_sdram_backend
+// REAL sdram_sync_bridge at the DEPLOYED settings (the controller on clk_sys at SYS_MHZ, 90 by
+// default, ADQM=1, FAST_GRADE=0, GATHER_K=4 - z486_mister.sv's split_sdram_backend
 // instance) against sdram_chip_model, and reports each of the four streams' headroom at the real
-// demand. Its FAIL conditions: the PEGC packed scanout's line completes inside the raster line
-// (56.42 Hz * 440 VTOTAL = 40.28 us), the CPU is served at all, and the PCM gets its rate.
+// demand. Its FAIL conditions: the PEGC packed scanout's line completes inside the SHORTER raster
+// line - the 31 kHz one (800 dots / 25 168 007 Hz = 31.79 us, the 640x480 256-colour mode's;
+// the 24 kHz line is 56.42 Hz * 440 VTOTAL = 40.28 us), the CPU is served at all, and the PCM gets its rate.
 // THE CPU's 40 MB/s (tb_pc9821_sdram_tdm's requirement, set for the 50/100 split-clock build) IS
 // REPORTED, NOT ASSERTED, since 2026-10-09: the same-clock build measures 25.9 MB/s under this
-// mix at 80/80 (and the 80/100 split-clock lightoc already measured 38.3), the loss the owner
+// mix at 80/80 (and the 80/100 split-clock build already measured 38.3), the loss
 // accepted with trade T36 (docs/trade-candidates.md). The mix runs the packed scanout back to back, unpaced by
 // the raster - an adversarial ceiling, not a game. Everything else - the adversarial
 // all-ports-max aggregate, and the single-port engine ceiling in MB/s - is REPORTED, not asserted. It exists to decide whether the controller's
@@ -36,15 +37,20 @@ module tb_pc9821_sdram_bw;
   localparam integer CAS       = 2;
   localparam integer GK        = 4;
   // clk_sys is a PARAMETER (the deadlines below scale with it), and the controller runs on it:
-  // the default is the shipped build's 80 MHz (build_profile.py base); -GSYS_MHZ=100 is mediumoc.
-  parameter  integer SYS_MHZ   = 80;                 // clk_sys = the controller's clock
+  // the default is the shipped build's 90 MHz (build_profile.py base); -GSYS_MHZ=100 is mediumoc.
+  parameter  integer SYS_MHZ   = 90;                 // clk_sys = the controller's clock
   localparam integer CTRL_MHZ  = SYS_MHZ;
   localparam integer CHIP_TRP  = (20 * CTRL_MHZ + 999) / 1000;   // sdram.v ns_to_cycles(20)
   localparam integer CHIP_TWR  = (15 * CTRL_MHZ + 999) / 1000;   // sdram.v ns_to_cycles(15)
 
-  // The raster line budget, in clk_sys cycles: 56.42 Hz * 440 VTOTAL -> 40.28 us = 2014 clk_sys at
-  // 50 MHz, scaled to SYS_MHZ (3222 at 80).
-  localparam integer LINE_BUDGET_SYS = 2014 * SYS_MHZ / 50;
+  // The raster line budget, in clk_sys cycles. The 24 kHz line: 56.42 Hz * 440 VTOTAL -> 40.28 us =
+  // 2014 clk_sys at 50 MHz, scaled to SYS_MHZ (3625 at 90). The 31 kHz line is SHORTER and is the
+  // deadline: 800 dots (the BIOS 31 kHz and 640x480 blocks, NP2kai bios/bios18.c gdcmastersync[2..5])
+  // at the 31 kHz dot clock 50 MHz x 78347/4096 / 38 = 25 168 007 Hz (pc9821_vclk_pkg, the capture
+  // docs/probes/CRT31K.TXT) = 31.787 us = floor(800 * 38 * 4096 * SYS_MHZ / (50 * 78347)) clk_sys
+  // (2860 at 90). The packed line is 640 bytes in both the 400- and 480-line modes.
+  localparam integer LINE24_BUDGET_SYS = 2014 * SYS_MHZ / 50;
+  localparam integer LINE_BUDGET_SYS = int'((64'd800 * 38 * 4096 * SYS_MHZ) / (64'd50 * 78347));
   localparam integer LINE_DWORDS     = 160;          // packed 640x400 8bpp line
   localparam integer SCAN_BURST      = 10;           // pc9821_pegc_scan's BURST_LEN
   localparam integer SCAN_BURSTS     = LINE_DWORDS / SCAN_BURST;   // 16
@@ -107,7 +113,7 @@ module tb_pc9821_sdram_bw;
   wire        busy;
 
   sdram_sync_bridge #(
-      .FREQ(CTRL_MHZ * 1_000_000), .HAS_DQM(1'b0), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(GK)
+      .FREQ(CTRL_MHZ * 1_000_000), .ADQM(1'b1), .FAST_GRADE(1'b0), .GATHER_K(GK)
   ) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(2'd2),
@@ -127,7 +133,10 @@ module tb_pc9821_sdram_bw;
       .SDRAM_nWE(nWE), .SDRAM_nRAS(nRAS), .SDRAM_nCAS(nCAS), .SDRAM_nCS(nCS), .SDRAM_CKE(CKE)
   );
 
-  sdram_chip_model #(.CAS(CAS), .T_RP(CHIP_TRP), .T_WR(CHIP_TWR)) chip (
+  // The AUTO REFRESH gap is held to tREFI = 64 ms / 8192 rows (the AS4C32M16SB datasheet's 8192
+  // refreshes per 64 ms) on the pins, under this bench's saturating four-stream load.
+  sdram_chip_model #(.CAS(CAS), .T_RP(CHIP_TRP), .T_WR(CHIP_TWR), .FREQ_HZ(SYS_MHZ * 1_000_000), .GRADE(7),
+                     .REFRESH_INTERVAL(SYS_MHZ * 1_000_000 / 128_000)) chip (
       .clk(clk_sys), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
@@ -415,6 +424,10 @@ module tb_pc9821_sdram_bw;
     adv_total_mbps = (cyc1 > cyc0) ? (adv_dwords * 4.0 * SYS_MHZ) / (cyc1 - cyc0) : 0.0;
     $display("NOTE sdram_bw adversarial: port0 %0d, font %0d, pcm %0d, scan %0d accepts (scan held valid %0d clk_sys); aggregate port0-only %0.1f MB/s",
              supply_accepts, adv_font_accepts, adv_pcm_accepts, adv_scan_accepts, adv_scan_valid_cyc, adv_total_mbps);
+    // The packed line's cost if all four ports saturated: 16 bursts at the measured accept spacing.
+    if (adv_scan_accepts > 0)
+      $display("NOTE sdram_bw adversarial packed line: %0d clk_sys for %0d bursts (31 kHz budget %0d, 24 kHz %0d; reported, not asserted)",
+               (ADV_CYCLES * SCAN_BURSTS) / adv_scan_accepts, SCAN_BURSTS, LINE_BUDGET_SYS, LINE24_BUDGET_SYS);
 
     // ==== VERDICT ====
     // machine-derived deadlines at the CURRENT demand only

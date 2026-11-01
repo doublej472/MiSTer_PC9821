@@ -27,7 +27,7 @@
 // reset arm resets the FSM only), so the byte's survival is a property of the shadow store,
 // not of a bench that clears memory on reset.
 //
-// It also pins the ROM PACK's read-only invariant (r13/294): with the 0x053D bit-1 gate OPEN
+// It also pins the ROM PACK's read-only invariant: with the 0x053D bit-1 gate OPEN
 // a guest store into the 0xE8000-0xF7FFF window -- flat and through window 0 = 0x0E -- is
 // rejected, so the byte the ITF's second ROM-sum pass reads at 0xE8000-0xF7FFF is still the
 // pack's, both before and after an OSD reset. Atomic Punkers running from the IDE disk is
@@ -71,8 +71,8 @@ module tb_pc9821_shadow_romsum;
   reg  [7:0]  cpu_burstcount = 8'd1;
   reg         cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire        cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire        cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   // Parked ports (GVRAM/TRAM/CG/EGC/scanout/font-reader): not this bench's subject.
   reg         ide_rom_enable = 0, gvram_access_page = 0;
@@ -310,7 +310,7 @@ module tb_pc9821_shadow_romsum;
                backend.peek(32'h0002_0E90)[7:0]);
       errors = errors + 1;
     end
-    // THE ROM PACK IS READ-ONLY (r13/294). The gate is OPEN (0x053D bit 1 set), the state
+    // THE ROM PACK IS READ-ONLY. The gate is OPEN (0x053D bit 1 set), the state
     // the machine runs in after POST and the state in which the pre-fix RTL wrote the pack.
     // A guest store into the 0xE8000-0xF7FFF lower-BIOS window must still be dropped, both
     // flat and through window 0 = 0x0E (0x88000 -> 0xE8000): NP2kai discards it
@@ -347,7 +347,7 @@ module tb_pc9821_shadow_romsum;
     // PASS 1 of the new boot.
     check_pack_top_pristine(3);
     // The lower-BIOS slot the ITF's SECOND sum reads is still the pack's ROM after the reset:
-    // the rejected store left no byte in it (r13/294). This is the Atomic Punkers sequence --
+    // the rejected store left no byte in it. This is the Atomic Punkers sequence --
     // run, store into the ROM window, OSD reset, and the next boot's sum must pass.
     sum_window(32'h0001_0000, 32'h8000);
     if (even_sum != 0 || odd_sum != 0) begin

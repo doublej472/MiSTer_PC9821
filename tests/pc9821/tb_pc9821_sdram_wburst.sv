@@ -24,7 +24,7 @@ module tb_pc9821_sdram_wburst;
   // The last dword of the 2 KiB row at 0x2000 on this 64 MB geometry, so XROW+4 is the first
   // dword of the NEXT row: the pair and the read burst below split at that boundary.
   localparam [26:0]  XROW = 27'h00_27FC;
-  // The LAST row of bank 1 and the cells on either side of its row boundary (review F5).
+  // The LAST row of bank 1 and the cells on either side of its row boundary.
   // 0x1FFF800 is {bank 1, row 0x1FFF, column 0}, so the 4-dword burst at LR_C510 and the
   // pair at LR_C511 split across the boundary -- and the true successor of
   // {bank 1, row 0x1FFF, ...} is row 0 of the NEXT bank: {bank 2, row 0, ...} = 0x2000000.
@@ -67,7 +67,6 @@ module tb_pc9821_sdram_wburst;
   // cannot be charged for the burst's timing.
   sdram #(
       .FREQ(FREQ),
-      .HAS_DQM(1'b0),
       .FAST_GRADE(1'b1)
   ) dut (
       .clk(clk), .resetn(resetn), .nce(1'b0), .refresh_allowed(1'b1),
@@ -86,10 +85,10 @@ module tb_pc9821_sdram_wburst;
       .SDRAM_CKE(CKE)
   );
 
-  // The model checks tRP for real (review F1's confirm-method): T_RP/T_WR are the controller's
+  // The model checks tRP for real: T_RP/T_WR are the controller's
   // derived values for this config (100 MHz, FAST_GRADE=1: ns_to_cycles(18) = 2 and
   // ns_to_cycles(12) = 2), sourced from the JEDEC minima rather than fitted to the RTL.
-  sdram_chip_model #(.CAS(CAS), .T_RP(2), .T_WR(2)) chip (
+  sdram_chip_model #(.CAS(CAS), .T_RP(2), .T_WR(2), .FREQ_HZ(FREQ), .GRADE(6)) chip (
       .clk(clk), .DQ(DQ), .A(SDRAM_A), .BA(SDRAM_BA),
       .nRAS(nRAS), .nCAS(nCAS), .nWE(nWE), .nCS(nCS)
   );
@@ -331,8 +330,8 @@ module tb_pc9821_sdram_wburst;
 
     // ---- Check I: at the LAST row of a bank the next row is the next BANK's row 0 (F5) ----
     // Everything above crosses an ordinary row boundary where row+1 happens to be right. At
-    // row 0x1FFF the "row field + 1" arithmetic wrapped 8191 back to row 0 of the SAME bank
-    // (review F5): the read burst's words 2-3 and the pair's word 1 silently aliased onto
+    // row 0x1FFF the "row field + 1" arithmetic wrapped 8191 back to row 0 of the SAME bank:
+    // the read burst's words 2-3 and the pair's word 1 silently aliased onto
     // {bank 1, row 0} instead of carrying into bank 2. The poison below sits at the wrap
     // target, so the pre-fix decode reads BAD0xxxx where F00Dxxxx was written.
     errors_at_last_row = errors;
@@ -351,7 +350,7 @@ module tb_pc9821_sdram_wburst;
     if (done_seen == 0) fail("the LAST-ROW-crossing read burst never signalled burst_done");
     for (i = 0; i < 4; i = i + 1)
       if (burst_w[i] !== (32'hF00D_0000 + i)) begin
-        fail("the LAST-ROW-crossing read burst did not carry into the NEXT BANK's row 0 (review F5: row+1 wrapped in-bank)");
+        fail("the LAST-ROW-crossing read burst did not carry into the NEXT BANK's row 0 (row+1 wrapped in-bank)");
         $display("     w%0d = %08x want %08x", i, burst_w[i], 32'hF00D_0000 + i);
       end
     if (acts_pair != 2)
@@ -367,12 +366,12 @@ module tb_pc9821_sdram_wburst;
       $display("     got %08x want F11E1111", got0);
     end
     if (got1 !== 32'hF11E_2222) begin
-      fail("the LAST-ROW split pair's word 1 did not carry into the NEXT BANK's row 0 (review F5)");
+      fail("the LAST-ROW split pair's word 1 did not carry into the NEXT BANK's row 0");
       $display("     got %08x want F11E2222 (the row field wrapped back into the same bank)", got1);
     end
     rd_word(POISON0, got0, lat);
     if (got0 !== 32'hBAD0_0000) begin
-      fail("the wrap target {bank 1, row 0} was written -- the split pair aliased onto the WRONG row (review F5)");
+      fail("the wrap target {bank 1, row 0} was written -- the split pair aliased onto the WRONG row");
       $display("     got %08x want the untouched poison BAD00000", got0);
     end
     if (errors == errors_at_last_row)

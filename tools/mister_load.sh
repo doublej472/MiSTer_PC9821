@@ -39,6 +39,27 @@
 #                                            # the dumps (for hosts without them)
 #   tools/mister_load.sh --allow-stale-pack  # accept a card pack that differs from
 #                                            # the local build instead of failing
+#   tools/mister_load.sh --allow-marginal-hdmi
+#                                            # deploy an RBF whose framework pll_hdmi
+#                                            # setup slack is below the deploy floor
+#                                            # (see "THE HDMI DEPLOY FLOOR" below)
+#   tools/mister_load.sh --clean-stale       # ALSO delete the other PC9821*.rbf cores and
+#                                            # the PC9821*.mgl files this run does not write
+#                                            # (see "NOTHING IS DELETED UNLESS ASKED" below)
+#
+# NOTHING IS DELETED UNLESS ASKED. A card is a shared device: it holds the owner's main core,
+# its backups and the owner's own MGLs beside whatever this script deploys. This script used
+# to delete every /media/fat/_Computer/PC9821*.rbf except the one it deployed and every
+# PC9821*.mgl it did not write, on every run; on a shared test card that removes the main core
+# and its backups. Now it only LISTS those files, and deletes them only with --clean-stale.
+#
+# A TEST CORE TOUCHES ONLY TEST FILES. When MISTER_CORE contains "zreg" (any case; the test
+# name docs/mister-testing.md gives every test build, e.g. MISTER_CORE=PC9821Z486-zreg), every
+# file this script writes or deletes on the card has "zreg" in its name: the RBF and the MGLs
+# are named after the core; the disk image and any floppy must be zreg-named copies (MISTER_IMG,
+# --fdd0/--fdd1; the card's own hdd.img is never mounted, use --no-image for none); the pack is
+# never written (the card's pack is checked read-only: --pack is refused); the Scripts-menu
+# converter is not copied; and --clean-stale removes only zreg-named PC9821 cores and MGLs.
 #
 # The local pack (build/pc98pack-<machine>.bin) is verified against the dumps with
 # tools/check_pack.py BEFORE it is deployed, and a pack already on the card that
@@ -98,8 +119,14 @@ mount_image=1
 force_pack=0
 skip_pack_check=0
 allow_stale_pack=0
+allow_marginal_hdmi=0
+clean_stale=0
+selftest=0
 dumps_base=${PC98_DUMPS:-${BIOS_DIR:-bios}}
-for arg in "$@"; do
+# A while/shift loop: an option's value (--machine xe) is its own word, which a `for` over "$@"
+# would visit next as an unknown option.
+while [ $# -gt 0 ]; do
+  arg=$1
   case "$arg" in
     --machine)  machine=${2:?--machine needs a name}; shift ;;
     --machine=*) machine=${arg#*=} ;;
@@ -116,9 +143,179 @@ for arg in "$@"; do
     --dumps=*)  dumps_base=${arg#*=} ;;
     --skip-pack-check)  skip_pack_check=1 ;;
     --allow-stale-pack) allow_stale_pack=1 ;;
+    --allow-marginal-hdmi) allow_marginal_hdmi=1 ;;
+    --clean-stale) clean_stale=1 ;;
+    --selftest) selftest=1 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
+  shift
 done
+
+# The test-core rule (header, "A TEST CORE TOUCHES ONLY TEST FILES"): is this name zreg-named?
+is_zreg() { case "$1" in *[zZ][rR][eE][gG]*) return 0 ;; *) return 1 ;; esac; }
+zreg_mode=0
+if is_zreg "$CORE"; then zreg_mode=1; fi
+
+# THE HDMI DEPLOY FLOOR. The framework's `pll_hdmi` domain is ~2.4k ALMs of frozen scaler/OSD
+# logic pinned to one quadrant and interleaved with our 84% of the die; its seed-to-seed spread
+# is 0.11-0.41 ns and a bad draw can wedge the HDMI scaler on load (the card then cannot even
+# screenshot the Menu core until a reboot). The hardware-confirmed wedge and every other
+# bad-band placement sit below this floor; hardware-verified good ones reach -0.33 ns, so -0.35
+# admits every known-good placement. tools/build.py writes the number beside the RBF in
+# artifact-timing.json (tools/fit_metrics.py --write-artifact), with the RBF's own sha256. A
+# below-floor margin, a record that cannot be parsed, or a record whose rbf_sha256 is another
+# RBF's refuses the deploy unless --allow-marginal-hdmi is passed; an absent record or an absent
+# margin field is reported as unrecorded (it cannot be checked), not refused. The rule and its numbers:
+# docs/fitting.md ("Timing and area facts") and docs/timing.md.
+# The number lives once, in tools/fit_metrics.py (tools/seed_sweep.py and tools/fit_matrix.py
+# import it); read it here so the loader cannot drift from the sweep that chose the seed.
+HDMI_FLOOR=$(python3 tools/fit_metrics.py --print-hdmi-floor 2>/dev/null || echo -0.35)
+
+# The gate itself: print the RBF's recorded margin and return 1 when it must be refused.
+# $1 = the artifact-timing.json path, $2 = the RBF about to be deployed. An absent file or an
+# absent margin field is a WARNING (a pre-guard build, or an RBF copied without its record): it
+# cannot be checked, and the message says so rather than silently passing it as if it were
+# verified. A record that cannot be parsed, or whose rbf_sha256 names a different RBF (one
+# copied into output_files/ over another fit's record), is REFUSED like a below-floor margin.
+hdmi_gate() {
+    local timing=$1 rbf=${2:-} margin tns clock seed rsum fields
+    if [ ! -f "$timing" ]; then
+        echo "  no $timing: this RBF's pll_hdmi margin is NOT recorded"
+        echo "    (a pre-guard build, or an RBF copied here without its timing record)"
+        return 0
+    fi
+    # one field per tab-separated column, "-" for an absent one, so a missing value can never
+    # shift the next one into its place
+    fields=$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    assert isinstance(d, dict), "not a JSON object"
+    v = d.get("hdmi_setup", d.get("other_setup"))
+    t = d.get("hdmi_tns", d.get("other_tns"))
+    f = lambda x: "-" if x is None else "%.3f" % float(x)
+    s = lambda x: "-" if x in (None, "") else str(x).replace("\t", " ")
+    print("\t".join(["ok", f(v), f(t), s(d.get("other_clock", "pll_hdmi")), s(d.get("seed")),
+                     s(d.get("rbf_sha256"))]))
+except Exception as e:
+    print("bad\t" + str(e).replace("\t", " ").replace(chr(10), " ")[:120])' "$timing" 2>&1)
+    if [ "${fields%%$'\t'*}" != "ok" ]; then
+        echo "ERROR: $timing cannot be read (${fields#*$'\t'}): the RBF's pll_hdmi margin is unknown." >&2
+        if [ "$allow_marginal_hdmi" = "1" ]; then
+            echo "  WARNING: --allow-marginal-hdmi: deploying it unchecked" >&2
+            return 0
+        fi
+        echo "       Refusing to deploy it (rewrite the record with tools/fit_metrics.py" >&2
+        echo "       --write-artifact, or pass --allow-marginal-hdmi and say why)." >&2
+        return 1
+    fi
+    IFS=$'\t' read -r _ margin tns clock seed rsum <<< "$fields"
+    if [ "$rsum" != "-" ] && [ -n "$rbf" ]; then
+        local have
+        have=$(sha256sum "$rbf" | awk '{print $1}')
+        if [ "$have" != "$rsum" ]; then
+            echo "ERROR: $timing describes another RBF (rbf_sha256 $rsum," >&2
+            echo "       $rbf is $have): its margin says nothing about this placement." >&2
+            if [ "$allow_marginal_hdmi" = "1" ]; then
+                echo "  WARNING: --allow-marginal-hdmi: deploying it unchecked" >&2
+                return 0
+            fi
+            echo "       Refusing to deploy it. Copy the RBF together with its own" >&2
+            echo "       artifact-timing.json, or pass --allow-marginal-hdmi and say why." >&2
+            return 1
+        fi
+        echo "  timing record matches this RBF (sha256)"
+    elif [ "$rsum" = "-" ]; then
+        echo "  $timing does not name its RBF (no rbf_sha256): it is trusted to describe this one"
+    fi
+    if [ "$margin" = "-" ]; then
+        echo "  $timing records no pll_hdmi margin: cannot check it"
+        return 0
+    fi
+    [ "$tns" = "-" ] && tns="not recorded"
+    [ "$seed" = "-" ] && seed="not recorded"
+    echo "  pll_hdmi margin ${margin} ns (TNS ${tns} ns, ${clock};" \
+         "seed ${seed}), deploy floor ${HDMI_FLOOR} ns"
+    if ! awk -v v="$margin" -v f="$HDMI_FLOOR" 'BEGIN { exit !(v + 0 < f + 0) }'; then
+        echo "  clears the ${HDMI_FLOOR} ns deploy floor"
+        return 0
+    fi
+    if [ "$allow_marginal_hdmi" = "1" ]; then
+        echo "  WARNING: --allow-marginal-hdmi: ${margin} ns is below the ${HDMI_FLOOR} ns" >&2
+        echo "  deploy floor; this placement may wedge the HDMI scaler on load. Hardware-test" >&2
+        echo "  it and record why it was accepted - do not widen the floor silently." >&2
+        return 0
+    fi
+    echo "ERROR: this fit's framework pll_hdmi setup slack is ${margin} ns, below the" >&2
+    echo "       ${HDMI_FLOOR} ns deploy floor. A seed in that band can wedge the scaler on" >&2
+    echo "       load: the card then cannot screenshot even the Menu core until it is" >&2
+    echo "       rebooted. Refusing to deploy it. Deploy a seed that clears the floor:" >&2
+    echo "         python3 tools/seed_sweep.py --dir <sweep> --report --min-seeds 6" >&2
+    echo "         cp <sweep>/seedNNN/output_files/z486_mister.rbf output_files/" >&2
+    echo "         cp <sweep>/seedNNN/output_files/artifact-timing.json output_files/" >&2
+    echo "         cp <sweep>/seedNNN/output_files/fit-source.sha256 output_files/" >&2
+    echo "       or pass --allow-marginal-hdmi to deploy this one anyway (and say why)." >&2
+    return 1
+}
+
+# Hardware-free checks of the deploy gate (planted margins; below the floor MUST be refused).
+if [ "$selftest" = "1" ]; then
+    tmp=$(mktemp -d)
+    printf '{"other_setup": -0.100, "other_tns": 0.0, "other_clock": "pll_hdmi", "seed": 3}\n' > "$tmp/ok.json"
+    printf '{"other_setup": -0.340}\n' > "$tmp/edge.json"
+    printf '{"other_setup": -0.600, "other_tns": -23.1}\n' > "$tmp/bad.json"
+    printf '{"note": "no timing"}\n' > "$tmp/none.json"
+    fail=0
+    hdmi_gate "$tmp/ok.json" >/dev/null 2>&1 || { echo "selftest FAIL: -0.100 must pass"; fail=1; }
+    hdmi_gate "$tmp/edge.json" >/dev/null 2>&1 || { echo "selftest FAIL: -0.340 must pass"; fail=1; }
+    if hdmi_gate "$tmp/bad.json" >/dev/null 2>&1; then
+        echo "selftest FAIL: -0.600 must be refused"; fail=1
+    fi
+    allow_marginal_hdmi=1
+    hdmi_gate "$tmp/bad.json" >/dev/null 2>&1 || { echo "selftest FAIL: the escape must override"; fail=1; }
+    allow_marginal_hdmi=0
+    hdmi_gate "$tmp/none.json" >/dev/null 2>&1 || { echo "selftest FAIL: no margin must warn, not refuse"; fail=1; }
+    hdmi_gate "$tmp/missing.json" >/dev/null 2>&1 || { echo "selftest FAIL: absent file must warn"; fail=1; }
+    # an unparsable record refuses (the escape overrides it)
+    printf '{"other_setup": -0.1,' > "$tmp/broken.json"
+    printf '[1, 2]\n' > "$tmp/list.json"
+    printf '{"other_setup": "n/a"}\n' > "$tmp/text.json"
+    for j in broken list text; do
+        if hdmi_gate "$tmp/$j.json" >/dev/null 2>&1; then echo "selftest FAIL: an unreadable record ($j) must be refused"; fail=1; fi
+    done
+    allow_marginal_hdmi=1
+    hdmi_gate "$tmp/broken.json" >/dev/null 2>&1 || { echo "selftest FAIL: the escape must override an unreadable record"; fail=1; }
+    allow_marginal_hdmi=0
+    # a missing setup value must not let the TNS slide into the margin's place
+    printf '{"other_tns": 0.0, "other_clock": "pll_hdmi"}\n' > "$tmp/notns.json"
+    out=$(hdmi_gate "$tmp/notns.json" 2>&1) || { echo "selftest FAIL: no setup value must warn, not refuse"; fail=1; }
+    case $out in *"records no pll_hdmi margin"*) ;; *) echo "selftest FAIL: no setup value read as a margin: $out"; fail=1 ;; esac
+    printf '{"other_tns": -23.1}\n' > "$tmp/negtns.json"
+    out=$(hdmi_gate "$tmp/negtns.json" 2>&1)
+    case $out in *"margin -23.100"*) echo "selftest FAIL: the TNS was read as the margin"; fail=1 ;; esac
+    # the record must belong to the RBF being deployed
+    printf 'rbf bytes' > "$tmp/a.rbf"
+    sum=$(sha256sum "$tmp/a.rbf" | awk '{print $1}')
+    printf '{"other_setup": -0.100, "rbf_sha256": "%s"}\n' "$sum" > "$tmp/mine.json"
+    printf '{"other_setup": -0.100, "rbf_sha256": "%064d"}\n' 0 > "$tmp/other.json"
+    hdmi_gate "$tmp/mine.json" "$tmp/a.rbf" >/dev/null 2>&1 || { echo "selftest FAIL: a record of this RBF must pass"; fail=1; }
+    if hdmi_gate "$tmp/other.json" "$tmp/a.rbf" >/dev/null 2>&1; then
+        echo "selftest FAIL: a record of another RBF must be refused"; fail=1
+    fi
+    allow_marginal_hdmi=1
+    hdmi_gate "$tmp/other.json" "$tmp/a.rbf" >/dev/null 2>&1 || { echo "selftest FAIL: the escape must override a foreign record"; fail=1; }
+    allow_marginal_hdmi=0
+    hdmi_gate "$tmp/ok.json" "$tmp/a.rbf" >/dev/null 2>&1 || { echo "selftest FAIL: a record without rbf_sha256 must pass"; fail=1; }
+    for n in PC9821Z486-zreg PC9821Z486-ZREG90 zreg-shmoo.img ZREG.mgl; do
+        is_zreg "$n" || { echo "selftest FAIL: $n is zreg-named"; fail=1; }
+    done
+    for n in PC9821Z486 PC9821Z486-test hdd.img PC9821Z486_20261029.rbf; do
+        if is_zreg "$n"; then echo "selftest FAIL: $n is not zreg-named"; fail=1; fi
+    done
+    rm -rf "$tmp"
+    if [ "$fail" = "0" ]; then echo "mister_load selftest: PASS"; exit 0; fi
+    echo "mister_load selftest: FAIL"; exit 1
+fi
 
 # The dumps for one machine: its own subdirectory of the base if that is how the
 # base is laid out (bios/xe10, bios/xe), else the base itself (a flat bios/).
@@ -153,6 +350,27 @@ verify_pack_against_dumps() {
 pack_name() { echo "pc98pack-$1.bin"; }
 mgl_for()   { if [ "$1" = "xe10" ]; then echo "/media/fat/$CORE.mgl"; else echo "/media/fat/$CORE-$1.mgl"; fi; }
 
+# The test-core preflight, before any connection: refuse anything that would write a file
+# without "zreg" in its name.
+if [ "$zreg_mode" = "1" ]; then
+    echo "test core $CORE: only zreg-named files on the card are written or deleted"
+    if [ "$force_pack" = "1" ]; then
+        echo "ERROR: --pack would overwrite the card's pack; a zreg core uses the pack already" >&2
+        echo "       on the card, read-only" >&2
+        exit 2
+    fi
+    if [ "$mount_image" = "1" ] && ! is_zreg "$IMGNAME"; then
+        echo "ERROR: the MGL would mount $IMGNAME, which is not a zreg-named copy. Upload a" >&2
+        echo "       copy with MISTER_IMG=<path>/<something>-zreg.img, or pass --no-image" >&2
+        exit 2
+    fi
+    for f in "$FDD0" "$FDD1"; do
+        if [ -n "$f" ] && ! is_zreg "$(basename "$f")"; then
+            echo "ERROR: floppy $f is not a zreg-named copy" >&2; exit 2
+        fi
+    done
+fi
+
 # A fresh card has none of these directories (nothing has run a PC9821 core on it yet), and scp
 # does not create them: make them before the first copy. mkdir -p is a no-op on a used card.
 $SSHP ssh $SSHO $HOST "mkdir -p /media/fat/_Computer $GAMES /media/fat/config"
@@ -164,9 +382,9 @@ MACHINES=$machine
 if [ "$copy" = "1" ]; then
     [ -f "$RBF" ] || { echo "$RBF not found; run the Quartus build first" >&2; exit 1; }
 
-    # output_files/ IS A COPY DESTINATION, NOT A SOURCE OF TRUTH. A build that ran in a lane
-    # leaves its artefact in that lane and never touches this tree's output_files/, so the file
-    # here can be arbitrarily old -- it once held a core from before every fix of a session.
+    # output_files/ IS A COPY DESTINATION, NOT A SOURCE OF TRUTH. A build that ran in a worktree
+    # leaves its artefact in that worktree and never touches this tree's output_files/, so the file
+    # here can be arbitrarily old -- it once held a core that predated several fixes.
     # fit-source.sha256 describes the RTL a fit was built FROM and cannot identify a bitstream,
     # so this reports what is known rather than pretending to verify it.
     echo "RBF to deploy:"
@@ -184,6 +402,11 @@ if [ "$copy" = "1" ]; then
     else
         echo "  no fit-source.sha256 beside it -- this RBF has no recorded provenance"
     fi
+
+    # THE DEPLOY GATE. fit-source.sha256 above is SOURCE provenance; artifact-timing.json is
+    # the PLACEMENT's own record (the seed and the pll_hdmi margin it drew), written after the
+    # fit by tools/build.py. An RBF without it cannot be checked: say so, do not pretend.
+    hdmi_gate output_files/artifact-timing.json "$RBF" || exit 1
     echo "copying RBF -> $DEST"
     $SSHP scp $SSHO "$RBF" $HOST:$DEST
     LOCAL_SUM=$(sha256sum "$RBF" | awk '{print $1}')
@@ -192,10 +415,15 @@ if [ "$copy" = "1" ]; then
     echo "  RBF sha256 $LOCAL_SUM verified"
 
     # The Scripts-menu converter travels with the core, so the card's copy matches this tree.
-    echo "copying CUE/BIN converter -> /media/fat/Scripts/pc9821_cue2pcd.sh"
-    $SSHP ssh $SSHO $HOST "mkdir -p /media/fat/Scripts/.pc9821"
-    $SSHP scp $SSHO tools/mister/pc9821_cue2pcd.sh $HOST:/media/fat/Scripts/pc9821_cue2pcd.sh
-    $SSHP scp $SSHO tools/cue2pcd.py $HOST:/media/fat/Scripts/.pc9821/cue2pcd.py
+    # Not for a test core: the card's converter is not a zreg file.
+    if [ "$zreg_mode" = "1" ]; then
+        echo "test core: the card's Scripts-menu converter is left as it is"
+    else
+        echo "copying CUE/BIN converter -> /media/fat/Scripts/pc9821_cue2pcd.sh"
+        $SSHP ssh $SSHO $HOST "mkdir -p /media/fat/Scripts/.pc9821"
+        $SSHP scp $SSHO tools/mister/pc9821_cue2pcd.sh $HOST:/media/fat/Scripts/pc9821_cue2pcd.sh
+        $SSHP scp $SSHO tools/cue2pcd.py $HOST:/media/fat/Scripts/.pc9821/cue2pcd.py
+    fi
 fi
 
 # The packs are runtime inputs holding the user's own dumped firmware. Whatever goes
@@ -231,6 +459,11 @@ for m in $MACHINES; do
         exit 1
     fi
 
+    if [ "$zreg_mode" = "1" ] && ! $SSHP ssh $SSHO $HOST "test -f '$GAMES/$PACK'"; then
+        echo "ERROR: the card has no $GAMES/$PACK, and a zreg core never writes the pack" >&2
+        echo "       (it is not a zreg file). Deploy the pack with a normal run first." >&2
+        exit 1
+    fi
     if [ "$force_pack" = "1" ] ||
        ! $SSHP ssh $SSHO $HOST "test -f '$GAMES/$PACK'"; then
         echo "copying pack ($m) -> $GAMES/$PACK"
@@ -286,19 +519,33 @@ for pair in "0:$FDD0" "1:$FDD1"; do
     if [ "$drv" = "0" ]; then FDDNAME0=$name; else FDDNAME1=$name; fi
 done
 
-# One core on the card, but one MGL per firmware set: that is what makes the menu
-# unambiguous. Remove other cores and any MGL this tool does not manage.
-echo "removing stale PC9821 cores/MGLs"
+# Other PC9821 cores and MGLs this run does not write: LISTED, and deleted only with
+# --clean-stale (header, "NOTHING IS DELETED UNLESS ASKED"). For a test core the candidates are
+# only zreg-named ones, so the owner's cores and MGLs are never even candidates.
+if [ "$zreg_mode" = "1" ]; then
+    RBF_GLOB='/media/fat/_Computer/PC9821*[zZ][rR][eE][gG]*.rbf'
+    MGL_GLOB='/media/fat/PC9821*[zZ][rR][eE][gG]*.mgl'
+else
+    RBF_GLOB='/media/fat/_Computer/PC9821*.rbf'
+    MGL_GLOB='/media/fat/PC9821*.mgl'
+fi
+if [ "$clean_stale" = "1" ]; then
+    echo "--clean-stale: removing other cores/MGLs ($RBF_GLOB, $MGL_GLOB)"
+    STALE_ACT='rm -f "$f" && echo "  removed $f"'
+else
+    echo "other cores/MGLs on the card (kept; --clean-stale removes them):"
+    STALE_ACT='echo "  $f"'
+fi
 $SSHP ssh $SSHO $HOST "
-  for f in /media/fat/_Computer/PC9821*.rbf; do
+  for f in $RBF_GLOB; do
     [ -e \"\$f\" ] || continue
     case \"\$f\" in '$DEST') continue ;; esac
-    rm -f \"\$f\" && echo \"  removed \$f\"
+    $STALE_ACT
   done
-  for f in /media/fat/PC9821*.mgl; do
+  for f in $MGL_GLOB; do
     [ -e \"\$f\" ] || continue
     case \"\$f\" in /media/fat/$CORE.mgl|/media/fat/$CORE-*.mgl) continue ;; esac
-    rm -f \"\$f\" && echo \"  removed \$f\"
+    $STALE_ACT
   done"
 
 # The image entry comes BEFORE the pack entry: MGL file entries are processed in
@@ -327,14 +574,13 @@ if [ -n "$FDDNAME1" ]; then FDD_LINE1="	<file delay=\"1\" type=\"s\" index=\"2\"
 # the file is PC9821.CFG -- not the RBF's name.
 #
 # WITH THE ROTATED OSD LISTS, A MISSING FILE IS CORRECT AND THE DEFAULT BLOB IS ALL
-# ZEROS. Both fields are list POSITIONS, and the lists were rotated so entry 0 is the
-# wanted default: byte 7 bits 5..7 are status[63:61] and entry 0 is 16 MB; byte 0 bit
-# 4 is status[4] and entry 0 is the core's native VSync rate. MiSTer uses index 0 for
-# every field when no file exists, so a card with no .CFG boots 16 MB at the native
-# rate - exactly as a card with a zeroed file does. There is nothing to install.
+# ZEROS. The RAM Size field is a list POSITION, and the list was rotated so entry 0 is
+# the wanted default: byte 7 bits 5..7 are status[63:61] and entry 0 is 16 MB. MiSTer uses
+# index 0 for every field when no file exists, so a card with no .CFG boots 16 MB -
+# exactly as a card with a zeroed file does. There is nothing to install.
 #
-# THAT IS THE POINT OF THE ROTATION. Before it, entry 0 was the ascending list's 1 MB
-# and 60 Hz, and a 1 MB guest cannot run the Xe10 BIOS at all: it froze with nothing
+# THAT IS THE POINT OF THE ROTATION. Before it, entry 0 was the ascending list's 1 MB,
+# and a 1 MB guest cannot run the Xe10 BIOS at all: it froze with nothing
 # on screen, which looks exactly like a broken core. This script used to install a
 # .CFG to cover for that, which only helps when someone remembers - so the trap stayed
 # for every card nobody ran this on, which is how it was found.
@@ -356,14 +602,14 @@ if $SSHP ssh $SSHO $HOST "test -f '$CFG'"; then
             echo "      ssh root@<mister> 'rm /media/fat/config/$SETNAME.CFG'"
             echo "      ssh root@<mister> 'dd if=/dev/zero of=/media/fat/config/$SETNAME.CFG bs=16 count=1'"
             echo "    or re-select the size in the OSD, which rewrites the file." ;;
-        *)  echo "  all zero: that IS the default now (16 MB, native VSync). Nothing to do."
+        *)  echo "  all zero: that IS the default now (16 MB). Nothing to do."
             echo "    One thing to know: before the rotation an all-zero file selected 1 MB, so"
             echo "    if this card was deliberately set to 1 MB it is now 16 MB. Re-select it in"
             echo "    the OSD if that was not what you wanted." ;;
     esac
 else
     echo "no $CFG, and none needed: with the rotated OSD lists a missing file IS the"
-    echo "  default - entry 0 is 16 MB of RAM and the core's native VSync rate."
+    echo "  default - entry 0 is 16 MB of RAM."
 fi
 
 # The pack is listed last: the core holds the CPU in reset until it has downloaded, so the disks

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GRCG:
-// The GRCG VRAM write path in the shapes the five games issue, driven through pc9821_memory_map into pc9821_gvram so the guest window address is translated rather than assumed: a TDW zero-fill through the B window (master.lib graph_clear), an RMW fill that needs the old value (TH01's clear) and one that does not (all-ones data), the active-low plane mask (TH04's single-plane put), and the low-15-bit address fold that makes a store through ANY of the four plane windows reach all four planes. It also pins that a store with the mode bit clear stays a plain single-plane write, that a GRCG store is exactly four COLUMN writes each enabling all four lanes (r12/33 D2's payoff -- no partial-byte-enable write, so no sdram.v read-modify-write), that a masked store writes only the enabled lanes, and that a store outside the aperture never reaches the GVRAM datapath at all.
+// The GRCG VRAM write path in the shapes the five games issue, driven through pc9821_memory_map into pc9821_gvram so the guest window address is translated rather than assumed: a TDW zero-fill through the B window (master.lib graph_clear), an RMW fill that needs the old value (TH01's clear) and one that does not (all-ones data), the active-low plane mask (TH04's single-plane put), and the low-15-bit address fold that makes a store through ANY of the four plane windows reach all four planes. It also pins that a store with the mode bit clear stays a plain single-plane write, that a GRCG store is exactly four COLUMN writes each enabling all four lanes (no partial-byte-enable write, so no sdram.v read-modify-write), that a masked store writes only the enabled lanes, and that a store outside the aperture never reaches the GVRAM datapath at all.
 module tb_pc9821_grcg;
   reg clk = 0;
   always #5 clk = ~clk;
@@ -37,18 +37,15 @@ module tb_pc9821_grcg;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0;
-  wire       gv_cpu_ready, gv_cpu_resp_valid, gv_cpu_line_resp_valid;
+  wire       gv_cpu_ready, gv_cpu_resp_valid, gv_cpu_line_word_valid;
   wire [31:0] gv_cpu_dout;
-  wire [127:0] gv_cpu_line_dout;
+  wire [31:0] gv_cpu_line_word;
   // The route's answer, muxed exactly as pc9821_memory_subsystem muxes it: a
   // plane window is pc9821_gvram's, everything else is the map's.
   wire       cpu_ready           = gvram_window ? gv_cpu_ready : map_cpu_ready;
   wire       cpu_resp_valid      = gvram_window ? gv_cpu_resp_valid
                                                 : map_cpu_resp_valid;
-  wire       cpu_line_resp_valid = gvram_window ? gv_cpu_line_resp_valid
-                                                : map_cpu_line_resp_valid;
   wire [31:0]  cpu_dout          = gvram_window ? gv_cpu_dout : map_cpu_dout;
-  wire [127:0] cpu_line_dout     = gv_cpu_line_dout;
 
   // ==== the map's plane-window decode, which is the route pc9821_gvram serves ====
   wire        gvram_window;
@@ -74,8 +71,7 @@ module tb_pc9821_grcg;
     map_seen       <= 1'b1;
   end
   wire [31:0]  map_cpu_dout;
-  wire [127:0] map_cpu_line_dout;
-  wire         map_cpu_ready, map_cpu_resp_valid, map_cpu_line_resp_valid;
+  wire         map_cpu_ready, map_cpu_resp_valid;
 
   // ==== the GVRAM datapath's backend, which the model answers ====
   wire        mem_valid, mem_write;
@@ -98,14 +94,12 @@ module tb_pc9821_grcg;
       .peg_window(1'b0), .peg_base(32'd0),
       .gvram_window(gvram_window), .gvram_win_plane(gvram_win_plane),
       .gvram_win_offset(gvram_win_offset),
-      .cpu_addr(cpu_addr), .cpu_addr_raw(cpu_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(cpu_din), .cpu_dout(map_cpu_dout),
-      .cpu_line_dout(map_cpu_line_dout), .cpu_be(cpu_be),
+      .cpu_addr(cpu_addr), .cpu_addr_raw(cpu_addr), .xl_low20(1'b0), .xl_peg(1'b0), .cpu_din(cpu_din), .cpu_dout(map_cpu_dout), .cpu_be(cpu_be),
       .cpu_burstcount(cpu_burstcount), .cpu_line_read(cpu_line_read),
       // The subsystem's route gate: the map never serves a plane window.
       .cpu_valid(cpu_valid && !gvram_window), .cpu_write(cpu_write),
       .cpu_ready(map_cpu_ready),
       .cpu_resp_valid(map_cpu_resp_valid),
-      .cpu_line_resp_valid(map_cpu_line_resp_valid),
       .mem_addr(map_addr), .mem_din(map_din), .mem_dout(map_dout),
       .mem_be(map_be),
       .mem_burstcount(map_burstcount),
@@ -122,9 +116,9 @@ module tb_pc9821_grcg;
       // this block at all.
       .cpu_valid(cpu_valid && gvram_window),
       .cpu_write(cpu_write),
-      .cpu_dout(gv_cpu_dout), .cpu_line_dout(gv_cpu_line_dout),
+      .cpu_dout(gv_cpu_dout), .cpu_line_word(gv_cpu_line_word),
       .cpu_ready(gv_cpu_ready), .cpu_resp_valid(gv_cpu_resp_valid),
-      .cpu_line_resp_valid(gv_cpu_line_resp_valid),
+      .cpu_line_word_valid(gv_cpu_line_word_valid),
       .grcg_we(port_we), .grcg_addr(port_addr), .grcg_din(port_din),
       .egc_gate(1'b0),
       .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
@@ -207,7 +201,7 @@ module tb_pc9821_grcg;
     reg [7:0] saved;
     begin
       // A plane read-back must be PLAIN. With the GRCG armed for TDW (0x7C bit 7 set, bit 6
-      // clear) the SAME plane-window read is NP2kai's memtcr tile-compare (r13/179), so disarm
+      // clear) the SAME plane-window read is NP2kai's memtcr tile-compare, so disarm
       // for the read and put the bench's mode back afterwards for a store that follows.
       saved = grcg_mode_sh;
       if (saved[7] && !saved[6]) port_w(8'h7C, 8'h00);

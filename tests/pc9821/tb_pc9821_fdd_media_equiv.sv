@@ -40,7 +40,7 @@ module tb_pc9821_fdd_media_equiv;
       .blk_fill_addr(blk_fill_addr), .blk_fill_data(blk_fill_data), .blk_req_wr(p``_blk_req_wr), \
       .blk_rd_addr(blk_rd_addr), .blk_rd_data(p``_blk_rd_data), .present(p``_present), \
       .writeprotect(p``_writeprotect), .chg(p``_chg), .req(req), .req_hdr(req_hdr), \
-      .req_wr(req_wr), .abort(abort), .unit(unit), .req_c(req_c), .req_h(req_h), .req_r(req_r), \
+      .req_wr(req_wr), .abort(abort), .unit(unit), .req_c(req_c), .req_h(req_h), .req_tc(req_c), .req_hd(req_h[0]), .req_mf(1'b1), .req_2hd(1'b1), .req_rpm(1'b0), .req_r(req_r), \
       .req_n(req_n), .req_idx(req_idx), .ready(p``_ready), .rdy(p``_rdy), .hdrv(p``_hdrv), \
       .err(p``_err), .dout(p``_dout), .adv(adv), .din(din), .hdr_r(p``_hdr_r), \
       .hdr_n(p``_hdr_n), .hdr_sects(p``_hdr_sects)

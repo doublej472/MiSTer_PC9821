@@ -18,7 +18,7 @@ Two independent failures are possible and both are silent:
 
 The two COMPUTED records (PRF and GFX) are held to their own modules the same way: their labels
 and lengths must be the decoder's field tables', and the last-byte index the report emitter
-(pc9821_dbg_record, r13/326) uses must be one less than the length its formatter declares.
+(pc9821_dbg_record) uses must be one less than the length its formatter declares.
 
 Both are checked here. So is the field-by-field agreement with the decoder,
 including the widths, because the decoder trusts the width to decide how many
@@ -39,7 +39,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 RTL = ROOT / "src/pc9821/core/pc9821_watchdog_msg.sv"
 RTL_SYS = ROOT / "src/pc9821/core/pc9821_system.sv"
 # The report SEQUENCER: which record is in flight and which byte of it is presented. It was inline
-# in pc9821_system.sv, and r13/326 moved it into its own module so the emission's pacing handshake
+# in pc9821_system.sv and was moved into its own module so the emission's pacing handshake
 # could have a bench. The coordinates checked below travelled with it, so the emitter is searched
 # in both files rather than in a filename.
 RTL_SEQ = ROOT / "src/pc9821/core/pc9821_dbg_record.sv"
@@ -52,12 +52,11 @@ def emitter_text():
 
 RTL_PRF = ROOT / "src/pc9821/core/pc9821_perf_msg.sv"
 RTL_GFX = ROOT / "src/pc9821/core/pc9821_gfx_msg.sv"
-RTL_INT21 = ROOT / "src/pc9821/core/pc9821_int21_msg.sv"
 DEC = ROOT / "tools/decode_telemetry.py"
 
 # The contract: 351 bytes, ONE line, and the file states 214 of them are literal text. The record
-# used to be 299 bytes over four lines (r13/119) and 277 until the HP field (the HPS block fetch's
-# cycles, r13/316) was appended before T, and 289 until the six STORAGE fields (FST/FCM/FRS/FCH
+# used to be 299 bytes over four lines and 277 until the HP field (the HPS block fetch's
+# cycles) was appended before T, and 289 until the six STORAGE fields (FST/FCM/FRS/FCH
 # for the FDC, ALB/ASE for the ATA) were appended before T the same way; the length and the
 # literal count are restated here rather than derived so that a change to either has to be made in
 # two places on purpose.
@@ -246,7 +245,6 @@ def check():
     check_bench_indices(text, bad)
     bad.extend(check_perf(dec))
     bad.extend(check_gfx(dec))
-    bad.extend(check_int21(dec))
     check_record_end(dec, bad)
     return bad
 
@@ -257,8 +255,8 @@ def check_record_end(dec_text, bad):
     would emit its last byte from the next record's formatter, and every field would stay right,
     so this is checked here rather than trusted."""
     sys_text = emitter_text()
-    # (module, counter, tag, index width). The PRF index is 9 bits (the record is 280 bytes after
-    # the SDRAM-port fields; 8 bits caps it at 256); the GFX index is still 7 bits and its
+    # (module, counter, tag, index width). The PRF index is 9 bits (the record is 256 bytes, so
+    # its length does not fit in 8); the GFX index is still 7 bits and its
     # 100-byte record still fits, so the two widths are named here rather than assumed common.
     for module, wire_name, tag, width in ((RTL_PRF, "prf_idx", "PRF", "9"),
                                          (RTL_GFX, "gfx_idx", "GFX", "7")):
@@ -326,7 +324,7 @@ def check_perf(dec_text):
 def check_gfx(dec_text):
     """The GFX record: its labels and length must be the decoder's, word for word.
 
-    The same contract check check_perf applies to PRF, for the record r13/267 adds. The two
+    The same contract check check_perf applies to PRF. The two
     records are separate modules with separate layouts; this one is 88 bytes (a 3-byte prefix +
     seven 12-byte fields + one LF), and its last byte is an LF, never a CR.
     """
@@ -366,85 +364,6 @@ def check_gfx(dec_text):
     m_nl = re.search(r"GFX_MSG_LEN - 1: ch = 8'h([0-9A-Fa-f]{2})", gfx)
     if not m_nl or m_nl.group(1).upper() != "0A":
         bad.append("pc9821_gfx_msg.sv's last byte is not a single LF (0x0A)")
-    return bad
-
-
-def check_int21(dec_text):
-    """The INT21 record: its labels and lengths must be the decoder's, word for word.
-
-    The record is TWO lines per call ("21 IN ..." then "21 OUT ..."), with two different field
-    sets and a CY field that is ONE hex digit, so the uniform perf/gfx formula does not apply
-    wholesale. The two lines share the perf/gfx field skeleton (a SPACE + 2-char label + '=' +
-    hex digits) after a 6-byte prefix ("21 IN " / "21 OUT"); the widths come from the decoder's
-    INT21_FIELDS / INT21_OUT_FIELDS tables, and the LF that ends each line is the last byte.
-    """
-    bad = []
-    if not RTL_INT21.exists():
-        return [f"the INT21 record module is missing: {RTL_INT21}"]
-    rtl = RTL_INT21.read_text()
-
-    m = re.search(r"INT21_MSG_LEN\s*=\s*8'd(\d+)", rtl)
-    if not m:
-        return ["pc9821_int21_msg.sv declares no INT21_MSG_LEN"]
-    msglen = int(m.group(1))
-    m_in = re.search(r"INT21_IN_LEN\s*=\s*8'd(\d+)", rtl)
-    m_out = re.search(r"INT21_OUT_LEN\s*=\s*8'd(\d+)", rtl)
-    if not m_in or not m_out:
-        return ["pc9821_int21_msg.sv declares no INT21_IN_LEN/INT21_OUT_LEN"]
-    in_len, out_len = int(m_in.group(1)), int(m_out.group(1))
-
-    # The two label functions are the ONE place the field names live on the RTL side.
-    def labels_for(fn):
-        head = rtl.split(f"function [7:0] {fn}", 1)
-        if len(head) != 2:
-            return None
-        return re.findall(r'"([A-Z0-9]{2})"', head[1].split("endfunction", 1)[0])
-
-    in_labels = labels_for("int21_in_label")
-    out_labels = labels_for("int21_out_label")
-    fields_in = [f for f in decoder_fields(dec_text) if f[0] == "INT21_FIELDS"]
-    fields_out = [f for f in decoder_fields(dec_text) if f[0] == "INT21_OUT_FIELDS"]
-    if in_labels is None or out_labels is None:
-        bad.append("pc9821_int21_msg.sv has no int21_in_label/int21_out_label function")
-        return bad
-    if [f[1] for f in fields_in] != in_labels:
-        bad.append(f"INT21_FIELDS {[f[1] for f in fields_in]} does not match the RTL's IN label "
-                   f"order {in_labels}")
-        return bad
-    if [f[1] for f in fields_out] != out_labels:
-        bad.append(f"INT21_OUT_FIELDS {[f[1] for f in fields_out]} does not match the RTL's OUT "
-                   f"label order {out_labels}")
-        return bad
-
-    # Two lines, each a 6-byte prefix then the field skeleton, then ONE LF.
-    prefix_len = 6
-    def line_len(fields):
-        return prefix_len + sum(PRF_SPACE_LEN + PRF_LABEL_LEN + 1 + w for _, _, w in fields) + PRF_SUFFIX_LEN
-
-    want_in, want_out = line_len(fields_in), line_len(fields_out)
-    if want_in != in_len:
-        bad.append(f"INT21_IN_LEN is {in_len} but the decoder's {len(fields_in)} fields make {want_in}")
-    if want_out != out_len:
-        bad.append(f"INT21_OUT_LEN is {out_len} but the decoder's {len(fields_out)} fields make {want_out}")
-    if msglen != in_len + out_len:
-        bad.append(f"INT21_MSG_LEN is {msglen} but INT21_IN_LEN + INT21_OUT_LEN is {in_len + out_len}")
-
-    # Two LFs, one per line, and no CR anywhere. The formatter's two `default: ch = 8'h0A` arms
-    # are the line endings; the comment on each names the index it ends the line at.
-    lf_arms = len(re.findall(r"default:\s*ch\s*=\s*8'h0A", rtl))
-    if lf_arms != 2:
-        bad.append(f"pc9821_int21_msg.sv has {lf_arms} LF arms, expected 2 (one per line)")
-    if "8'h0D" in rtl:
-        bad.append("pc9821_int21_msg.sv emits a CR (0x0D): the record must end in bare LFs only")
-
-    # The emitter's end index is a coordinate in two files: pc9821_dbg_record's INT21_MSG_LAST
-    # must be the formatter's last byte, INT21_MSG_LEN - 1.
-    m_last = re.search(r"INT21_MSG_LAST\s*=\s*8'd(\d+)", emitter_text())
-    if not m_last:
-        bad.append("pc9821_dbg_record.sv declares no INT21_MSG_LAST")
-    elif int(m_last.group(1)) != msglen - 1:
-        bad.append(f"the INT21 record is {msglen} bytes, but the emitter ends it at index "
-                   f"{m_last.group(1)} instead of {msglen - 1}")
     return bad
 
 

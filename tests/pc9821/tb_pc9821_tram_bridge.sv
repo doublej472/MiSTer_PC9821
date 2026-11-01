@@ -17,8 +17,8 @@ module tb_pc9821_tram_bridge;
   reg [3:0] cpu_be = 0;
   reg cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
   wire [31:0] cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   wire [13:0] tram_addr;
   wire [7:0] tram_din;
   wire tram_we;
@@ -36,6 +36,13 @@ module tb_pc9821_tram_bridge;
   wire [7:0]  byte_din;
   wire        byte_we;
 
+  // The DMA byte port, idle here (tb_pc9821_dma_tram drives it through the memory subsystem).
+  reg         dma_valid = 0, dma_write = 0;
+  reg  [13:0] dma_addr = 14'd0;
+  reg   [7:0] dma_din = 8'h00;
+  wire        dma_ready, dma_resp_valid;
+  wire  [7:0] dma_dout;
+
   // ==== DUT ====
   pc9821_window_responder dut (.*);
 
@@ -44,7 +51,7 @@ module tb_pc9821_tram_bridge;
   // A same-cycle ready+resp_valid answer wedges z486, and the phase checks below poll
   // for the response -- they pass with it.
   always @(posedge clk)
-    if (cpu_ready && (cpu_resp_valid || cpu_line_resp_valid))
+    if (cpu_ready && (cpu_resp_valid || cpu_line_word_valid))
       $fatal(1, "ready and response in the same cycle");
 
   always @(posedge clk) begin
@@ -55,9 +62,13 @@ module tb_pc9821_tram_bridge;
   end
   // ==== STIMULUS ====
 
+  // The four word beats of the last line read, assembled as the L1 does (beat N = line word N).
+  reg [127:0] line_cap = 128'd0;
+
   task automatic start_request(
       input [13:0] addr, input [31:0] data, input [3:0] be,
       input wr, input line);
+    integer n;
     begin
       @(negedge clk);
       cpu_addr = addr;
@@ -68,8 +79,22 @@ module tb_pc9821_tram_bridge;
       cpu_valid = 1;
       while (!cpu_ready) @(negedge clk);
       // Reads deliver data with the response, one cycle after the accept
-      // (z486 samples din on resp_valid, matching the open-bus responder).
-      if (!wr) while (!cpu_resp_valid && !cpu_line_resp_valid) @(negedge clk);
+      // (z486 samples din on resp_valid, matching the open-bus responder). A LINE read is
+      // accepted at the walk's start (P3) and its four word beats stream through the walk, so
+      // they are gathered here one at a time.
+      if (!wr) begin
+        if (line) begin
+          n = 0;
+          line_cap = 128'd0;
+          while (n < 4) begin
+            @(negedge clk);
+            if (cpu_line_word_valid) begin
+              line_cap[{n[1:0], 5'b00000} +: 32] = cpu_line_word;
+              n = n + 1;
+            end
+          end
+        end else while (!cpu_resp_valid) @(negedge clk);
+      end
       #1;
     end
   endtask
@@ -95,7 +120,7 @@ module tb_pc9821_tram_bridge;
 
     // Address is DWORD-aligned and inactive lanes remain untouched.
     start_request(14'h0123, 32'h44332211, 4'b1011, 1'b1, 1'b0);
-    if (cpu_resp_valid || cpu_line_resp_valid || ram[14'h0120] !== 8'h11 ||
+    if (cpu_resp_valid || cpu_line_word_valid || ram[14'h0120] !== 8'h11 ||
         ram[14'h0121] !== 8'h22 || ram[14'h0122] !== 8'hA2 ||
         ram[14'h0123] !== 8'h44) begin
       $display("FAIL byte-enable write %02x %02x %02x %02x",
@@ -105,7 +130,7 @@ module tb_pc9821_tram_bridge;
     end_request();
 
     start_request(14'h0121, 32'd0, 4'hF, 1'b0, 1'b0);
-    if (!cpu_resp_valid || cpu_line_resp_valid ||
+    if (!cpu_resp_valid || cpu_line_word_valid ||
         cpu_dout !== 32'h44A22211) begin
       $display("FAIL DWORD read %08x resp=%b", cpu_dout, cpu_resp_valid);
       errors = errors + 1;
@@ -114,9 +139,8 @@ module tb_pc9821_tram_bridge;
 
     // Cache fills are aligned to the 16-byte z486 line and little-endian.
     start_request(14'h0037, 32'd0, 4'hF, 1'b0, 1'b1);
-    if (!cpu_line_resp_valid || cpu_resp_valid ||
-        cpu_line_dout !== 128'hBFBEBDBCBBBAB9B8B7B6B5B4B3B2B1B0) begin
-      $display("FAIL line read %032x", cpu_line_dout);
+    if (line_cap !== 128'hBFBEBDBCBBBAB9B8B7B6B5B4B3B2B1B0) begin
+      $display("FAIL line read %032x", line_cap);
       errors = errors + 1;
     end
     end_request();
@@ -159,13 +183,12 @@ module tb_pc9821_tram_bridge;
       errors = errors + 1;
     end
     end_request();
-    // A cache fill of the attribute plane substitutes every odd lane the same way (the z486
-    // line path reads cpu_line_dout, which IS the assembled read_data). Lanes 4..15 still hold
-    // the fill, so this pins the substitution per lane and not just in the final byte.
+    // A cache fill of the attribute plane substitutes every odd lane the same way (the word
+    // beats are the responder's own read_data words). Lanes 4..15 still hold the fill, so this
+    // pins the substitution per lane and not just in the final byte.
     start_request(14'h2000, 32'd0, 4'hF, 1'b0, 1'b1);
-    if (!cpu_line_resp_valid || cpu_resp_valid ||
-        cpu_line_dout !== 128'hFF8E_FF8C_FF8A_FF88_FF86_FF84_FF55_FF00) begin
-      $display("FAIL attr-half line read %032x", cpu_line_dout);
+    if (line_cap !== 128'hFF8E_FF8C_FF8A_FF88_FF86_FF84_FF55_FF00) begin
+      $display("FAIL attr-half line read %032x", line_cap);
       errors = errors + 1;
     end
     end_request();

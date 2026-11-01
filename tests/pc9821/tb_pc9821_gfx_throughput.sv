@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GFX_THROUGHPUT: the GVRAM store path measured where the frame budget feels it - the WALL CLOCK of a BACK-TO-BACK store stream, not a single store's CPU hold (r13/310/322 removed that). The stream presents the next CPU store the cycle its predecessor's ready is seen, which is z486's own shape, so what is measured is the array's throughput plus whatever the engine adds around it: `clk_sys per store` printed beside the array's own port-A access count for the same stream. A store that is one clk_sys shorter must not have dropped a lane, so every shape's access count is a FLOOR GUARD and every shape's result is read back byte-exact (the GRCG merge, the TDW tile, the active-low plane mask). The six shapes are TH05's: its per-frame sprite traffic is GRCG RMW (the capture's GT - TDW - reads zero in gameplay, r13/167), with the 0xFF-datum pair-burst read-skip and the two-column TDW burst as the other arms. FAIL-FIRST: the bounds are this bench's measurement on the pre-change tree plus nothing - a store used to spend one clk_sys being PRESENTED before the walk's first lane (r13/327), so every shape is 1 clk_sys/store slower there and every bound below fails.
+// TB_PC9821_GFX_THROUGHPUT: the GVRAM store path measured where the frame budget feels it - the WALL CLOCK of a BACK-TO-BACK store stream, not a single store's CPU hold (no longer the cost). The stream presents the next CPU store the cycle its predecessor's ready is seen, which is z486's own shape, so what is measured is the array's throughput plus whatever the engine adds around it: `clk_sys per store` printed beside the array's own port-A access count for the same stream. A store that is one clk_sys shorter must not have dropped a lane, so every shape's access count is a FLOOR GUARD and every shape's result is read back byte-exact (the GRCG merge, the TDW tile, the active-low plane mask). The six shapes are TH05's: its per-frame sprite traffic is GRCG RMW (the capture's GT - TDW - reads zero in gameplay), with the 0xFF-datum pair-burst read-skip and the two-column TDW burst as the other arms. FAIL-FIRST: the bounds are this bench's measurement on the pre-change tree plus nothing - a store used to spend one clk_sys being PRESENTED before the walk's first lane, so every shape is 1 clk_sys/store slower there and every bound below fails.
 //
-// WHY A STREAM AND NOT A HOLD. r13/322 decoupled the store's ready from the walk, so a single
+// WHY A STREAM AND NOT A HOLD. The core decouples the store's ready from the walk, so a single
 // store's CPU hold is 0 and that number cannot move again. The render's cost is the stream: the
 // CPU presents the next store while the previous walk drains, and it is not accepted until the
 // client's FSM is free, so the pass's wall clock is (stores x per-store throughput). That is the
@@ -28,8 +28,8 @@ module tb_pc9821_gfx_throughput;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -53,9 +53,9 @@ module tb_pc9821_gfx_throughput;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -151,7 +151,7 @@ module tb_pc9821_gfx_throughput;
   // ---- THE MEASUREMENT: the back-to-back STORE STREAM ----
   // `n` stores, each one column apart, the next presented the cycle the previous one's ready is
   // seen (z486's shape: it completes an external store ON the ready and re-presents at once). The
-  // CPU's own hold is NOT counted - r13/322 made it 0, and this bench is about the wall clock the
+  // CPU's own hold is NOT counted - the decoupled store made it 0, and this bench is about the wall clock the
   // array imposes on the stream, which is what a sprite pass's duration is made of. `accs` is the
   // port-A enables over the whole stream, taken after every owner has drained.
   task automatic stream_store(input integer n, input [1:0] plane, input [14:0] base,
@@ -229,7 +229,7 @@ module tb_pc9821_gfx_throughput;
       want_acc[5] = 2;
       // The per-store bound is the CAPTURE'S, not this bench's best tree. A GRCG store is priced at
       // the machine's own per-operation cost: docs/probes/GFX2.TXT's GRCG_RMW row
-      // (4614 - 2952 ns) / 16 stores = 103.9 ns = 5 clk_sys at 50 MHz, which is also r13/327's
+      // (4614 - 2952 ns) / 16 stores = 103.9 ns = 5 clk_sys at 50 MHz, which is also the measured
       // presentation-bubble number - so a bound of 6 keeps BOTH floors (the walk's own accesses
       // and the machine's period), and fails on the pre-change tree's 5 (S1), 3 (S3/S4/S6) and
       // 6 (S5) through the period, never through a dropped lane (want_acc above is that guard).
@@ -243,7 +243,7 @@ module tb_pc9821_gfx_throughput;
       // under the intermediate model, before that arming rule landed). tb_pc9821_gvram_porta_equiv
       // encodes the same rule (its second pair is at acc + GVRAM_GR_HOLD and the path is next free
       // at +GVRAM_GR_HOLD + 2) and would fail if the second pair re-armed.
-      // RE-PINNED (docs/trade-candidates.md T28, owner-authorised 2026-10-02): the GRCG's presentation is now
+      // RE-PINNED (docs/trade-candidates.md T28): the GRCG's presentation is now
       // the REGISTERED one, which takes the route decode off the GVRAM write-enable's clk_sys
       // cone and adds exactly ONE clk_sys to the walk. These two bounds were this bench's own
       // PRE-change measurement, not a machine number (the machine's GRCG_RMW row is 5 clk at
@@ -264,7 +264,7 @@ module tb_pc9821_gfx_throughput;
   // ==== CHECKS ====
   // THE MEASURED NUMBER IS PRINTED FOR EVERY SHAPE, PASS OR FAIL, so the log carries it and a
   // reader never has to infer it from the bound: `cyc[j]/N` is the stream's per-store clk_sys
-  // (r13/322 made the CPU hold 0, so this is the device's wall clock, not the CPU's).
+  // (the decoupled store made the CPU hold 0, so this is the device's wall clock, not the CPU's).
   task automatic check(input integer j);
     begin
       $display("NOTE gfx_throughput: %0s: %0d.%02d clk_sys/store (%0d for %0d), %0d array accesses/store (bound %0d)",

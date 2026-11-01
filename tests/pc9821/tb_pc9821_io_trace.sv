@@ -188,7 +188,7 @@ module tb_pc9821_io_trace;
     end
   endtask
 
-  // The record's IO/DR/IV fields, indices 251..269 (since r13/119 made the record one line), read
+  // The record's IO/DR/IV fields, indices 251..269 (since the record became one line), read
   // out one character at a time. tools/check_telemetry_contract.py requires this index to be the
   // one the formatter puts the IO field's leading space at.
   task automatic capture_io;

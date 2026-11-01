@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GVRAM_FILL:
-// A 32 KiB fill of the GVRAM plane window completes against a backend that answers the way src/memory/sdram.v documents - a one-cycle accept pulse, several cycles to the first read beat, one response per beat, and a controller that serves one request at a time - and the read-back returns the fill value, so the ITF's stage-0x1B graphics VRAM test is not wedging in the route; and a cache-line read to normal RAM completes as FOUR WORD BEATS with no line producer anywhere, the beat-uniform fill (tb_pc9821_fill_beat_uniform diffs it against the 128-bit line form byte for byte) - the old dead line path is deleted now, not merely dead.
+// A 32 KiB fill of the GVRAM plane window completes against a backend that answers the way src/memory/sdram.v documents - a one-cycle accept pulse, several cycles to the first read beat, one response per beat, and a controller that serves one request at a time - and the read-back returns the fill value, so the ITF's stage-0x1B graphics VRAM test is not wedging in the route; and a cache-line read to normal RAM completes as FOUR WORD BEATS with no line producer anywhere, the beat-uniform fill (tb_pc9821_fill_beat_uniform diffs every beat against the bytes its route holds and pins the streaming cadence) - the old 128-bit line path is deleted end to end now, not merely dead.
 
 // ==== DUT ====
 // pc9821_memory_subsystem, with its backend answered by sdram_backend_model
@@ -44,6 +44,8 @@ module tb_pc9821_gvram_fill;
   reg [7:0]  grcg_addr = 0;
   reg [7:0]  grcg_din = 0;
   wire       grcg_expand;   // the GRCG's CG-mode bit 7, fed back from the subsystem
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
 
   // EGC held off: this bench is about the plain CPU path into a plane.
   reg        egc_enable = 0;
@@ -83,12 +85,11 @@ module tb_pc9821_gvram_fill;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  wire [7:0] grcg_mode_r = 8'h00;   // parked: the GRCG mode register (the 0x7C read is open bus 0xFF - RDBACK.TXT:152); tb_pc9821_gdc_text_regs drives it
-  wire [127:0] cpu_line_dout;
+  wire [31:0] cpu_line_word;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
-  wire       cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire       cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   wire [13:0] tram_addr;
   wire [7:0]  tram_din;
@@ -138,7 +139,7 @@ module tb_pc9821_gvram_fill;
   wire mem_line_resp_valid = line_producer &&
                              (slow_mode ? slow_line_resp_valid : fast_line_resp_valid);
   wire [127:0] mem_line_dout = slow_mode ? slow_line_dout : fast_line_dout;
-  // The GVRAM scanout's SDRAM requester (r13/35): the wildcard instantiation needs every port
+  // The GVRAM scanout's SDRAM requester: the wildcard instantiation needs every port
   // named. This bench never starts the scanout, so it accepts and never answers.
   wire [31:0] mem3_addr, mem3_din;
   wire  [3:0] mem3_be;
@@ -173,7 +174,7 @@ module tb_pc9821_gvram_fill;
   // ==== CHECKS ====
   //
   // SEEN TO FAIL, which is this tree's standard for trusting a test. Planting
-  // the defect lane/p0-reset-fix removed -- making `backend_owner` in
+  // the fixed defect -- making `backend_owner` in
   // pc9821_memory_subsystem.sv a ONE-CYCLE record again -- produces:
   //
   //   PASS fill: 8192 stores, 32769 backend writes ... finished at tb_cycle=229397
@@ -200,29 +201,29 @@ module tb_pc9821_gvram_fill;
   // 2 read-back  : dwords read back through the same route return the fill value.
   // 3 stub-fill  : the same stores pass against the immediate stub, so the bench
   //                is measuring the route and not its own stimulus.
-  // 4 line-read  : a cache-line read (burstcount 4, z486 memory.sv:313) to
+  // 4 line-read  : a cache-line read (burstcount 4, z486 bus_unit.sv:301 `assign line_read`) to
   //                normal RAM completes as FOUR WORD BEATS - the beat-uniform
   //                fill every route answers with now (tb_pc9821_fill_beat_uniform
   //                diffs the form byte for byte against the 128-bit line it
   //                replaced), where the line form itself is gone from the
-  //                boundary entirely (r11/4.1's dead path, deleted).
+  //                boundary entirely (a dead path, deleted).
 
 
   wire [1:0] ems_state;
   wire top_shadow_en;
 
-  // The GVRAM write client's two-word payload (r13/137); this bench's backend ignores it.
+  // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
   wire [31:0] mem_din_hi;
 
-  // The graphics telemetry bus (r13/267); this bench does not read it, but (.*) needs the name.
+  // The graphics telemetry bus; this bench does not read it, but (.*) needs the name.
   wire [127:0] dbg_gfx_stats;
-  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses (r13/310), same reason
-  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses (r13/315), same reason
-  // The GRCG's and the EGC's per-cycle ownership pulses (r13/321); this bench does not count
+  wire dbg_walk_start, dbg_walk_cycle;   // the GVRAM's walk pulses, same reason
+  wire dbg_egc_txn, dbg_egc_unit, dbg_grcg_store;   // the EGC/GRCG operation pulses, same reason
+  // The GRCG's and the EGC's per-cycle ownership pulses; this bench does not count
   // them, but (.*) needs every port named.
   wire dbg_gr_owned, dbg_eg_owned;
-  // The page-coincidence probe's two page levels (r13/325); this bench does not read them,
+  // The page-coincidence probe's two page levels; this bench does not read them,
   // but (.*) needs every port named.
   wire dbg_access_page, dbg_scan_page_q;
   wire cg_win_byte_hold = 1'b0;
@@ -233,6 +234,7 @@ module tb_pc9821_gvram_fill;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -303,7 +305,7 @@ module tb_pc9821_gvram_fill;
   localparam integer FILL_DWORDS = 8192;         // the ITF's cx=0x2000
   // Each 32-bit store's four enabled plane bytes are four CONSECUTIVE plane
   // words, and the write-combining buffer now pairs adjacent dirty words into
-  // ONE two-word burst (r13/271), so a store owes between 2 and 4 backend
+  // ONE two-word burst, so a store owes between 2 and 4 backend
   // writes -- not one per byte lane as it did before the pair. The bound below
   // is the paired floor; the read-back phase is what proves the bytes. Bounded
   // well above the realistic worst case so a wedge is a timeout rather than a
@@ -350,7 +352,7 @@ module tb_pc9821_gvram_fill;
   // COMPLETE on `ready`. z486's memory.sv completes an external write there (its store queue
   // drains on mem_ready) and consumes `resp_valid` only for a READ (`direct_rd_resp_now` is
   // gated `!ext_write_r`), so this route has never owed a store a response strobe -- asserting
-  // one was the plain client's extra cycle, not the machine's contract (r13/272). `c_ok` comes
+  // one was the plain client's extra cycle, not the machine's contract. `c_ok` comes
   // back false if the route never accepts inside the budget, which is how a wedge is reported.
   // The request is released the cycle the route accepts, as z486 releases it.
   // No task output arguments: Verilator rejects them ("Too many arguments in
@@ -374,7 +376,7 @@ module tb_pc9821_gvram_fill;
       c_ok = cpu_ready;
       // A store is complete ON THE ACCEPT and z486 clears the request on `ready`, so release
       // it in the accept cycle and step past that cycle -- holding it one cycle longer would
-      // present a second, identical access (the pre-r13/272 C_RESP2/C_HOLD tail absorbed it).
+      // present a second, identical access (the earlier C_RESP2/C_HOLD tail absorbed it).
       cpu_valid = 0;
       cpu_write = 0;
       @(negedge clk);
@@ -416,7 +418,7 @@ module tb_pc9821_gvram_fill;
   endtask
 
   // A cache-line read: burstcount 4 is what z486's cache channels use, and
-  // memory.sv:313 turns exactly that shape into `line_read`. The route answers it
+  // bus_unit.sv:301 turns exactly that shape into `line_read`. The route answers it
   // as FOUR WORD BEATS now (the beat-uniform fill; tb_pc9821_fill_beat_uniform).
   // `c_q_ok` says whether the route completed all four beats.
   task automatic cpu_line_load(input [31:0] a);
@@ -497,7 +499,7 @@ module tb_pc9821_gvram_fill;
       errors = errors + 1;
       nfail = nfail + 1;
     end else begin
-      // The GVRAM is block RAM now (r13/283): the fill is served ENTIRELY by the array and owes
+      // The GVRAM is block RAM now: the fill is served ENTIRELY by the array and owes
       // the backend nothing, so the wedge tripwire is the STORE COUNT alone - every one of the
       // ITF's 8192 stores must complete - not a backend-write count. The count is still printed
       // so a future regression that puts the GVRAM back on the backend shows up here.

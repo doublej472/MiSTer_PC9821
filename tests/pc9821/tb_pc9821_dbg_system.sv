@@ -36,7 +36,7 @@ module tb_pc9821_dbg_system;
       .img_mounted(1'b0), .img_readonly(1'b0), .img_size(64'd0), .img_ack(1'b0), .img_buff_addr(13'd0),
       .img_buff_din(16'd0), .img_buff_wr(1'b0),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
-      .dbg_uart_byte(off_byte), .dbg_uart_we(off_we), .dbg_uart_accept(1'b1), .trace_trig(),
+      .dbg_uart_byte(off_byte), .dbg_uart_we(off_we), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0));
   // the display log, the sampler (1 ms window at 50 MHz = 50,000 clocks) and a snoop built
   pc9821_system #(.SYS_FREQ(50_000_000), .DCACHE_SET_BITS(4), .ICACHE_SET_BITS(4), .ENABLE_X87(1'b0),
@@ -53,7 +53,7 @@ module tb_pc9821_dbg_system;
       .img_mounted(1'b0), .img_readonly(1'b0), .img_size(64'd0), .img_ack(1'b0), .img_buff_addr(13'd0),
       .img_buff_din(16'd0), .img_buff_wr(1'b0),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
-      .dbg_uart_byte(on_byte), .dbg_uart_we(on_we), .dbg_uart_accept(on_accept), .trace_trig(),
+      .dbg_uart_byte(on_byte), .dbg_uart_we(on_we), .dbg_uart_accept(on_accept), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0));
 
   // ==== CHECKS ====

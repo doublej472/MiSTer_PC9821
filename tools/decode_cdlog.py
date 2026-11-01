@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""decode_cdlog.py <capture.bin> [...]   (or '-' for stdin)
+"""decode_cdlog.py <capture.bin> [...]   (or '-' for stdin);  decode_cdlog.py --selftest
 
 Decodes the CD drive's command log (pc9821_atapi LOG_EN, built with
 `build_profile.py base --cdrom --cdrom-log`) from a raw capture of the debug UART:
@@ -13,10 +13,15 @@ Every record is 0xA5, a type, a 16-bit millisecond time (big-endian, wraps at 65
   5 MOUNT  img_size[39:0]       6 READY  PCD flag, tracks, sector count[23:0]
   7 DEVCTL the 0x074C byte      8 BANK  a bank switch (0x0432)     9 LOST  records dropped before this
   10 ALIVE 0x5A, at power-up and after every core reset (the path works even with no CD traffic)
-  11 PLAYER audio status (0x11 play/0x12 pause/0x13 done/0x15 none), position, remaining length,
+  11 PLAYER audio status (0x11 play/0x12 pause/0x13 done/0x14 medium gone/0x15 none), position, remaining length,
            engine-idle and cdda_req bits; on every status change and every 16th streamed audio sector
   (8 BANK records were retired after 28bbd257: the guest's disk traffic flooded the ring)
 Bytes outside a record (the core's "Z386 start" banner, line noise) are skipped and counted.
+
+TIME. The record's 16-bit millisecond stamp wraps every 65.536 s; the decoder unwraps it (a stamp
+lower than the previous record's adds 65 536 ms), so the printed time only ever grows and an
+interval across a wrap is not mistaken for a ~65 s stall. A gap of 65.536 s or more with no record
+in it (or with records lost: see LOST) cannot be seen in a 16-bit stamp and is not counted.
 """
 import sys
 
@@ -28,8 +33,12 @@ OPS = {0x00: 'TEST UNIT READY', 0x03: 'REQUEST SENSE', 0x12: 'INQUIRY', 0x1B: 'S
        0x5A: 'MODE SENSE', 0xBD: 'MECHANISM STATUS', 0xBE: 'READ CD', 0xB9: 'READ CD MSF'}
 
 
+WRAP = 1 << 16
+
+
 def decode(data):
     i, skipped, out = 0, 0, []
+    prev, base = None, 0
     while i < len(data):
         if data[i] != 0xA5 or i + 4 > len(data) or data[i + 1] not in LEN:
             skipped += 1
@@ -65,12 +74,33 @@ def decode(data):
             s = f'ALIVE  {p[0]:02x}  (power-up or the end of a core reset)'
         else:
             s = f'LOST   {p[0]} record(s)'
-        out.append(f'{ms:5d} ms  {s}')
+        if prev is not None and ms < prev:
+            base += WRAP
+        prev = ms
+        out.append(f'{base + ms:8d} ms  {s}')
         i += 4 + LEN[t]
     return out, skipped
 
 
+def selftest():
+    def rec(t, ms, payload):
+        return bytes([0xA5, t, ms >> 8, ms & 0xFF]) + bytes(payload)
+    data = (b"Z386 start\r\n" + rec(10, 65000, [0x5A]) + rec(7, 65500, [0x00]) + rec(7, 200, [0x01])
+            + rec(7, 1000, [0x02]) + rec(7, 1000, [0x03]) + rec(7, 64000, [0x04]) + rec(7, 10, [0x05]))
+    lines, skipped = decode(data)
+    times = [int(line.split()[0]) for line in lines]
+    want = [65000, 65500, 65736, 66536, 66536, 129536, 131082]
+    ok = times == want and skipped == len(b"Z386 start\r\n")
+    deltas = [b - a for a, b in zip(times, times[1:])]
+    ok = ok and max(deltas) < 65536 and min(deltas) >= 0
+    print(f"times {times} (want {want}); deltas {deltas}; skipped {skipped}")
+    print("decode_cdlog selftest:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def main():
+    if sys.argv[1:] == ['--selftest']:
+        return selftest()
     for path in sys.argv[1:] or ['-']:
         data = sys.stdin.buffer.read() if path == '-' else open(path, 'rb').read()
         lines, skipped = decode(data)
@@ -79,4 +109,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

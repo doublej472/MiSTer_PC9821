@@ -1,14 +1,14 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PLAIN_WRITE: profiles the PLAIN plane-window WRITE path - the shape the r13/267 GFX counters show dominates TH05's MUSIC ROOM - against the REAL pc9821_gvram, whose plane store now lives in on-chip M10K block RAM (r13/283), and asserts the three shapes' stored bytes are BYTE-EXACT when read back through the same plane windows: the four plane windows of one column (the sprite/music-room column write), a single-plane consecutive 16-bit run (the graphics library's rep movsw fill), and the GRCG RMW 16-bit store whose merge needs the old word (data 0xF0). Each shape is timed over a fixed window (clk_sys/store and the client's own cs split) as the measurement, and the plain WRITE's accept cadence is asserted: a store completes on ready and never enters the response strobe C_RESP2, which only a READ needs (r13/272).
+// TB_PC9821_PLAIN_WRITE: profiles the PLAIN plane-window WRITE path - the shape the GFX counters show dominates TH05's MUSIC ROOM - against the REAL pc9821_gvram, whose plane store now lives in on-chip M10K block RAM, and asserts the three shapes' stored bytes are BYTE-EXACT when read back through the same plane windows: the four plane windows of one column (the sprite/music-room column write), a single-plane consecutive 16-bit run (the graphics library's rep movsw fill), and the GRCG RMW 16-bit store whose merge needs the old word (data 0xF0). Each shape is timed over a fixed window (clk_sys/store and the client's own cs split) as the measurement, and the plain WRITE's accept cadence is asserted: a store completes on ready and never enters the response strobe C_RESP2, which only a READ needs.
 //
-// WHY THE READ-BACK IS THE ASSERTION. The plane store is on-chip M10K block RAM (r13/283), so
+// WHY THE READ-BACK IS THE ASSERTION. The plane store is on-chip M10K block RAM, so
 // there is no SDRAM controller and no write-combining buffer on this path to profile: the old
 // two-word write-back pair and the permanently-zero backend counters that claimed it are gone
-// (r13/333 finding 1). What remains is the current contract - the bytes the read-back sees are
+//. What remains is the current contract - the bytes the read-back sees are
 // the bytes the CPU stored, and a WRITE completes on its ready without the separate response
-// strobe a READ needs (r13/272). The byte checks below are the assertion; the timing and cs
+// strobe a READ needs. The byte checks below are the assertion; the timing and cs
 // lines are the measurement, so a faster path cannot pass by writing the wrong bytes.
 //
 // The three shapes are the ones the plain path is asked for:
@@ -17,7 +17,7 @@
 //   C  the GRCG RMW store (16-bit, data 0xF0, so the merge needs the old word).
 //
 // The cs line is also the accept-cadence instrument: a WRITE now costs C_IDLE + ... only
-// (r13/272 deleted C_RESP2 and C_HOLD from the write arm -- a store completes on `ready`), and
+// (the write arm has no C_RESP2 or C_HOLD -- a store completes on `ready`), and
 // RESP2 stays nonzero only because a read still needs its separate response strobe. The
 // assertion below holds that line: a write-only window never enters C_RESP or C_RESP2.
 
@@ -43,8 +43,8 @@ module tb_pc9821_plain_write;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -69,9 +69,9 @@ module tb_pc9821_plain_write;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -89,10 +89,10 @@ module tb_pc9821_plain_write;
 
   // ==== STIMULUS ====
   // The counters that turn the stimulus into a measurement. The plane store is on-chip M10K
-  // block RAM now (r13/283), so the only cost instrument left is the client's own cs split:
+  // block RAM now, so the only cost instrument left is the client's own cs split:
   // there is no backend transaction and no write-combining buffer to count. The dead
   // txn_rd/txn_wr/txn_wr_pair/txn_wr_single counters and the report that printed them as zero
-  // while a PASS note called the pair "byte-exact" are deleted (r13/333 finding 1).
+  // while a PASS note called the pair "byte-exact" are deleted.
   integer cs_cnt [0:7];
   reg     meas_en = 1'b0;
   always @(posedge clk) if (meas_en) cs_cnt[dut.u_arb.cs] <= cs_cnt[dut.u_arb.cs] + 1;
@@ -220,7 +220,7 @@ module tb_pc9821_plain_write;
 
   // One timed window of the streaming driver, reporting the shape's per-store cost and holding
   // the one current-contract assertion this tier owns: a write-only window never enters the
-  // response strobe a READ needs (r13/272).
+  // response strobe a READ needs.
   task automatic run_window(input [255:0] what, input integer win);
     integer s0;
     integer j;
@@ -236,7 +236,7 @@ module tb_pc9821_plain_write;
       meas_en = 1'b0;
       win_stores = stores - s0;
       if (win_stores == 0) fail("a write phase completed no store -- the plain path is wedged");
-      // A store completes on `ready`; only a READ uses C_RESP/C_RESP2 (r13/272). This window
+      // A store completes on `ready`; only a READ uses C_RESP/C_RESP2. This window
       // drives no read, so any cycle in either state is the write path regressing to the old
       // two-strobe shape (READ=3, RESP2=4 in pc9821_gvram's client FSM).
       if (cs_cnt[3] != 0 || cs_cnt[4] != 0)
@@ -329,7 +329,7 @@ module tb_pc9821_plain_write;
     $display("NOTE plain_write: C read back 1024 plane bytes of the GRCG RMW block");
     grcg_w(8'h7C, 8'h00);
 
-    // ---- The plane store is on-chip M10K block RAM now (r13/283): there is no SDRAM
+    // ---- The plane store is on-chip M10K block RAM now: there is no SDRAM
     //      controller and no write-combining buffer on this path, so no write-back pair to
     //      count. The byte checks above are the assertion, and they are the stronger one. ----
 

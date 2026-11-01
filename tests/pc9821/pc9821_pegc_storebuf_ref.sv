@@ -1,3 +1,4 @@
+// TEST REFERENCE: a frozen copy of src/pc9821/core/pc9821_pegc_storebuf.sv before its area rewrite, kept as the equivalence reference of tb_pc9821_pegc_storebuf_equiv; not maintained.
 // THE PEGC POSTED STORE BUFFER (trade-candidates T21), draining through the G3 GATHER-RMW
 // SESSION (src/memory/sdram.v).
 //
@@ -46,7 +47,7 @@
 //      per port), so accept order is visibility order.
 //   5. BOUNDED RESIDENCY (P2-6, the horizontal-stripe class: the old SDRAM
 //      write-combining buffer was invisible to the scanout and produced the
-//      owner's stripe). EVERY entry's age runs from its OWN allocation and never
+//      reported stripe). EVERY entry's age runs from its OWN allocation and never
 //      stops or restarts on a merge (the hold_age fix of 1aacf864, generalised):
 //      a drain session fires at the latest when its oldest entry is HOLD_CYCLES
 //      old, so no dirty dword lives past one hold window (the subsystem derives

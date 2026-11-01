@@ -9,14 +9,15 @@
 // - is the same under crtc_d(a) as under crtc_d(b). (f_wrap_r's sample there is re-taken at the
 // next dot and read only at the line's last cell; see pc9821_crtc.)
 module m(input [7:0] a1, a2, a3, a4, a5, a6, a7, input [7:0] b1, b2, b3, b4, b5, b6, b7,
+         input ca, cb,   // 0x09A8 bit 0 on each side of the edge (the 31 kHz range)
          output mismatch);
   // SPAN-HERE
   wire [9:0] dot = 10'd0;    // hdot = vline = 0 (the plant moves it to where the lag WOULD show)
-  wire [7:0] xa = crtc_x(a1, a2, a3, a4);
+  wire [7:0] xa = crtc_x(ca, a1, a2, a3, a4);
   wire [9:0] ya = crtc_y(a2, a3, a5, a6, a7);
   wire [G_W-1:0] ga = crtc_d(xa, ya, crtc_hact(xa, a1), crtc_vact(ya, crtc_lf(a6, a7)),
                              a2, a3, a4, a5);
-  wire [7:0] xb = crtc_x(b1, b2, b3, b4);
+  wire [7:0] xb = crtc_x(cb, b1, b2, b3, b4);
   wire [9:0] yb = crtc_y(b2, b3, b5, b6, b7);
   wire [G_W-1:0] gb = crtc_d(xb, yb, crtc_hact(xb, b1), crtc_vact(yb, crtc_lf(b6, b7)),
                              b2, b3, b4, b5);

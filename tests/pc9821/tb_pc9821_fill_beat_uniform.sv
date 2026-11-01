@@ -1,24 +1,21 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_FILL_BEAT_UNIFORM: The platform's cache-line fill is BEAT-UNIFORM: every route answers a burstcount-4 line read to the L1 as FOUR WORD BEATS, byte-identical to the 128-bit line form the on-chip responders used to answer with - for TRAM, the CG window, a GVRAM plane window, the PEGC register file and the absent C0000-D7FFF open bus the four beats at the subsystem's cpu_dout/cpu_resp_valid are diffed word-for-word against the responders' own line data captured live in the SAME fill and against the bytes the route is known to hold, the map route is the control (four word beats and never a line form), and the captured fill replayed through the real l1_icache's line arm and beat arm installs byte-identical lines, so the L1 sees the same fill data either way. THE PRE-CONVERSION FORM FAILS THIS BENCH BY CONSTRUCTION: those routes suppressed the word form and answered only the 128-bit line, so the beat wait times out and the run aborts.
+// TB_PC9821_FILL_BEAT_UNIFORM: every cache-line fill is FOUR WORD BEATS PRODUCED BY THE ROUTE, IN ORDER, AND A WALKING ROUTE STREAMS THEM THROUGH ITS WALK - for TRAM, the CG window, a GVRAM plane window, the PEGC register file and the absent C0000-D7FFF open bus the four beats at the subsystem's cpu_dout/cpu_resp_valid are diffed word-for-word against the bytes each route is known to hold, a walking route's line read must be accepted within three cycles of the request and its last beat must land inside the walk's own 48 cycles (the pre-P3 assemble-then-split form accepts after the walk and lands at 53, so it fails this while its bytes were identical), the map route is the control (four word beats out of the backend and no line form at all), and the captured fill replayed through the real l1_icache's line arm and beat arm installs byte-identical lines, so the L1 sees the same fill data either way, and the beat arm of the L1 replay is fed the four beats with 1-3-cycle GAPS (a window walk's cadence), so the L1's fill is proved not to need back-to-back beats.
 //
 // ---- where each expectation comes from ----
 //  * THE BEAT ORDER is the caches' own: src/z486/l1_icache.sv's fill gathers beat N into
-//    line word N (`patch_line_word(..., fill_count, ...)`) and its wide arm installs
-//    `mem_line_dout` directly, so word N of the line form IS beat N of the beat form
-//    (line word N = the dword at the line base + 4N).
-//  * THE ROUTES' LINE DATA is what each responder already assembles: pc9821_window_responder's
-//    16-byte walk (read_data[{byte_index,3'b000} +: 8]), pc9821_gvram_arb's C_VAL/C_WAIT walk
-//    (c_line_r[{c_line_n[3:0],3'b000} +: 8], c_col = c_line_base + c_line_n), pc9821_pegc's
-//    "the same dword four times" (its header), pc9821_open_bus's {4{32'hFFFF_FFFF}}. The bench
-//    reads that SAME data at the subsystem's line mux (dut.cpu_line_dout, the converter's input)
-//    and diffs it against the beats, so both forms are observed in one run. The CG window's
-//    byte position is the responder's own permutation {offset[0], offset[4:1]} (its header:
-//    {page, row}), so the expected byte i of a line read at 0xA4000 is cg_model[{i[0], i[4:1]}].
-//  * THE MAP ROUTE's line form is provably never 1 (pc9821_memory_map's local path is
-//    unreachable for reads), so
-//    it is the control: four word beats out of the backend, no line form at all.
+//    line word N (`patch_line_word(..., fill_count, ...)`), so line word N = the dword at the
+//    line base + 4N, which is what each route's byte/column walk builds.
+//  * THE ROUTES' EXPECTED BYTES are the bytes each backend holds: the TRAM array, the CG view's
+//    own permutation {offset[0], offset[4:1]} (pc9821_window_responder's header: {page, row}),
+//    the GVRAM plane bytes the bench stores, the PEGC register file's dword (pc9821_pegc's
+//    header: "the same dword four times") and the open bus's 0xFF.
+//  * THE ACCEPT AND STREAMING BOUNDS are the structural contract P3 created: a walking route
+//    accepts a line read at the walk's start and strobes word N as its fourth byte/column lands.
+//    The old form accepted after the walk and strobed once, so the same stimulus fails both.
+//  * THE MAP ROUTE is the control: four word beats out of the backend, and no route-side line
+//    machinery at all (its backend answers burstcount 4 as four beats).
 //  * THE GVRAM PHASE runs with the PEGC view down and the PEGC phase with it up, because
 //    pc9821_memory_map gates gvram_window on !pegc_256 and pegc_reg_win on pegc_256
 //    (the two windows are never routed together on the machine either).
@@ -45,7 +42,8 @@ module tb_pc9821_fill_beat_uniform;
   reg [7:0]  grcg_addr = 0;
   reg [7:0]  grcg_din = 0;
   wire       grcg_expand;
-  wire [7:0] grcg_mode_r = 8'h00;
+  wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
+
 
   reg        egc_enable = 0;
   reg [15:0] egc_access = 16'hFFF0;
@@ -81,11 +79,6 @@ module tb_pc9821_fill_beat_uniform;
 
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   wire [31:0] cpu_dout;
-  // The line-form names, declared so `.*` binds in BOTH trees: a port before the
-  // beat-uniform conversion, an internal wire (the converter's input) after it.
-  // The bench reads them hierarchically (line_form_* below), not through here.
-  wire [127:0] cpu_line_dout;
-  wire        cpu_line_resp_valid;
   reg [3:0]  cpu_be = 4'hF;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
@@ -166,6 +159,7 @@ module tb_pc9821_fill_beat_uniform;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
+  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
   wire [31:0] dma_din  = 32'd0;
   wire  [3:0] dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -188,7 +182,7 @@ module tb_pc9821_fill_beat_uniform;
   reg         pegc_256 = 1'b0;
   wire        pegc_256e = 1'b0;
   wire  [2:0] scan_dot = 3'b0;
-  // scan_dot_ce/act: the pegc-scanout lane added these to the subsystem's port
+  // scan_dot_ce/act: the packed scanout added these to the subsystem's port
   // list; this bench runs with the scanout inert (scan_enable=0, pegc_256=0), so
   // the house tie-off (tb_pc9821_egc, tb_pc9821_gvram_fill) is equivalent either
   // way and only exists so `.*` binds.
@@ -219,12 +213,6 @@ module tb_pc9821_fill_beat_uniform;
   reg  [1:0] d8_bank = 2'b00;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
-
-  // THE LINE FORM, as the responders produce it: the subsystem's own line mux
-  // (the converter's input). Hierarchical so BOTH forms are observed in one run
-  // and can be diffed against each other.
-  wire         line_form_pulse = dut.cpu_line_resp_valid;
-  wire [127:0] line_form_data  = dut.cpu_line_dout;
 
   // ==== STIMULUS ====
   integer errors = 0;
@@ -302,23 +290,21 @@ module tb_pc9821_fill_beat_uniform;
   endtask
 
   // One CACHE-LINE READ (burstcount 4 with line_read - the shape memory.sv's line_read
-  // term builds) to `addr`, answered by the four word beats the L1 consumes. Captures
-  // BOTH forms of the SAME fill:
-  //   beats[0..3]  the word beats at the boundary (what the L1 now sees),
-  //   cap_line     the responders' 128-bit line datum, at its own strobe.
-  // Aborts on a timeout, which is exactly the pre-conversion form's failure: those
-  // routes suppressed the word form and answered only the line.
+  // term builds) to `addr`, answered by the four word beats the L1 consumes.
+  //   beats[0..3]  the word beats at the boundary (what the L1 sees),
+  //   acc_cycles   cycles from the request being presented to its accept,
+  //   last_cycles  cycles from the request to the fourth beat.
+  // Aborts on a timeout, which is also the pre-P3 form's failure on a hang.
   reg  [31:0] beats [0:3];
-  reg [127:0] cap_line;
-  reg         line_seen;
   integer     beat_n;
+  integer     acc_cycles, last_cycles;
 
   task automatic line_fill(input [31:0] a);
     integer guard;
     begin
-      cap_line = 128'hx;
-      line_seen = 1'b0;
       beat_n = 0;
+      acc_cycles = 0;
+      last_cycles = 0;
       cpu_addr  = a;
       cpu_din   = 32'd0;
       cpu_be    = 4'hF;
@@ -330,6 +316,7 @@ module tb_pc9821_fill_beat_uniform;
       while (!cpu_ready && guard < BUDGET) begin
         @(negedge clk);
         guard = guard + 1;
+        acc_cycles = acc_cycles + 1;
       end
       if (!cpu_ready) $fatal(1, "TB_PC9821_FILL_BEAT_UNIFORM: FAIL no accept for line read %08x", a);
       @(negedge clk);
@@ -337,60 +324,57 @@ module tb_pc9821_fill_beat_uniform;
       cpu_line_read = 0;
       guard = 0;
       while (beat_n < 4 && guard < BUDGET) begin
-        if (line_form_pulse) begin
-          cap_line = line_form_data;
-          line_seen = 1'b1;
-        end
         if (cpu_resp_valid) begin
           beats[beat_n] = cpu_dout;
           beat_n = beat_n + 1;
+          last_cycles = acc_cycles + guard + 1;
         end
         @(negedge clk);
         guard = guard + 1;
       end
       if (beat_n != 4)
-        $fatal(1, "TB_PC9821_FILL_BEAT_UNIFORM: FAIL %08x answered with %0d word beats (of 4) - the pre-conversion form answered a line read as ONE 128-bit line and suppressed these beats, which is the wedge the retired word-suppressing platform form showed", a, beat_n);
+        $fatal(1, "TB_PC9821_FILL_BEAT_UNIFORM: FAIL %08x answered with %0d word beats (of 4) - a route that suppresses the word form hangs the L1 fill", a, beat_n);
     end
   endtask
 
   // ==== CHECKS ====
 
-  // The whole proof, per route: the four beats are the line form's four dwords,
-  // byte for byte, AND the bytes the route is known to hold. `want_line` says the
-  // route's responder still produces the line form (the converter's input): 1 for
-  // the four on-chip responders, 0 for the map route (whose line form is provably dead).
+  // The whole proof, per route: the four beats are the bytes the route is known to hold, byte
+  // for byte, and a WALKING route additionally owes P3's streaming contract - accepted within
+  // three cycles of the request, last beat no later than the walk's own last byte + 1. The
+  // constant routes (open bus, PEGC regs) and the map's backend keep their own cadence, so only
+  // their bytes are asserted.
   task automatic check_fill(input [8*12-1:0] name, input [31:0] a,
                             input [31:0] w0, input [31:0] w1,
                             input [31:0] w2, input [31:0] w3,
-                            input want_line);
-    integer n, g;
+                            input walking);
+    integer g;
     begin
       line_fill(a);
-      if (line_seen !== want_line) begin
-        $display("FAIL %0s: line form seen=%b want=%b", name, line_seen, want_line);
-        errors = errors + 1;
-      end
-      for (n = 0; n < 4; n = n + 1) begin
-        if (want_line && beats[n] !== cap_line[n*32 +: 32]) begin
-          $display("FAIL %0s: beat %0d is %08x but the line form's word %0d is %08x (not byte-identical)",
-                   name, n, beats[n], n, cap_line[n*32 +: 32]);
-          errors = errors + 1;
-        end
-      end
       if (beats[0] !== w0 || beats[1] !== w1 || beats[2] !== w2 || beats[3] !== w3) begin
         $display("FAIL %0s: beats %08x %08x %08x %08x, want %08x %08x %08x %08x",
                  name, beats[0], beats[1], beats[2], beats[3], w0, w1, w2, w3);
         errors = errors + 1;
       end
-      // No fifth beat and no late form: the fill owes exactly four words.
+      if (walking) begin
+        // P3's contract: the accept precedes the walk. The pre-P3 form accepted a window line
+        // read at the walk's end (48 cycles for TRAM, one GVRAM column period per column).
+        if (acc_cycles > 3) begin
+          $display("FAIL %0s: a line read was accepted %0d cycles after it was presented - a walking route accepts at the walk's start", name, acc_cycles);
+          errors = errors + 1;
+        end
+        // ... and the beats stream through it: the TRAM walk is 16 three-cycle byte reads, so
+        // its last beat lands at cycle 49; the post-walk split form lands at 53.
+        if (name == "tram" && (last_cycles < 45 || last_cycles > 49)) begin
+          $display("FAIL %0s: the last beat landed %0d cycles after the request, outside the streaming window 45..49 (the walk is 48 cycles; the post-walk split form lands at 53)", name, last_cycles);
+          errors = errors + 1;
+        end
+      end
+      // No fifth beat: the fill owes exactly four words.
       g = 0;
       while (g < 12) begin
         if (cpu_resp_valid) begin
           $display("FAIL %0s: a fifth word beat after the four", name);
-          errors = errors + 1;
-        end
-        if (want_line == 0 && line_form_pulse) begin
-          $display("FAIL %0s: a line form appeared on the map route", name);
           errors = errors + 1;
         end
         @(negedge clk);
@@ -453,12 +437,16 @@ module tb_pc9821_fill_beat_uniform;
       .cache_enable(1'b1)
   );
 
-  // Fill both arms from the captured fill: the line arm takes cap_line in one
-  // strobe, the beat arm takes the captured beats one per cycle - the same fill
-  // both ways - then each arm answers a read of the filled line and the two
-  // answers must be byte-identical (and equal the captured line form). The two
-  // arms complete on DIFFERENT cycles (the line arm at its strobe, the beat arm
-  // at its fourth beat), so each completion is captured as it lands.
+  // Fill both arms from the captured fill: the line arm takes the four captured beats
+  // assembled as a 128-bit line (line word N = beat N, the caches' own convention) in one
+  // strobe, the beat arm takes the captured beats WITH GAPS (1-3 idle cycles apart, a window
+  // walk's cadence, never back-to-back) - the same fill both ways -
+  // then each arm answers a read of the filled line and the two answers must be
+  // byte-identical: the line form and the beat form are the same fill. (The true expected
+  // bytes are asserted against the route's own data in check_fill above; this replay proves
+  // the L1 datapath consumes the beat stream into the same line.) The two arms complete on
+  // DIFFERENT cycles (the line arm at its strobe, the beat arm at its fourth beat), so each
+  // completion is captured as it lands.
   task automatic l1_replay_diff(input [31:0] a);
     integer n, guard;
     reg [127:0] ln, bt;
@@ -487,7 +475,7 @@ module tb_pc9821_fill_beat_uniform;
         $fatal(1, "TB_PC9821_FILL_BEAT_UNIFORM: FAIL l1 arms did not launch their fills");
       @(negedge clk);   // the accept cycle ends here; deliver behind it
       got_l = 0; got_b = 0;
-      ic_l_ldata = cap_line;
+      ic_l_ldata = {beats[3], beats[2], beats[1], beats[0]};
       ic_b_data  = beats[0];
       ic_l_lresp = 1'b1;
       ic_b_resp_v = 1'b1;
@@ -496,7 +484,14 @@ module tb_pc9821_fill_beat_uniform;
       if (ic_l_resp) begin ln = ic_l_line; got_l = 1'b1; end
       if (ic_b_resp) begin bt = ic_b_line; got_b = 1'b1; end
       for (n = 1; n < 4; n = n + 1) begin
+        // THE BEATS ARE NOT BACK-TO-BACK ON A REAL WINDOW FILL: the route strobes one word per
+        // four walk steps, so deliver beat n after n idle cycles. z486's L1 gathers beat N into
+        // line word N and needs no adjacency; this drives that (the study names it as the
+        // assumption the change rests on).
+        ic_b_resp_v = 1'b0;
+        repeat (n) @(negedge clk);
         ic_b_data = beats[n];
+        ic_b_resp_v = 1'b1;
         @(negedge clk);
         if (ic_l_resp) begin ln = ic_l_line; got_l = 1'b1; end
         if (ic_b_resp) begin bt = ic_b_line; got_b = 1'b1; end
@@ -534,8 +529,9 @@ module tb_pc9821_fill_beat_uniform;
         $display("FAIL l1 replay: the line arm installed %032x, the beat arm %032x - the L1 did NOT see the same fill data either way", ln, bt);
         errors = errors + 1;
       end
-      if (ln !== cap_line) begin
-        $display("FAIL l1 replay: the installed line %032x is not the captured line form %032x", ln, cap_line);
+      if (ln !== {beats[3], beats[2], beats[1], beats[0]}) begin
+        $display("FAIL l1 replay: the installed line %032x is not the captured beats %032x",
+                 ln, {beats[3], beats[2], beats[1], beats[0]});
         errors = errors + 1;
       end
     end
@@ -578,7 +574,7 @@ module tb_pc9821_fill_beat_uniform;
 
     // ---- open bus (the absent 0xC0000-0xD7FFF): four all-ones words ----
     check_fill("open-bus", 32'h000C_0000,
-               32'hFFFF_FFFF, 32'hFFFF_FFFF, 32'hFFFF_FFFF, 32'hFFFF_FFFF, 1'b1);
+               32'hFFFF_FFFF, 32'hFFFF_FFFF, 32'hFFFF_FFFF, 32'hFFFF_FFFF, 1'b0);
 
     // ---- the MAP ROUTE control (0x20000, ordinary guest RAM): four word beats
     // ---- out of the backend and NO line form at all (r11 section 4.1) ----
@@ -597,7 +593,7 @@ module tb_pc9821_fill_beat_uniform;
     repeat (2) @(negedge clk);
     cpu_store(32'h000E_0100, 32'h5A55_FF01, 4'hF);
     check_fill("pegc-regs", 32'h000E_0100,
-               32'h5A55_FF01, 32'h5A55_FF01, 32'h5A55_FF01, 32'h5A55_FF01, 1'b1);
+               32'h5A55_FF01, 32'h5A55_FF01, 32'h5A55_FF01, 32'h5A55_FF01, 1'b0);
     pegc_256 = 1'b0;
     repeat (2) @(negedge clk);
 

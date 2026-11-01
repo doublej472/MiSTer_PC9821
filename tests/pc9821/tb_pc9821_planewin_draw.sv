@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PLANEWIN_DRAW: a FULL-SCREEN multi-plane picture drawn through the GVRAM plane windows (0xA8000-0xBFFFF) is asserted BY VALUE at every plane byte, so a store that lands the WRONG WORD in a few columns shows up as a horizontal stripe from elsewhere in the picture. Every shape the owner's games issue is driven: plane-major and row-major multi-plane draws, the raster's flush interleaved per row, all four planes written to the SAME columns, a second pass over the picture, the `or es:[di],ax` read-modify-write composite, a 32-bit plane store (the four-byte width), and the graphics library's own `rep movsw` whole-plane stream at consecutive offsets. The check is a software model compared after a raster flush.
+// TB_PC9821_PLANEWIN_DRAW: a FULL-SCREEN multi-plane picture drawn through the GVRAM plane windows (0xA8000-0xBFFFF) is asserted BY VALUE at every plane byte, so a store that lands the WRONG WORD in a few columns shows up as a horizontal stripe from elsewhere in the picture. Every shape the games issue is driven: plane-major and row-major multi-plane draws, the raster's flush interleaved per row, all four planes written to the SAME columns, a second pass over the picture, the `or es:[di],ax` read-modify-write composite, a 32-bit plane store (the four-byte width), and the graphics library's own `rep movsw` whole-plane stream at consecutive offsets. The check is a software model compared after a raster flush.
 //
 // WHY THIS EXISTS. The existing value benches draw at most one 16x16 sprite (tb_pc9821_sprite) or a single line (tb_pc9821_gvram_combine). The word-keyed write-combining buffer holds EIGHT words and a full-screen picture walks rows 80 words apart, so only a full-screen walk cycles the buffer enough to expose an eviction/fill slot that lands a word from another row, and only a streamed whole-plane walk reaches the row and plane ends.
 //
@@ -34,8 +34,8 @@ module tb_pc9821_planewin_draw;
   reg        cpu_line_read = 1'b0;
   reg        cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
 
   reg        grcg_we = 1'b0;
   reg  [7:0] grcg_addr = 8'd0, grcg_din = 8'd0;
@@ -60,9 +60,9 @@ module tb_pc9821_planewin_draw;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(egc_gate), .egc_access(egc_access), .egc_fgbg(egc_fgbg),
       .egc_ope(egc_ope), .egc_fg(egc_fg), .egc_mask(egc_mask),
@@ -72,12 +72,6 @@ module tb_pc9821_planewin_draw;
       .scan_page(scan_page), .scan_line_base(scan_line_base),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .line_data(line_data), .line_sel(line_sel), .line_ready(line_ready));
-
-  // ---- The real controller, at the built configuration (50 MHz, HAS_DQM=0, no fast grade) ----
-
-  
-
-  
 
   // ==== THE MODEL ====
   // exp_mem[plane][row][col] = the byte the image draw should leave in that plane byte. The
@@ -311,8 +305,8 @@ module tb_pc9821_planewin_draw;
 
   // ==== PHASE W: a 32-bit plane store ====
   // A 32-bit plane store covers FOUR consecutive columns (the four byte lanes of the dword), so a
-  // store that lands at the wrong base shows as a ~4-pixel horizontal strip - the width the owner
-  // reports. Streamed back to back like the game's `rep stosd`.
+  // store that lands at the wrong base shows as a ~4-pixel horizontal strip - the width
+  // observed. Streamed back to back like the game's `rep stosd`.
   function automatic [7:0] cm(input integer plane, input integer col);
     begin
       cm = 8'(((col * 37) + (plane * 91)) & 8'hFF);
@@ -379,7 +373,7 @@ module tb_pc9821_planewin_draw;
   endtask
 
   // ==== PHASE S: scroll the plane, so the corruption is pinned to the WRITTEN data ====
-  // The owner's strips FOLLOW THE PLANE when the screen scrolls, so the wrong pixels are in the
+  // The observed strips FOLLOW THE PLANE when the screen scrolls, so the wrong pixels are in the
   // GVRAM itself, not in the display path. The scroll is a same-plane overlapping copy (a
   // `movsw` walk with the source 80 bytes ahead of the destination, i.e. one row up): the copy
   // READS a word the plane already holds and WRITES it 40 words lower, which is the read-after-

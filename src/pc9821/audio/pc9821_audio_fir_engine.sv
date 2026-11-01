@@ -141,15 +141,23 @@ module pc9821_audio_fir_engine #(
     localparam integer ACCW = 34;
     reg signed [ACCW-1:0] acc_l, acc_r;
 
-    // Q17 accumulator -> 16-bit, saturating (the filters' DC gain is unity, so this only
-    // ever catches arithmetic, never the signal). SHIFT+15 is the sign bit of the 16-bit
-    // result, so anything above it that is not that sign is an overflow.
+    // Q17 accumulator -> 16-bit, saturating. The clamp is reached by the SIGNAL, not only by
+    // arithmetic: the filters' DC gain is unity but their step response overshoots (stage B
+    // 5.2%, sum|h| = 1.27; stage C about 8.9% per phase, sum|h| about 1.93), so an edge
+    // landing above about 0.87 of full scale (-1.2 dBFS) - clipped full-scale FM at the OPNA
+    // junction's rails, or the Policenauts CD track-3 plateau, whose stage-B sum reaches
+    // 4 296 639 539 > 2^32 - takes the accumulator past the 16-bit range.
+    // SHIFT+15 is the sign bit of the 16-bit result, so anything above it that is not that
+    // sign is an overflow, and the rail is the sign of the TRUE sum, acc[ACCW-1] (the
+    // accumulator is exact, above, so its top bit is that sign). On an overflow acc[OSB] is
+    // by definition the inverted sign; selecting the rail from it turned a positive overshoot
+    // into -32768 and a negative one into +32767 (tb_pc9821_audio_out_sat).
     localparam integer OSB = SHIFT + 15;               // 32
     localparam integer OVW = ACCW - 1 - OSB;           // 1
     wire ovf_l = (acc_l[ACCW-1:OSB+1] != {OVW{acc_l[OSB]}});
     wire ovf_r = (acc_r[ACCW-1:OSB+1] != {OVW{acc_r[OSB]}});
-    wire signed [15:0] y_l = (SAT != 0 && ovf_l) ? (acc_l[OSB] ? 16'sh8000 : 16'sh7FFF) : acc_l[OSB -: 16];
-    wire signed [15:0] y_r = (SAT != 0 && ovf_r) ? (acc_r[OSB] ? 16'sh8000 : 16'sh7FFF) : acc_r[OSB -: 16];
+    wire signed [15:0] y_l = (SAT != 0 && ovf_l) ? (acc_l[ACCW-1] ? 16'sh8000 : 16'sh7FFF) : acc_l[OSB -: 16];
+    wire signed [15:0] y_r = (SAT != 0 && ovf_r) ? (acc_r[ACCW-1] ? 16'sh8000 : 16'sh7FFF) : acc_r[OSB -: 16];
 
     reg signed [15:0] out_l_q, out_r_q;
     assign out_l = (HOLD_OUT != 0) ? out_l_q : y_l;

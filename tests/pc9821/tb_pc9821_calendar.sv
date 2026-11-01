@@ -26,7 +26,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_CALENDAR:
-// Both uPD4990A/4993A command forms. The serial form is the one the authentic BIOS uses: `send_serial` replays the exact 0x20 byte stream of its send routine (BANK7@0x5DA2, field held at 7, four opcode bits LSB-first on DATA with a CLK each, then an STB pulse) and the clock is read back through the firmware's own 0x33/shr/rcr loop. Also the parallel form's LSB-first bit order (BANK7@0x5D34), the reset and measured register values, and the tick-clear behaviour. The 4993A four-bit prefix vs suffix is r6/08 C19 and is not settled here; the read uses the module's documented zero prefix.
+// Both uPD4990A/4993A command forms. The serial form is the one the authentic BIOS uses: `send_serial` replays the exact 0x20 byte stream of its send routine (BANK7@0x5DA2, field held at 7, four opcode bits LSB-first on DATA with a CLK each, then an STB pulse) and the clock is read back through the firmware's own 0x33/shr/rcr loop. Also the parallel form's LSB-first bit order (BANK7@0x5D34), the reset and measured register values, and the tick-clear behaviour. The 4993A four-bit prefix vs suffix is an open question and is not settled here; the read uses the module's documented zero prefix.
 
 
 module tb_pc9821_calendar;

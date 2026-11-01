@@ -135,7 +135,7 @@ module tb_mem_resp
     .dcache_vipt_probe_accepted(),
     .dcache_vipt_probe_direct_accepted(),
     .dcache_vipt_resolve_valid(1'b0),
-    .dcache_vipt_resolve_phys_addr_raw(32'h0),
+    .dcache_vipt_resolve_phys_addr_raw(32'h0), .dcache_vipt_resolve_tlb_phys_raw(32'h0), .dcache_vipt_resolve_alt_phys_raw(32'h0), .dcache_vipt_resolve_use_tlb(1'b0),
     .dcache_vipt_resolve_hit(),
     .dcache_vipt_resolve_data(),
 

@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// What the CPU's cache-line fill ACTUALLY issues: the real z486 L1 data cache (src/z486/l1_cache.sv), through the real SDRAM bridge (the controller on clk_sys) and the real src/memory/sdram.v controller against the chip model, fills its 16-byte line as ONE 4-dword BURST -- a single request carrying burst_cnt=4, accepted as ONE SDRAM transaction (one BankActivate, one auto-precharged row), returning all four dwords correctly -- where the same 16 bytes read as four single-word requests is FOUR accepted transactions. The fill is therefore already the authentic 486 burst and already the minimum number of SDRAM slots, so r13/38 section 2's 'already batched, nothing left' is pinned here rather than asserted, and this lane's premise -- that the fill might be several shorter requests -- is refuted by measurement.
+// What the CPU's cache-line fill ACTUALLY issues: the real z486 L1 data cache (src/z486/l1_cache.sv), through the real SDRAM bridge (the controller on clk_sys) and the real src/memory/sdram.v controller against the chip model, fills its 16-byte line as ONE 4-dword BURST -- a single request carrying burst_cnt=4, accepted as ONE SDRAM transaction (one BankActivate, one auto-precharged row), returning all four dwords correctly -- where the same 16 bytes read as four single-word requests is FOUR accepted transactions. The fill is therefore already the authentic 486 burst and already the minimum number of SDRAM slots, so the earlier 'already batched, nothing left' is pinned here rather than asserted, and the premise -- that the fill might be several shorter requests -- is refuted by measurement.
 //
 // ---- where each expectation comes from ----
 //  * ONE REQUEST, burst_cnt = 4: src/z486/l1_cache.sv's S_FILL arm sets mem_addr line-aligned
@@ -81,7 +81,7 @@ module tb_pc9821_cpu_line_burst;
       .stores_drained(stores_drained),
       .vipt_probe_offset(12'd0), .vipt_probe_valid(1'b0), .vipt_probe_ready(),
       .vipt_probe_accepted(), .vipt_probe_direct_accepted(),
-      .vipt_resolve_phys_addr(32'd0), .vipt_resolve_valid(1'b0),
+      .vipt_resolve_phys_addr(32'd0), .vipt_resolve_tlb_phys(32'd0), .vipt_resolve_alt_phys(32'd0), .vipt_resolve_use_tlb(1'b0), .vipt_resolve_valid(1'b0),
       .vipt_resolve_data(), .vipt_resolve_hit(),
       .mem_addr(cache_addr), .mem_din(cache_din), .mem_dout(p0_dout),
       .mem_line_dout(128'd0), .mem_be(cache_be), .mem_burstcount(cache_burst),
@@ -99,7 +99,7 @@ module tb_pc9821_cpu_line_burst;
   wire [1:0]  SDRAM_BA, SDRAM_DQM;
   wire        nWE, nRAS, nCAS, nCS, CKE;
 
-  sdram_sync_bridge #(.FREQ(`TB_SDRAM_FREQ), .HAS_DQM(1'b0), .FAST_GRADE(1'b0)) backend (
+  sdram_sync_bridge #(.FREQ(`TB_SDRAM_FREQ), .FAST_GRADE(1'b0)) backend (
       .clk(clk_sys), .resetn(resetn),
       .refresh_allowed(1'b1), .busy(busy), .sdram_size(sdram_size),
       .valid0(p0_valid), .ready0(p0_ready), .wr0(p0_write), .addr0(p0_addr[26:0]),

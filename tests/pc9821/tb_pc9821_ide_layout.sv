@@ -1,14 +1,14 @@
 `timescale 1ns / 1ps
 
-// tb_pc9821_ide_layout - the IDE layout is FIXED in both builds (owner, 2026-10-11).
+// tb_pc9821_ide_layout - the IDE layout is FIXED in both builds.
 //
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_IDE_LAYOUT: The built-in IDE layout is fixed in pc9821_system whatever the build and the media: in the build WITHOUT the CD (CDROM_EN 0) and in the build WITH it (CDROM_EN 1), the one hard disk (hps_io slot 0) answers as bank 0's master - 0x0432 = 0x00, 0x064C = 0xA0: STATUS 0x50, ERROR 0x01, cylinder 0x00/0x00 (an ATA, not a packet, signature) and 0x0433 = 0x02 - and the CD-ROM, when built, as bank 1's master - STATUS 0x00, 0x0642 = 0x01 and the 0x14/0xEB ATAPI signature the Xe10 IDE ROM's presence test reads - with bank 1 an empty connector without it (the measured empty-bank float: 0x064E = 0x064C = 0x0E, 0x074E = 0x0F); port 0xF0 reports exactly that, bit 5 = the hard disk (clear once it is mounted) and bit 6 = the CD drive (clear only in the CD build), so the Xe10 strap reads 0xE9 then 0xC9 without the CD and 0xA9 then 0x89 with it, the stock CD-equipped Xe10's 0x89; and in the CD build a disc mount and an eject move none of it.
 //
 // The reference for the layout is the stock CD-equipped PC-9821Xe10 (its hard disk on the first
 // IDE connector, bank 0; its CD-ROM on the second, bank 1) and NP2kai's default (the hard disk at
-// IDE unit 0, the CD-ROM at unit 2). The owner's own Xe10 answers at bank 1 (docs/probes/IDE.TXT)
-// only because its CF card sits in the CD connector; the owner fixed the core to the stock layout.
+// IDE unit 0, the CD-ROM at unit 2). The probed Xe10 answers at bank 1 (docs/probes/IDE.TXT)
+// only because its CF card sits in the CD connector; the core follows the stock layout.
 // The individual values:
 //   * port 0xF0 bits 5/6 are the two connectors' drive-present lines, active low (the Xe10 ITF's
 //     IDE drive bitmap, BANK4@0x19DF-0x19F2, and its 0x457 byte, BANK4@0x1B6C-0x1B8F); the
@@ -21,7 +21,7 @@
 //     0x0433 = 0x02 at a bank with a device on it (NP2kai cbus/ideio.c ideio_i433).
 //   * an ATAPI master at power-on: STATUS 0x00, ERROR 0x01, 0x0648/0x064A = 0x14/0xEB - the Xe10
 //     IDE ROM's pre-reset presence test (BANK3@0x0D39), NP2kai's signature.
-//   * an empty bank floats 0x0E across 0x0642-0x064E and 0x0F at 0x074C/0x074E (the owner's Xe10
+//   * an empty bank floats 0x0E across 0x0642-0x064E and 0x0F at 0x074C/0x074E (the probed Xe10
 //     at its empty bank 0: probes/R10.TXT, JOY.TXT, WIN.TXT).
 //
 // FAIL-FIRST: before the layout was fixed the build without the CD put the disk on bank 1, so
@@ -52,6 +52,16 @@ module tb_pc9821_ide_layout;
   reg        cd_mount = 1'b0;
   reg [63:0] cd_size = 64'd0;
   localparam [63:0] HDD_BYTES = 64'd4_194_304;   // an 8192-sector disk image
+  // Slot 0 (the hard disk): the mount detector reads the image's first and last sectors, so
+  // each instance needs hps_io's acknowledge and word stream. The words are zero, which is
+  // neither an HDI header nor a VHD footer, so the image mounts as raw - the layout this
+  // bench is about is unchanged.
+  wire        img_lba_hd_u, img_rd_hd, img_wr_hd, img_lba_cd_u, img_rd_cd, img_wr_cd;
+  wire [31:0] img_lba_hd, img_lba_cd;
+  wire [5:0]  img_blk_hd, img_blk_cd;
+  reg         img_ack_hd = 1'b0, img_ack_cd = 1'b0;
+  reg  [12:0] hd_buff_addr = 13'd0;
+  reg         hd_buff_wr = 1'b0;
 
   // the build WITHOUT the CD-ROM (build_profile.py --no-cdrom)
   pc9821_system #(.SYS_FREQ(50_000_000), .DCACHE_SET_BITS(4), .ICACHE_SET_BITS(4), .ENABLE_X87(1'b0),
@@ -64,11 +74,13 @@ module tb_pc9821_ide_layout;
       .ext_mem1_dout(32'd0), .ext_mem1_resp_valid(1'b0), .ext_mem1_ready(1'b1),
       .ext_mem2_dout(32'd0), .ext_mem2_resp_valid(1'b0), .ext_mem2_ready(1'b1),
       .ioctl_download(1'b0), .ioctl_index(16'd0), .ioctl_wr(1'b0), .ioctl_addr(27'd0), .ioctl_dout(16'd0),
-      .img_mounted(hdd_mount_hd), .img_readonly(1'b0), .img_size(HDD_BYTES), .img_ack(1'b0),
-      .img_buff_addr(13'd0), .img_buff_din(16'd0), .img_buff_wr(1'b0),
-      .cd_mounted(1'b0), .cd_size(64'd0), .cd_ack(1'b0), .cdda_req(1'b0),
+      .img_mounted(hdd_mount_hd), .img_readonly(1'b0), .img_size(HDD_BYTES),
+      .img_lba(img_lba_hd), .img_blk_cnt(img_blk_hd), .img_rd(img_rd_hd), .img_wr(img_wr_hd),
+      .img_ack(img_ack_hd),
+      .img_buff_addr(hd_buff_addr), .img_buff_din(16'd0), .img_buff_wr(hd_buff_wr),
+      .cd_mounted(1'b0), .cd_size(64'd0), .cd_ack(1'b0), .cdda_req(1'b0), .cdda_req4(1'b0), .cdda_played(1'b0), .cdda_flush(),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
-      .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .trace_trig(),
+      .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0));
 
   // the build WITH the CD-ROM and its CD-DA player (every preset since 2026-10-10)
@@ -87,29 +99,61 @@ module tb_pc9821_ide_layout;
       .ext_mem1_dout(32'd0), .ext_mem1_resp_valid(1'b0), .ext_mem1_ready(1'b1),
       .ext_mem2_dout(32'd0), .ext_mem2_resp_valid(1'b0), .ext_mem2_ready(1'b1),
       .ioctl_download(1'b0), .ioctl_index(16'd0), .ioctl_wr(1'b0), .ioctl_addr(27'd0), .ioctl_dout(16'd0),
-      .img_mounted(hdd_mount_cd), .img_readonly(1'b0), .img_size(HDD_BYTES), .img_ack(1'b0),
+      .img_mounted(hdd_mount_cd), .img_readonly(1'b0), .img_size(HDD_BYTES),
+      .img_lba(img_lba_cd), .img_blk_cnt(img_blk_cd), .img_rd(img_rd_cd), .img_wr(img_wr_cd),
+      .img_ack(img_ack_cd),
       .img_buff_addr(cd_buff_addr), .img_buff_din(16'd0), .img_buff_wr(cd_buff_wr),
-      .cd_mounted(cd_mount), .cd_size(cd_size), .cd_ack(cd_ack), .cdda_req(1'b0),
+      .cd_mounted(cd_mount), .cd_size(cd_size), .cd_ack(cd_ack), .cdda_req(1'b0), .cdda_req4(1'b0), .cdda_played(1'b0), .cdda_flush(),
       .cd_rd(cd_rd), .cd_lba(cd_lba), .cd_blk_cnt(cd_blk_cnt),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
-      .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .trace_trig(),
+      .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0));
 
-  // hps_io's side of slot 4: serve the drive's header fetch at a mount with zero words (an ISO
-  // whose first sectors are blank), so the mount completes as it does on the MiSTer.
+  // hps_io's side of slot 0: serve each mount probe (first, then last sector) with 256 zero
+  // words, one slot at a time. The no-CD instance has only the disk.
+  always @(negedge clk_sys) begin : hd_host
+    integer words, w;
+    if (img_rd_hd && !img_ack_hd) begin
+      words = (img_blk_hd + 1) * 256;
+      repeat (6) @(negedge clk_sys);
+      img_ack_hd = 1;
+      repeat (3) @(negedge clk_sys);
+      for (w = 0; w < words; w = w + 1) begin
+        hd_buff_addr = 13'(w);
+        hd_buff_wr = 1; @(negedge clk_sys); hd_buff_wr = 0; @(negedge clk_sys);
+      end
+      repeat (2) @(negedge clk_sys);
+      img_ack_hd = 0;
+    end
+  end
+
+  // hps_io's side of slot 4 and of the same instance's slot 0: the CD's header fetch at a
+  // mount (zero words: an ISO whose first sectors are blank) and the disk's mount probes. The
+  // two never overlap in this bench; the CD wins if they ever do.
   always @(negedge clk_sys) begin : cd_host
-    integer words;
+    integer words, w;
     if (cd_rd && !cd_ack) begin
       words = (cd_blk_cnt + 1) * 256;
       repeat (6) @(negedge clk_sys);
       cd_ack = 1;
       repeat (3) @(negedge clk_sys);
-      for (int w = 0; w < words; w++) begin
+      for (w = 0; w < words; w = w + 1) begin
         cd_buff_addr = 13'(w);
         cd_buff_wr = 1; @(negedge clk_sys); cd_buff_wr = 0; @(negedge clk_sys);
       end
       repeat (2) @(negedge clk_sys);
       cd_ack = 0;
+    end else if (img_rd_cd && !img_ack_cd) begin
+      words = (img_blk_cd + 1) * 256;
+      repeat (6) @(negedge clk_sys);
+      img_ack_cd = 1;
+      repeat (3) @(negedge clk_sys);
+      for (w = 0; w < words; w = w + 1) begin
+        cd_buff_addr = 13'(w);
+        cd_buff_wr = 1; @(negedge clk_sys); cd_buff_wr = 0; @(negedge clk_sys);
+      end
+      repeat (2) @(negedge clk_sys);
+      img_ack_cd = 0;
     end
   end
 
@@ -219,7 +263,7 @@ module tb_pc9821_ide_layout;
     // (b) the hard disk mounted (hps_io slot 0's mount event)
     @(negedge clk_sys); hdd_mount_hd = 1; hdd_mount_cd = 1;
     @(negedge clk_sys); hdd_mount_hd = 0; hdd_mount_cd = 0;
-    repeat (200) @(negedge clk_sys);
+    repeat (2000) @(negedge clk_sys);
     expect8(0, 16'h00F0, 8'hC9, "(b) port 0xF0 with the hard disk, no CD drive");
     expect8(1, 16'h00F0, 8'h89, "(b) port 0xF0 with the hard disk and the CD drive (the stock Xe10)");
     expect_hdd_on_bank0(0, "(b)");

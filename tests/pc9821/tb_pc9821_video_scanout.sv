@@ -54,8 +54,8 @@ module tb_pc9821_video_scanout;
   reg  [3:0]  cpu_be = 4'hF;
   reg         cpu_line_read = 1'b0, cpu_valid = 1'b0, cpu_write = 1'b0;
   wire [31:0]  cpu_dout;
-  wire [127:0] cpu_line_dout;
-  wire         cpu_ready, cpu_resp_valid, cpu_line_resp_valid;
+  wire [31:0] cpu_line_word;
+  wire         cpu_ready, cpu_resp_valid, cpu_line_word_valid;
   reg         grcg_we = 1'b0;
   reg  [7:0]  grcg_addr = 8'd0, grcg_din = 8'd0;
   wire [31:0] line_data;
@@ -64,7 +64,7 @@ module tb_pc9821_video_scanout;
   wire        line_rd_sel;
 
   localparam [31:0] GVRAM_BASE = 32'h0300_0000;
-  // The GVRAM's two SDRAM requesters (r13/35) and the shared store behind them.
+  // The GVRAM's two SDRAM requesters and the shared store behind them.
 
   pc9821_gvram_dut u_gvram (
       .clk(clk), .reset(reset),
@@ -72,9 +72,9 @@ module tb_pc9821_video_scanout;
       .win_plane(win_plane), .win_offset(win_offset),
       .cpu_din(cpu_din), .cpu_be(cpu_be), .cpu_line_read(cpu_line_read),
       .cpu_valid(cpu_valid), .cpu_write(cpu_write),
-      .cpu_dout(cpu_dout), .cpu_line_dout(cpu_line_dout),
+      .cpu_dout(cpu_dout), .cpu_line_word(cpu_line_word),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
-      .cpu_line_resp_valid(cpu_line_resp_valid),
+      .cpu_line_word_valid(cpu_line_word_valid),
       .grcg_we(grcg_we), .grcg_addr(grcg_addr), .grcg_din(grcg_din),
       .egc_gate(1'b0), .egc_access(16'hFFFF), .egc_fgbg(16'd0), .egc_ope(16'd0),
       .egc_fg(16'd0), .egc_mask(16'hFFFF), .egc_bg(16'd0),
@@ -92,8 +92,8 @@ module tb_pc9821_video_scanout;
   reg [14:0] scan_line_base = 15'd0;
 
   // The pixel pipeline: fold -> graphics palette -> compositor. Only the graphics
-  // arm is exercised, and the analogue table - pc9821_gfx_palette's ping-pong RAM,
-  // r13/225 #2 - is loaded through its write port so the index is readable off
+  // arm is exercised, and the analogue table - pc9821_gfx_palette's ping-pong RAM -
+  // is loaded through its write port so the index is readable off
   // r_out: entry k carries k in its red nibble, so r_out = {k,k}.
   reg         pal_we = 1'b0;
   reg  [3:0]  pal_widx = 4'd0;
@@ -201,7 +201,7 @@ module tb_pc9821_video_scanout;
   integer n;
 
   // The pixel the raster presents for the current hdot, sampled at the pixel
-  // enable exactly as the framework samples r_out/g_out/b_out (r12/49 section 4).
+  // enable exactly as the framework samples r_out/g_out/b_out.
   reg        armed = 1'b0;
   integer    seen  = 0;
   task automatic sample_and_check;

@@ -7,18 +7,22 @@ reason. The fork's `docs/fork-rebase-policy.md` (inside `src/z486/docs/`) record
 series is kept: a correction is folded into the commit it corrects, and a fork fix is dropped
 when upstream's own implementation passes its fail-first test.
 
-**Vendored commit:** the fork at `85d8190` (`5bcc1eb` plus five cycle-identical timing commits: the
-LAR/LLIM/LBAS read-backs and the descriptor-cache writes keyed by the microcode segment command and target
-instead of the issue-muxed ones, each legal by an invariant the fork asserts in simulation and an independent review checked against every word of the shipped microcode ROM; the D1 skeleton's `ucode_action` decoded from the raw entry
-beside the overlay qualifiers; the speculative target-line compares in carry-free `A+B==K` form; and the
-GPR forwarding views fed the plain loaded value instead of the direct-load ALU result they never select). `5bcc1eb` is cycle-identical area commits on `2447ede`: TR7's PFN is read a
-cycle later from one 32 x 20 MLAB so the TLB's auxiliary tag copies drop their PFN half; the auxiliary
-port's three readers share one tag compare and valid read; the I-cache's fill response returns `fill_line`
-instead of a `line_r` copy; `address_unit` shares one adder across the IND two-term updates and one
-across the issue stack/moffs relocation; LBAS reads `seg_base_for`'s base mux; `mul_div` negates each
-divide operand once at full width and takes the DIV step's carry from the step's own adder; and an
-attribute that turns the fitter's register retiming off in `segmentation_unit` and `prefetch`). The tree carries no local patch: the
-diff map below is the explicit `(none)` row.
+**Vendored commit:** the fork's `a7a863f`, a plain copy. The tree carries no local patch: the
+diff map below is the explicit `(none)` row. What each fork commit changes, and why, is in the
+fork's own log.
+
+What the fork carries, in outline:
+
+- **PC-98 memory-map template** (`z486_cache_map_pkg`): the compile-time classes of the PC-98
+  windows (device apertures uncached and ordered, RAM cacheable), with stores to the template's
+  RAM pages posted through the direct store port (`TEMPLATE_STORE_POST`) and device-window stores
+  kept on the ordered demand path, so no device sees a merged or reordered store.
+- **Correctness fixes** with fail-first programs under `src/z486/tests/programs/`, for example a
+  faulting LFS/LGS keeping the old FS/GS selector (`seg_load_np_keeps_segreg`), and the 486 AC
+  flag kept across protected-mode interrupt entry while real-mode delivery clears it
+  (`ac_int_keep`, `ac_int_real`).
+- **Zero-cycle timing and area cuts**, each proven value-identical by a yosys SAT file under
+  `src/z486/tests/equiv/` and cycle-identical over the fork's test programs.
 
 ## The fork-first rule
 
@@ -31,9 +35,9 @@ CPU changes are made in the fork **first**, then re-vendored. Nothing lives only
   in the diff map. It is owed to the fork, and the next re-vendor should leave the map empty
   again.
 - The contract a change must keep or re-report with per-change attribution:
-  `bash tests/pc9821/run_z486_suite.sh` (317/317 at this vendoring; the runner floor is 309), Dhrystone
-  `254235 cy / 121837 instr / CPI 2.087` (`docs/dhrystone-numbers.md`) and the boot golden
-  (`CYCLES used=930544`). A latency-visible change that costs cycles is raised in
+  `bash tests/pc9821/run_z486_suite.sh` (328/328 at this vendoring; the runner floor is 309), Dhrystone
+  `242611 cy / 121837 instr / CPI 1.991` (`docs/dhrystone-numbers.md`) and the boot golden
+  (`CYCLES used=930533`). A latency-visible change that costs cycles is raised in
   `docs/trade-candidates.md`.
 
 ## Re-vendoring
@@ -58,9 +62,10 @@ undocumented delta and a stale row in temporary copies); it needs no external ch
 
 None.
 
-### Verified diff map (the fork at 85d8190)
+### Verified diff map (the fork at the vendored commit)
 
-`Z486 PATCH MAP: PASS (0 documented files, 0 deliberately not carried, 0 tree-only, upstream 85d8190c452e)`.
+`tools/check_z486_patch_diff.py --upstream <fork checkout at the vendored commit>` reports
+`Z486 PATCH MAP: PASS (0 documented files, 0 deliberately not carried, 0 tree-only, ...)`.
 
 | file | entries |
 |---|---|
