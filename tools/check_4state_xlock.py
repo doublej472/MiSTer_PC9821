@@ -140,9 +140,9 @@ COVERS: dict[str, dict] = {
 UNCOVERED: dict[str, str] = {
     "system_reset_seed": (
         "pc9821_system still does not elaborate in iverilog, but NOT for the two reasons "
-        "this bench once listed: those are fixed (pc9821_dmac.sv:548 (dout_comb = 8'hFF;) is now a "
+        "this bench once listed: those are fixed (pc9821_dmac.sv:536 (dout_comb = 8'hFF;) is now a "
         "legal l-value, and its iobus sibling "
-        "src/pc9821/core/pc9821_iobus.sv:417 (assign dbg_itf_stage = itf_stage;) now "
+        "src/pc9821/core/pc9821_iobus.sv:470 (assign dbg_itf_stage = itf_stage;) now "
         "follows its declaration). What iverilog reports FIRST is a frozen file: "
         "src/opna/jt12/hdl/jt12_top.v labels two generate blocks `gen_adpcm` "
         "(use_adpcm==1 and use_adpcm==2), which iverilog rejects even "

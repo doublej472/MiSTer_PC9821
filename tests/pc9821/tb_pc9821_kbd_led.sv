@@ -42,7 +42,6 @@ module tb_pc9821_kbd_led;
       .dout(dout),
       .irq(irq),
       .ps2_key(ps2_key),
-      .bios_setup(1'b0),
       .led_status(led_status)
   );
 

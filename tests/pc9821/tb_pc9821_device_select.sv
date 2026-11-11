@@ -56,7 +56,9 @@ module tb_pc9821_device_select;
   // beside it: with MPU_EN 0 it must be 0 at EVERY one of the 65,536 addresses.
   wire [10:0] mask_full = {mpu_cs, mask};
 
-  pc9821_device_select dut (.*);
+  // Every instance here builds the PC-9801-118 game port (GAMEPORT_118 1), whose eight
+  // addresses the table below pins; the Xe10 default (0, no -118) is tb_pc9821_xe10_absent_ports'.
+  pc9821_device_select #(.GAMEPORT_118(1'b1)) dut (.*);
 
   // ==== THE SAME DECODE WITH THE MPU-PC98II PRESENT ====
   // MPU_EN 1 is what build_profile.py's mpu_en builds (every preset but trace). The claim this
@@ -67,7 +69,7 @@ module tb_pc9821_device_select;
        ata_cs_on, opna_cs_on, pcm_cs_on, gameport_cs_on, gdc_cs_on, mpu_cs_on, dev_bus_cs_on;
   wire [9:0] mask_on = {gameport_cs_on, pcm_cs_on, pic_master_cs_on, pic_slave_cs_on, pit_cs_on,
                         interrupt_cs_on, cal_cs_on, kbd_cs_on, ata_cs_on, opna_cs_on};
-  pc9821_device_select #(.MPU_EN(1'b1)) dut_on (
+  pc9821_device_select #(.MPU_EN(1'b1), .GAMEPORT_118(1'b1)) dut_on (
       .addr(addr),
       .pic_master_cs(pic_master_cs_on), .pic_slave_cs(pic_slave_cs_on), .pit_cs(pit_cs_on),
       .interrupt_cs(interrupt_cs_on), .cal_cs(cal_cs_on), .kbd_cs(kbd_cs_on),
@@ -85,7 +87,7 @@ module tb_pc9821_device_select;
        sdph_cs_sp;
   wire [10:0] mask_sp = {mpu_cs_sp, gameport_cs_sp, pcm_cs_sp, pic_master_cs_sp, pic_slave_cs_sp,
                          pit_cs_sp, interrupt_cs_sp, cal_cs_sp, kbd_cs_sp, ata_cs_sp, opna_cs_sp};
-  pc9821_device_select #(.SDRAM_PHASE_DYN(1'b1)) dut_sp (
+  pc9821_device_select #(.SDRAM_PHASE_DYN(1'b1), .GAMEPORT_118(1'b1)) dut_sp (
       .addr(addr),
       .pic_master_cs(pic_master_cs_sp), .pic_slave_cs(pic_slave_cs_sp), .pit_cs(pit_cs_sp),
       .interrupt_cs(interrupt_cs_sp), .cal_cs(cal_cs_sp), .kbd_cs(kbd_cs_sp),

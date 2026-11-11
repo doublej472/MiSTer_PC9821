@@ -63,7 +63,6 @@ module tb_pc9821_kbd_warmreset;
       .dout(dout),
       .irq(irq),
       .ps2_key(ps2_key),
-      .bios_setup(1'b0),
       .dbg_events(dbg_events), .dbg_delivered(dbg_delivered),
       .dbg_rd_data(dbg_rd_data), .dbg_wr_ctrl(dbg_wr_ctrl),
       .dbg_rts(), .dbg_rx_en(),

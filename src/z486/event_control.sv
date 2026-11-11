@@ -294,10 +294,13 @@ assign seq_advance = (((i_issue_seq | uc_exec |
                        (fault_suppress_delay_slot & !stall)) &
                       !halted && !repeat_active);
 
-// A CALL through a gate whose new stack is too small raises #SS(new SS
-// selector); INT n and exceptions raise #SS(0).  The CALL dispatch (5B9h) set
-// interrupt_hw without external_event.
-wire ss_call_newstack = ss_fault_newstack_r && interrupt_hw && !external_event;
+// A privilege switch whose new stack is too small raises #SS(new SS
+// selector), EXT set by the fault body for an exception or external event:
+// a CALL through a gate (i486 PRM, CALL: "#SS(SS selector)"), and INT n or an
+// exception through an interrupt/trap gate (a real Am486DX4 reports 38h for
+// INT n and 39h for a #GP with SS0 = 38h, CPUSUITE-XE10 int_newstack_ss /
+// exc_newstack_ss; Intel SDM INT n: "#SS(error_code(NewSS,0,EXT))").
+wire ss_newstack = ss_fault_newstack_r;
 
 // Fault redirects override the port-B continuation. A page fault has priority over a
 // simultaneous segment/general-protection fault, matching the original tree.
@@ -307,7 +310,7 @@ always_comb begin
         seq_fault_redirect.valid = 1'b1;
         seq_fault_redirect.target = gp_fault_double_r ? UADDR_DOUBLE_FAULT :
                                     ac_fault_r ? UADDR_ALIGN_FAULT :
-                                    (ss_fault_r ? (ss_call_newstack ? UADDR_CALL_STACK_FAULT
+                                    (ss_fault_r ? (ss_newstack ? UADDR_CALL_STACK_FAULT
                                                                     : UADDR_STACK_FAULT) :
                                                   UADDR_GENERAL_FAULT1);
     end

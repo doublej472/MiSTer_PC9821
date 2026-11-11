@@ -72,6 +72,7 @@ module tb_pc9821_gvram_arb_equiv;
 
   pc9821_gvram_arb dut (
     .clk(clk),
+    .timing_xe10(1'b0), .gfx_scan_on(1'b0),   // Fast: the pre-field periods
     .reset(reset),
     .access_page(access_page),
     .win_plane(win_plane),

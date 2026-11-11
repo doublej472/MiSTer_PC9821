@@ -4,6 +4,13 @@
 ;
 ; Each trial runs "mov cr3,eax" in the last bytes of P_j and falls through into
 ; N_j, which B maps to T_j. T_j's stub records a marker and returns.
+;
+; Real silicon: the Xe10's Am486DX4 DOES deliver A's #PF.  The CPUSUITE triage
+; run of tri_cr3_race (this program with the stack below fixed and CR2/EIP
+; reported) gave data=00012000h: CR2 = N_0, pushed EIP = N_0's first byte, the
+; fault from A's walk for the prefetch of N_0, taken after MOV CR3 switched to
+; B.  z486 keeps this program's expectation (no fault) pending an owner
+; decision; this program checks z486's behaviour, not the part's.
 BITS 32
 ORG 0
 
@@ -22,7 +29,8 @@ PT_B   equ 0x3000
 
 start:
     cli
-    mov esp, 0x0003F000
+    mov esp, 0x0003FF00        ; inside the one mapped stack page (3F000h): at
+                               ; 3F000h the first push landed in unmapped 3E000h
     lgdt [cs:gdt_desc]
     lidt [cs:idt_desc]
 

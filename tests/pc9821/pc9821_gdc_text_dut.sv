@@ -94,7 +94,6 @@ module pc9821_gdc_text_dut (
     output wire [3:0]  pal_wr_idx,
     output wire [1:0]  pal_wr_chan,
     output wire [3:0]  pal_wr_data,
-    output wire        pal_commit,
 
     output wire       hs_out,
     output wire       vs_out,
@@ -173,7 +172,6 @@ module pc9821_gdc_text_dut (
       .gfx_mode16(gfx_mode16), .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
       .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
-      .pal_commit(pal_commit),
     .pal256_wr_en(pal256_wr_en), .pal256_wr_idx(pal256_wr_idx),
     .pal256_wr_chan(pal256_wr_chan), .pal256_wr_data(pal256_wr_data),
     .gfx_pegc_256(gfx_pegc_256), .gdc_ff2_state(gdc_ff2_state),
@@ -207,6 +205,9 @@ module pc9821_gdc_text_dut (
       .font_ld_addr(font_ld_addr), .font_ld_data(font_ld_data),
       .font_ld_we(font_ld_we),
       .cg_record_restore(cg_record_restore),
+      // The OSD configuration at the measured machine's values (pc9821_iobus's setup_cfg:
+      // port 0x31 = 0xF3, docs/probes/MEMSW.TXT; 0x871E = 0x3E, docs/probes/PORTS.TXT:258).
+      .setup_cfg(24'h763EF3),
       .bios_set(bios_set),
       .cfg_ram_mib(cfg_ram_mib), .cfg_seed_en(cfg_seed_en),
       .cfg_seed_reload(cfg_seed_reload),

@@ -60,7 +60,8 @@ module tb_pc9821_gvram_w2b_wrap;
   // block), and every request this bench presents arrives on the EGC client port with `egc_gate`
   // tied high. It stays so the conversion is the real clock's if that exemption ever changes.
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(100_000_000)) u_arb (
-      .clk(clk), .reset(reset),
+      .clk(clk),
+      .timing_xe10(1'b0), .gfx_scan_on(1'b0),   // Fast: the pre-field periods .reset(reset),
       .access_page(1'b0),
       .win_plane(2'd0), .win_offset(15'd0),
       .cpu_din(32'd0), .cpu_din_z(4'hF), .cpu_din_f(4'h0), .cpu_be(4'hF), .cpu_line_read(1'b0),

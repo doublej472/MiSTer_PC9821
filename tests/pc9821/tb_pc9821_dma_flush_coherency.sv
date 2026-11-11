@@ -64,7 +64,10 @@ module tb_pc9821_dma_flush_coherency;
   // ==== the strap inputs and system-port outputs (.* needs every name) ====
   reg  [3:0]  bios_set = 4'd0;
   reg         gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   reg         triple_fault_reset = 1'b0;
   reg         cal_cdat = 0;
   reg  [6:0]  cfg_ram_mib = 7'd0;
@@ -83,6 +86,7 @@ module tb_pc9821_dma_flush_coherency;
   wire [7:0]  win0_sel;
   wire       win0_sel_moved;   // pc9821_iobus's registered `win0_sel != 8'h08`
   wire        sys16m_en, ide_rom_enable, top_shadow_en, bios_ram_gate;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        ide_ram_gate;
   wire        a20_enable, cpu_reset_req;
   wire [15:0] unmapped_writes, unmapped_reads, last_unmapped_port;
@@ -96,6 +100,7 @@ module tb_pc9821_dma_flush_coherency;
   wire [15:0] dbg_artic_hi, dbg_last_io_addr;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd, dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   wire  [7:0] dbg_fdc_state;
   wire  [7:0] dbg_fdc_cmd;
   wire [31:0] dbg_fdc_result;
@@ -122,7 +127,8 @@ module tb_pc9821_dma_flush_coherency;
 
   // ==== the uPD71071's bus-master memory port, taken at its accept below ====
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire  [3:0] dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   reg         dma_mem_ready = 1'b0;
@@ -180,8 +186,10 @@ module tb_pc9821_dma_flush_coherency;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // ==== DUT ====
   // The CPU side of the coherency: the real z486 `memory` (both L1s and the native

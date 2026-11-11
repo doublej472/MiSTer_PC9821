@@ -65,11 +65,19 @@ module pc9821_cg (
     input wire [15:0] font_ld_data,
     input wire        font_ld_we,
 
-    // The record restore: the MACHINE-RESET seed's one-cycle pulse (pc9821_iobus's
-    // `sdip_seed_pulse`), which restarts the 38-byte walk at store 0x810. It may be asserted
+    // The record restore: the reset seed's one-cycle pulse (pc9821_iobus's `sdip_seed_pulse`:
+    // the machine-reset assertion, a configuration change inside that reset, and the guest's
+    // 0x534 reboot), which restarts the 40-byte walk at store 0x810. It may be asserted
     // while `rst_n_sys` is low (the seed is), which is why the walk below is not clamped by
     // it. The reset seed is this walk's only source and the walk has no zero mode.
     input  wire        cg_record_restore,
+    // The OSD configuration, from pc9821_iobus's reset-qualified latches (its setup_cfg port):
+    // [7:0] the port-0x31 byte, [15:8] the bank-A 0x871E seed byte, [23:16] the bank-A 0x861E
+    // seed byte. The record rows and the mirror bytes the SETUP items live in are built from it
+    // (cg_record_row, cg_restore_byte), so port 0x31, the software-DIP store, its mirror and the
+    // record carry one configuration.
+    // Every bit has a reader: the three mirror cells take the three bytes whole.
+    input  wire [23:0] setup_cfg,
 
     // The OSD Machine field's LIST POSITION (z486_mister P1O[31:28], 0 = Xe10): the
     // software-DIP record is MODEL DATA and the two ITFs carry their own tables - see
@@ -197,7 +205,17 @@ module pc9821_cg (
     end
   endfunction
 
-  wire [18:0] cg_jis_base = cg_jis_addr(cg_hi7, cg_lo7);
+  // A column below 0x20 has no slot of its own: the real Xe10 answers a CPU read of such a
+  // code with column 0x20's glyph in the same row. XE10CFG /CG's CGX table
+  // (docs/probes/KIT1-XE10-CG0-USERCG.TXT:534 `CGX 0101 P20=6A0A P00=6A0A`, 16 zero bytes per
+  // half) reads 0xA1 = 0x01..0x1F like 0xA1 = 0x20 in all four rows it walks - zeros in rows
+  // 0x01/0x10/0x22, 0xFF in row 0x5C (`CGX 015C P20=6A4B P00=6A4B`, FONT.ROM's column-0x20
+  // slot of that row) - through port 0xA9 and the window alike; the wrap this function alone
+  // gives lands in a later row's slots (tb_pc9821_cg_ten_low). The gaiji class is not
+  // here (cg_jis excludes it), so the CG RAM codes such as 0x1056 are untouched. The scanout
+  // draws these cells blank (pc9821_crtc's f_row_in), which is its own, separate rule.
+  wire [6:0]  cg_ten7     = (cg_hi7 < 7'h20) ? 7'h20 : cg_hi7;
+  wire [18:0] cg_jis_base = cg_jis_addr(cg_ten7, cg_lo7);
 
   // ---------------------------------------------------------------
   // The fetched glyph block
@@ -277,6 +295,7 @@ module pc9821_cg (
   reg  [7:0]   wk_code_lo, wk_code_hi;
   reg          wk_jis2nd;    // the previous cell was a JIS left half
   reg  [7:0]   wk_pair_row, wk_pair_ten;
+  reg          wk_pair_in;   // the pair's code is inside the grid (a blank pair fetches nothing)
   reg  [15:0]  wk_skip_cnt;  // saturating count of walk slots skipped because a walk was in flight
   // The walker's bank for the row it fills, latched with the row: pc9821_crtc numbers rows'
   // banks by a mod-3 count of the GDC's row reloads, and asks for the bank after the one being
@@ -407,14 +426,46 @@ module pc9821_cg (
   // stores (Xe10 BANK4@0x489C/0x48A2 = 0x86/0x8A, Xe writes 0x82 at row 0xC), row 0xD is
   // BANK4@0xFD49F's 0xFF, and row 0 (0x04) is the Xa7C9W runtime capture's (qemu-pc98
   // roms/pc98bios/memsw.inc row code 0x20 line 0x00) - no ITF site reads it (an open question).
+  // ROW 2 CARRIES THE OSD'S SETUP ITEMS (docs/bios-setup.md): SETUP stores DIP switch 2 there
+  // INVERTED (its accessors `not al` on both sides), and the ITF writes it back inverted into
+  // port 0x31 at POST (BANK4@0x46A1-0x46AB `mov al,[es:di] / cmp di,0x5 / jnz / xor al,0xff /
+  // out 0x31,al`). So row 2 is the complement of port 0x31's byte in the bits the OSD owns -
+  // bit 3 text lines, bit 4 the memory switch, bit 7 the GDC clock - and the fixed bits 6:5 and
+  // 2:0 are the complement of the port's fixed 1 1 and 0 1 1: row 2 IS ~setup_cfg[7:0], 0x0C at
+  // the defaults (port 0x31 F3) and the factory 0x8C at GDC 5 MHz, 25 lines and initialise
+  // (port 0x31 73). BIT 7 FOLLOWS THE OSD'S GDC CLOCK because SETUP reads it there: the GDC
+  // clock item's getter is BANK3@0x37A3 `call 0x20db / shr al,0x7 / and ax,0x1` (0x20DB reads
+  // row 2 and `not al`s it), value 1 = 2.5 MHz, so the owner's Xe10, photographed in SETUP
+  // showing GDC clock 2.5 MHz (docs/bios-setup.md "The Xe10 as found"), holds row 2 bit 7 = 0,
+  // the same SETUP encoding the row-4 Sound item below is taken from. Its other readers are the
+  // ITF's `out 0x31` (BANK4@0x46A9-0x46AB, @0x4AE3-0x4AE9), which this core ignores (pc9821_iobus's HX_0031
+  // write arm), and the sum check.
+  // ROW 3 CARRIES SETUP'S DIP SWITCH 3 INVERTED, the same way; its bits 1:0 are the floppy disk
+  // mode (docs/bios-setup.md), so on the Xe10 they are the complement of the OSD's 0x861E seed
+  // bits 1:0 (setup_cfg[17:16]): 0x80 at the core's default auto (1M), the factory 0x81 at 1M.
+  // The two factory tables' rows 3 differ only there: the Xe's 0x80 is auto (1M). The Xe keeps its factory row:
+  // that ITF's use of the record is untraced and the Xe set does not boot (README).
+  // ROW 4 BIT 1 IS SETUP'S SOUND ITEM, STORED 1 = "NOT USED" (docs/bios-setup.md, the Sound
+  // row), and it is SET here where the factory tables carry 0xCD: the item is the built-in
+  // PCM codec, which this core does not model, and the owner's Xe10 as found has it "not
+  // used" (docs/bios-setup.md "The Xe10 as found"; its 0x881E reads 0x7C, bit 5 = not used,
+  // in docs/probes/XE10CFG-XE10-CFG0.TXT, against 0xDC with the item "used" in
+  // XE10CFG-XE10-CFGSND.TXT - pc9821_iobus's sdip_powerup and CG_MIRROR_BYTES below carry
+  // that 0x7C already). The machine's record does not read through 0xA9 (the capture's
+  // `CG 2056` rows are 00), so the row is the factory row with the measured item applied.
+  // Its one ITF reader is the sound POST, the same code in both dumps (Xe10 BANK4@0x2967,
+  // Xe bios/xe/BANK4.BIN@0x4BA4): `in al,0xA9 / and al,0x2 / test al,0x2 / jnz` - set, it
+  // gives the codec no IRQ select (`out 0xF40,0`) and, should a codec answer, writes no
+  // `out 0xA460,0x73`; with no codec (0xF45 reads open bus here) both branches leave at the
+  // codec check BANK4@0x29CC, so 0xA460 keeps the -86 board's 0x40 either way.
   function automatic [7:0] cg_record_row(input [3:0] idx, input model_xe);
     begin
       case (idx)
         4'd0:  cg_record_row = 8'h04;
         4'd1:  cg_record_row = 8'hC1;
-        4'd2:  cg_record_row = 8'h8C;
-        4'd3:  cg_record_row = model_xe ? 8'h80 : 8'h81;
-        4'd4:  cg_record_row = 8'hCD;
+        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};
+        4'd3:  cg_record_row = model_xe ? 8'h80 : {6'b100000, ~setup_cfg[17:16]};
+        4'd4:  cg_record_row = 8'hCF;   // the factory 0xCD with bit 1 set: Sound not used (above)
         4'd5:  cg_record_row = 8'hFF;
         4'd6:  cg_record_row = 8'h00;
         4'd7:  cg_record_row = 8'h00;
@@ -429,15 +480,17 @@ module pc9821_cg (
   endfunction
 
   // Row A (store 0x81A): the value that completes the ITF's ten-byte sum to 0 mod 256.
-  // The sum reduces to a per-model constant. Rows 1..9 are all fixed except row 3
-  // (`model_xe ? 8'h80 : 8'h81`); the fixed rows {C1,8C,CD,FF,00,00,AA,55} sum to
-  // 0x18 mod 256, so rows 1..9 sum to 0x99 when model_xe = 0 (row 3 = 0x81, the Xe10
-  // table's own 0x67 completing byte) and to 0x98 when model_xe = 1 (row 3 = 0x80, the
-  // Xe table's 0x68). The two-arm generic loop computed this every clk_sys through
-  // `cfg_seed_byte`; the direct select is value-identical for every model_xe, and any
-  // change to the row table above must re-derive these two constants.
+  // Rows 1..9 are fixed except row 2 (the OSD) and row 3 (the model and the OSD's floppy disk
+  // mode); the fixed rows {C1,CF,FF,00,00,AA,55} sum to 0x8E mod 256, so row A = -(0x8E + row 2 +
+  // row 3), which holds for every Floppy mode and GDC clock because rows 2 and 3 are summed as
+  // computed. With row 2 the factory 0x8C (GDC 5 MHz) and the Xe10's factory row 3 0x81 (1M) that
+  // is its table's completing byte 0x67 less the 2 that row 4's Sound bit adds, 0x65; the Xe (row
+  // 3 = 0x80) gives 0x66, its table's 0x68 less 2. At the core's defaults (GDC 2.5 MHz, row 2
+  // 0x0C; auto (1M), row 3 0x80) it is 0xE6; 1M / auto (640K) / 640K (row 3 0x81 / 0x82 / 0x83)
+  // give 0xE5 / 0xE4 / 0xE3 at 2.5 MHz and 0x65 / 0x64 / 0x63 at 5 MHz.
+  // Any change to the fixed rows above must re-derive 0x8E.
   function automatic [7:0] cg_record_cksum(input model_xe);
-    cg_record_cksum = model_xe ? 8'h68 : 8'h67;
+    cg_record_cksum = 8'd0 - (8'h8E + cg_record_row(4'd2, model_xe) + cg_record_row(4'd3, model_xe));
   endfunction
 
   function automatic [7:0] cg_record_byte(input [3:0] idx, input model_xe);
@@ -446,12 +499,13 @@ module pc9821_cg (
   endfunction
 
   // The dpram's power-up literal: cg_record_byte(idx, 1'b0) for idx 0..13 (the Xe10 model,
-  // which is also the config-less default), spelled out because a function call in a
+  // which is also the config-less default) at the measured machine's setup_cfg 0x763EF3 (1M,
+  // GDC 2.5 MHz: row 2 0x0C, row 3 0x81, row A 0xE5), spelled out because a function call in a
   // parameter override is the class Quartus 17.0.2 refuses (see pc9821_iobus's bit-select
   // note). The reset walk rewrites the RAM with the SELECTED model's rows before the CPU can
   // read, and tb_pc9821_cg_read_path pins the power-up store against cg_record_byte so this
   // literal and the table cannot drift apart.
-  localparam [111:0] CG_RECORD_INIT = 112'hff8a_8667_55aa_0000_ffcd_818c_c104;
+  localparam [111:0] CG_RECORD_INIT = 112'hff8a_86e5_55aa_0000_ffcf_810c_c104;
 
   // THE OSD SETTINGS ARE SAMPLED AT MACHINE RESET ONLY (the msw-cell pattern pc9821_crtc's
   // cfg_fdd_mode latch follows). The
@@ -488,29 +542,71 @@ module pc9821_cg (
   // modules; tb_pc9821_gdc_text pins both spellings to the same capture rows):
   //   bank A = docs/probes/PORTS.TXT:258 (841E 7C 851E 02 861E 76 871E 3E) ...
   //   bank B = the firmware's own factory table (BANK4@0x4818: 8f 80 80 80 80 80 ...)
+  // EXCEPT bank A's 0x851E cell (store 0x51), which is NOT the port's read-back 02: both
+  // firmware writers of that cell compose it from PORT 0x31, not from 0x851E - the ITF's
+  // re-sync (BANK4@0x4839-0x4849 `cmp dh,0x85 / jz` -> `in al,0x31 / test al,0xff / jpo /
+  // xor al,0x10 / mov [es:di],al`) and SETUP's accessor (BANK3@0x220B-0x221D `in al,dx /
+  // mov ah,al / in al,0x31 / and ax,0x10ef / or al,ah`, then `and al,0xef / jpo / or al,0x10`)
+  // - so the cell holds port 0x31's bits 7:5 and 3:0 with bit 4 as the odd-parity bit. A real
+  // machine's cell agrees: the Xa7C9W capture's code 0x01 line 0x01 is 0x73
+  // (qemu-pc98 roms/pc98bios/memsw.inc `.byte 0x01, 0x01, 0x73`), a port-0x31 image with bit 5
+  // (the internal hard disk, "use") set, against the port's 02. It matters because port 0x31
+  // follows a bank-A 0x851E write (pc9821_iobus P31) and the FC42D copy writes this cell
+  // there: with 02 the copy left port 0x31 bit 5 clear, and the IDE ROM's `in al,0x31 / test
+  // al,0x20 / jnz` (BANK3@0x2F5-0x2F9) then detached the hard disks (`and byte [0x55d],0xf0`,
+  // BANK3@0x324) - the "insert a system disk" boot. The cell is the OSD's port-0x31 byte
+  // (setup_cfg[7:0]) at every restore (cg_restore_byte), E3 at the defaults (port 0x31 F3), so
+  // the copy leaves port 0x31 at the Xe10's F3 (docs/probes/XE10CFG-XE10-CFG0.TXT `PORT
+  // 0031=F3 F3` with `SDIPA0 7C 02 ...`); the literal below carries that default byte.
   // Byte layout of the literal below is store 0x40 first: 12 bank-B bytes, the 4-cell
   // 0x4C..0x4F hole (NO source: the Xa7C9W capture has no code-0x01 rows 0x2c-0x2f, and
   // neither the accessor table nor FC42D/FC824 visit it - zero is its unmeasured
   // power-up, and the walk below skips it), then 12 bank-A bytes.
   localparam [223:0] CG_MIRROR_BYTES =
-      224'h9849_7f7f_bfff_7f7c_3e76_027c_0000_0000_8080_8080_8080_8080_8080_808f;
+      224'h9849_7f7f_bfff_7f7c_3e76_e37c_0000_0000_8080_8080_8080_8080_8080_808f;
 
-  // ONE walk covers both runs: 38 steps, the record FIRST (it is what the ITF's 0xFC681
+  // ONE walk covers three runs: 40 steps, the record FIRST (it is what the ITF's 0xFC681
   // check reads, so the boot-critical bytes land in the walk's first 14 cycles), then the
-  // mirror's 24 sourced bytes. The 24-cycle sdip walk in pc9821_iobus keeps cpu_reset_req
-  // high and pc9821_cpu_reset_gate re-arms its 15-cycle hold on each of those cycles, so
-  // the CPU may not leave reset before cycle 24+15 = 39 - which covers 38 steps with one
-  // cycle of margin. If the walk is ever grown past 38 steps, the hold must grow with it
-  // (export this walk's busy into cpu_reset_req) or that invariant is silently gone.
-  localparam [5:0]   CG_RESTORE_LEN  = 6'd38;
+  // mirror's 24 sourced bytes, then the two bytes of the ITF's saved-table length (below).
+  // The 24-cycle sdip walk in pc9821_iobus keeps cpu_reset_req high and
+  // pc9821_cpu_reset_gate re-arms its 15-cycle hold on each of those cycles, so the CPU may
+  // not leave reset before cycle 24+15 = 39 - which covers the first 39 steps. The 40th, the
+  // length's high byte, can land one cycle after the CPU's release; its first reader is the
+  // ITF's table check at BANK4@0x4745, about 0.37 M cycles into the boot (the userdisk tier),
+  // and the CPU cannot reach any CG access within one cycle of leaving reset. If the walk
+  // grows again, the hold must grow with it (export this walk's busy into cpu_reset_req).
+  //
+  // THE SAVED-TABLE LENGTH (store 0x400/0x401 = code 0x1056 line 0x20 rows 0/1). At the end of
+  // a POST the ITF saves a table of its port settings into CG RAM from code 0x5610 up (writer
+  // BANK4@0x2136-0x2192, code map BANK4@0x2195-0x21CA, length word first, negated sum last),
+  // and a later boot that finds a non-zero length does not write it again (BANK4@0x1D34-0x1D64
+  // `or ax,ax / jz` ... `jmp 0x2329`). Every POST's KANJI CG-RAM test (BANK4@0x0076-0x00F4)
+  // writes FF then 00 over codes 0x5620-0x567F/0x5720-0x577F, and the table runs past code
+  // 0x5620 (0x183 bytes on this core; the Xa7C9W capture's own length is 0x15A, qemu-pc98
+  // roms/pc98bios/memsw.inc `.byte 0x10, 0x20, 0x5a` / `.byte 0x10, 0x21, 0x01`, so the
+  // machine's table crosses code 0x5620 too). So the boot after a boot that kept its table
+  // found its tail zeroed, failed the table check (BANK4@0x4741-0x47AD) and installed the
+  // factory DIP image (BANK4@0x47B2): every second machine reset came up with 0x861E = 76 (the
+  // 1 MB floppy interface), port 0x31 = 73 and 0x881E = DC whatever the OSD said, after a SET
+  // THE SOFTWARE DIP-SWITCH screen. How the machine's table survives its own test is not
+  // captured (item 181). The walk clears the length at every machine reset and 0x534 reboot,
+  // so each boot starts as the first boot after a core load does - length 0, the table
+  // written again by the same POST, after its own test - which is the path the boot golden
+  // takes.
+  localparam [5:0]   CG_RESTORE_LEN  = 6'd40;
   localparam [5:0]   CG_RESTORE_LAST = CG_RESTORE_LEN - 6'd1;
+  localparam [12:0]  CG_TABLE_LEN_ADDR = 13'h400;   // steps 38/39: 0x400 (low), 0x401 (high)
   function automatic [12:0] cg_restore_addr(input [5:0] idx);
     begin
       if (idx < 6'd14)       cg_restore_addr = CG_RECORD_ADDR + {9'd0, idx[3:0]};
       else if (idx < 6'd26)  cg_restore_addr = 13'h040 + {7'd0, (idx - 6'd14)};
-      else                   cg_restore_addr = 13'h050 + {7'd0, (idx - 6'd26)};
+      else if (idx < 6'd38)  cg_restore_addr = 13'h050 + {7'd0, (idx - 6'd26)};
+      else                   cg_restore_addr = CG_TABLE_LEN_ADDR + {12'd0, idx[0]};
     end
   endfunction
+  // Bank A's 0x851E mirror cell (see CG_MIRROR_BYTES): port 0x31's byte with bit 4 the
+  // odd-parity bit (BANK4@0x4843-0x4847 `test al,0xff / jpo / xor al,0x10`).
+  wire [7:0] cg_mirror_851e = {setup_cfg[7:5], ~(^(setup_cfg[7:0] & 8'hEF)), setup_cfg[3:0]};
   function automatic [7:0] cg_restore_byte(input [5:0] idx);
     // A byte position in CG_MIRROR_BYTES (0..27). 32 bits wide because pos*8 is the
     // part-select base and is self-determined: at 6 bits it would wrap from 216 to 0.
@@ -518,14 +614,26 @@ module pc9821_cg (
     begin
       if (idx < 6'd14) begin
         cg_restore_byte = cg_record_byte(idx[3:0], model_xe);
+      end else if (idx >= 6'd38) begin
+        cg_restore_byte = 8'h00;            // the saved-table length: no table
       end else begin
         pos = (idx < 6'd26) ? {26'd0, (idx - 6'd14)} : {26'd0, (idx - 6'd26)} + 32'd16;
-        cg_restore_byte = CG_MIRROR_BYTES[pos*8 +: 8];
+        // Bank A's 0x871E cell (store 0x53, step 29) is the OSD-owned seed byte pc9821_iobus
+        // writes into the port (setup_cfg): the ITF copies this mirror into the ports at POST
+        // (BANK4@0x4439-0x4465), so the two must carry the same byte. Bank A's 0x861E cell
+        // (store 0x52, step 28) is the other OSD-owned byte (setup_cfg[23:16]).
+        // Bank A's 0x851E cell (store 0x51, step 27) is the port-0x31 image the firmware's own
+        // writers store there (CG_MIRROR_BYTES above): the OSD's port-0x31 byte with bit 4
+        // made the odd-parity bit, as BANK4@0x4843-0x4847 makes it.
+        if (idx == 6'd29)      cg_restore_byte = setup_cfg[15:8];
+        else if (idx == 6'd28) cg_restore_byte = setup_cfg[23:16];
+        else if (idx == 6'd27) cg_restore_byte = cg_mirror_851e;
+        else              cg_restore_byte = CG_MIRROR_BYTES[pos*8 +: 8];
       end
     end
   endfunction
 
-  // The record restore: a one-cycle strobe from pc9821_iobus starts the 38-byte walk, one
+  // The record restore: a one-cycle strobe from pc9821_iobus starts the 40-byte walk, one
   // byte per clk_sys, through the array's only write port. That port is shared with the
   // 0xA9 access and the 0xA4000 window, so a step needs a cycle none of them uses. A
   // second write port on the scanout side cost 117,521 nodes and 65,552 registers.
@@ -535,12 +643,13 @@ module pc9821_cg (
   // so a reset-held walk could not run AT ALL in the window it exists for - it would have to
   // wait for the release, which is the very instant the CPU starts issuing. Held only by its
   // own `initial` values instead, the walk runs inside the window (all three port-sharing
-  // conditions - `cg_we`, `cg_rd_win`, `io_rd` - are idle there), so the 38 bytes are written
-  // before the CPU can leave its own reset and read the record at 0xFC681. A reset landing
+  // conditions - `cg_we`, `cg_rd_win`, `io_rd` - are idle there), so the 40 bytes are written
+  // (all but the last, see CG_RESTORE_LEN) before the CPU can leave its own reset and read the record at 0xFC681. A reset landing
   // mid-walk simply lets the walk finish; the restore is idempotent. WHAT IT WRITES: the
   // record rows are the model table (the guest's READ of them is the static view below, so
-  // this half exists for the SCANOUT's copy of the same cells), and the mirror's 24 bytes are
-  // live guest state BANK4@0xFC42D copies into the software-DIP ports.
+  // this half exists for the SCANOUT's copy of the same cells), the mirror's 24 bytes are
+  // live guest state BANK4@0xFC42D copies into the software-DIP ports, and the last two are
+  // the ITF's saved-table length, cleared (see CG_RESTORE_LEN).
   reg         cg_rec_busy;
   reg  [5:0]  cg_rec_idx;
   /* verilator lint_off PROCASSINIT */   // the initialisers are the registers' power-up values
@@ -841,25 +950,54 @@ module pc9821_cg (
   // odd offsets the "high" page, row = addr[4:1]; classes that give the low page no
   // meaning leave it on THE dummy - ONE page (cgrom.c:18 `low = 0x7fff0`) shared by
   // every class and both pages of ver0.78+lr (cgrom.c:33-36 `high = low`), so the dummy
-  // byte is CLASS-INDEPENDENT. THIS MACHINE ANSWERS 0x8F THERE: the odd page reads
+  // byte is class-independent in NP2kai. THIS MACHINE ANSWERS 0x8F THERE FOR THE USER-CG
+  // CLASS (the code both VRAM.TXT captures used, 0xA1=0x2F, 0xA3=0x57): the odd page reads
   // 0x00 for all eight rows, so the even page cannot be the store, and the even writes
   // were dropped, so it is read-only (docs/probes/VRAM.TXT). The machine outranks
   // NP2kai's zeroed array byte.
-  // UNMEASURED: whether that page is a CONSTANT or a page keyed on the code register -
-  // both captures used the same code (0xA1=0x2F, 0xA3=0x57, the gaiji class). 0x8F is
-  // measured right for that one state and is what every class answers here; 0x00 is
-  // measured right for none.
+  // THE PAGE IS KEYED ON THE CLASS, not one constant. XE10CFG /CG's CGX table read the even
+  // bytes for other classes too (W20E/W00E = the even bytes with 0xA5 bit 5 set/clear; CRC
+  // 6A4B is 16 bytes of 0xFF):
+  //   gaiji (user CG)         0x8F  (VRAM.TXT above, and the kit's own
+  //                                  docs/probes/KIT1-XE10-CG0-USERCG.TXT:518 `CGW 1056 00 8FFF8F02`)
+  //   one-byte (ANK)          0xFF  (docs/probes/KIT1-XE10-CG0-USERCG.TXT:533
+  //                                  `CGX 0001 P20=A97D P00=A97D W20E=6A4B`; 0010, 0022, 005C alike)
+  //   two-byte, row 0x5C      0xFF  (docs/probes/KIT1-XE10-CG0-USERCG.TXT:710
+  //                                  `CGX 215C P20=AB09 P00=4386 W20E=6A4B`: every
+  //                                  0xA1 = 0x01..0x2F of row 0x5C)
+  //   two-byte, row 0x09      0xFF  (docs/probes/KIT2-XE10-CG2-USERCG.TXT:758
+  //                                  `CGX 2109 P20=2195 P00=6A0A W20E=6A4B W20O=2195 W00E=6A4B
+  //                                  W00O=6A0A`: every 0xA1 = 0x01..0x2F, both 0xA5 halves)
+  //   two-byte, row 0x0C      0xFF  (KIT2-XE10-CG2-USERCG.TXT:806 `CGX 210C P20=6A0A P00=6A0A
+  //                                  W20E=6A4B`: every 0xA1 = 0x01..0x2F, both halves)
+  //   two-byte, row 0x58      0x8F  (KIT2-XE10-CG2-USERCG.TXT:822 `CGX 0158 P20=6A0A P00=6A0A
+  //                                  W20E=A0DD`, CRC A0DD = 16 x 0x8F: every 0xA1 = 0x01..0x2F,
+  //                                  both halves) - NOT row 0x5C's 0xFF, although both
+  //                                  references decode 0x58-0x5F as one class (NP2kai
+  //                                  cgwindowset's 0x58-0x60 arm)
+  // and row 0x09's ODD page with 0xA5 bit 5 clear (cg_lr set) reads 0x00, the port's own answer
+  // there (the same :758 `W00O=6A0A`, 16 x 0x00; every 0xA1 of the row), where the ver0.78 arm
+  // had the dummy. The class rules are therefore per ROW where a row was measured: the rest of
+  // each class keeps the answer it had, UNMEASURED - ver0.78 rows 0x0A/0x0B (even page, and the
+  // odd page with the half bit clear: 0x8F), wide rows 0x0D-0x0F (0x8F) and rows 0x59-0x5B and
+  // 0x5D-0x5F (0xFF, row 0x5C's) - todo item 189.
   localparam [7:0] CG_LOW_DUMMY = 8'h8F;
+  localparam [7:0] CG_LOW_FF    = 8'hFF;
+  wire       cg_row_09  = (cg_lo7 == 7'h09);
+  // the wide rows whose even page is 0xFF: 0x0C (measured), 0x5C (measured) and the rest of
+  // 0x59-0x5F (unmeasured, row 0x5C's answer kept); 0x58 (measured) and 0x0D-0x0F take 0x8F
+  wire       cg_wide_ff = (cg_lo7 == 7'h0C) || ((cg_lo7 >= 7'h59) && (cg_lo7 < 7'h60));
   reg  [7:0] cg_win_byte_r;
   always @(*) begin
     if (cg_gaiji)          cg_win_byte_r = win_page ? cg_ram_q : CG_LOW_DUMMY;
     // cgwindowset's ONE-BYTE branch (cgrom.c:21-25) is the ANK page for every low byte,
     // 0x09-0x0B included - the port's unmasked ver0.78 class does not exist here.
-    else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_DUMMY;
-    else if (cg_ver078)    cg_win_byte_r = (win_page && !cg_lr)
-                                         ? cg_win_blk_byte : CG_LOW_DUMMY;
-    else if (cg_wide)      cg_win_byte_r = win_page
-                                         ? cg_win_blk_byte : CG_LOW_DUMMY;
+    else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_FF;
+    else if (cg_ver078)    cg_win_byte_r = !win_page ? (cg_row_09 ? CG_LOW_FF : CG_LOW_DUMMY)
+                                         : !cg_lr    ? cg_win_blk_byte
+                                         : (cg_row_09 ? 8'h00 : CG_LOW_DUMMY);
+    else if (cg_wide)      cg_win_byte_r = win_page ? cg_win_blk_byte
+                                         : (cg_wide_ff ? CG_LOW_FF : CG_LOW_DUMMY);
     else                   cg_win_byte_r = cg_win_blk_byte;
   end
   assign cg_win_dout = cg_win_byte_r;
@@ -958,16 +1096,21 @@ module pc9821_cg (
   wire wk_jis_pair = wk_jis_any && !wk_ver078;
   wire [7:0] wk_ku  = {1'b0, wk_code_lo[6:0]} - 8'h01;
   wire [7:0] wk_ten = {1'b0, wk_code_hi[6:0]} - 8'h20;
-  wire wk_row_in   = (wk_ku < JIS_ROWS[7:0]);
+  // In the grid: a stored row AND a column at or above 0x20 (pc9821_crtc's f_row_in, the same
+  // test, so the walker and the scanout agree on which cells pair). wk_ten wraps below 0x20.
+  wire wk_row_in   = (wk_ku < JIS_ROWS[7:0]) && !wk_ten[7];
   // A right half reuses the pair's row/column and ignores its own code - the scanout's own
   // rule - and the pair never crosses the line, so a left half in the last cell leaves none.
-  wire wk_new_pair = wk_jis_pair && wk_row_in && !wk_jis2nd;
+  // A code outside the grid still pairs (pc9821_crtc's f_jis2nd: NP2kai/QEMU set kanji2nd for
+  // it), so the walker tracks the pair to stay in step with the scanout but fetches nothing:
+  // the scanout draws that pair blank.
+  wire wk_new_pair = wk_jis_pair && !wk_jis2nd;
   // A ver0.78 row is a SINGLE: one fetch of the slot, half 0 (the base/left 16 bytes),
   // and no pair left behind for the next cell.
   wire wk_half_cell = wk_jis_any && wk_ver078 && wk_row_in && !wk_jis2nd;
   wire [7:0] wk_use_row = wk_jis2nd ? wk_pair_row : wk_ku;
   wire [7:0] wk_use_ten = wk_jis2nd ? wk_pair_ten : wk_ten;
-  wire wk_fetch = wk_new_pair || wk_jis2nd || wk_half_cell;
+  wire wk_fetch = (wk_new_pair && wk_row_in) || (wk_jis2nd && wk_pair_in) || wk_half_cell;
   wire [18:0] wk_glyph_next = 19'h1800 + {wk_use_row, 11'b0} + {1'b0, wk_use_row, 10'b0}
                             + {6'd0, wk_use_ten, 5'b0};
 
@@ -990,7 +1133,7 @@ module pc9821_cg (
       wk_wr_en <= 1'b0; wk_wr_addr <= {JC_AW{1'b0}}; wk_wr_data <= 32'd0;
       wk_glyph_r <= 19'd0; wk_half_r <= 1'b0;
       wk_code_lo <= 8'd0; wk_code_hi <= 8'd0;
-      wk_jis2nd <= 1'b0; wk_pair_row <= 8'd0; wk_pair_ten <= 8'd0;
+      wk_jis2nd <= 1'b0; wk_pair_row <= 8'd0; wk_pair_ten <= 8'd0; wk_pair_in <= 1'b0;
       wk_skip_cnt <= 16'd0;
     end else begin
       wk_wr_en <= 1'b0;
@@ -1042,15 +1185,16 @@ module pc9821_cg (
                  wk_code_hi <= tram_vid_q; wk_state <= W_DEC;
                end
         W_DEC: begin
+                 wk_jis2nd <= (wk_new_pair && (wk_cell != 7'd79));
+                 if (wk_new_pair) begin
+                   wk_pair_row <= wk_ku; wk_pair_ten <= wk_ten; wk_pair_in <= wk_row_in;
+                 end
                  if (wk_fetch) begin
                    wk_glyph_r <= wk_glyph_next;
                    wk_half_r  <= wk_jis2nd;          // a right half is the pair's second cell
-                   wk_jis2nd  <= (wk_new_pair && (wk_cell != 7'd79));
-                   if (wk_new_pair) begin wk_pair_row <= wk_ku; wk_pair_ten <= wk_ten; end
                    wk_req   <= 1'b1;
                    wk_state <= W_REQ;
                  end else begin
-                   wk_jis2nd <= 1'b0;
                    if (wk_cell == 7'd79) wk_state <= W_IDLE;
                    else begin wk_cell <= wk_cell + 7'd1; wk_state <= W_LO; end
                  end
@@ -1066,7 +1210,7 @@ module pc9821_cg (
   // ---------------------------------------------------------------
   // CPU-side port reads. This module answers only its own addresses (0xA1/0xA3/0xA5/0xA9);
   // pc9821_system muxes it with pc9821_crtc's and pc9821_gdc2's, and the arm that reaches
-  // these three ports is the cg_io_dout one -- pc9821_system.sv:2001 "(device_io_addr[7:0] == 8'hA5) || (device_io_addr[7:0] == 8'" -- so the
+  // these three ports is the cg_io_dout one -- pc9821_system.sv:2173 "(device_io_addr[7:0] == 8'hA5) || (device_io_addr[7:0] == 8'" -- so the
   // bytes below are the bytes a CPU read of 0xA1/0xA3/0xA5 receives.
   //
   // The three register ports DO read back their latches. NP2kai attaches a read handler only

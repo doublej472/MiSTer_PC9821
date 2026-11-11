@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DMA_TRAM: a uPD71071 bus-master byte addressed to the text RAM (0xA0000-0xA3FFF) is stored in the text RAM, so a CPU read of the window returns the transferred bytes, and a memory-to-port DMA read answers the text RAM's own byte - NP2kai's memp_write8 sends an address at or above CPU_MEMWRITEMAX (0xA0000) through the CPU's handler table, whose 0xA0000 slot is memtram_wr8 (mem/dmax86.c MEMP_WRITE8, i386c/cpumem.h, mem/memtram.c); MAME pc9801.cpp dma_write_byte writes the program space - with memtram_wr8's attribute rule (an odd byte at or above 0xA2000 is dropped and reads 0xFF), no write into the SDRAM backend under the window, and a DMA byte at 0xA4000 (past the text RAM) or to guest RAM still committing to the backend; a floppy IPL that DMAs a sector to A000:1000 and jumps there then executes that sector.
+// TB_PC9821_DMA_TRAM: a uPD71071 bus-master byte addressed to the text RAM (0xA0000-0xA3FFF) is stored in the text RAM, so a CPU read of the window returns the transferred bytes, and a memory-to-port DMA read answers the text RAM's own byte - NP2kai's memp_write8 sends an address at or above CPU_MEMWRITEMAX (0xA0000) through the CPU's handler table, whose 0xA0000 slot is memtram_wr8 (mem/dmax86.c MEMP_WRITE8, i386c/cpumem.h, mem/memtram.c); MAME pc9801.cpp dma_write_byte writes the program space - with memtram_wr8's attribute rule (an odd byte at or above 0xA2000 is dropped and reads 0xFF), no write into the SDRAM backend under the window, a DMA byte at 0xA4000 (the CG window just past the text RAM, docs/probes/DMAROUTE-XE10.TXT case G1) reaching neither the text RAM nor the backend, and one to guest RAM still committing to the backend; a floppy IPL that DMAs a sector to A000:1000 and jumps there then executes that sector.
 //
 // WHY THIS EXISTS. The text RAM lives in M10K (pc9821_text_mem, reached only through
 // pc9821_window_responder), and the DMA port went straight to the SDRAM backend at the byte's
@@ -24,6 +24,10 @@
 // returned the text RAM's untouched contents.
 
 module tb_pc9821_dma_tram;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -38,6 +42,7 @@ module tb_pc9821_dma_tram;
   // 0x043F's 0x8 nibble, latched in pc9821_iobus. Held off here: this bench is about
   // load/arbitration, and the shadow's routing has its own bench (tb_pc9821_shadow_romsum).
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   wire       win0_sel_moved = (win0_sel != 8'h08);   // pc9821_iobus's registered compare
   // 0x043B bit 2, the 15-16 MiB system-space window. The machine's reset value is ON,
@@ -141,6 +146,8 @@ module tb_pc9821_dma_tram;
   wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
 
   reg        scan_enable = 0;
+
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg [14:0] scan_line_base = 0;
@@ -173,12 +180,12 @@ module tb_pc9821_dma_tram;
   wire gfx_odd_line = 1'b0;
   // ---- pc9821_memory_subsystem's DMA bus-master port, driven by the cases ----
   reg  [31:0] dma_addr = 32'd0;
-  // The DMAC presents its address's video-window class registered with the address
-  // (pc9821_dmac mem_gvwin: 2'b10 = the text RAM); this bench drives the address, so it forms
-  // the class the same way.
-  wire [1:0]  dma_gvwin = { (dma_addr[31:16] == 16'h000B) || (dma_addr[31:14] == 18'h00028),
-                            (dma_addr[31:20] == 12'd0) && ((dma_addr[19:15] == 5'b10101) ||
-                             (dma_addr[19:16] == 4'hB) || (dma_addr[19:15] == 5'b11100)) };
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  // The DMAC's address load (pc9821_dmac mem_addr_nx/mem_load): the subsystem registers the
+  // byte's route as the address loads, so the bench loads the address while no request is up
+  // and presents it at least one cycle later, as the DMAC's S_FIRST/S_DEV -> S_MEM edge does.
+  wire [31:0] dma_addr_nx = dma_addr;
+  wire        dma_load    = !dma_valid;
   reg  [31:0] dma_din  = 32'd0;
   reg   [3:0] dma_be   = 4'd0;
   reg         dma_valid = 1'b0;
@@ -235,6 +242,9 @@ module tb_pc9821_dma_tram;
   // 0x063C bank select into the 0xD8000 window: 0 = the IDE option ROM, the reset bank.
 
   reg  [1:0] d8_bank = 2'b00;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
   // ==== THE BACKEND: the bridge's launch/ack contract, minus the hiding $fatal ====
@@ -363,6 +373,7 @@ module tb_pc9821_dma_tram;
       dma_din   = {4{b}};
       dma_be    = 4'b0001 << addr[1:0];
       dma_write = is_write;
+      @(negedge clk);   // the DMAC's address load: one cycle before the request
       dma_valid = 1'b1;
       seen = 0; hold = 0; resps = 0; rd = 32'hXXXX_XXXX;
       g = 0;
@@ -504,12 +515,15 @@ module tb_pc9821_dma_tram;
       errors = errors + 1;
     end
 
-    // ---- controls: just past the text RAM (0xA4000) and guest RAM still go to the backend ----
+    // ---- controls: just past the text RAM (0xA4000) is the CG window, which takes the byte
+    //      (docs/probes/DMAROUTE-XE10.TXT case G1; tb_pc9821_dma_route pins where), so neither
+    //      the text RAM's offset 0 nor the backend sees it; guest RAM still goes to the backend ----
     commits_before = b_commits;
+    tram[14'h0000] = 8'hC3;
     dma_byte(32'h000A_4000, 1'b1, 8'h3C, rd);
-    if (b_commits != commits_before + 1) begin
-      $display("FAIL a DMA byte at 0xA4000 (past the text RAM) did not commit to the backend (commits %0d -> %0d)",
-               commits_before, b_commits);
+    if (b_commits != commits_before || tram[14'h0000] !== 8'hC3) begin
+      $display("FAIL a DMA byte at 0xA4000 (the CG window) reached the backend or the text RAM (commits %0d -> %0d, tram[0] %02x)",
+               commits_before, b_commits, tram[14'h0000]);
       errors = errors + 1;
     end
     commits_before = b_commits;

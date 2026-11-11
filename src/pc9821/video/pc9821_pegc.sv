@@ -12,6 +12,15 @@
 //                    window) is 0xE0004 and bank B (0xB0000) 0xE0006, four bits
 //                    each; the capture says so too (docs/probes/PEGC.TXT's PPM
 //                    rows read 0E0004/0E0006, and only 0E0006 moved under DOOM).
+//                    THE READ-BACK IS THE MACHINE'S, NOT NP2kai's byte round-trip:
+//                    0xE0004/0xE0006 keep bits 5-0 of the written byte (bits 7-6
+//                    read 0) and 0xE0005/0xE0007 read 0x00 whatever is written.
+//                    docs/probes/DMAROUTE-XE10.TXT case P4 (256-colour mode, LEN=4
+//                    at 0xE0004): the as-found `ORIG=05000600`, the prefill
+//                    B1 53 5A 5A (the sector's EB 09 00 00 ^ key 0x5A) reads back
+//                    `PRE=31001A00`, and the stored EB 09 00 00 reads back
+//                    `POST=2B000000`, for the CPU's and the DMA's stores alike.
+//                    Bits 5-4 are kept but do not bank (NP2kai VGARD8 `& 15`).
 //   0xE0100          mode: BIT 0 ONLY is stored (NP2kai memvgaio_wr8 masks
 //                    `value &= 0x1` on this register). 0 = packed-pixel
 //                    (256-colour) windows, 1 = the plane engine's windows. No
@@ -70,7 +79,11 @@ module pc9821_pegc (
     output wire [3:0]  bank_a,      // 0xE0004 bits 3:0: the 0xA8000 window's bank
     output wire [3:0]  bank_b,      // 0xE0006 bits 3:0: the 0xB0000 window's bank
     output wire        plane_mode,  // 0xE0100 bit 0: 1 = the windows are the engine's
-    output wire        vram_en      // 0xE0102 bit 0: the flat aperture is enabled
+    output wire        vram_en,     // 0xE0102 bit 0: the flat aperture is enabled
+    // The responder is between transactions (S_IDLE): the one cycle a request is sampled.
+    // pc9821_memory_subsystem shares this port between the CPU and the uPD71071 and may
+    // hand it to the other master only here, where no request is in flight.
+    output wire        idle
 );
 
   // mio1[0..3] (0xE0004-0xE0007) and mio2[0..31] (0xE0100-0xE011F): NP2kai's two
@@ -144,8 +157,8 @@ module pc9821_pegc (
       vram_en_r <= 1'b0;
     end else if (write_accept) begin
       for (lane = 0; lane < 4; lane = lane + 1) begin : wr_lane
-        if (cpu_be[lane] && (req_addr[14:2] == 13'd1))
-          mio1[lane] <= cpu_din[lane*8 +: 8];
+        if (cpu_be[lane] && (req_addr[14:2] == 13'd1) && (lane[0] == 1'b0))
+          mio1[lane] <= {2'b00, cpu_din[lane*8 +: 6]};   // bits 5-0 (header: DMAROUTE-XE10 P4)
       end
       if (mio2_wr) begin
         mio2_dirty[mio2_idx] <= 1'b1;
@@ -213,6 +226,7 @@ module pc9821_pegc (
   assign bank_b     = mio1[2][3:0];
   assign plane_mode = plane_mode_r;
   assign vram_en    = vram_en_r;
+  assign idle       = (state == S_IDLE);
 
 endmodule
 

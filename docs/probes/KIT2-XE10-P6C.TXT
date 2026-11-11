@@ -1,0 +1,12 @@
+XE10CFG configuration stores (tools/hwprobe/xe10cfg)
+P6C asfound=00
+ROW 6C 80
+P6C w=80 r=80
+ROW 6C F0
+P6C w=F0 r=F0
+ROW 6C FF
+P6C w=FF r=F0
+ROW 6C 70
+P6C w=70 r=70
+P6C restored-00 r=00
+XE10CFG DONE

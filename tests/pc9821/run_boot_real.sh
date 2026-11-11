@@ -8,7 +8,7 @@
 #   bash tests/pc9821/run_boot_real.sh                 build and run
 #   bash tests/pc9821/run_boot_real.sh --compile-only  elaborate only
 #
-# The count is pinned by BOOT_CYCLES_REAL_SDRAM in the bench (CYCLES used=942542): any other
+# The count is pinned by BOOT_CYCLES_REAL_SDRAM in the bench (CYCLES used=942534): any other
 # count is fatal there, and this script also requires the bench's "CYCLES ASSERTED" line. Its own
 # object directory (obj_boot_real), but still a heavy job: run it beside no other boot tier.
 set -euo pipefail

@@ -37,7 +37,6 @@ module tb_pc9821_kbd_codes;
   wire [7:0] dout;
   wire irq;
   reg [10:0] ps2_key = 0;
-  reg        bios_setup = 0;
 
   // ==== DUT ====
   // Shrink the byte-presentation tick so back-to-back keys stay inside read_byte's
@@ -53,7 +52,6 @@ module tb_pc9821_kbd_codes;
       .dout(dout),
       .irq(irq),
       .ps2_key(ps2_key),
-      .bios_setup(bios_setup),
       // The JIS layout: NP2kai sdlcnv106, this bench's reference, is a JIS 106-key map.
       // tb_pc9821_kbd_layout covers the US layout's four keys against NP2 winkbd.cpp.
       .layout_jis(1'b1)

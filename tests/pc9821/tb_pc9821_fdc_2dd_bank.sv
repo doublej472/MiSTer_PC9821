@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// One uPD765 sits behind TWO port windows: the 0x00BE strap (bit 0) selects whether 0x90/0x92/0x94 or 0xC8/0xCA/0xCC answers, and the same bit routes the controller's completion to IRQ11 (slave_irq[3]) or IRQ10 (slave_irq[2]) and its DMA handshake to channel 2 or channel 3; the unselected window answers the open bus 0xFF and drops writes (NP2kai's gate), the register index is the same in both banks, the 2DD window's control port answers NP2kai's 0x74 where the 2HD one answers the machine's 0x44, and a floppy READ issued on the 2DD window moves the sector over DMA channel 3 while the same command on the 2HD window still uses channel 2. The FDD-mode switch reads back as 0x00BE/0x00BF bit 2 - Fixed FF, Auto FB (FA after writing 0x02) - and the read follows the switch only across a reset (POST samples it).
+// One uPD765 sits behind TWO port windows: the 0x00BE strap (bit 0) selects whether 0x90/0x92/0x94 or 0xC8/0xCA/0xCC answers, and the same bit routes the controller's completion to IRQ11 (slave_irq[3]) or IRQ10 (slave_irq[2]) and its DMA handshake to channel 2 or channel 3; the unselected window answers the open bus 0xFF and drops writes (NP2kai's gate), the register index is the same in both banks, the 2DD window's control port answers the Xe10's 640K-mode 0x64 (docs/probes/FDMODE-XE10-FDMF0.TXT, -FDMF1.TXT) away from a command and 0x74 (bit 4, the selected drive's RDY) straight after a SENSE DRIVE STATUS of a drive with media, as the BIOS's 640K read path reads it (BANK7@0x7E67-0x7E7E), where the 2HD one answers the machine's 0x44, 0x04BE reads EE with the strap at 0 and FE with it at 1 (bit 4, 1.44 MB access, clear in the 640K I/F mode, the same captures and FDM0), and a floppy READ issued on the 2DD window moves the sector over DMA channel 3 while the same command on the 2HD window still uses channel 2. The Floppy mode field's fixed/auto bit reads back as 0x00BE bit 2 - 1M FF, Auto (1M) FB (FA after writing 0x02), 0x00BF reading FF as the Xe10's does (docs/probes/FDMODE-XE10-FDMF3.TXT) - and the read follows the field only across a reset (POST samples it).
 //
 // THE 2DD BANK, DRIVEN AT THE PORT LEVEL because the port decode IS the feature: the same
 // pc9821_iobus the machine boots through is poked at 0x90/0x92/0x94, 0xC8/0xCA/0xCC,
@@ -24,18 +24,17 @@
 //     :43-56, pic_setirq(0x0b) vs (0x0a)) and the DMA channel (fdc_dmaready, :85-92,
 //     FDC_DMACH2HD = 2 / FDC_DMACH2DD = 3 at :22-27).
 //
-// TWO OF THE ELEVEN CASES ARE CAPTURE-PENDING, and each is NAMED for the reference it
+// ONE OF THE ELEVEN CASES IS CAPTURE-PENDING AND ONE IS CAPTURED, and each is NAMED for the reference it
 // follows so a capture flips a named assertion rather than silently changing a byte:
 //   * hd_window_dead_under_2dd_strap follows NP2KAI (the unselected window answers 0xFF and
 //     swallows writes). qemu-pc98 and MAME ALIAS instead, and MAME carries a TODO saying it
 //     should be gated - so this is the one behavioural bit the references do not agree on,
 //     and no capture in docs/probes/ reads these ports (PORTS.TXT skips 0x5B-0xEF).
-//   * control_port_byte_2dd follows NP2KAI's fdc_i94 (`if (!(port & 0x10))` sets 0x20 and
-//     0x10: io/fdc.c:1064-1078) - the 2DD door answers 0x74 and the 2HD door keeps the 0x44
-//     this machine has been measured at (docs/probes/PORTS.TXT). QEMU-PC98 DISAGREES IN THE
-//     OTHER DIRECTION (FDSTAT_DMA at 0x94 and not at 0xcc, hw/block/pc98-fdc.c:2816-2827);
-//     MAME agrees with NP2kai (pc9801.cpp:571-580). The tree's evidence hierarchy puts
-//     NP2kai first, so that is what is built - and the case names both readings.
+//   * control_port_byte_2dd is CAPTURED now: the 2DD door reads 0x64 in the 640K I/F mode
+//     (docs/probes/FDMODE-XE10-FDMF0.TXT, -FDMF1.TXT) and the 2HD door 0x44 in the 1M mode
+//     (FDMODE-XE10.TXT). NP2kai's fdc_i94 (0x74 at 0xCC, io/fdc.c:1064-1078) and MAME's live
+//     ready bit (pc9801.cpp:571-580) both differ from the capture in bit 4; reg144_640k
+//     (0x04BE bit 4 clear in 640K mode, the same captures) rides in the same case.
 //
 // EACH CASE AND WHERE ITS EXPECTATION COMES FROM:
 //   1  strap_readback              NP2kai fdc_ibe (`(chgreg & 3) | 0xf8`, io/fdc.c:1112-1114)
@@ -47,7 +46,11 @@
 //   7  dma_ch2_2hd                 regression guard: FDC_DMACH2HD = 2 still selected at 0x03
 //   8  dma_chann_qualifier         the other channel's strobe cannot move these bytes
 //   9  hd_window_dead_under_2dd_strap   NP2kai's gate (capture-pending; qemu/MAME alias)
-//  10  control_port_byte_2dd       NP2kai fdc_i94 (capture-pending; qemu disagrees)
+//  10  control_port_byte_2dd       FDMODE-XE10 captures: 0xCC=64 (640K), 0x94=44 (1M);
+//      reg144_640k                 0x04BE=EE with the strap at 0, FE at 1 (FDMF0/FDMF1/FDM0)
+// 10b  selected_rdy                0xCC bit 4 = the selected drive's RDY (undoc98 io_fdd.txt)
+//                                  straight after SENSE DRIVE STATUS (BANK7@0x7E67-0x7E7E),
+//                                  the captured 0 one drive poll later and for an empty unit
 //  11  boot_golden_precondition    chgreg resets to 3 (NP2kai fdc_reset, :1159), so the
 //                                  ITF's own 0xC8 probes are gated out and the boot golden
 //                                  (CYCLES used=930542) cannot move
@@ -81,7 +84,13 @@ module tb_pc9821_fdc_2dd_bank;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  // Floppy mode list position 1, 1M (0x861E = 0x76): the measured machine, whose captures
+  // (docs/probes/FDMODE-XE10.TXT, 0x00BE = FF) the strap reads below cite. The OSD default,
+  // position 0 = Auto (1M), reads bit 2 clear (FB); step 12 moves to it.
+  reg  [1:0] floppy_mode = 2'd1;
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   reg         triple_fault_reset = 1'b0;
   reg         cal_cdat = 0;
   reg  [6:0]  cfg_ram_mib = 7'd0;
@@ -102,6 +111,7 @@ module tb_pc9821_fdc_2dd_bank;
   wire [7:0]  win0_sel;
   wire       win0_sel_moved;   // pc9821_iobus's registered `win0_sel != 8'h08`
   wire        sys16m_en, ide_rom_enable, top_shadow_en, bios_ram_gate;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire ide_ram_gate;   // 0x1E8E's IDE work-RAM gate (the iobus drives it; unused here)
   wire        a20_enable, cpu_reset_req;
   wire [15:0] unmapped_writes, unmapped_reads, last_unmapped_port;
@@ -115,6 +125,7 @@ module tb_pc9821_fdc_2dd_bank;
   wire [15:0] dbg_artic_hi, dbg_last_io_addr;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd, dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -156,7 +167,8 @@ module tb_pc9821_fdc_2dd_bank;
 
   // ==== the uPD71071's bus-master memory port, modelled below ====
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire  [3:0] dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   reg         dma_mem_ready = 1'b0;
@@ -170,8 +182,10 @@ module tb_pc9821_fdc_2dd_bank;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // ==== STIMULUS ====
   // The port numbers this bench drives, named once.
@@ -182,6 +196,7 @@ module tb_pc9821_fdc_2dd_bank;
                     P_DATA_2DD = 16'h00CA,
                     P_DOR_2DD  = 16'h00CC,
                     P_STRAP    = 16'h00BE,
+                    P_REG144   = 16'h04BE,
                     P_DMA_STAT = 16'h0011,
                     P_DMA_MASK = 16'h0015,
                     P_DMA_MODE = 16'h0017,
@@ -625,22 +640,89 @@ module tb_pc9821_fdc_2dd_bank;
       $fatal(1, "hd_window_dead_under_2dd_strap (NP2KAI; qemu/MAME alias): with the strap at 0x03, 0xC8 reads %02x, expected FF", rd_val);
 
     // ------------------------------------------------------------------ 10: control port byte
-    // CAPTURE-PENDING, and it follows NP2KAI's fdc_i94: `ret = 0x40; if (!(port & 0x10))
-    // { ret |= 0x20; ret |= 0x10; }` (io/fdc.c:1064-1078) - the 2DD door at 0xCC advertises
-    // DMA and ready, the 2HD door at 0x94 does not, so 0x94 keeps the 0x44 this machine has
-    // been MEASURED at (docs/probes/PORTS.TXT) and 0xCC answers 0x74. QEMU-PC98 DISAGREES:
-    // its FDSTAT_DMA (0x20) is set at 0x94 and not at 0xcc (hw/block/pc98-fdc.c:2816-2827).
-    // MAME agrees with NP2kai (pc9801.cpp:571-580). A capture reading 0x94 and 0xCC back to
-    // back settles it; this assertion names both readings so a flip is a named change.
+    // THE MACHINE, both doors and both mode bits. The 2HD door at 0x94 reads 0x44 in the 1M
+    // I/F mode (docs/probes/FDMODE-XE10.TXT `PORT 0094=44`); the 2DD door at 0xCC reads 0x64
+    // in the 640K I/F mode (docs/probes/FDMODE-XE10-FDMF0.TXT and -FDMF1.TXT `PORT 00CC=64`,
+    // the strap at 0, a disk in drive 0, before and after a SENSE). undoc98 io_fdd.txt: bit 5
+    // DMACH fixed 1 in 640K mode, bits 3:2 TYP = 01, bit 4 the drive's RDY pin. NP2KAI's
+    // fdc_i94 sets bit 4 at 0xCC unconditionally (0x74, io/fdc.c:1064-1078) and MAME ORs a live
+    // drive ready (pc9801.cpp:580); the capture reads it 0 with a disk in, so neither holds.
     port_rd(P_DOR_2HD);
     if (rd_val !== 8'h44)
-      $fatal(1, "control_port_byte_2dd (NP2KAI: 0x94=0x44, 0xCC=0x74; QEMU: 0x94 gets 0x20): 0x94 reads %02x, expected the machine's measured 44",
+      $fatal(1, "control_port_byte_2dd (FDMODE-XE10: 0x94=44 in 1M mode, 0xCC=64 in 640K mode): 0x94 reads %02x, expected the machine's 44",
              rd_val);
     port_wr(P_STRAP, 8'h02);
     port_rd(P_DOR_2DD);
-    if (rd_val !== 8'h74)
-      $fatal(1, "control_port_byte_2dd (NP2KAI: 0x94=0x44, 0xCC=0x74; QEMU: 0x94 gets 0x20): 0xCC reads %02x, expected 74 (0x40 | DMA 0x20 | ready 0x10 | internal-priority 0x04)",
+    if (rd_val !== 8'h64)
+      $fatal(1, "control_port_byte_2dd (FDMODE-XE10: 0x94=44 in 1M mode, 0xCC=64 in 640K mode): 0xCC reads %02x, expected the machine's 64 (0x40 | DMACH 0x20 | TYP 0x04, RDY 0)",
              rd_val);
+    port_wr(P_STRAP, 8'h00);
+    port_rd(P_DOR_2DD);
+    if (rd_val !== 8'h64)
+      $fatal(1, "control_port_byte_2dd (FDMODE-XE10: 0x94=44 in 1M mode, 0xCC=64 in 640K mode): with the strap at 0x00 0xCC reads %02x, expected 64",
+             rd_val);
+    // 0x04BE bit 4, "1.44 MB access possible": undoc98 io_fdd.txt (I/O 04BEh) reads 0 for every
+    // drive in the 640KB I/F mode. THE MACHINE: EE with 0xBE bits 1:0 = 00 (FDMF0 00BE=F4,
+    // FDMF1 00BE=F0), FE with 11 (FDMODE-XE10.TXT 00BE=FF, FDMF3 00BE=FB) and FE with 01
+    // (FDM0 00BE=FD): the bit follows the strap, bit 0. NP2KAI's fdc_i4be is the constant FE.
+    port_wr(P_STRAP, 8'h00);
+    port_rd(P_REG144);
+    if (rd_val !== 8'hEE)
+      $fatal(1, "reg144_640k (FDMODE-XE10-FDMF0/FDMF1: 04BE=EE at strap 0, FE at strap 1): with 0xBE bits 1:0 = 00 0x04BE reads %02x, expected EE", rd_val);
+    port_wr(P_STRAP, 8'h02);
+    port_rd(P_REG144);
+    if (rd_val !== 8'hEE)
+      $fatal(1, "reg144_640k (FDMODE-XE10-FDMF0/FDMF1: 04BE=EE at strap 0, FE at strap 1): with 0xBE bits 1:0 = 10 0x04BE reads %02x, expected EE", rd_val);
+    port_wr(P_STRAP, 8'h01);
+    port_rd(P_REG144);
+    if (rd_val !== 8'hFE)
+      $fatal(1, "reg144_640k (FDMODE-XE10-FDMF0/FDMF1: 04BE=EE at strap 0, FE at strap 1): with 0xBE bits 1:0 = 01 (FDM0) 0x04BE reads %02x, expected FE", rd_val);
+    port_wr(P_STRAP, 8'h03);
+    port_rd(P_REG144);
+    if (rd_val !== 8'hFE)
+      $fatal(1, "reg144_640k (FDMODE-XE10-FDMF0/FDMF1: 04BE=EE at strap 0, FE at strap 1): with 0xBE bits 1:0 = 11 0x04BE reads %02x, expected FE", rd_val);
+    port_wr(P_STRAP, 8'h02);
+
+    // ------------------------------------------------------------------ 10b: the selected RDY
+    // 0xCC bit 4 is the RDY pin of the drive the controller selects (undoc98 io_fdd.txt), and
+    // the BIOS's 640K read path reads it straight after a SENSE DRIVE STATUS of the unit
+    // (BANK7@0x7E67-0x7E7E); with the 640K AI off a clear bit answers every read AH=60h
+    // (BANK7@0x7525-0x7535), which is how a 2DD IPL booted through the Auto interface toggle
+    // hung. Away from a command (one uPD765A drive poll, 1.024 ms, later) the bit reads the
+    // capture's 0 again (case 10, FDMODE-XE10-FDMF0/FDMF1 `PORT 00CC=64`). The bench clock is
+    // the iobus default 50 MHz, so the poll interval is 51200 cycles; 110000 is past it at
+    // either clock the core runs.
+    port_wr(P_DATA_2DD, 8'h04);            // SENSE DRIVE STATUS
+    port_wr(P_DATA_2DD, 8'h00);            // unit 0, head 0: the medium is there
+    port_rd(P_DATA_2DD);                   // ST3
+    if ((rd_val & 8'h20) !== 8'h20)
+      $fatal(1, "selected_rdy (undoc98 io_fdd.txt bit 4 RDY; BANK7@0x7E67-0x7E7E): ST3 of unit 0 reads %02x, expected RDY 0x20 set", rd_val);
+    port_rd(P_DOR_2DD);
+    if (rd_val !== 8'h74)
+      $fatal(1, "selected_rdy (undoc98 io_fdd.txt bit 4 RDY; BANK7@0x7E67-0x7E7E): 0xCC reads %02x straight after SENSE DRIVE STATUS of unit 0 with media, expected 74 (RDY set) - with it clear the BIOS answers a 640K read AH=60h at Floppy mode Auto",
+             rd_val);
+    repeat (110000) @(negedge clk);
+    port_rd(P_DOR_2DD);
+    if (rd_val !== 8'h64)
+      $fatal(1, "selected_rdy (FDMODE-XE10-FDMF0/FDMF1 PORT 00CC=64): 0xCC reads %02x one drive poll after the command, expected the captured 64",
+             rd_val);
+    port_wr(P_DATA_2DD, 8'h04);
+    port_wr(P_DATA_2DD, 8'h01);            // unit 1: no medium
+    port_rd(P_DATA_2DD);
+    port_rd(P_DOR_2DD);
+    if (rd_val !== 8'h64)
+      $fatal(1, "selected_rdy (undoc98 io_fdd.txt bit 4 RDY): 0xCC reads %02x after SENSE DRIVE STATUS of the EMPTY unit 1, expected 64 - the pin is the selected drive's", rd_val);
+    port_wr(P_DATA_2DD, 8'h04);
+    port_wr(P_DATA_2DD, 8'h00);
+    port_rd(P_DATA_2DD);
+    port_wr(P_DOR_2DD, 8'h80);             // controller reset: the select lines drop
+    port_rd(P_DOR_2DD);
+    if (rd_val !== 8'h64)
+      $fatal(1, "selected_rdy (uPD765A RESET): 0xCC reads %02x after a controller reset following SENSE DRIVE STATUS of unit 0, expected 64", rd_val);
+    port_wr(P_DOR_2DD, 8'h08);
+    port_rd(P_DOR_2HD);
+    if (rd_val !== 8'hFF)
+      $fatal(1, "selected_rdy: 0x94 reads %02x with the strap at 0x02, expected the dead window's FF", rd_val);
 
     // ------------------------------------------------------------------ 11: the reset state again
     // The last word is the golden's: from a cold reset the strap is 3, the 2HD window
@@ -657,38 +739,41 @@ module tb_pc9821_fdc_2dd_bank;
     if (rd_val !== 8'hFF)
       $fatal(1, "boot_golden_precondition: 0xC8 reads %02x after a reset, expected FF", rd_val);
 
-    // ------------------------------------------------------------------ 12: the FDD-mode switch
-    // 0x00BE bit 2 is the FDD-mode switch, both positions real (MAME pc9801.cpp fdc_mode_r
-    // `(m_dsw3->read() & 3) << 2`, DSW3:1 Fixed / Auto-Detection). Fixed reads the measured
-    // unit's FF (docs/probes/FDMODE-XE10.TXT), Auto FB (NP2kai fdc_ibe `(fdc.chgreg & 3) | 8 |
-    // 0xf0`). POST samples a switch, so the read follows the input only across a reset.
-    fdd_dip_fixed = 1'b0;
+    // ------------------------------------------------------------------ 12: the fixed/auto bit
+    // 0x00BE bit 2 is SETUP's fixed/auto choice, the Floppy mode field (MAME pc9801.cpp
+    // fdc_mode_r `(m_dsw3->read() & 3) << 2`). 1M reads the measured unit's FF
+    // (docs/probes/FDMODE-XE10.TXT), Auto (1M) FB (docs/probes/FDMODE-XE10-FDMF3.TXT; NP2kai
+    // fdc_ibe `(fdc.chgreg & 3) | 8 | 0xf0`). The field is latched at reset, so the read follows
+    // it only across one.
+    floppy_mode = 2'd0;                              // Auto (1M), the OSD default
     repeat (4) @(negedge clk);
     port_rd(P_STRAP);
     if (rd_val !== 8'hFF)
-      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x after the switch moved to Auto WITHOUT a reset, expected FF (sampled at reset only)", rd_val);
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x after Floppy mode moved to Auto (1M) WITHOUT a reset, expected FF (sampled at reset only)", rd_val);
     reset = 1;
     repeat (8) @(negedge clk);
     reset = 0;
-    repeat (4) @(negedge clk);
+    repeat (40) @(negedge clk);
     port_rd(P_STRAP);
     if (rd_val !== 8'hFB)
-      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x at Auto after a reset, expected FB (bit 2 clear, NP2kai fdc_ibe)", rd_val);
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x at Auto (1M) after a reset, expected FB (docs/probes/FDMODE-XE10-FDMF3.TXT)", rd_val);
+    // 0x00BF is not the register's second door on a read: the Xe10 reads FF there while 0x00BE
+    // reads FB / F0 / F4 (docs/probes/FDMODE-XE10-FDMF3/FDMF1/FDMF0.TXT `PORT 00BF=FF`).
     port_rd(16'h00BF);
-    if (rd_val !== 8'hFB)
-      $fatal(1, "fdd_mode_switch: 0x00BF reads %02x at Auto, expected FB (the pair reads alike)", rd_val);
+    if (rd_val !== 8'hFF)
+      $fatal(1, "fdd_mode_switch: 0x00BF reads %02x at Auto (1M), expected FF (docs/probes/FDMODE-XE10-FDMF3.TXT)", rd_val);
     port_wr(P_STRAP, 8'h02);
     port_rd(P_STRAP);
     if (rd_val !== 8'hFA)
-      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x at Auto after `out 0x00BE,0x02`, expected FA", rd_val);
-    fdd_dip_fixed = 1'b1;
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x at Auto (1M) after `out 0x00BE,0x02`, expected FA", rd_val);
+    floppy_mode = 2'd1;                              // 1M
     reset = 1;
     repeat (8) @(negedge clk);
     reset = 0;
-    repeat (4) @(negedge clk);
+    repeat (40) @(negedge clk);
     port_rd(P_STRAP);
     if (rd_val !== 8'hFF)
-      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x back at Fixed after a reset, expected FF", rd_val);
+      $fatal(1, "fdd_mode_switch: 0x00BE reads %02x back at 1M after a reset, expected FF", rd_val);
 
 // ==== VERDICT ====
     $display("TB_PC9821_FDC_2DD_BANK: PASS");

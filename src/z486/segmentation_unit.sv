@@ -651,9 +651,9 @@ always_ff @(posedge clk) begin
         desc_cache[6] <= seg_desc_real_mode(16'h0000);
         desc_cache[7] <= seg_desc_real_mode(16'h0000);
         idt_base <= 32'h0;
-        idt_limit <= 20'h003FF;
+        idt_limit <= DTR_RESET_LIMIT;
         gdt_base <= 32'h0;
-        gdt_limit <= 20'h003FF;
+        gdt_limit <= DTR_RESET_LIMIT;
 `endif
     end else begin
         // The descriptor writes are microcode commands only (an issue cycle's

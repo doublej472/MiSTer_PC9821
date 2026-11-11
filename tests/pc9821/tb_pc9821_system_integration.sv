@@ -17,7 +17,10 @@ module tb_pc9821_system_integration;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -65,6 +68,7 @@ module tb_pc9821_system_integration;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -82,6 +86,7 @@ module tb_pc9821_system_integration;
   wire        egc_shift_we;
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
   reg        saw_device_rd = 1'b0;
@@ -115,7 +120,8 @@ module tb_pc9821_system_integration;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -136,8 +142,10 @@ module tb_pc9821_system_integration;
   // wildcard instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // The device decode, driven independently of the fabric's own decode so the two can
   // be compared.
@@ -307,7 +315,12 @@ module tb_pc9821_system_integration;
       // The 0x43x family.
       check_port(16'h0434, 8'hBE, "R10.TXT");
       check_port(16'h0436, 8'h04, "R10.TXT");
-      check_port(16'h0439, 8'hB4, "R10.TXT");
+      // 0x439 is the ITF's cold-start flag: 0x00 out of a machine reset, and R10.TXT's 0xB4 is
+      // the ITF's own cold-branch write (BANK4@0x40EC-0x40F5: 0xB4 | (read & 2)), so the
+      // machine's DOS-prompt byte needs that write first.
+      check_port(16'h0439, 8'h00, "0x439 cold-start flag clear out of reset (BANK4@0x40D6-0x40DF)");
+      write_byte(16'h0439, 8'hB4);
+      check_port(16'h0439, 8'hB4, "R10.TXT after the ITF's cold-branch write");
       // 0x043B echoes the live bit-2 request now (NP2kai necio),
       // so the machine's byte needs the machine's STATE: the
       // 0xFB capture is a DOS-prompt state after the firmware's own 0x00 writes

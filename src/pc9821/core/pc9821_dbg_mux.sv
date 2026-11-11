@@ -34,6 +34,7 @@ module pc9821_dbg_mux #(
   //   0x20/0x21  the CPU sampler (0x21: the previous sample was lost)
   //   0x30/0x31  a memory-snoop write / read beat             0x32 LOST snoop events
   //   0x43       one frozen-trace entry                       0x44 the trigger record
+  //   0x50-0x56  a floppy-controller event (pc9821_fdc_log)   0x5E LOST, 0x5F ALIVE
   function automatic [5:0] dbg_rec_len(input [7:0] t);
     case (t)
       8'h01: dbg_rec_len = 6'd8;
@@ -52,6 +53,8 @@ module pc9821_dbg_mux #(
       8'h32: dbg_rec_len = 6'd8;
       8'h43: dbg_rec_len = 6'd15;
       8'h44: dbg_rec_len = 6'd13;
+      8'h50, 8'h51, 8'h52, 8'h53, 8'h54, 8'h55, 8'h56: dbg_rec_len = 6'd7;
+      8'h5E, 8'h5F: dbg_rec_len = 6'd7;
       default: dbg_rec_len = 6'd2;
     endcase
   endfunction

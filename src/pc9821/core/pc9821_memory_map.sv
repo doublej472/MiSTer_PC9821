@@ -33,6 +33,7 @@ module pc9821_memory_map (
     // 0x4000 dwords of it, BANK4@0xF82C7-0xF8317), and any other 0x2x = unmapped. pc9821_iobus
     // encodes that as ems_state 0/1/2: only state 1 leaves the planes and takes the page
     // (see ems_page_base), and state 2 is routed to the open-bus responder by the subsystem.
+    // A 0x2x other than 0x20/0x22 written from the identity keeps it (pc9821_iobus next_ems_state).
     input wire [1:0]  ems_state,
     // Where the 0x22 state's 64 KiB page lives in the backend (see pc9821_memory_subsystem).
     /* verilator lint_off UNUSEDSIGNAL */   // low 20 bits are the constant 0x48000 (pack_base + PACK_BYTES + 0x48000): the page arm is a splice
@@ -80,6 +81,20 @@ module pc9821_memory_map (
     output wire        pegc_packed,
     output wire        pegc_reg_win,
     output wire        pegc_nc,
+
+    // THE E PLANE IS AN ANALOG-MODE WINDOW. `mode2_16color` is the 16-colour select (port 0x6A
+    // dat 0x00/0x01, FF2 num 0; pc9821_crtc's mode2_16color). With it clear - the digital
+    // (8-colour) mode DOS leaves - the machine shows NOTHING at 0xE0000-0xE7FFF: 0xE0004 reads
+    // FF and keeps no store (docs/probes/DMAROUTE-XE10.TXT case P4 view V1, `ORIG=FFFFFFFF
+    // PRE=FFFFFFFF POST=FFFFFFFF` under `9A0_04/07/08/0A=00 00 00 00`), and 0xE0000 reads
+    // FF FF FF FF after `00 FF 55 AA` were written (docs/probes/VRAM2.TXT `E000wrote= 00 FF 55 AA`
+    // / `got= FF FF FF FF`). NP2kai agrees: memm_vram installs memnc_* over the 0xE0000 slot
+    // whenever VOPBIT_ANALOG (gdc_o6a's num-0 bit) is clear (i386c/cpumem.c). So the intensity
+    // window decodes only with the bit set, and `e_plane_nc` names the digital-mode slot for
+    // the subsystem's registered open-bus responder (reads 0xFF, stores dropped). The 256-colour
+    // view outranks both (pegc_reg_win: NP2kai's VOPBIT_VGA branch takes the slot first).
+    input wire        mode2_16color,
+    output wire       e_plane_nc,
 
             // Graphics VRAM sits directly above the 1 MiB firmware reserve; 0xA6 selects the page.
 
@@ -153,7 +168,8 @@ module pc9821_memory_map (
 
             // Window 0: 0x80000-0x9FFFF is a 128 KiB alias of the RAM page (value & 0xFE) * 0x10000. 0x08 is
             // the identity, 0x0E points at 0xE0000-0xFFFFF, 0x0C at 0xC0000-0xDFFFF, bit 0 is ignored, and
-            // read-back is value|1. BIAS IS APPLIED PRE-DECODE so each region below keeps one comparison:
+            // read-back is value|1. Pages 0x00-0x07 are NOT an alias but a hole (win0_hole_page below).
+            // BIAS IS APPLIED PRE-DECODE so each region below keeps one comparison:
             // the ITF's 0x9800<-0xF800 copy after 0x461=0x0E needs 0x80000+x == 0xE0000+x.
   // The membership test is a BIT SLICE, not the 32-bit range compare it reads as: [0x80000,0x9FFFF]
   // is exactly "the address is in the first MiB (bits [31:20] all zero) and bits [19:17] are 100",
@@ -216,7 +232,35 @@ module pc9821_memory_map (
   wire [DV_W-1:0] dv_raw = region_dec(cpu_addr_raw[31:13]);
   wire [DV_W-1:0] dv_l20 = region_dec({12'd0, cpu_addr_raw[19:13]});
   wire [DV_W-1:0] dv_peg = region_dec({8'd0, cpu_addr_raw[23:13]});
-  wire [DV_W-1:0] dv_mv  = region_dec({7'd0, win0_hi, cpu_addr_raw[15:13]});
+  // WINDOW 0 AT 0x0A IS RAM, NOT THE VRAM WINDOWS. The machine's window-0 page 0x0A/0x0B is
+  // storage of its own: docs/probes/DMAROUTE-XE10.TXT cases W1/W2 (0x0461=0x0A) store through
+  // 0x88100 and 0x81000 and read the bytes back there (V0 -> D), while plane B at 0xA8100 and
+  // the text RAM at 0xA1000 keep their prefills (V1 -> P1) and so does the RAM the window
+  // covers (V2 -> P2); the as-found bytes under the window are DRAM-like noise
+  // (`V0 ORIG=00200000...`, `V0 ORIG=FFFFFFFFF5FFFFDF...`) where the plane and the text RAM read
+  // 00/0x0020 - as docs/probes/WIN.TXT's `0461=0A ... b=0800` already showed against the text
+  // RAM's 0x0020. So the moved arm decodes no graphics window on that page (plane, packed,
+  // not-connected or EMS arms: bits 6, 5, 4 and 2), and the access falls through to the backend
+  // at d_addr, 0xA0000-0xBFFFF, the RAM page QEMU's rule-(a) names (pc98-mem.c:295, the same
+  // arithmetic every other page uses here); pc9821_memory_subsystem keeps its text-RAM, CG and
+  // gap routes off a moved address the same way. win0_sel[0] is always 0, so 0x0A is the one
+  // value whose window lands there. The mask is on a register (win0_sel), off the address cone.
+  wire            win0_ram_page = (win0_sel == 8'h0A);
+  // WINDOW 0 BELOW PAGE 8 IS A HOLE. docs/probes/KIT2-XE10-RISKY-461.TXT:5-15 (RISKY /461): with
+  // 0x0461 = 00, 01, 02, 03, 04 or 06 every window word read at 0x80000/0x80400/0x90000/0x9FFFE
+  // is FFFF while the conventional memory the page names reads its contents directly (`R461 00
+  // rb=01 win(80000 80400 90000 9FFFE)=FFFF FFFF FFFF FFFF dir=B625 7002 0001 82E8`), and a
+  // marker stored through the window at pages 00 and 01 reads FFFF back and never reaches the
+  // cell (`mark(win before/after, cell)=FFFF FFFF 3C5A`); page 08 is the identity (line 17).
+  // win0_sel[0] is always 0, so 0x07 is 0x06's page. So the moved arm answers the FF-always
+  // decode on those pages (bit 8, the bit ide_worktail reads, which routes the access to the
+  // open-bus responder: all ones, stores discarded); a page below 8 names RAM below 0x80000,
+  // where no other region bit is set. Pages above 0x09 are not measured and keep the alias.
+  // Like win0_ram_page the select is on a register, off the address cone.
+  wire            win0_hole_page = (win0_sel[7:3] == 5'd0);
+  wire [DV_W-1:0] dv_mv_dec = region_dec({7'd0, win0_hi, cpu_addr_raw[15:13]});
+  wire [DV_W-1:0] dv_mv  = win0_ram_page  ? (dv_mv_dec & ~17'h00074) :
+                           win0_hole_page ? (dv_mv_dec | 17'h00100)  : dv_mv_dec;
   wire [DV_W-1:0] dv     = win0_moved ? dv_mv : xl_low20 ? dv_l20 : xl_peg ? dv_peg : dv_raw;
 
         // Only the 8 KiB option ROM is a window; 0xDA000-0xDBFFF stays identity RAM because the authentic
@@ -344,9 +388,11 @@ module pc9821_memory_map (
             // blocks=000C bytes=00006000 ... ffblocks=000C`), and QEMU models the rest of the
             // 0xD8000 window as rom_empty - a 0xFF fill with only the 8 KiB ide_ram overlaid
             // at 0xDA000 (hw/i386/pc98-mem.c d8000_rom; NP2kai's 12 KiB gate mask 0x1c00 is
-            // the outlier). The tail's gate-ON state is capture-pending: one marker write at
-            // 0xDC000 under 0x1E8E=0x81 settles it (probe2 /IDEGATE, item 34); the QEMU shape
-            // is what is modelled until that capture lands.
+            // the outlier). The gate-ON state is measured too: docs/probes/XE10CFG-XE10-CFGWR.TXT:9-13
+            // (`DC000 1E8E was/gate/back FE FF FE`, then `DC000 gate81` and `DC000 marked` read
+            // FF x16 after a 5A A5 store under 0x1E8E=0x81), so the tail answers FF in both gate
+            // states, as modelled.
+  // (The moved window's hole pages set the same bit: see win0_hole_page.)
   wire ide_worktail = dv[8];
             // ================ end the FF-always tail ====================================
   assign absent_area = (dv[7] && !sound_rom_window) ||
@@ -392,7 +438,8 @@ module pc9821_memory_map (
   wire        ems_shadow  = ems_in_window && (ems_state != 2'd0);
   assign ems_open_bus = ems_unmapped;
   wire        gvram_contig = (dv[2] || dv[6]) && !ems_shadow;
-  wire        gvram_inten  = dv[3];
+  wire        gvram_inten  = dv[3] && mode2_16color;   // analog (16-colour) mode only: see e_plane_nc
+  assign      e_plane_nc   = dv[3] && dv[16] && !pegc_256 && !mode2_16color;
               // The plane windows exist only in the first MiB, and the guard is on d_addr - the address the
               // decoders see: with window 0 moved, a guest address can translate to a page whose low 20 bits
               // look like a plane window (0x461 = 0x7F lands on RAM at 0x7E0000). In 256-colour mode the

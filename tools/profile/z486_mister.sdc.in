@@ -225,7 +225,7 @@ if {[get_collection_size [get_registers -nowarn {*cdda_inst|*}]] > 0} {
 #    stage-1 sample, so the filter at worst advances/defers the level by one
 #    clk_sys. Clock-scoped: the clk_vid leg is bounded by the video clock section's max-delay
 #    instead (one clk_sys period, what it was held to while clk_vid was clk_sys). The clk_100 telemetry chains at
-#    sys/hps_io.sv:985 and :1020 are deliberately NOT named here: frozen
+#    sys/hps_io.sv:1014 and :1049 are deliberately NOT named here: frozen
 #    framework internals, covered by the same clock groups.
 set pc9821_clk_hdmi [get_clocks {pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0]*|divclk}]
 if {[get_collection_size $pc9821_clk_hdmi] != 1} {

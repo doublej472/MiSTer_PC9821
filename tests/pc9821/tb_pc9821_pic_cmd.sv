@@ -34,7 +34,7 @@
 //     for `IRR = 0x03 with IMR = 0xFF`, but VRAM.TXT (and VRAM2.TXT) contain no
 //     PIC read at all - their port snapshot starts at 0x20. The only direct PIC
 //     reads in-repo are docs/probes/PROBE.TXT:16 and T.TXT:16, both `7d 00 00`,
-//     which are consistent with a TIMER-specific clear (todo item 114 / BOOT14)
+//     which are consistent with a TIMER-specific clear (BOOT14)
 //     and do not by themselves prove the general latch.
 //
 //  4. Non-specific EOI clears the HIGHEST-PRIORITY in-service level, and only one.

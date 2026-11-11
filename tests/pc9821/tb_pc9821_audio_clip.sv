@@ -64,7 +64,10 @@ module tb_pc9821_audio_clip;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -118,6 +121,7 @@ module tb_pc9821_audio_clip;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -145,6 +149,7 @@ module tb_pc9821_audio_clip;
   // 0x043F EMS page register / window select (pc9821_iobus outputs).
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
   // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
@@ -179,7 +184,8 @@ module tb_pc9821_audio_clip;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -195,8 +201,10 @@ module tb_pc9821_audio_clip;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // pc9821_system's device glue: the OPNA is selected for its four ports (P5 made the ONE
   // pc9821_device_select instance live inside pc9821_iobus, so `.*` above binds opna_cs/pcm_cs
@@ -311,7 +319,7 @@ module tb_pc9821_audio_clip;
 
   // The extended bank's register/data pair (0x18C/0x18E), the port pair the
   // card puts FM channels 4-6 behind: jt12_mmr decodes the chip address's high
-  // bit as the channel's high bit (jt12_mmr.v:535, `up_ch <= {part, selected_register[1:0]};`), and the glue reaches it only
+  // bit as the channel's high bit (jt12_mmr.v:539, `up_ch <= {part, selected_register[1:0]};`), and the glue reaches it only
   // when 0xA460 bit 0 is set (pc9821_opna.sv op_sel).
   task automatic sound_x(input [7:0] reg_index, input [7:0] data);
     begin
@@ -447,7 +455,7 @@ module tb_pc9821_audio_clip;
   endfunction
 
   // The (b) per-drum term: the DUT's decoded sample through its RHYTHM shift.
-  // `rhythm_gain_shift` is hardwired to 0 (jtopna.v:75), so this is a no-op in the
+  // `rhythm_gain_shift` is hardwired to 0 (jtopna.v:88), so this is a no-op in the
   // core; (b)'s scope note above stands (it cannot see a wrong decode/gain).
   wire signed [15:0] dr_term = dr_en_sum ? (dr_pcm_in >>> dr_gain) : 16'sd0;
 
@@ -716,31 +724,28 @@ module tb_pc9821_audio_clip;
       fail("P2: the join never passed 16 bits: the no-clamp check would be vacuous");
 
     // =================================================================
-    // PHASE 3: WRQ FLOOD (the S2 overrun): 128 back-to-back host writes
-    // (64 FM register pairs) at the I/O floor cadence - the fastest a guest
-    // can go. Pre-fix the 64-deep queue silently dropped the overflow; with
-    // the back-pressure every presented write is accepted AND lands.
+    // PHASE 3: WRQ FLOOD (the S2 overrun): 192 back-to-back host writes
+    // (96 FM register pairs) at the I/O floor cadence - the fastest a guest
+    // can go - against the 128-deep queue. Pre-fix the queue silently dropped the
+    // overflow; with the back-pressure every presented write is accepted AND lands.
     // =================================================================
     key_off; ssg_off;
     // Quiesce first: the land counter must count the FLOOD's own entries, not the
     // tail of the previous phases still draining when the counters zero.
-    for (n = 0; n < 200000 && sound.wrq_busy; n = n + 1) @(posedge clk);
-    if (sound.wrq_busy)
+    // (wrq_busy is only the guest's BUSY - the queue half full - so the drain is read directly.)
+    for (n = 0; n < 2000000 && (sound.wrq_cnt != 0 || sound.dr_state != 0); n = n + 1) @(posedge clk);
+    if (sound.wrq_cnt != 0 || sound.dr_state != 0)
       fail("P3: the queue never drained before the flood");
     io_strobes_opna = 0; wrq_pushes = 0; wrq_lands = 0;
-    for (n = 0; n < 64; n = n + 1)
+    for (n = 0; n < 96; n = n + 1)
       sound_o(8'h30 + 8'(n[2:0]), 8'(8'h40 + n));   // both bytes are queued writes
-    // The guest-visible WAITREADY: 0x188 bit 7 clears only when the queue AND
-    // the drain are done - so the lands are countable at quiesce.
-    for (n = 0; n < 200000; n = n + 1) begin
-      read_raw(16'h0188, v);
-      if (!v[7]) n = 200000;
-    end
+    // Quiesce: the queue empty and the drain idle, so the lands are countable.
+    for (n = 0; n < 4000000 && (sound.wrq_cnt != 0 || sound.dr_state != 0); n = n + 1) @(posedge clk);
     repeat (4000) @(posedge clk);
     $display("  P3 WRQ flood: presented=%0d accepted=%0d landed=%0d, back-pressure stall cycles=%0d",
              io_strobes_opna, wrq_pushes, wrq_lands, bp_stall_events);
-    if (io_strobes_opna != 128)
-      fail("P3: the flood did not present all 128 writes");
+    if (io_strobes_opna != 192)
+      fail("P3: the flood did not present all 192 writes");
     if (wrq_pushes != io_strobes_opna)
       fail("P3: the register queue DROPPED writes under the flood: the S2 overrun is back");
     if (wrq_lands != io_strobes_opna)

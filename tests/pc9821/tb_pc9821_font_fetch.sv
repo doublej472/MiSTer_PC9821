@@ -41,6 +41,7 @@ module tb_pc9821_font_fetch;
   reg        bios_ram_gate = 0;
   reg  [1:0] ems_state = 2'd0;
   reg        top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg  [7:0] win0_sel = 8'h08;
   reg        sys16m_en = 1'b1;
   reg [31:0] pack_base = PACK_BASE;
@@ -116,11 +117,15 @@ module tb_pc9821_font_fetch;
   // ==== DUT ====
   // The two blocks wired exactly as pc9821_system.sv wires them, so the assertion is the
   // real font requester (pc9821_memory_subsystem) feeding the real consumer (pc9821_gdc_text).
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
   pc9821_memory_subsystem dut_mem (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk_sys), .reset(reset),
       .top_bank(top_bank), .ems_state(ems_state), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(1'b1),
-      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en),
+      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en), .soft_reboot(soft_reboot),
       .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08), .sys16m_en(sys16m_en),
       .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
       .gvram_access_page(gvram_access_page),
@@ -180,7 +185,6 @@ module tb_pc9821_font_fetch;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire hs_out, vs_out, de_out;
   reg  cg_record_restore = 0;
   reg  [6:0] cfg_ram_mib = 7'd0;
@@ -210,7 +214,7 @@ module tb_pc9821_font_fetch;
       .pix_dot(pix_dot), .pix_h_active(pix_h_active), .pix_v_active(pix_v_active),
       .gfx_mode16(gfx_mode16), .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
-      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
       .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out),
       .dbg_sad(dbg_sad), .dbg_pitch(dbg_pitch), .dbg_col40(dbg_col40),
       .dbg_disp(dbg_disp)

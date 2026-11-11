@@ -1,8 +1,10 @@
 # AGENTS.md - working in this repository
 
-The guide for contributors and coding agents. [`README.md`](README.md) is the user's view
-(what runs, how to set up DOS, known issues); this file is how the tree is built, tested and
-changed. The explanations, measurements and tool reference behind it live in `docs/` (index below).
+The guide for contributors and coding agents. [`README.md`](README.md) is the user's view (what
+the core provides, what it needs, short recipes), with the user guides under `docs/user/`
+(setup, options, images, DOS, troubleshooting and known issues, compatibility); this file is how
+the tree is built, tested and changed. The explanations, measurements and tool reference behind it
+live in `docs/` ([`docs/README.md`](docs/README.md) is the index; the contributor docs are below).
 
 ## What the project is
 
@@ -31,14 +33,15 @@ are runtime inputs the user supplies.
 | `tools/timing/` | the path census and `pll_hdmi` placement scripts (`QUARTUS_POST_STA_TCL`) |
 | `tools/equiv/` | yosys equivalence harnesses for value-identical rewrites (`tools/check_micro_equiv.py`) |
 | `tools/hwprobe/` | DOS probe programs that measure a real PC-9821 |
-| `tools/mister/` | helpers that run ON the MiSTer (uinput keyboard/mouse), the user-facing Scripts-menu CUE/BIN converter `pc9821_cue2pcd.sh`, and the regression scenario example |
+| `tools/mister/` | test helpers that run ON the MiSTer (uinput keyboard/mouse) and the regression scenario example; nothing user-facing is installed on the card (the image converters `tools/cue2pcd.py`, `tools/fdconv.py` and `tools/pc98_hdd_convert.py` run on a computer) |
 | `tests/pc9821/` | Verilator benches, the integrated boot/userdisk/portharness tiers, the z486 suite runner |
 | `firmware/` | the in-tree diagnostic test pack (no NEC code) |
-| `docs/` | the contributor docs indexed below, port status, the single-cycle event rule (and `CONTRIBUTING.md`, its entry point), timing paths, the clock-domain crossing map, trade candidates, the SDRAM DQM wiring, Dhrystone numbers, the z486 vendoring map, the compatibility list |
+| `docs/` | `README.md` (the index of everything below), the contributor docs indexed below, port status, the single-cycle event rule (and `CONTRIBUTING.md`, its entry point), timing paths, the clock-domain crossing map, trade candidates, Dhrystone numbers, the z486 vendoring map, the BIOS SETUP decode |
+| `docs/user/` | the user guides README links: setup, OSD options, images, input, DOS and Windows 95, hardware, troubleshooting and known issues, the compatibility list |
 | `docs/probes/` | raw captures from a real Xe10: the source of the hardware facts benches assert |
 | `todo/`, `TODO.md` | the open-work list, one file per theme; `TODO.md` is the index |
 
-The repo root holds only `README.md`, `AGENTS.md`, `TODO.md`, `NOTICE` and the build
+The repo root holds only `README.md`, `AGENTS.md`, `TODO.md`, `LICENSE`, `NOTICE` and the build
 files (`Makefile`, `build_profile.py`, the Quartus project, the top level, `backend.qip` and
 `z486_mister.clk_sys_top_setup.tcl`, a minimal STA session). Build
 output goes under `.build/` (Quartus, scratch) or `tests/pc9821/build/` (Verilator); both are
@@ -46,10 +49,11 @@ ignored. Put temporary files in `.build/<task>/` or an ignored `scratch/`, never
 
 | doc | what |
 |---|---|
+| [`docs/README.md`](docs/README.md) | the index of every document under `docs/`, user and contributor |
 | [`docs/policies.md`](docs/policies.md) | every binding rule in full, the performance/latency/area policy, documentation and wording, fixed design decisions |
 | [`docs/build.md`](docs/build.md) | the Quartus build, build profiles, SDRAM I/O registers, analog video, CD-ROM, the generated PLL and SDC |
 | [`docs/fitting.md`](docs/fitting.md) | seed sweeps, remote fitting, timing and area facts, the `pll_hdmi` deploy gate and load screen |
-| [`docs/sdram.md`](docs/sdram.md) | the supported SDRAM modules and their timing |
+| [`docs/sdram.md`](docs/sdram.md) | the supported SDRAM modules, their timing and the DQM-on-address wiring |
 | [`docs/sdram-margin.md`](docs/sdram-margin.md) | the SDRAM I/O corner gate (`--min-sdram-io`), the run-time phase instrument (`--dbg-sdram-phase`), the shmoo and its run procedure |
 | [`docs/testing.md`](docs/testing.md) | mutation testing, what each static check proves, hand-run proofs, the userdisk instrument |
 | [`docs/mister-testing.md`](docs/mister-testing.md) | testing on a real MiSTer: deploying, screenshots, input, the debug UART, the regression runner, the rules |
@@ -89,14 +93,20 @@ Each line is binding; the linked section carries the rule in full.
 - **A knob that changes constants is a compile-time parameter, not a runtime mux** ([policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **Comments carry hardware facts**, cited; a `file:NNN` citation quotes its target ([policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **Latency and performance trades are raised, not decided by a contributor** ([policies](docs/policies.md#the-rules-that-bind-every-change)).
-- **The boot golden is a canary, not a constant** (`CYCLES used=930533`; [policies](docs/policies.md#the-rules-that-bind-every-change)).
+- **The boot golden is a canary, not a constant** (`CYCLES used=930528`; [policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **Generated files: fix the generator, then regenerate** ([policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **A power-up value lives on an internal register, never on an output-port initializer**
   (Quartus ignores those; [policies](docs/policies.md#the-rules-that-bind-every-change)).
+- **Licence: the project's own code is Apache-2.0** (`LICENSE`); code or data taken from another
+  project keeps its licence and is listed in `NOTICE` ([policies](docs/policies.md#fixed-design-decisions)).
 - **Never `git add -A`.** Name the paths you mean; build trees have slipped into the index that
   way before.
+- **No AI co-author attribution.** Commits carry no `Co-Authored-By:` trailer (or any other
+  attribution) naming an AI model or agent; the human who commits is the author.
 - **Never reduce performance to meet timing**, nor add guest-visible latency ([policies](docs/policies.md#performance-latency-and-area-policy)).
 - **README is user-only; wording is neutral** ([policies](docs/policies.md#documentation-and-wording)).
+- **Defaults favour running software**: an OSD default is the value that runs the most programs
+  and games, not merely one machine's factory setting ([policies](docs/policies.md#fixed-design-decisions)).
 - **Fixed design decisions** are not reopened by a change ([policies](docs/policies.md#fixed-design-decisions)).
 - **SDRAM timings meet the slowest supported module** ([`docs/sdram.md`](docs/sdram.md)).
 - **Never quote a single fit; the `pll_hdmi` floor and load screen gate a deploy** ([fitting](docs/fitting.md#timing-and-area-facts)).
@@ -104,7 +114,9 @@ Each line is binding; the linked section carries the rule in full.
 
 ### Frozen and vendored trees
 
-- `sys/` is byte-identical to Template_MiSTer. Never edit it; report bugs upstream.
+- `sys/` is byte-identical to Template_MiSTer (upstream commit 76dd8f5, the one NOTICE part 2
+  records; a sync is a verbatim `cp -r` of upstream `sys/` and moves both records). Never edit
+  it; report bugs upstream.
 - `src/opna/` (jt12/jt49/jt08) is vendored from PC88_MiSTer at the commit
   `src/opna/LICENSE-SCOPE.md` pins (`tools/check_opna_vendor_diff.py --upstream <checkout>` proves the ten recorded deltas). Do not refactor it. A change is a marked, reference-backed
   `LOCAL CHANGE`/`LOCAL FIX`/`LOCAL PATCH` block added to that file's list of local changes, so a
@@ -118,7 +130,7 @@ made in the fork FIRST, pass the fork's own release gate (`make -C tests test-re
 the fork), and are then re-vendored here as a plain copy:
 
 ```
-git rm -r -q src/z486 && mkdir -p src/z486
+git rm -r -q src/z486 && rm -rf src/z486 && mkdir -p src/z486   # rm -rf: gate runs leave untracked build output there
 git -C <fork> archive <sha> | tar -x -C src/z486
 git add -f src/z486          # every path the fork tracks
 ```
@@ -129,7 +141,7 @@ map, and it is owed to the fork. `tools/check_z486_patch_diff.py --upstream <for
 vendored commit>` (or `$Z486_UPSTREAM`) proves the tree matches the map; without a baseline it
 prints a loud SKIP (exit 2), never a pass.
 
-The CPU contract: `bash tests/pc9821/run_z486_suite.sh` passes every program (328/328 today; the runner fails below 309), and
+The CPU contract: `bash tests/pc9821/run_z486_suite.sh` passes every program (335/335 today; the runner fails below 309), and
 `make -C src/z486/tests dhrystone JOBS=4` reads exactly `242611 cy / 121837 instr / CPI 1.991`
 ([`docs/dhrystone-numbers.md`](docs/dhrystone-numbers.md)). A change may move these, but must
 report the new values with per-change attribution.
@@ -176,13 +188,13 @@ controller change shows in as a cycle count (the boot golden and the CPU Dhrysto
 python3 tools/bench.py --all                 # the Verilator battery
 python3 tools/check_lint.py
 python3 tools/gen_bench_sources.py --check
-bash tests/pc9821/run_z486_suite.sh          # 328/328
-timeout 2400 bash tests/pc9821/run_boot.sh   # boot golden: CYCLES used=930533
+bash tests/pc9821/run_z486_suite.sh          # 335/335
+timeout 2400 bash tests/pc9821/run_boot.sh   # boot golden: CYCLES used=930528
 bash tests/pc9821/run_integrated_build.sh    # compile-only: the boot, portharness, userdisk,
                                              # throttle and dma_snoop_throttle tops the battery
                                              # cannot build
 make -C src/z486/tests dhrystone JOBS=4      # 242611 cy / 121837 instr / CPI 1.991, exact
-bash tests/pc9821/run_boot_real.sh           # boot on the real SDRAM controller: CYCLES used=942542
+bash tests/pc9821/run_boot_real.sh           # boot on the real SDRAM controller: CYCLES used=942534
 python3 tools/dhrystone_real.py              # Dhrystone on the real SDRAM controller: 271807, exact
 ```
 
@@ -207,8 +219,10 @@ SAT proofs' memory caps, are in [`docs/testing.md`](docs/testing.md#the-static-c
 `check_mister_layout.py`, `check_dead_files.py`, `check_iobus_hit_equiv.py`,
 `check_tool_citations.py`, `check_line_citations.py`, `check_z486_patch_diff.py`,
 `check_opna_vendor_diff.py`, `check_todo_split.py`, `pc98_hdd_convert.py --selftest`,
+`cue2pcd.py --selftest`, `fdconv.py --selftest`,
 `mister/zclick.py --selftest`, `mister/ztype.py --selftest`, `decode_cdlog.py --selftest`,
-`mister_load_loop.py --selftest`,
+`mister_load_loop.py --selftest`, `hwprobe/xe10t/xe10t_decode.py --selftest`,
+`hwprobe/mputest/mputest_decode.py --selftest`,
 `check_win0_moved_inv.py`, `check_iobus_lane_inv.py`, `check_arb_resp_inv.py`,
 `check_gdc_egc_gate_inv.py`, `check_storebuf_head_inv.py`, `check_cpu_run_inv.py`,
 `check_micro_equiv.py`, `check_fir_acc_bound.py`, `check_powerup_init.py`. Proofs run by hand (X-lock, decode and netlist
@@ -235,6 +249,9 @@ branch of parallel work is called a lane below. More working habits: [`docs/lane
 - Workers run focused benches (`python3 tools/bench.py <name>`, one name per call), `check_lint`
   and `gen_bench_sources --check`; the integrator runs the full battery and the Quartus fits.
   Don't merge into the main tree while a gate run is in progress: it voids the run.
+- A lane that changes anything the guest can see boots the hard disk on a card before it is
+  merged, and a release candidate is cut only from a merged head the full battery passed
+  ([`docs/lanes.md`](docs/lanes.md)).
 - Merge lanes sequentially. Conflicts cluster in `pc9821_system.sv`, `pc9821_iobus.sv`,
   `pc9821_crtc.sv`, `z486_mister.sv`, the audio chain, the `todo/` theme files and
   `tools/gen_bench_sources.py` (take the union, regenerate).
@@ -252,7 +269,9 @@ branch of parallel work is called a lane below. More working habits: [`docs/lane
 The public repository's `main` holds one squashed commit per release; the development branch and
 its history are never pushed there. A release candidate passes, on its exact tree and bitstream:
 the full gate; a 6-seed sweep with the chosen seed clearing the `pll_hdmi` floor and the SDRAM I/O
-gate (`--min-sdram-io`, [`docs/sdram-margin.md`](docs/sdram-margin.md)); the 10-load screen and the scripted regression on every test card; and a representative sample
+gate (`--min-sdram-io`, [`docs/sdram-margin.md`](docs/sdram-margin.md)); the 10-load screen and the scripted regression on every test card, its
+`boot-loop` item included (`--boot-count 6` or more, the boot after the load counted) and its `speeds`
+item (a boot at CPU Speed 33, 25 and 16 MHz); and a representative sample
 of the game list (hard-disk, CD and floppy titles, the mouse-driven and CD-audio ones, and Windows 95)
 checked by eye, with screenshots kept for every title
 ([`docs/mister-testing.md`](docs/mister-testing.md#game-test-sets)). Before the push: no game names in
@@ -267,6 +286,6 @@ tree: never renumber or reuse one. A closed item is deleted and its number retir
 `python3 tools/check_todo_split.py` holds the files, the index and every reference together.
 `todo/` holds only work still to follow up or verify (a capture whose answer would change guest-
 visible behaviour, a divergence, a re-check, an open owner decision): a known limitation with no
-plan goes in README's "Known issues", a latency/area trade in
+plan goes in `docs/user/troubleshooting.md`'s "Known issues", a latency/area trade in
 `docs/trade-candidates.md`, a standing rule here - otherwise the list fills with finished history
 and stops being a work list.

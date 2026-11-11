@@ -11,13 +11,6 @@
 
 module pc9821_kbd #(
     parameter integer SYS_CLOCK_HZ = 50_000_000,
-    // OSD "Enter BIOS setup (hold HELP)": how long the injected HELP key is held.
-    // 3 s is past the ITF's POST scan window (~1 s) and ends on a break, so the key is not left held into the OS.
-    // 29 bits: the hold is SYS_CLOCK_HZ * 3, which is 360_000_000 at 120 MHz, and a
-    // 28-bit field TRUNCATED it at the 100 and 120 MHz profiles - 300_000_000 mod 2^28
-    // is 31_564_544, so the injected key was released after 0.32 s instead of 3 s and
-    // the ITF's POST poll never saw HELP held.
-    parameter [29:0] HELP_HOLD_CYCLES = 30'(SYS_CLOCK_HZ * 3),
     // Typematic auto-repeat, NP2kai keystat.c defaults (500 ms delay, 50 ms interval).
     // 26 bits: REPEAT_DELAY is SYS_CLOCK_HZ/2, which is 60_000_000 at 120 MHz and so
     // still inside 2^26 (67_108_864); a profile past 134 MHz would need widening.
@@ -46,7 +39,6 @@ module pc9821_kbd #(
 
     output wire irq,
     input wire [10:0] ps2_key,
-    input wire        bios_setup,   // OSD: hold HELP from reset, so POST enters SETUP
     input wire        layout_jis,   // OSD "Keyboard": 1 = JIS host layout, 0 = US (translate())
     output wire [2:0] led_status,   // MiSTer hps_io order {scrolllock, numlock, capslock}
 
@@ -209,8 +201,8 @@ module pc9821_kbd #(
           8'h64: translate = 8'h35;  // henkan -> XFER
           8'h13: translate = 8'h72;  // katakana/hiragana -> KANA
           8'h05: translate = 8'h62;  // F1 -> NEC F1 (NP2kai lrcnv106 F1->0x62); HELP is End
-                                     // (0x69 -> 0x3F above) and the OSD bios_setup injector, so
-                                     // an F1->HELP remap would make NEC F1 unreachable (M1)
+                                     // (0x69 -> 0x3F above), so an F1->HELP remap would
+                                     // make NEC F1 unreachable (M1)
           8'h06: translate = 8'h63;  // F2
           8'h04: translate = 8'h64;  // F3
           8'h0C: translate = 8'h65;  // F4
@@ -404,33 +396,6 @@ module pc9821_kbd #(
   reg rst_n_prev   = 1'b0;   // rst_n one clk ago: the module reset's leading edge, for the epoch bump
   /* verilator lint_on PROCASSINIT */
 
-  // OSD "Enter BIOS setup (hold HELP)": the injected HELP hold. A physically held key
-  // cannot do this -- the framework sends one edge per press and the ITF's POST re-inits
-  // the 8251 with a bit-3 reset (BANK4@0x4BEA/0x4BF6) that discards anything latched
-  // before its ~5 ms key poll (the 500 ms typematic repeat is far too late). The ITF
-  // enters SETUP when its poll reads the raw key number 0x3F (BANK4@0x4C3F,
-  // `cmp al,0x3f`). So the option HOLDS HELP itself: queue make 0x3F at the start,
-  // RE-QUEUE a make on every guest keyboard reset (the held key survives the ITF's
-  // re-init, exactly as NP2kai's keystat_resendstat re-announces a still-held key,
-  // io/serial.c), and queue one break 0xBF after HELP_HOLD_CYCLES to release it.
-  reg [29:0] help_hold;      // remaining hold-window cycles (0 = released); the width of HELP_HOLD_CYCLES, which is why the 120 MHz hold is the full 3 s
-  reg        help_started;   // 1 after this hold's first make has been queued
-  reg        help_pending;   // an injected byte is waiting for FIFO room
-  reg        help_release;   // the pending byte is the final break (0xBF)
-  wire [7:0] help_data = help_release ? 8'hBF : 8'h3F;
-  // THE OPTION IS SAMPLED AT MACHINE RESET ONLY: a mid-run OSD change must do NOTHING to
-  // the running machine - flipping it on must not start a fresh hold, injecting a held HELP
-  // into a running guest. The hold is
-  // armed from the reset-time latch instead (the msw-cells pattern), so the new value
-  // applies at the next machine reset / reload and nowhere else.
-  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
-  reg  bios_setup_eff = 1'b0;
-  /* verilator lint_on PROCASSINIT */
-  always @(posedge clk) begin
-    if (!rst_n) bios_setup_eff <= bios_setup;
-  end
-  wire help_active = bios_setup_eff && (help_hold != 30'd0);
-
   // THE TRANSLATION ROM'S READ IS REGISTERED, AND ITS READ REGISTER CARRIES NO POWER-UP VALUE.
   // Both halves are load-bearing and only together. The synchronous read is what lets the ROM
   // be block RAM at all; a POWER-UP VALUE ON THE REGISTER THAT CAPTURES IT puts the whole
@@ -579,13 +544,12 @@ module pc9821_kbd #(
   wire st_deliver = !kbd_reset_now && (deliver_resp || deliver_key);
   wire fifo_can_enqueue = (fifo_cnt < 5'd16) || deliver_key;
   wire event_enqueue = event_valid && fifo_can_enqueue;
-  wire inject_enqueue = help_pending && fifo_can_enqueue && !event_valid;
   // THE hps_io-NORMALIZED PAUSE EVENT IS A TAP, NOT A HELD KEY. Its host stream carries
   // exactly ONE event: Main_MiSTer sends the raw PS/2 Pause make sequence
   // E1 14 77 E1 F0 14 F0 77 at key RELEASE and on every host autorepeat (user_io.cpp
   // send_keycode, `press != 1` - "pause does not have a break code"; press 2 is a repeat, and
   // this branch runs ahead of the other keys' `press > 1 && !use_ps2ctl` repeat filter, so a held
-  // Pause is a train of taps), and sys/hps_io.sv:309 normalizes it to one
+  // Pause is a train of taps), and sys/hps_io.sv:325 normalizes it to one
   // {pressed, extended, 0x77} token with NO Pause-release case. The make that token
   // translates to (0x60, STOP) could therefore never be broken: the key stayed down
   // and - STOP being typematic-repeatable (NP2kai keystat.tbl kbexflag row 0x60 is 0) -
@@ -597,15 +561,14 @@ module pc9821_kbd #(
   // press per host event, with no stuck state and no typematic reachable from it.
   wire tap_event = (ev2_code == 8'h60);   // 0x60 has no other source in translate()
   wire tap_brk_set = normal_make && tap_event && event_enqueue;
-  wire tap_enqueue = (tap_brk != 2'd0) && fifo_can_enqueue && !event_valid && !inject_enqueue;
-  // The typematic pair outranks nothing: a real key event and the injected HELP both
+  wire tap_enqueue = (tap_brk != 2'd0) && fifo_can_enqueue && !event_valid;
+  // The typematic pair outranks nothing: a real key event and a Pause tap's break both
   // win, so a held key can never displace a press.
-  wire repeat_push = (rep_pend != 2'd0) && fifo_can_enqueue && !event_valid && !inject_enqueue && !tap_enqueue;
+  wire repeat_push = (rep_pend != 2'd0) && fifo_can_enqueue && !event_valid && !tap_enqueue;
   wire [7:0] repeat_push_data = (rep_pend == 2'd2) ? (rep_key | 8'h80) : rep_key;
-  wire enqueue_key = event_enqueue || inject_enqueue || tap_enqueue || repeat_push;
+  wire enqueue_key = event_enqueue || tap_enqueue || repeat_push;
   wire [7:0] enqueue_data = event_enqueue ? event_data :
-                            (inject_enqueue ? help_data :
-                             (tap_enqueue ? (8'h60 | 8'h80) : repeat_push_data));
+                            (tap_enqueue ? (8'h60 | 8'h80) : repeat_push_data);
 
   // THE KEYBOARD RESET'S OWN CYCLE (the 8251 bit-3 1-to-0 transition). As a
   // wire it can give explicit priority in the folds below: the reset is one
@@ -1118,38 +1081,6 @@ module pc9821_kbd #(
       pace_div <= kbd_reset_now ? '0 :
                   deliver_key    ? XFER_LAST :
                   (pace_div != '0) ? pace_div - XFER_ONE : '0;
-    end
-  end
-
-  // The injected-HELP generator: re-armed whenever the option is off or the block is
-  // reset, so a core reset with the option on starts a fresh hold. The option itself is
-  // the reset-latched bios_setup_eff above, so a mid-run OSD flip neither starts nor
-  // releases a hold.
-  always @(posedge clk) begin
-    if (!rst_n || !bios_setup_eff) begin
-      help_hold    <= HELP_HOLD_CYCLES;
-      help_started <= 1'b0;
-      help_pending <= 1'b0;
-      help_release <= 1'b0;
-    end else begin
-      // The hold's first make, and the make re-announced after each guest keyboard
-      // reset (the reset flushed the receive side, so the held key is offered again).
-      if (!help_started || (help_active && kbd_reset_now)) help_pending <= 1'b1;
-
-      if (help_pending) begin
-        if (inject_enqueue) help_pending <= 1'b0;
-      end
-
-      // Count the hold window down; at its end queue the one break that releases HELP.
-      if (help_hold == 30'd1) begin
-        help_release <= 1'b1;
-        help_pending <= 1'b1;
-        help_hold    <= 30'd0;
-      end else if (help_hold != 30'd0) begin
-        help_hold <= help_hold - 30'd1;
-      end
-
-      help_started <= 1'b1;
     end
   end
 

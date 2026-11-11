@@ -1,0 +1,32 @@
+BEGIN:YM29
+YM29 v2: does YM2608 reg 0x29 (IRQ enable) gate the Timer A and B IRQs? windows of 61440 ARTIC ticks (0.2 s)
+TIMERS A NA=200 B NB=E0 win=61440
+BASE b=0188 st=03 st2=03 a460=40 id=01 r0e=FF r0f=FF r29=FF
+BASE b=0288 st=FF st2=FF a460=40
+USE b=0188 id=01 irq=12
+IRQ  v29=1F n=21 st_end=7C st_isr=7D irr_end=80 ticks=61440 pit0=C8A2 pit1=4884 sat=0
+POLL v29=1F flags=21 ir4=20 polls=25281 irr_or=90 ticks=61441 pit0=4681 pit1=C663
+IRQB v29=1F n=21 st_end=00 st_isr=02 irr_end=80 ticks=61440 pit0=C48B pit1=4475 sat=0
+POLLB v29=1F flags=21 ir4=19 polls=25280 irr_or=90 ticks=61440 pit0=4295 pit1=C27F
+IRQ  v29=03 n=21 st_end=00 st_isr=01 irr_end=80 ticks=61440 pit0=C0A6 pit1=408C sat=0
+POLL v29=03 flags=21 ir4=19 polls=25281 irr_or=90 ticks=61441 pit0=3EA9 pit1=BE87
+IRQB v29=03 n=21 st_end=00 st_isr=02 irr_end=80 ticks=61440 pit0=BCB1 pit1=3C9F sat=0
+POLLB v29=03 flags=21 ir4=19 polls=25284 irr_or=90 ticks=61441 pit0=3AC5 pit1=BAA1
+IRQ  v29=02 n=21 st_end=00 st_isr=01 irr_end=80 ticks=61440 pit0=B8C5 pit1=38AD sat=0
+POLL v29=02 flags=21 ir4=19 polls=25283 irr_or=90 ticks=61440 pit0=36D2 pit1=B6BD
+IRQB v29=02 n=21 st_end=00 st_isr=02 irr_end=80 ticks=61440 pit0=B4E1 pit1=34C7 sat=0
+POLLB v29=02 flags=21 ir4=19 polls=25281 irr_or=90 ticks=61441 pit0=32E4 pit1=B2C5
+IRQ  v29=01 n=21 st_end=00 st_isr=01 irr_end=80 ticks=61440 pit0=B0E9 pit1=30D9 sat=0
+POLL v29=01 flags=21 ir4=19 polls=25281 irr_or=90 ticks=61441 pit0=2EFB pit1=AEDF
+IRQB v29=01 n=21 st_end=00 st_isr=02 irr_end=80 ticks=61440 pit0=AD0A pit1=2CF1 sat=0
+POLLB v29=01 flags=21 ir4=20 polls=25281 irr_or=90 ticks=61442 pit0=2B11 pit1=AAE6
+IRQ  v29=00 n=21 st_end=00 st_isr=01 irr_end=80 ticks=61440 pit0=A90B pit1=28F8 sat=0
+POLL v29=00 flags=21 ir4=18 polls=25281 irr_or=90 ticks=61442 pit0=2718 pit1=A6EE
+IRQB v29=00 n=21 st_end=00 st_isr=02 irr_end=80 ticks=61440 pit0=A51B pit1=2501 sat=0
+POLLB v29=00 flags=21 ir4=21 polls=25281 irr_or=90 ticks=61442 pit0=2320 pit1=A2F6
+IRQ  v29=1F n=21 st_end=00 st_isr=01 irr_end=80 ticks=61440 pit0=A11D pit1=2107 sat=0
+POLL v29=1F flags=21 ir4=19 polls=25280 irr_or=90 ticks=61440 pit0=1F2B pit1=9F12
+IRQB v29=1F n=21 st_end=00 st_isr=02 irr_end=80 ticks=61441 pit0=9D36 pit1=1D18 sat=0
+POLLB v29=1F flags=21 ir4=19 polls=25284 irr_or=90 ticks=61440 pit0=1B33 pit1=9B1A
+RESTORE m_imr=7D->7D s_imr=75->75 vec14=FD80:0937->FD80:0937 opna: 27=30 24=00 25=00 26=00 29=1F (reset values; reboot to restore the sound BIOS's own 0x29)
+END:YM29

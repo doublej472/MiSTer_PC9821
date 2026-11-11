@@ -88,12 +88,16 @@ module tb_pc9821_pegvram;
   wire        mem_ready, mem_resp_valid;
   wire        mem_busy;
   wire [31:0] mem_accepts, mem_beats;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk), .reset(reset), .top_bank(top_bank),
       .ems_state(ems_state), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(1'b1),
-      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en),
+      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en), .soft_reboot(1'b0),
       .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08), .sys16m_en(sys16m_en),
       .pegc_256(pegc_256),
       .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),

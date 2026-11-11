@@ -147,7 +147,7 @@ PLA4_RTL := $(Z486_DIR)/protection.sv
 # Targets
 .PHONY: all build test-simple test-full test-386 test-186 test-protected test-pla4 test-l1-cache test-l1-icache test-memory-order test-cache-coherence test-load-waw test-gpr-hazard test-gpr-merge test-memmap-template check-reset-lists check-pragmas check-rom-columns check-shift-ucode test-interrupt-nmi test-paging-walker test-paging-tlb test-cache-flush test-x87-bridge test-x87-sequencer test-x87-executor test-x87-testfloat test-x87-fifo test-x87-core test-x87-integration test-x87-integer dhrystone clean help
 
-.PHONY: check-equiv test-release test-pc98-map test-fuzz-pc98 dhrystone-pc98 test-protected-narrow check-generators test-data-access check-runner test-l1-tags-wide test-reset-restart test-fuzz
+.PHONY: check-equiv test-release test-pc98-map test-fuzz-pc98 dhrystone-pc98 test-protected-narrow check-generators test-data-access check-runner test-l1-tags-wide test-reset-restart test-reset-dtr test-fuzz
 .PHONY: test-bigmem test-addr-unit-reloc test-reset-sweep test-pc98-map-bus test-mem-resp test-protected-throttled
 .PHONY: test-protected-zero-wait test-fuzz-zero-wait
 .PHONY: test-throttle-rate test-throttle-invariance test-fuzz-throttle test-throttle-sweep
@@ -159,7 +159,7 @@ all: build
 # External SingleStepTests/test386 and vendor timing are separate requirements.
 test-release:
 	$(MAKE) -j1 check-reset-lists check-pragmas check-rom-columns check-shift-ucode check-generators check-runner check-equiv
-	$(MAKE) -j1 test-l1-cache test-l1-icache test-memory-order test-mem-resp test-load-waw test-gpr-merge test-gpr-hazard test-data-access test-memmap-template test-interrupt-nmi test-paging-walker test-paging-tlb test-cache-flush test-cache-coherence test-reset-restart
+	$(MAKE) -j1 test-l1-cache test-l1-icache test-memory-order test-mem-resp test-load-waw test-gpr-merge test-gpr-hazard test-data-access test-memmap-template test-interrupt-nmi test-paging-walker test-paging-tlb test-cache-flush test-cache-coherence test-reset-restart test-reset-dtr
 	$(MAKE) -j1 test-addr-unit-reloc test-reset-sweep test-pc98-map-bus
 	$(MAKE) -j1 test-protected test-protected-narrow test-protected-zero-wait test-protected-throttled test-throttle-rate test-throttle-invariance test-fuzz-throttle test-fuzz-zero-wait test-simple test-pc98-map test-fuzz-pc98 test-bigmem test-l1-tags-wide test-fuzz
 	$(MAKE) -j1 obj_dir_x87/Vtb_protected_mode
@@ -356,6 +356,15 @@ obj_dir/Vtb_reset_restart: $(RTL_SRCS) $(RTL_DEPS) tb_reset_restart.sv
 
 test-reset-restart: obj_dir/Vtb_reset_restart
 	./obj_dir/Vtb_reset_restart
+
+# SIDT/SGDT as the first instructions after reset: the reset IDTR and GDTR.
+obj_dir/Vtb_reset_dtr: $(RTL_SRCS) $(RTL_DEPS) tb_reset_dtr.sv
+	cp -f ../*.hex .
+	$(VERILATOR) --binary --timing -Wno-fatal -Wno-UNOPTFLAT -j $(JOBS) -I$(Z486_DIR) -I$(X87_DIR) \
+		--top-module tb_reset_dtr $(RTL_SRCS) tb_reset_dtr.sv
+
+test-reset-dtr: obj_dir/Vtb_reset_dtr
+	./obj_dir/Vtb_reset_dtr
 
 # address_unit's relocation outputs and captures against independent arithmetic
 # (random stimulus, the 16-bit offset wraps included).

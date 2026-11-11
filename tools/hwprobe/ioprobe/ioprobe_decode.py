@@ -90,82 +90,78 @@ AXIS_81_NS = 1620.0
 IOBUS_SV = Path(__file__).resolve().parents[3] / "src/pc9821/core/pc9821_iobus.sv"
 TOP_SV = Path(__file__).resolve().parents[3] / "z486_mister.sv"
 
-# The checked-in expectation of the parse (--check-rtl), keyed by the profile the
-# tree builds (z486_mister.sv's IO_LATENCY_PROFILE).  For profile 0 (the min
-# profile) `constants` are the three firmware floors plus the 0x5F write, and
-# `above_floor` is every census (port, mode) that is NOT the FSM floor - the 0x5F
-# WRITE takes the machine's item-41 1621 ns (the BIOS POST's timer-interrupt test
-# polls with `out 0x5f`, so this is a correctness floor, not a timing choice),
-# while its READ keeps the 600 ns anchor, and the 8253 floor is write-only.
-# Profiles 1/2 are the faithful class table:
-# the same IO_NS_* localparams at 50 MHz, and every census entry is priced by
-# faithful_class() below - a hand-written mirror of the faithful branch, so an
-# arm that moved away from it is a drift, not a re-derivation.
-FAITHFUL_CONSTANTS_50MHZ = {
-    "IO_NS_SLOW_R": 42, "IO_NS_SLOW_W": 44,
-    "IO_NS_EGC_R": 20, "IO_NS_EGC_W": 18, "IO_NS_GRCG_W": 18,
-    "IO_NS_GDC1": 23, "IO_NS_GDC2": 34,
-    "IO_NS_PIT_W": 44, "IO_NS_5F_R": 42, "IO_NS_5F_W": 82,
-    "IO_NS_EGCF_HI": 465, "IO_NS_9A0": 20, "IO_NS_FAA": 15,
+# The checked-in expectation of the parse (--check-rtl), keyed by the I/O TIMING
+# MODE: io_access_cycles() carries BOTH tables, chosen at run time by the OSD's
+# "I/O timing" field (pc9821_iobus's io_timing_xe10), so --check-rtl checks both.
+# FAST (`!xe10`): `constants` are the two firmware floors and `above_floor` is every
+# census (port, mode) that is NOT the FSM floor - only the 8253 WRITE, whose floor is
+# the ITF timer self-test's (one 2.4576 MHz tick); 0x5F is the floor both ways (its
+# write is posted: the bus time behind it is IO_POST_5F, outside this function).
+# XE10: the IO_NS_* class times at 50 MHz, and every census entry is priced by
+# xe10_class() below - a hand-written mirror of the Xe10 branch, so an arm that moved
+# away from it is a drift, not a re-derivation. The Xe10 table's per-access CPU share
+# (IO_XE10_CPU_CYC, taken off in io_access_hold, not here) is pinned beside it.
+XE10_CONSTANTS_50MHZ = {
+    "IO_NS_SLOW_R": 40, "IO_NS_SLOW_W": 42,
+    "IO_NS_EGC_R": 18, "IO_NS_FAST_W": 16,
+    "IO_NS_GDC1": 21, "IO_NS_GDC2": 32,
+    "IO_NS_EGCF_HI": 300, "IO_NS_9A0": 18, "IO_NS_FAA": 13,
+    "IO_MIN_HOLD": 4, "IO_XE10_CPU_CYC": 8,
 }
 
+MODES = ("fast", "xe10")
+
 EXPECTED_RTL: dict = {
-    0: {
-        "clock_hz": 50_000_000,
-        "constants": {"IO_MIN_HOLD": 4, "IO_PIT_HOLD": 21,
-                      "IO_NS_5F_W": 82},
+    "fast": {
+        "clock_hz": 90_000_000,
+        "constants": {"IO_MIN_HOLD": 4, "IO_PIT_HOLD": 21},
         "above_floor": {
-            (0x005F, "R"): "IO_NS_5F_W", (0x005F, "W"): "IO_NS_5F_W",
             (0x0071, "W"): "IO_PIT_HOLD", (0x0073, "W"): "IO_PIT_HOLD",
             (0x0075, "W"): "IO_PIT_HOLD", (0x0077, "W"): "IO_PIT_HOLD",
             (0x3FD9, "W"): "IO_PIT_HOLD", (0x3FDB, "W"): "IO_PIT_HOLD",
             (0x3FDD, "W"): "IO_PIT_HOLD", (0x3FDF, "W"): "IO_PIT_HOLD",
         },
     },
-    1: {"clock_hz": 50_000_000, "constants": FAITHFUL_CONSTANTS_50MHZ},
-    2: {"clock_hz": 50_000_000, "constants": FAITHFUL_CONSTANTS_50MHZ},
+    "xe10": {"clock_hz": 90_000_000, "constants": XE10_CONSTANTS_50MHZ},
 }
 
 
-def faithful_class(profile: int, port: int, mode: str) -> str:
-    """The constant that must price (port, mode) in the faithful profiles.
+def xe10_class(port: int, mode: str) -> str:
+    """The constant that must price (port, mode) in the Xe10 table.
 
-    This is the checked-in expectation of the faithful branch's class table,
-    written independently of the parser's arm structure.  Profile 1 holds the
-    unresolved-mechanism EGC-file EVEN-read class back to the default read
-    class (item 82); profile 2 prices it at the capture's 9290 ns."""
+    This is the checked-in expectation of the Xe10 branch's class table, written
+    independently of the parser's arm structure: the net_ns of the Xe10's XE10T
+    /IO rows (docs/probes/XE10T-XE10.TXT), which the RTL's comment lists row by
+    row. The EGC file's EVEN-read class is charged as measured; its mechanism is
+    still unresolved (item 82)."""
     wr = mode == "W"
     if port & 0xFFF0 == 0x04A0:
         if wr:
-            return "IO_NS_EGC_W"
-        return "IO_NS_EGCF_HI" if (profile >= 2 and port % 2 == 0) else "IO_NS_SLOW_R"
+            return "IO_NS_FAST_W"
+        return "IO_NS_EGCF_HI" if port % 2 == 0 else "IO_NS_SLOW_R"
     if port == 0x005F:
-        return "IO_NS_5F_W" if wr else "IO_NS_5F_R"
-    if port in (0x0071, 0x0073, 0x0075, 0x0077, 0x3FD9, 0x3FDB, 0x3FDD, 0x3FDF):
-        return "IO_NS_PIT_W" if wr else "IO_NS_SLOW_R"
-    if port in (0x0640, 0x0641, 0x0642, 0x0644, 0x0646, 0x0648, 0x064A,
-                0x064C, 0x064E, 0x074C, 0x074E, 0x0430, 0x0432, 0x1E8E):
-        return "IO_NS_SLOW_W" if wr else "IO_NS_SLOW_R"
+        return "IO_MIN_HOLD" if wr else "IO_NS_SLOW_R"   # the write is posted (IO_POST_5F)
     if port in (0x0060, 0x0062):
         return "IO_NS_GDC1"
     if port in (0x00A0, 0x00A2):
         return "IO_NS_GDC2"
     if port in (0x006A, 0x00A6):
-        return "IO_NS_EGC_W" if wr else "IO_NS_EGC_R"
-    if port in (0x007C, 0x007E):
-        return "IO_NS_GRCG_W" if wr else "IO_NS_SLOW_R"
-    if port == 0x09A0:
+        return "IO_NS_FAST_W" if wr else "IO_NS_EGC_R"
+    if port in (0x007C, 0x007E, 0x0064, 0x00A4):
+        return "IO_NS_FAST_W" if wr else "IO_NS_SLOW_R"
+    if port in (0x09A0, 0x09A8):
         return "IO_NS_9A0"
     if port == 0x0FAA:
         return "IO_NS_FAA"
+    # the 8253 (and its 0x3FD9 alias), the IDE task file and every other port
     return "IO_NS_SLOW_W" if wr else "IO_NS_SLOW_R"
 
 
-def expected_class(profile: int, port: int, mode: str) -> str:
-    """The constant name that must price a census entry at `profile`."""
-    if profile == 0:
-        return EXPECTED_RTL[0]["above_floor"].get((port, mode), "IO_MIN_HOLD")
-    return faithful_class(profile, port, mode)
+def expected_class(mode_sel: str, port: int, mode: str) -> str:
+    """The constant name that must price a census entry in I/O timing mode `mode_sel`."""
+    if mode_sel == "fast":
+        return EXPECTED_RTL["fast"]["above_floor"].get((port, mode), "IO_MIN_HOLD")
+    return xe10_class(port, mode)
 
 
 class RtlParseError(Exception):
@@ -187,7 +183,7 @@ class RtlTable:
     arms: tuple[RtlArm, ...]
     default: RtlArm
     top_clock_hz: int | None
-    profile: int
+    mode: str                   # the I/O timing mode: "fast" or "xe10"
 
     def arm_of(self, port: int) -> RtlArm:
         for arm in self.arms:
@@ -282,15 +278,6 @@ def _top_clock_hz(path: Path) -> int | None:
     return int(m.group(1).replace("_", "")) if m else None
 
 
-def _top_io_latency_profile(path: Path) -> int:
-    """z486_mister.sv's IO_LATENCY_PROFILE: which class table the tree builds."""
-    if not path.exists():
-        return 0
-    m = re.search(r"localparam\s+\[1:0\]\s+IO_LATENCY_PROFILE\s*=\s*2'd([0-3])",
-                  path.read_text())
-    return int(m.group(1)) if m else 0
-
-
 def _constant(token: str, env: dict[str, int]) -> int:
     token = token.strip()
     return env[token] if token in env else _const_expr(token, env)
@@ -300,15 +287,15 @@ _SIMPLE_RHS = re.compile(r"^[\w']+$")
 _DIR_RHS = re.compile(r"^wr\s*\?\s*(?P<w>[\w']+)\s*:\s*(?P<r>[\w']+)$")
 _BLOCK_RHS = re.compile(
     r"^wr\s*\?\s*(?P<w>[\w']+)\s*:\s*"
-    r"\(\(IO_LATENCY_PROFILE\s*>=\s*2'd2\)\s*&&\s*!portnum\[0\]\)\s*\?\s*"
+    r"!portnum\[0\]\s*\?\s*"
     r"(?P<hi>[\w']+)\s*:\s*(?P<lo>[\w']+)$")
 
 
-def _rhs_price(rhs: str, env: dict[str, int], profile: int, port: int
+def _rhs_price(rhs: str, env: dict[str, int], port: int
                ) -> tuple[int, int]:
     """(read_cycles, write_cycles) for one io_access_cycles RHS.
 
-    Modeled: a bare constant, `wr ? A : B`, and the faithful block arm's
+    Modeled: a bare constant, `wr ? A : B`, and the Xe10 block arm's
     parity-gated nested ternary.  Anything else is a shape this parser does not
     model and raises - a stale RTL column is worse than no column."""
     rhs = " ".join(rhs.split())
@@ -324,7 +311,7 @@ def _rhs_price(rhs: str, env: dict[str, int], profile: int, port: int
         w = _constant(m.group("w"), env)
         lo = _constant(m.group("lo"), env)
         hi = _constant(m.group("hi"), env)
-        read = hi if (profile >= 2 and port % 2 == 0) else lo
+        read = hi if port % 2 == 0 else lo
         return read, w
     raise RtlParseError(f"io_access_cycles RHS in a shape this parser does not"
                         f" model: {rhs!r}")
@@ -333,7 +320,7 @@ def _rhs_price(rhs: str, env: dict[str, int], profile: int, port: int
 def _block_comment(branch: str, if_start: int, if_end: int, assign_end: int
                    ) -> str | None:
     """The block arm's own comment: the // lines between the if and its
-    assignment (the faithful branch's style), or failing that the // lines
+    assignment (the Xe10 branch's style), or failing that the // lines
     immediately before the if (the min branch's style)."""
     mid = branch[if_end:assign_end]
     m = re.search(r"//(.*)", mid)
@@ -349,7 +336,7 @@ def _block_comment(branch: str, if_start: int, if_end: int, assign_end: int
     return pre_comments[-1] if pre_comments else None
 
 
-def _parse_branch(branch: str, env: dict[str, int], profile: int
+def _parse_branch(branch: str, env: dict[str, int]
                   ) -> tuple[list[RtlArm], RtlArm]:
     """The named arms + default arm of one io_access_cycles branch."""
     arms: list[RtlArm] = []
@@ -368,8 +355,8 @@ def _parse_branch(branch: str, env: dict[str, int], profile: int
                            branch[blk_if.end():], re.S)
     if not blk_assign:
         raise RtlParseError("the block arm's assignment not found")
-    even = _rhs_price(blk_assign.group(1), env, profile, base)
-    odd = _rhs_price(blk_assign.group(1), env, profile, base + 1)
+    even = _rhs_price(blk_assign.group(1), env, base)
+    odd = _rhs_price(blk_assign.group(1), env, base + 1)
     if even[1] != odd[1]:
         raise RtlParseError("the block arm's write branch is parity-dependent (unmodeled)")
     label = _short_label(_block_comment(branch, blk_if.start(), blk_if.end(),
@@ -397,7 +384,7 @@ def _parse_branch(branch: str, env: dict[str, int], profile: int
         found += 1
         ports = tuple(int(p.replace("_", ""), 16)
                       for p in re.findall(r"16'h([0-9A-Fa-f_]+)", am.group("ports")))
-        read, write = _rhs_price(am.group("rhs"), env, profile, 0)
+        read, write = _rhs_price(am.group("rhs"), env, 0)
         arm = RtlArm(read, write,
                      _short_label(am.group("comment"),
                                   am.group("rhs") if ports else "default"),
@@ -420,13 +407,13 @@ def _parse_branch(branch: str, env: dict[str, int], profile: int
     return arms, default_arm
 
 
-def parse_io_access_cycles(path: Path = IOBUS_SV) -> RtlTable:
+def parse_io_access_cycles(path: Path = IOBUS_SV, mode: str = "fast") -> RtlTable:
     """io_access_cycles()'s arms and constants, read from the RTL source.
 
-    Parsed: SYS_CLOCK_HZ's default, every modeled localparam (the three firmware
-    floors and the faithful IO_NS_* class times), the profile the tree builds
-    (z486_mister.sv's IO_LATENCY_PROFILE), and the active branch's block arm and
-    case arms - each arm's trailing comment as its label and its READ/WRITE
+    Parsed: SYS_CLOCK_HZ's default, every modeled localparam (the two firmware
+    floors, the Xe10 IO_NS_* class times and its CPU share), and the block arm and
+    case arms of the branch I/O timing `mode` selects ("fast": `if (!xe10)`,
+    "xe10": its else) - each arm's trailing comment as its label and its READ/WRITE
     price.  Raises RtlParseError on anything unexpected: a stale RTL column
     would be worse than no column.
     """
@@ -446,10 +433,10 @@ def parse_io_access_cycles(path: Path = IOBUS_SV) -> RtlTable:
         n: e for n, e in re.findall(
             r"localparam\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*(.+?);", text)
     }
-    modeled = {"IO_MIN_HOLD", "IO_PIT_HOLD",
-               "IO_NS_SLOW_R", "IO_NS_SLOW_W", "IO_NS_EGC_R", "IO_NS_EGC_W",
-               "IO_NS_GRCG_W", "IO_NS_GDC1", "IO_NS_GDC2", "IO_NS_PIT_W",
-               "IO_NS_5F_R", "IO_NS_5F_W", "IO_NS_EGCF_HI", "IO_NS_9A0", "IO_NS_FAA"}
+    modeled = {"IO_MIN_HOLD", "IO_PIT_HOLD", "IO_XE10_CPU_CYC",
+               "IO_NS_SLOW_R", "IO_NS_SLOW_W", "IO_NS_EGC_R", "IO_NS_FAST_W",
+               "IO_NS_GDC1", "IO_NS_GDC2",
+               "IO_NS_EGCF_HI", "IO_NS_9A0", "IO_NS_FAA"}
     missing = modeled - set(consts)
     if missing:
         raise RtlParseError(f"localparams not found: {sorted(missing)}")
@@ -470,18 +457,19 @@ def parse_io_access_cycles(path: Path = IOBUS_SV) -> RtlTable:
         raise RtlParseError("io_access_cycles() body not found")
     body = body.group(1)
 
-    profile = _top_io_latency_profile(TOP_SV)
-    split = re.search(r"if\s*\(\s*IO_LATENCY_PROFILE\s*==\s*2'd0\s*\)\s*begin(.*?)\belse\s*begin(.*?)\Z",
+    if mode not in MODES:
+        raise RtlParseError(f"unknown I/O timing mode {mode!r}")
+    split = re.search(r"if\s*\(\s*!\s*xe10\s*\)\s*begin(.*?)\belse\s*begin(.*?)\Z",
                       body, re.S)
     if not split:
-        raise RtlParseError("the IO_LATENCY_PROFILE == 0 / else branch not found")
-    active = split.group(1) if profile == 0 else split.group(2)
+        raise RtlParseError("the `if (!xe10)` (Fast) / else (Xe10) branch not found")
+    active = split.group(1) if mode == "fast" else split.group(2)
 
-    arms, default_arm = _parse_branch(active, env, profile)
+    arms, default_arm = _parse_branch(active, env)
 
     return RtlTable(env["SYS_CLOCK_HZ"],
                     {name: env[name] for name in sorted(modeled)},
-                    tuple(arms), default_arm, _top_clock_hz(TOP_SV), profile)
+                    tuple(arms), default_arm, _top_clock_hz(TOP_SV), mode)
 
 
 try:
@@ -504,15 +492,15 @@ def rtl_drift(table: RtlTable | None) -> list[str]:
     if table is None:
         return [f"io_access_cycles() unreadable: {RTL_ERROR}"]
     drift: list[str] = []
-    prof = EXPECTED_RTL.get(table.profile)
+    prof = EXPECTED_RTL.get(table.mode)
     if prof is None:
-        return [f"profile {table.profile} is not pinned in EXPECTED_RTL"]
+        return [f"I/O timing mode {table.mode!r} is not pinned in EXPECTED_RTL"]
     for name, value in sorted(prof["constants"].items()):
         got = table.constants.get(name)
         if got != value:
             drift.append(f"{name}: source says {got}, expected {value}")
-    for port, mode in CENSUS:
-        want_name = expected_class(table.profile, port, mode)
+    for port, mode in CENSUS + RTL_EXTRA:
+        want_name = expected_class(table.mode, port, mode)
         want_cycles = table.constants.get(want_name)
         if want_cycles is None:
             drift.append(f"0x{port:04X} ({mode}): the localparam {want_name} no longer"
@@ -520,7 +508,7 @@ def rtl_drift(table: RtlTable | None) -> list[str]:
             continue
         got = table.cycles(port, mode == "W")
         if got != want_cycles:
-            drift.append(f"0x{port:04X} ({mode}): priced at {got} clk"
+            drift.append(f"{table.mode} 0x{port:04X} ({mode}): priced at {got} clk"
                          f" ('{table.arm_of(port).label}'), expected {want_name} ="
                          f" {want_cycles} clk")
     top = table.top_clock_hz
@@ -528,6 +516,14 @@ def rtl_drift(table: RtlTable | None) -> list[str]:
         drift.append(f"the build profile's clock is {top} Hz, the expectation pins "
                      f"{prof['clock_hz']} Hz (re-derive EXPECTED_RTL)")
     return drift
+
+
+# Entries --check-rtl prices beyond the probe's census: the XE10T /IO rows that gave the Xe10
+# table an arm of its own and that ioprobe never measured (the 0x64/0xA4/0x7E fast writes,
+# the 0x09A8 read).
+RTL_EXTRA: list[tuple[int, str]] = [
+    (0x0064, "W"), (0x00A4, "W"), (0x007E, "W"), (0x09A8, "R"),
+]
 
 
 def print_rtl_drift(drift: list[str]) -> None:
@@ -726,7 +722,11 @@ def print_table(rows: list[dict], scale: int) -> None:
         )
     if w_ex <= 0:
         print("  (the anchor's PIT excess is not positive: read the ARTIC columns only)")
-    clock = RTL.top_clock_hz if (RTL and RTL.top_clock_hz) else (RTL.clock_hz if RTL else 50_000_000)
+    # Xe10's classes are REAL TIMES evaluated at the iobus default clock (SYS_CLOCK_HZ), so
+    # their ns are taken at that clock; Fast's floors are clk_sys COUNTS, so theirs are taken
+    # at the build profile's clock.
+    clock = ((RTL.clock_hz if RTL.mode == "xe10" else (RTL.top_clock_hz or RTL.clock_hz))
+             if RTL else 50_000_000)
     print(
         f"  {'port':5} {'md':2} {'label':8} {'pit':>6} {'base':>6} {'excess':>6} "
         f"{'clk_sys':>7} {'ns':>6} {'clk_a':>7} {'abs_ns':>8} {'via':>3} "
@@ -766,17 +766,18 @@ def print_table(rows: list[dict], scale: int) -> None:
     print(
         f"  clk_sys is anchored so 0x005F = {WAIT_CLK} clk (the DOCUMENTED 600 ns).\n"
         f"  RTL and RTL_ns are what src/pc9821/core/pc9821_iobus.sv io_access_cycles()\n"
-        f"  prices TODAY, parsed from that function ({clock / 1e6:.0f} MHz = the profile's"
-        " CLOCK_RATE_HZ,\n  so a TIME-derived arm such as 0x5F or the 8253 moves with it);"
-        " xRTL = abs_ns / RTL_ns.\n"
+        f"  prices TODAY in the {RTL.mode if RTL else 'fast'} I/O timing table (--io-timing),"
+        f" parsed from that function\n  at {clock / 1e6:.0f} MHz (Xe10: the iobus default clock,"
+        " whose classes are real times;\n  Fast: the profile's CLOCK_RATE_HZ, whose floors are"
+        " clk_sys counts); xRTL = abs_ns / RTL_ns.\n"
         "  abs_ns is ABSOLUTE (device clocks, both columns refereed at 8 raw PIT counts per\n"
         "  ARTIC tick): per-access ns over the row's own control, comparable across runs.\n"
         "  THE 0x5F ANCHOR'S xBASE CURRENCY: the ratio to quote from this table is the clk_sys column\n"
         "  (the class's excess over its own paired control as a ratio to the WAIT5F anchor; the\n"
         "  run's own scale cancels) - \"quote only xBASE\" means this column, not the ns ones.\n"
-        "  xRTL 10x on a floor row is EXPECTED, not a decoder bug: the FSM-floor change dropped every\n"
-        "  class but 0x5F and the 8253 to IO_MIN_HOLD deliberately, and that gap is item 82's\n"
-        "  stall-budget decision.  What the column is for is making sure the RTL\n"
+        "  xRTL 10x on a Fast floor row is EXPECTED, not a decoder bug: Fast drops every class but\n"
+        "  the 8253 write to IO_MIN_HOLD deliberately (the OSD's I/O timing field, item 82;\n"
+        "  Xe10 is the measured table).  What the column is for is making sure the RTL\n"
         "  figure you read is the one the FSM actually carries."
     )
 
@@ -795,7 +796,11 @@ def print_class_summary(rows: list[dict]) -> None:
     w_ex = excess(wait["pit"], wait["base"])
     if w_ex <= 0:
         return
-    clock = RTL.top_clock_hz if (RTL and RTL.top_clock_hz) else (RTL.clock_hz if RTL else 50_000_000)
+    # Xe10's classes are REAL TIMES evaluated at the iobus default clock (SYS_CLOCK_HZ), so
+    # their ns are taken at that clock; Fast's floors are clk_sys COUNTS, so theirs are taken
+    # at the build profile's clock.
+    clock = ((RTL.clock_hz if RTL.mode == "xe10" else (RTL.top_clock_hz or RTL.clock_hz))
+             if RTL else 50_000_000)
     # The machine's absolute price of one 0x5F access: what the clk_sys axis is worth
     # in ns for THIS capture (1621 ns on IO.TXT, not the documented 600).  Using the
     # capture's own anchor keeps meas_ns equal to the per-row abs_ns column.
@@ -894,8 +899,8 @@ def decode(text: str) -> list[str]:
     else:
         clock = RTL.top_clock_hz or RTL.clock_hz
         print(f"  clock {clock / 1e6:.0f} MHz (z486_mister.sv CLOCK_RATE_HZ; the iobus"
-              f" default is {RTL.clock_hz / 1e6:.0f} MHz; profile {RTL.profile})")
-        for name in ("IO_MIN_HOLD", "IO_PIT_HOLD", "IO_WAIT_5F"):
+              f" default is {RTL.clock_hz / 1e6:.0f} MHz; I/O timing {RTL.mode})")
+        for name in ("IO_MIN_HOLD", "IO_PIT_HOLD", "IO_XE10_CPU_CYC"):
             c = RTL.constants[name]
             print(f"  {name:12} = {c:>3} clk = {RTL.ns(c, clock):>5.0f} ns")
         for arm in RTL.arms:
@@ -966,33 +971,43 @@ def main() -> int:
     ap.add_argument("--rtl", type=Path, metavar="PATH",
                     help="read io_access_cycles() from PATH instead of the tree's"
                          " pc9821_iobus.sv (for checking a proposed RTL change)")
+    ap.add_argument("--io-timing", choices=MODES, default="fast",
+                    help="which I/O timing table (the OSD's I/O timing field) the RTL"
+                         " column prices: fast (the default) or xe10")
     args = ap.parse_args()
-    if args.rtl is not None:
+    rtl_path = args.rtl or IOBUS_SV
+    if args.rtl is not None or args.io_timing != "fast":
         try:
-            RTL = parse_io_access_cycles(args.rtl)
+            RTL = parse_io_access_cycles(rtl_path, args.io_timing)
             RTL_ERROR = ""
         except RtlParseError as exc:
             RTL, RTL_ERROR = None, str(exc)
     if args.check_rtl:
-        if RTL is None:
-            print(f"FAIL: io_access_cycles() unreadable: {RTL_ERROR}")
+        failed = 0
+        for mode in MODES:
+            try:
+                table = parse_io_access_cycles(rtl_path, mode)
+            except RtlParseError as exc:
+                print(f"FAIL: io_access_cycles() unreadable ({mode}): {exc}")
+                return 1
+            drift = rtl_drift(table)
+            clock = table.top_clock_hz or table.clock_hz
+            print(f"  parsed {rtl_path} at {clock / 1e6:.0f} MHz "
+                  f"(I/O timing {mode}): {len(table.arms)} named arm(s) + the default, "
+                  f"constants {table.constants}")
+            if drift:
+                print_rtl_drift(drift)
+                failed += len(drift)
+                continue
+            if mode == "fast":
+                print(f"  fast: above the FSM floor in the census: "
+                      f"{', '.join(f'0x{p:04X} {m}' for p, m in sorted(EXPECTED_RTL['fast']['above_floor']))}")
+            else:
+                print("  xe10: every census entry is priced by xe10_class()")
+        if failed:
+            print(f"\nFAIL ({failed} drift item(s))")
             return 1
-        drift = rtl_drift(RTL)
-        clock = RTL.top_clock_hz or RTL.clock_hz
-        print(f"  parsed {args.rtl or IOBUS_SV} at {clock / 1e6:.0f} MHz "
-              f"(profile {RTL.profile}): {len(RTL.arms)} named arm(s) + the default, "
-              f"constants {RTL.constants}")
-        if drift:
-            print_rtl_drift(drift)
-            print(f"\nFAIL ({len(drift)} drift item(s))")
-            return 1
-        if RTL.profile == 0:
-            print(f"  above the FSM floor in the census: "
-                  f"{', '.join(f'0x{p:04X} {m}' for p, m in sorted(EXPECTED_RTL[0]['above_floor']))}")
-        else:
-            print(f"  faithful profile {RTL.profile}: every census entry is priced by "
-                  f"faithful_class()")
-        print("\nPASS (io_access_cycles() matches EXPECTED_RTL)")
+        print("\nPASS (io_access_cycles() matches EXPECTED_RTL in both I/O timing modes)")
         return 0
     if not args.captures:
         ap.error("a capture file is required (or pass --check-rtl)")

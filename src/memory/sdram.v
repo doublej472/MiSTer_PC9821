@@ -33,7 +33,7 @@ module sdram
     // pins. 1: the byte mask rides A[12:11] (the MiSTer 128MB XSDS module wires the chips'
     // DQML/DQMH to A11/A12), so the byte mask is placed on a[12:11] during a WRITE and no
     // read-modify-write is needed. 0: a partial store is a read-modify-write. See
-    // docs/sdram-dqm-wiring.md.
+    // docs/sdram.md, "DQM wiring".
     parameter         ADQM = 1'b0,
     parameter         FAST_GRADE = 1'b1,  // 1: Alliance -6 speed grade, 0: -7 speed grade
     // G3 gather-RMW session: the most entries one session carries (1..GATHER_MAX). The
@@ -1373,7 +1373,7 @@ always @* begin
             end else if (ADQM) begin
                 // MiSTer standard (JTFRAME's ADQM): the chip's DQM is wired to A[12:11], so a
                 // partial store is ONE masked WRITE -- the mask rides a[12:11], with no read and
-                // no re-activated merge write. docs/sdram-dqm-wiring.md.
+                // no re-activated merge write. docs/sdram.md, "DQM wiring".
                 // BOTH halves are always written, a half no byte enable touches with DQM = 11
                 // (it writes nothing). That keeps the auto-precharge on the second half, at
                 // T_RCD+1, which is what meets tRAS (the guards' note: one half at T_RCD puts the

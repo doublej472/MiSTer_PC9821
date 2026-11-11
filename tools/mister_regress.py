@@ -21,9 +21,25 @@ THE SCRIPTED SET (--items, default all)
                the CONFIG.SYS profile 0 (noemm: HIMEM, no EMM386) unless the scenarios file says
                otherwise. ~1.5 min including the boot (256 programs in under 30 s); --cpusuite-passes N
                loops the pack for a longer stress run
+  boot-loop    loads the core once, then --boot-count N boots in all (the load's own included) through
+               the OSD's 'Reset and close OSD', each boot checked as below. Not in the default set (it
+               needs --osd-reset-downs and --osd-verify); the release card run uses it with N >= 6
+  speeds       loads the core once per OSD CPU Speed in --speeds (default 33, 25 and 16 MHz), each time with
+               that setting written into the card's PC9821.CFG before the load (backed up first and
+               restored after, also when the item fails), and checks that each load booted the hard
+               disk. A reduced speed gates the CPU's clock, which Full never exercises: a placement
+               whose clock-gate enable path was too long booted at Full and never below it
+               (docs/clock-domains.md, "The enable into the clock-control block"), so the release card run includes it
   crt31k       CRT31K.COM (tools/hwprobe/crt31k): times the 24 kHz raster, switches to the 31 kHz dot clock
                (0x09A8 bit 0 + the BIOS 31 kHz master SYNC), times it, restores; screenshots every 3 s
                show the switch on HDMI. Not in the default set (run it with --items crt31k)
+  BOOT CHECK   every item first proves the BIOS booted the hard disk: the copy's AUTOEXEC.BAT starts
+               with a line appending a row to ZREGBOOT.TXT (as does every SELSYS 'REM .BAT' section of
+               its CONFIG.SYS, since SELSYS rewrites AUTOEXEC.BAT at boot; an image where no boot can run
+               the line is refused before the card is touched), and that file must hold exactly one row per
+               boot since the core load (read out of the copy after the boot wait, then polled up to
+               --boot-check-timeout s). Otherwise the item FAILs at once ('BIOS did not boot the hard
+               disk') with a screenshot, and nothing of the item is typed. --no-boot-check turns it off.
   PASS CHECKS  probe items: every INTEG_*.TXT ends 'INTEG END FAILS=0000', INTEG_OK.TXT exists, and
                for probe-cda the PLAY row says 'PLAY OK' (a probe that could not play audio proved nothing
                about CD-DA).  Game items: the screen is not frozen (frame-diff between consecutive
@@ -84,11 +100,37 @@ LOCK = f"/tmp/{TAG}.lock"
 REMOTE_RBF = f"/media/fat/_Computer/{CORE}-{TAG}.rbf"
 REMOTE_MGL = f"/media/fat/{TAG.upper()}.mgl"
 SHOTS = f"/media/fat/screenshots/{SETNAME}"
+MENU = "/media/fat/menu.rbf"                   # the card's own Menu core, loaded by the cleanup
 
-ITEMS = ("keymap", "probe", "probe-cda", "doom", "th05", "rusty", "policenauts", "flamezap", "cpusuite", "crt31k")
+ITEMS = ("boot-loop", "speeds", "keymap", "probe", "probe-cda", "doom", "th05", "rusty", "policenauts", "flamezap",
+         "cpusuite", "crt31k")
 # The set a run without --items gets (tools/mister_multi.py DEFAULT_ITEMS is the same list): all
-# of them but crt31k (cpusuite takes ~1.5 min on the card, boot included; measured 2026-10-14).
-DEFAULT_ITEMS = tuple(i for i in ITEMS if i != "crt31k")
+# of them but crt31k (cpusuite takes ~1.5 min on the card, boot included; measured 2026-10-14) and
+# boot-loop (opt-in: it needs the OSD row count and its verification, see --osd-reset-downs).
+DEFAULT_ITEMS = tuple(i for i in ITEMS if i not in ("crt31k", "boot-loop"))
+# THE BOOT CHECK. Every item boots the hard disk, and a BIOS that did not boot it (the
+# "insert a system disk" prompt of 639674f3) must fail the item at once: a screenshot-only item
+# passed at that prompt and the probe waited out its timeout. The image COPY's AUTOEXEC.BAT gets
+# BOOT_LINE first, so every boot that runs the hard disk's own AUTOEXEC.BAT appends one row to
+# BOOT_MARK in the hard disk's root; the runner reads it back out of the copy (as it reads the
+# probe's captures) and wants exactly one row per boot since the core load. A CONFIG.SYS that loads
+# SELSYS rewrites AUTOEXEC.BAT at every boot, so its profiles' AUTOEXEC bodies get the line too
+# (mark_selsys).
+BOOT_MARK = "ZREGBOOT.TXT"
+BOOT_ROW = "ZREGBOOT"
+BOOT_LINE = f"@ECHO {BOOT_ROW}>>\\{BOOT_MARK}\r\n".encode()
+BOOT_POLL_S = 5
+SHOT_SETTLE_S = 3          # the wait for a requested screenshot to be written on the card
+# Linux key codes for the OSD (input-event-codes.h): F12 opens the OSD, Down, Enter, Esc
+KEY_F12, KEY_DOWN, KEY_ENTER, KEY_ESC = 88, 108, 28, 1
+OSD_RESET_ROW = "Reset and close OSD"
+# OSD CPU Speed: CONF_STR `O[17:14],CPU Speed,Full,33 MHz,25 MHz,16 MHz,...` (z486_mister.sv), the
+# list position in status bits 17:14, which Main_MiSTer keeps in config/<setname>.CFG as the
+# status word's bytes, least significant first (bit n = byte n/8, bit n%8).
+SPEED_LSB, SPEED_WIDTH = 14, 4
+SPEED_LABELS = {1: "33 MHz", 2: "25 MHz", 3: "16 MHz", 4: "12 MHz", 5: "8 MHz"}
+CARD_CFG = f"/media/fat/config/{SETNAME}.CFG"
+CARD_CFG_BAK = f"{CARD_CFG}.{TAG}-bak"
 CPUSUITE = ROOT / "tools/hwprobe/cpusuite"
 CRT31K = ROOT / "tools/hwprobe/crt31k"
 CRT31K_CAPTURE_HZ = 25_168_031     # docs/probes/CRT31K.TXT, calibrated (crt31k_decode.py)
@@ -338,16 +380,26 @@ def judge_probe(captures: dict, expect: list, want_play: bool):
 
 def parse_cpusuite(text: str) -> dict:
     """CPUSUITE.TXT -> {'begin': (programs, passes)|None, 'rows': [(name, verdict, detail)],
-    'pending': name|None (the program the run stopped in), 'end': {PASSES,RUN,PASS,FAIL}|None}."""
-    r = {"begin": None, "rows": [], "pending": None, "end": None}
+    'pending': name|None (the program the run stopped in), 'end': {PASSES,RUN,PASS,FAIL,SKIP}|None,
+    'cpu': {field: value}|None (the CPU row), 'skipped': [name] (/SKIP rows)}.
+    A file a resumed run appended to (/FROM, /SKIP, /A) holds several BEGIN/CPU/END rows: the
+    last of each wins; the rows of every run are kept."""
+    r = {"begin": None, "rows": [], "pending": None, "end": None, "cpu": None, "skipped": []}
     for line in text.replace("\r", "").split("\n"):
         m = re.match(r"CPUSUITE BEGIN V1 PROGRAMS=(\d+) PASSES=(\d+)", line)
         if m:
             r["begin"] = (int(m.group(1)), int(m.group(2)))
             continue
-        m = re.match(r"CPUSUITE END PASSES=(\d+) RUN=(\d+) PASS=(\d+) FAIL=(\d+)", line)
+        m = re.match(r"CPUSUITE END PASSES=(\d+) RUN=(\d+) PASS=(\d+) FAIL=(\d+)(?: SKIP=(\d+))?", line)
         if m:
-            r["end"] = dict(zip(("PASSES", "RUN", "PASS", "FAIL"), map(int, m.groups())))
+            r["end"] = dict(zip(("PASSES", "RUN", "PASS", "FAIL", "SKIP"), (int(g or 0) for g in m.groups())))
+            continue
+        if line.startswith("CPUSUITE CPU"):
+            r["cpu"] = dict(f.split("=", 1) for f in line.split()[2:] if "=" in f)
+            continue
+        m = re.match(r"(\S+) SKIP$", line)
+        if m:
+            r["skipped"].append(m.group(1))
             continue
         m = re.match(r"(\S+) (PASS|FAIL)\b ?(.*)", line)
         if m:
@@ -454,8 +506,107 @@ def set_default_profile(config_sys: bytes, n: int) -> bytes:
     return new
 
 
-def item_needs(item, sc):
+def mark_autoexec(autoexec: bytes | None) -> bytes:
+    """AUTOEXEC.BAT for the image COPY with BOOT_LINE first (every other byte kept; a disk with no
+    AUTOEXEC.BAT gets one holding only the line). Each boot that runs the hard disk's AUTOEXEC.BAT
+    appends one BOOT_ROW to BOOT_MARK on the hard disk."""
+    body = autoexec or b""
+    if body.startswith(BOOT_LINE):
+        return body
+    return BOOT_LINE + body
+
+
+# SELSYS.EXE v2.20 (KMe; its manual SELSYS22.DOC on the regression image, sections 2 and 3) is a
+# CONFIG.SYS device driver that chooses one of several profiles at boot. "REM .SYS [title]" opens a
+# profile's CONFIG.SYS body and "REM .BAT" its AUTOEXEC.BAT body, each running to the next
+# "REM .<anything>" line (case does not matter). It writes the chosen .BAT body out as AUTOEXEC.BAT on
+# every boot ("AUTOEXEC.BAT はいつも上書きします", it always overwrites AUTOEXEC.BAT) unless given -s
+# or -b, and with .SYS profiles but no .BAT body it asks whether to keep or erase AUTOEXEC.BAT.
+SELSYS_DEVICE = re.compile(rb"(?mi)^[ \t]*DEVICE(?:HIGH)?[ \t]*=[ \t]*\S*SELSYS\.EXE\b([^\r\n]*)")
+SELSYS_BAT = re.compile(rb"(?mi)^[ \t]*REM[ \t]+\.BAT\b[^\r\n]*(\r?\n|\Z)")
+SELSYS_SYS = re.compile(rb"(?mi)^[ \t]*REM[ \t]+\.SYS\b")
+
+
+def mark_selsys(config_sys: bytes) -> tuple[bytes, int]:
+    """CONFIG.SYS for the image COPY with BOOT_LINE as the first line of every SELSYS `REM .BAT`
+    body (every other byte kept; a body that already starts with it is left alone) -> (bytes, the
+    number of .BAT bodies). The SELSYS profile that boots then writes an AUTOEXEC.BAT that starts
+    with the line."""
+    out, last, n = [], 0, 0
+    for m in SELSYS_BAT.finditer(config_sys):
+        n += 1
+        end = m.end()
+        out.append(config_sys[last:end])
+        if not m.group(1):                       # a REM .BAT on the file's last line, no line end
+            out.append(b"\r\n")
+        if not config_sys.startswith(BOOT_LINE, end):
+            out.append(BOOT_LINE)
+        last = end
+    out.append(config_sys[last:])
+    return b"".join(out), n
+
+
+def boot_check_files(autoexec: bytes | None, config_sys: bytes | None) -> dict:
+    """The files the boot check rewrites in the image COPY: AUTOEXEC.BAT always, and CONFIG.SYS when
+    it loads SELSYS (each `REM .BAT` body marked). SystemExit when no boot can run the line: SELSYS
+    is loaded with .SYS profiles but no .BAT body and no -s/-b (it then asks at boot whether to keep
+    or erase AUTOEXEC.BAT), so a check would fail on a good boot."""
+    files = {"AUTOEXEC.BAT": mark_autoexec(autoexec)}
+    dev = SELSYS_DEVICE.search(config_sys or b"")
+    if not dev:
+        return files
+    marked, n = mark_selsys(config_sys)
+    if n:
+        files["CONFIG.SYS"] = marked
+        return files
+    keeps = re.search(rb"(?i)(?:^|\s)[-/][a-z]*[sb]", dev.group(1))    # -s / -b: AUTOEXEC.BAT left as it is
+    if SELSYS_SYS.search(config_sys) and not keeps:
+        raise SystemExit("the boot check cannot work on this image: CONFIG.SYS loads SELSYS, which rewrites "
+                         "AUTOEXEC.BAT at every boot, but has no 'REM .BAT' section to put the marker in, "
+                         "so neither AUTOEXEC.BAT nor a section can carry it. Add a 'REM .BAT' section "
+                         "to each profile, or give --no-boot-check (the items then cannot tell a BIOS "
+                         "that did not boot the disk)")
+    return files
+
+
+def count_boots(text: str | None) -> int:
+    """The BOOT_ROW rows in BOOT_MARK: how many boots ran the hard disk's AUTOEXEC.BAT."""
+    return sum(1 for l in (text or "").replace("\r", "").split("\n") if l.strip() == BOOT_ROW)
+
+
+def judge_boot(text: str | None, want: int, waited_s: float, of: int = 1):
+    """-> (ok, detail). want: the boots since the core load (the load's own boot is 1). Fewer rows
+    than want is the BIOS failure the guard exists for (the 639674f3 'insert a system disk'
+    prompt); more rows is a machine that restarted by itself, also a failure."""
+    n = count_boots(text)
+    which = f"boot {want} of {of}" if of > 1 else "the boot after the core load"
+    if n == want:
+        return True, f"DOS ran the hard disk's AUTOEXEC.BAT on {which}"
+    if n < want:
+        return False, (f"BIOS did not boot the hard disk: the hard disk's AUTOEXEC.BAT did not run on {which} "
+                       f"within {waited_s:.0f}s ({BOOT_MARK} has {n} row{'s' if n != 1 else ''}, want {want}); "
+                       f"see the screenshot (the BIOS system-disk prompt, or a reset that did not happen)")
+    return False, f"the machine restarted by itself: {BOOT_MARK} has {n} rows after {which}, want {want}"
+
+
+def item_needs(item, sc, a=None):
     """None if the item is runnable, else the reason it is not (a SKIP, not a pass)."""
+    if item == "boot-loop" and a is not None:
+        if a.no_boot_check:
+            return "needs the boot check (--no-boot-check given)"
+        if a.boot_count < 2:
+            return "--boot-count must be at least 2 (the load's boot and one reset)"
+        if a.osd_reset_downs is None:
+            return ("needs --osd-reset-downs N (Down presses from the main page's top row to "
+                    "'Reset and close OSD' on this build, counted once on an HDMI capture)")
+        if not a.osd_verify:
+            return ("needs --osd-verify CMD|counted (the highlighted OSD row is verified before every "
+                    "Enter, docs/mister-testing.md)")
+    if item == "speeds" and a is not None:
+        if a.no_boot_check:
+            return "needs the boot check (--no-boot-check given): a load that did not boot is the failure"
+        if not a.speeds:
+            return "--speeds is empty"
     if item in GAME_ITEMS:
         if item not in sc:
             return f"no '{item}' entry in the scenarios file"
@@ -504,6 +655,9 @@ def manifest_for(img: Path, drive: str, kind: str, select: dict) -> str:
             fs = fatimg.Fat(f, fatimg.locate_volume(f, select.get("partition"), select.get("offset"), select.get("skip", 0)))
             read = lambda e: fs.read_file(e, select["max_bytes"])
         ents = [e for e in fs.walk() if e.size > 0 and e.path.isascii()]   # Shift-JIS names cannot be typed into a manifest
+        # files the runner rewrites in the copy (AUTOEXEC.BAT for the boot check) differ by design
+        ex = {x.upper() for x in select.get("exclude") or ()}
+        ents = [e for e in ents if e.path.upper() not in ex]
         if select.get("under"):
             u = select["under"].upper().strip("\\/") + "\\"
             ents = [e for e in ents if e.path.upper().startswith(u)]
@@ -556,10 +710,11 @@ def expected_captures(manifests: dict, want_play: bool):
     return exp
 
 
-def mgl_text(hdd=None, fdd0=None, fdd1=None, cd=None, pack="pc98pack-xe10.bin") -> str:
-    """The same shape tools/mister_load.sh writes; an S entry's index is the hps_io slot."""
+def mgl_text(hdd=None, fdd0=None, fdd1=None, cd=None, pack="pc98pack-xe10.bin", hdd2=None) -> str:
+    """The same shape tools/mister_load.sh writes; an S entry's index is the hps_io slot
+    (S0 HDD, S1/S2 FDD1/FDD2, S3 HDD2 - IDE bank 1's master when the OSD says so - S4 the CD)."""
     lines = ["<mistergamedescription>", f"\t<rbf>_Computer/{CORE}-{TAG}</rbf>", f"\t<setname>{SETNAME}</setname>"]
-    for idx, p in ((0, hdd), (1, fdd0), (2, fdd1), (4, cd)):
+    for idx, p in ((0, hdd), (1, fdd0), (2, fdd1), (3, hdd2), (4, cd)):
         if p:
             lines.append(f'\t<file delay="1" type="s" index="{idx}" path="{p}"/>')
     lines.append(f'\t<file delay="1" type="f" index="0" path="{pack}"/>')
@@ -712,6 +867,98 @@ def cat_cmd(a, hskip: int, name: str) -> str:
             f"{'--skip %d ' % hskip if hskip else ''}--cat {name} 2>/dev/null")
 
 
+def boot_guard(m: Mister, a, hskip: int, want: int, of: int = 1, waited: float = 0):
+    """Wait (up to --boot-check-timeout s past the boot wait, `waited` s) for the hard disk's
+    AUTOEXEC.BAT to have run `want` times since the core load -> (ok, detail). Polls the image copy."""
+    if m.dry:
+        m.sh(cat_cmd(a, hskip, BOOT_MARK), check=False)
+        return True, "dry run"
+    t0 = time.time()
+    while True:
+        text = m.sh(cat_cmd(a, hskip, BOOT_MARK), check=False) or None
+        ok, detail = judge_boot(text, want, waited + time.time() - t0, of)
+        # more rows than wanted cannot heal; fewer may still be on their way (a slow AUTOEXEC)
+        if ok or count_boots(text) > want or time.time() - t0 >= a.boot_check_timeout:
+            return ok, detail
+        time.sleep(BOOT_POLL_S)
+
+
+def osd_keys(m: Mister, keys: str):
+    """Key presses for Main_MiSTer's OSD, through ztype's raw-code escapes (slower than typing:
+    the OSD drops presses that come too close together)."""
+    m.sh(f"python3 {REMOTE_TMP}/ztype.py --hold 80 --gap 150 {shlex.quote(keys)}")
+
+
+def osd_reset(m: Mister, a, boot: int, itemdir: Path, out: Path):
+    """Open the OSD, move to OSD_RESET_ROW, have the row verified, press Enter -> (ok, detail).
+    The OSD opens on the main page's top row after a core load or this row's own reset (the page
+    the OSD last showed, at row 0, as seen on the cards), so the row is --osd-reset-downs Down
+    presses away. The OSD is
+    not in a screenshot: --osd-verify CMD checks the highlighted row (on an HDMI capture) before
+    every Enter, and 'counted' records that the count was verified on a capture for this RBF."""
+    osd_keys(m, f"~k{KEY_F12};~w1500;" + f"~k{KEY_DOWN};" * a.osd_reset_downs + "~w800;")
+    if a.osd_verify == "counted":
+        log(out, f"boot-loop: boot {boot}: '{OSD_RESET_ROW}' is {a.osd_reset_downs} Downs "
+                 f"(counted on a capture for this RBF, not re-checked)")
+    elif not m.dry:
+        env = dict(os.environ, ZREG_OSD_ROW=OSD_RESET_ROW, ZREG_OSD_DOWNS=str(a.osd_reset_downs),
+                   ZREG_BOOT=str(boot), ZREG_HOST=m.host, ZREG_OUT=str(itemdir))
+        try:
+            r = subprocess.run(a.osd_verify, shell=True, env=env, timeout=120)
+            verified = r.returncode == 0
+        except subprocess.TimeoutExpired:
+            verified = False
+        if not verified:
+            osd_keys(m, f"~k{KEY_ESC};~w300;~k{KEY_ESC};")
+            return False, (f"boot {boot}: --osd-verify did not confirm '{OSD_RESET_ROW}' after "
+                           f"{a.osd_reset_downs} Downs; Enter NOT pressed, the OSD was closed")
+    osd_keys(m, f"~k{KEY_ENTER};")
+    return True, ""
+
+
+def cfg_set_speed(m: Mister, pos: int):
+    """Write OSD CPU Speed list position `pos` into the card's config file (status bits 17:14)."""
+    m.sh(f"python3 - {CARD_CFG} {pos} {SPEED_LSB} {SPEED_WIDTH} <<'PY'\n"
+         "import os, sys\n"
+         "p, pos, lsb, w = sys.argv[1], *map(int, sys.argv[2:])\n"
+         "b = bytearray(open(p, 'rb').read()) if os.path.exists(p) else bytearray(16)\n"
+         "for i in range(w):\n"
+         "    n = lsb + i\n"
+         "    while len(b) <= n // 8: b.append(0)\n"
+         "    b[n // 8] = (b[n // 8] & ~(1 << (n % 8))) | (((pos >> i) & 1) << (n % 8))\n"
+         "open(p, 'wb').write(bytes(b))\n"
+         "PY")
+
+
+def speeds_item(m: Mister, a, hskip, boot, itemdir, out, stopped):
+    """One core load per --speeds position, the setting written into the card's config first; each
+    load must boot the hard disk (the image copy gets one more boot row per load)."""
+    sel = a.speeds
+    had = m.sh(f"test -f {CARD_CFG} && echo yes", check=False).strip() == "yes"
+    if had:
+        m.sh(f"cp {CARD_CFG} {CARD_CFG_BAK}")
+    try:
+        for k, pos in enumerate(sel, 1):
+            name = SPEED_LABELS.get(pos, f"position {pos}")
+            cfg_set_speed(m, pos)
+            log(out, f"speeds: load {k} of {len(sel)}: CPU Speed {name} (position {pos})")
+            m.sh(f"echo 'load_core {REMOTE_MGL}' > /dev/MiSTer_cmd")
+            time.sleep(0 if m.dry else boot)
+            ok, d = boot_guard(m, a, hskip, k, len(sel), boot)
+            m.sh("echo screenshot > /dev/MiSTer_cmd", check=False)
+            if not ok:
+                return stopped(f"CPU Speed {name}: {d}")
+            log(out, f"speeds: CPU Speed {name}: {d}")
+    finally:
+        # the user's settings come back whatever happened (a load that never booted included)
+        if had:
+            m.sh(f"cp {CARD_CFG_BAK} {CARD_CFG} && rm -f {CARD_CFG_BAK} && sync", check=False)
+        else:
+            m.sh(f"rm -f {CARD_CFG}; sync", check=False)
+    time.sleep(0 if m.dry else SHOT_SETTLE_S)
+    return None
+
+
 def run_item(m: Mister, item, a, sc, prep, out):
     """Boot the core on a fresh image copy, drive it, collect. Returns (verdict, detail)."""
     hskip = prep.get("skip", 0)          # an HDI container's front header, for the guest-side reads
@@ -744,16 +991,64 @@ def run_item(m: Mister, item, a, sc, prep, out):
     before = set(m.sh(f"ls {SHOTS} 2>/dev/null || true").split())
     if a.uart:
         start_uart(m)
+    boot = (sc.get(item, {}).get("boot_wait") if sc else None) or a.boot_wait
+
+    def stopped(why):
+        # fail fast: what the guest shows, this item's screenshots and UART, nothing more typed
+        m.sh("echo screenshot > /dev/MiSTer_cmd", check=False)
+        time.sleep(0 if m.dry else SHOT_SETTLE_S)
+        collect_shots(m, a, before, since, itemdir)
+        if a.uart:
+            m.get(f"{REMOTE_TMP}/uart.bin", itemdir / "uart.bin")
+            stop_uart(m)
+        return "FAIL", why
+
+    if item == "speeds":
+        r = speeds_item(m, a, hskip, boot, itemdir, out, stopped)
+        if r is not None:
+            return r
+        collect_shots(m, a, before, since, itemdir)
+        if a.uart:
+            m.get(f"{REMOTE_TMP}/uart.bin", itemdir / "uart.bin")
+            stop_uart(m)
+        names = ", ".join(SPEED_LABELS.get(p, f"position {p}") for p in a.speeds)
+        return ("DRY", "dry run") if m.dry else (
+            "PASS", f"the hard disk booted at CPU Speed {names} (one core load each); look at the screenshots")
     log(out, f"{item}: load_core")
     m.sh(f"echo 'load_core {REMOTE_MGL}' > /dev/MiSTer_cmd")
-    boot = (sc.get(item, {}).get("boot_wait") if sc else None) or a.boot_wait
     time.sleep(0 if m.dry else boot)
     verdict, detail = "PASS", ""
 
     def type_(s):
         m.sh(f"python3 {REMOTE_TMP}/ztype.py {shlex.quote(s)}")
 
-    if item in ("probe", "probe-cda"):
+    nboot = a.boot_count if item == "boot-loop" else 1
+    if not a.no_boot_check:
+        ok, d = boot_guard(m, a, hskip, 1, nboot, boot)
+        if not ok:
+            return stopped(d)
+        log(out, f"{item}: {d}")
+
+    if item == "boot-loop":
+        # the load's boot was 1; every OSD reset is another, each checked the same way
+        for k in range(2, nboot + 1):
+            m.sh("echo screenshot > /dev/MiSTer_cmd", check=False)   # the DOS prompt before reset k
+            ok, d = osd_reset(m, a, k, itemdir, out)
+            if not ok:
+                return stopped(d)
+            log(out, f"{item}: boot {k} of {nboot}: OSD reset")
+            time.sleep(0 if m.dry else boot)
+            ok, d = boot_guard(m, a, hskip, k, nboot, boot)
+            if not ok:
+                return stopped(d)
+            log(out, f"{item}: {d}")
+        m.sh("echo screenshot > /dev/MiSTer_cmd", check=False)
+        time.sleep(0 if m.dry else SHOT_SETTLE_S)
+        collect_shots(m, a, before, since, itemdir)
+        verdict = "DRY" if m.dry else "PASS"
+        detail = "dry run" if m.dry else (f"{nboot} boots (the core load and {nboot - 1} OSD resets) "
+                                          f"each ran the hard disk's AUTOEXEC.BAT; look at the screenshots")
+    elif item in ("probe", "probe-cda"):
         # AUTOEXEC may leave the guest in another directory; the batch writes its captures to the cwd
         type_("cd \\\n")
         type_("RUNINTEG /PLAY\n" if item == "probe-cda" else "RUNINTEG\n")
@@ -920,6 +1215,25 @@ def main(argv=None):
     ap.add_argument("--cpusuite-passes", type=int, default=1, help="cpusuite: run the whole pack N times (CPUSUITE /P:N)")
     ap.add_argument("--cpusuite-timeout", type=int, default=600,
                     help="cpusuite: seconds from typing CPUSUITE to giving up on its END row")
+    ap.add_argument("--boot-check-timeout", type=int, default=60, metavar="SECONDS",
+                    help="the boot check: how long past the boot wait to wait for the hard disk's AUTOEXEC.BAT "
+                         "to have run (default 60)")
+    ap.add_argument("--no-boot-check", action="store_true",
+                    help="do not patch AUTOEXEC.BAT or check that each boot ran it (a disk whose shell skips "
+                         "AUTOEXEC.BAT; the items then cannot tell a BIOS that did not boot the disk)")
+    ap.add_argument("--speeds", type=lambda v: [int(x) for x in v.split(",") if x.strip()],
+                    default=[1, 2, 3], metavar="P,P,...",
+                    help="speeds: OSD CPU Speed list positions, one core load each (default 1,2,3 = "
+                         "33, 25 and 16 MHz; 5 = 8 MHz)")
+    ap.add_argument("--boot-count", type=int, default=6, metavar="N",
+                    help="boot-loop: boots in all, the core load's included (N-1 OSD resets; default 6)")
+    ap.add_argument("--osd-reset-downs", type=int, metavar="N",
+                    help="boot-loop: Down presses from the OSD main page's top row to 'Reset and close OSD' "
+                         "on this build (it depends on the build profile; count it on an HDMI capture)")
+    ap.add_argument("--osd-verify", metavar="CMD|counted",
+                    help="boot-loop: a host command run after the Downs and before each Enter; exit 0 means the "
+                         "highlighted row is 'Reset and close OSD' (env ZREG_OSD_ROW, ZREG_OSD_DOWNS, ZREG_BOOT, "
+                         "ZREG_HOST, ZREG_OUT). 'counted': the count was verified on a capture for this RBF")
     ap.add_argument("--host", default=os.environ.get("MISTER_HOST", "root@MiSTer"),
                     help="ssh destination (default $MISTER_HOST, else root@MiSTer)")
     ap.add_argument("--password", default=os.environ.get("MISTER_PASS", "1"),
@@ -958,6 +1272,18 @@ def main(argv=None):
         log(out, f"{a.hdd_image}: HDI container, data starts at {skip} bytes")
     sel = {"largest": a.hdd_largest, "max_bytes": a.max_bytes, "under": a.hdd_under,
            "partition": a.partition, "skip": skip}
+    with open(a.hdd_image, "rb") as f:
+        fs = fatimg.Fat(f, fatimg.locate_volume(f, a.partition, None, skip))
+        rd = lambda n: fs.read_file(fs.find(n), 1 << 20) if fs.find(n) else None
+        ae, cfg_sys = rd("AUTOEXEC.BAT"), rd("CONFIG.SYS")
+    boot_files = {} if a.no_boot_check else boot_check_files(ae, cfg_sys)
+    if "CONFIG.SYS" in boot_files:
+        log(out, f"boot check: CONFIG.SYS loads SELSYS; the marker line goes into its "
+                 f"{mark_selsys(cfg_sys)[1]} 'REM .BAT' section(s) as well as AUTOEXEC.BAT")
+        cfg_sys = boot_files["CONFIG.SYS"]       # a per-item profile (set_default_profile) keeps the marks
+    if boot_files:
+        # files the copy carries rewritten differ from the original by design
+        sel["exclude"] = sorted(boot_files)
     manifests = {a.hdd_drive.upper(): manifest_for(Path(a.hdd_image), a.hdd_drive.upper(), "fat", sel)}
     if a.fdd0:
         manifests["A:"] = manifest_for(Path(a.fdd0), "A:", "fat", {"largest": 99, "max_bytes": a.max_bytes})
@@ -973,14 +1299,13 @@ def main(argv=None):
         files.update(cf)
     if "crt31k" in items:
         files.update(crt31k_files())
+    files.update(boot_files)
     if a.go:
         log(out, f"patching a COPY of {a.hdd_image} -> {patched}")
         patch_hdd(Path(a.hdd_image), patched, files, a.partition, None, skip)
     else:
         log(out, f"(dry run) would patch a COPY of {a.hdd_image} -> {patched} with {sorted(files)}")
-    with open(a.hdd_image, "rb") as f:
-        cfg_sys = fatimg.Fat(f, fatimg.locate_volume(f, a.partition, None, skip)).cat("CONFIG.SYS")
-    prep = {"config_sys": cfg_sys, "manifests": manifests, "cd": bool(a.cd), "fdd0": bool(a.fdd0), "fdd1": bool(a.fdd1),
+    prep = {"config_sys": cfg_sys or b"", "manifests": manifests, "cd": bool(a.cd), "fdd0": bool(a.fdd0), "fdd1": bool(a.fdd1),
             "cpusuite": cpus_names, "skip": skip}
 
     # ---- the plan
@@ -989,7 +1314,7 @@ def main(argv=None):
         why = None
         if it == "probe-cda" and not a.cd:
             why = "needs --cd"
-        why = why or item_needs(it, sc)
+        why = why or item_needs(it, sc, a)
         (skipped if why else runnable).append((it, why))
     log(out, "plan: run " + (", ".join(i for i, _ in runnable) or "nothing") +
         ("; skip " + "; ".join(f"{i} ({w})" for i, w in skipped) if skipped else ""))
@@ -1051,6 +1376,8 @@ def cleanup(m: Mister, out: Path):
     """Remove everything the run created and VERIFY it is gone. Returns what is still there."""
     log(out, "cleanup")
     stop_uart(m)
+    # leave the card on its Menu core, not on the test core whose files are removed below
+    m.sh(f"echo 'load_core {MENU}' > /dev/MiSTer_cmd", check=False)
     paths = sorted(set(m.created))
     for p in paths:
         # a test-named file, or one of this run's own screenshots (directly in SHOTS, named by
@@ -1076,6 +1403,24 @@ def selftest() -> int:
         nonlocal rc
         print(("ok:   " if c else "FAIL: ") + what)
         rc |= 0 if c else 1
+
+    # a SELSYS CONFIG.SYS in the regression image's layout: device line, DEFAULT/WAIT, then .SYS/.BAT
+    # profiles, the last one closed by "REM ."; the marker goes right after each REM .BAT line
+    sel_cs = (b"DEVICE=A:\\TOOLS\\SELSYS\\SELSYS.EXE -k -m\r\nREM DEFAULT3\r\nREM WAIT5\r\n\r\n"
+              b"REM .SYS [noemm - no EMM386]\r\nFILES=30\r\nSHELL=\\COMMAND.COM /P\r\n"
+              b"REM .BAT\r\n@ECHO OFF\r\nPATH A:\\DOS;A:\\\r\n"
+              b"REM .SYS [himem]\r\nDEVICE=A:\\DOS\\HIMEM.SYS\r\n"
+              b"rem .bat\r\n@ECHO OFF\r\n"
+              b"REM .SYS [full]\r\nDOS=HIGH,UMB\r\n"
+              b"REM .BAT\r\n@ECHO OFF\r\nCD \\FILMTN\r\nFILMTNH\r\nREM .\r\n")
+    want_cs = (b"DEVICE=A:\\TOOLS\\SELSYS\\SELSYS.EXE -k -m\r\nREM DEFAULT3\r\nREM WAIT5\r\n\r\n"
+               b"REM .SYS [noemm - no EMM386]\r\nFILES=30\r\nSHELL=\\COMMAND.COM /P\r\n"
+               b"REM .BAT\r\n" + BOOT_LINE + b"@ECHO OFF\r\nPATH A:\\DOS;A:\\\r\n"
+               b"REM .SYS [himem]\r\nDEVICE=A:\\DOS\\HIMEM.SYS\r\n"
+               b"rem .bat\r\n" + BOOT_LINE + b"@ECHO OFF\r\n"
+               b"REM .SYS [full]\r\nDOS=HIGH,UMB\r\n"
+               b"REM .BAT\r\n" + BOOT_LINE + b"@ECHO OFF\r\nCD \\FILMTN\r\nFILMTNH\r\nREM .\r\n")
+    no_bat = b"DEVICE=A:\\SELSYS.EXE -k\r\nREM .SYS [a]\r\nFILES=30\r\nREM .SYS [b]\r\nFILES=20\r\n"
 
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -1182,6 +1527,25 @@ def selftest() -> int:
         two = ("CPUSUITE BEGIN V1 PROGRAMS=1 PASSES=2\r\naaa PASS\r\naaa PASS\r\nCPUSUITE END PASSES=2 RUN=2 PASS=2 FAIL=0\r\n")
         check(judge_cpusuite(two, ["aaa"], 2)[0] and not judge_cpusuite(two, ["aaa"], 3)[0], "cpusuite: passes are counted")
         check(not judge_cpusuite(None, ["aaa"], 1)[0], "cpusuite: no result file fails")
+        cpu = ("CPUSUITE BEGIN V1 PROGRAMS=2 PASSES=1\r\nCPUSUITE CPU ac=1 cpuid=none bda486=0420 detail=dma "
+               "resetdx=00000420\r\naaa PASS\r\nbbb FAIL verdict=FF data=00000001 eax=000000FF\r\n"
+               "CPUSUITE END PASSES=1 RUN=2 PASS=1 FAIL=1\r\n")
+        r = parse_cpusuite(cpu)
+        check(r["cpu"] == {"ac": "1", "cpuid": "none", "bda486": "0420", "detail": "dma", "resetdx": "00000420"}
+              and r["pending"] is None and r["end"]["SKIP"] == 0
+              and r["rows"][1] == ("bbb", "FAIL", "verdict=FF data=00000001 eax=000000FF"),
+              "cpusuite: the CPU row and a FAIL row's detail parse")
+        check(judge_cpusuite(cpu.replace("bbb FAIL verdict=FF data=00000001 eax=000000FF", "bbb PASS")
+                             .replace("PASS=1 FAIL=1", "PASS=2 FAIL=0"), ["aaa", "bbb"], 1)[0],
+              "cpusuite: the CPU row does not disturb the verdict")
+        resumed = (hang + "\r\nCPUSUITE BEGIN V1 PROGRAMS=2 PASSES=1 FROM=bbb\r\n"
+                   "CPUSUITE CPU ac=1 cpuid=none bda486=0420 detail=dma resetdx=00000420\r\nbbb SKIP\r\n"
+                   "CPUSUITE END PASSES=1 RUN=0 PASS=0 FAIL=0 SKIP=1\r\n")
+        r = parse_cpusuite(resumed)
+        check(r["skipped"] == ["bbb"] and r["end"] == {"PASSES": 1, "RUN": 0, "PASS": 0, "FAIL": 0, "SKIP": 1}
+              and r["rows"] == [("aaa", "PASS", "")] and r["begin"] == (2, 1),
+              "cpusuite: a resumed file (appended, /FROM + /SKIP) keeps the first run's rows and reads SKIP=")
+        check(not judge_cpusuite(resumed, ["aaa", "bbb"], 1)[0], "cpusuite: a run that skipped a program does not pass")
         check("cpusuite" in DEFAULT_ITEMS, "cpusuite: in the default set")
         # ---- crt31k: the capture itself passes; the core before the 31 kHz clock fails
         cap = (ROOT / "docs/probes/CRT31K.TXT").read_text()
@@ -1225,6 +1589,38 @@ def selftest() -> int:
             if fsck:
                 check(subprocess.run([fsck, "-n", str(cp)], capture_output=True).returncode == 0, "patch: fsck.fat accepts the patched copy")
             check("F 00011170" in man["C:"] and "C:\\GAME.BIN" in man["C:"], "manifest: the file, its size and drive")
+            ae = d / "AUTOEXEC.BAT"
+            ae.write_bytes(b"@ECHO OFF\r\n" * 4000)       # the largest file on this volume
+            subprocess.run(["mcopy", "-i", str(img), str(ae), "::AUTOEXEC.BAT"], check=True, capture_output=True)
+            sel_x = {"largest": 4, "max_bytes": 1 << 20, "under": None, "partition": None}
+            check("AUTOEXEC.BAT" in manifest_for(img, "C:", "fat", sel_x)
+                  and "AUTOEXEC.BAT" not in manifest_for(img, "C:", "fat", dict(sel_x, exclude=["AUTOEXEC.BAT"])),
+                  "manifest: the boot check's AUTOEXEC.BAT (rewritten in the copy) is left out of the probe's manifest")
+            # a SELSYS disk end to end: the copy carries the marked CONFIG.SYS, the original is untouched
+            cfg = d / "CONFIG.SYS"
+            cfg.write_bytes(sel_cs)
+            subprocess.run(["mcopy", "-o", "-i", str(img), str(cfg), "::CONFIG.SYS"], check=True, capture_output=True)
+            orig = img.read_bytes()
+            with open(img, "rb") as f:
+                fs = fatimg.Fat(f, 0)
+                bfs = boot_check_files(fs.cat("AUTOEXEC.BAT"), fs.cat("CONFIG.SYS"))
+            patch_hdd(img, cp, bfs, None, None, 0)
+            with open(cp, "rb") as f:
+                fs = fatimg.Fat(f, 0)
+                got = {n: fs.cat(n) for n in bfs}
+            check(img.read_bytes() == orig and got["CONFIG.SYS"] == want_cs and got["AUTOEXEC.BAT"].startswith(BOOT_LINE),
+                  "patch: a SELSYS disk's copy carries the marked CONFIG.SYS and AUTOEXEC.BAT; the original is untouched")
+            # a SELSYS disk no boot can mark: the run stops before its plan, nothing listed or touched
+            cfg.write_bytes(no_bat)
+            subprocess.run(["mcopy", "-o", "-i", str(img), str(cfg), "::CONFIG.SYS"], check=True, capture_output=True)
+            rbf = d / "x.rbf"
+            rbf.write_bytes(b"")
+            try:
+                main(["--rbf", str(rbf), "--hdd-image", str(img), "--out", str(d / "nobat"), "--items", "probe"])
+                check(False, "plan: a disk the boot check cannot mark stops the run")
+            except SystemExit as e:
+                check("cannot work on this image" in str(e) and not (d / "nobat" / "plan.txt").exists(),
+                      "plan: a disk the boot check cannot mark stops the run before the plan, saying why")
 
         # ---- the plan: dry run touches nothing and stays in the test namespace
         m = Mister("nowhere", "x", dry=True)
@@ -1296,12 +1692,21 @@ def selftest() -> int:
               and lm.created == [f"{SHOTS}/{p.name}" for p in got],
               "shots: only the run's own new screenshots are fetched and marked for removal")
 
+        # ---- the cleanup: the card goes back to its Menu core before the test core's files go
+        mc = Mister("nowhere", "x", dry=True)
+        mc.created = [REMOTE_RBF, f"{GAMES}/{TAG}-hdd.img"]
+        check(cleanup(mc, d) == [], "cleanup: a dry card reports nothing left")
+        cmds = [v for k, v in mc.plan if k == "ssh"]
+        menu = [i for i, v in enumerate(cmds) if v == f"echo 'load_core {MENU}' > /dev/MiSTer_cmd"]
+        rm = [i for i, v in enumerate(cmds) if v.startswith("rm -f ") and REMOTE_RBF in v]
+        check(menu and rm and menu[0] < rm[0], "cleanup: loads the Menu core, then removes the test core's files")
+
         # ---- B1: every capture read-back of an HDI image skips its header (cpusuite included)
         for item in ("probe", "crt31k", "cpusuite"):
             mi = Mister("nowhere", "x", dry=True)
             ai = argparse.Namespace(partition=None, pack="pc98pack-xe10.bin", uart=False, boot_wait=0,
                                     cpusuite_passes=1, cpusuite_timeout=1, probe_timeout=1, cd=None,
-                                    cd_drive="E:")
+                                    cd_drive="E:", no_boot_check=False, boot_check_timeout=0, boot_count=6)
             prep_i = {"skip": 4096, "config_sys": b"REM DEFAULT3\r\n", "cpusuite": ["aaa"],
                       "manifests": {"C:": "x"}}
             run_item(mi, item, ai, {}, prep_i, d)
@@ -1345,6 +1750,162 @@ def selftest() -> int:
               not check_motion([seq[0]] * 8, 6, 3, 1, stall_t)[0],
               "motion: a static run is measured in the shots' real seconds, dense shots included")
 
+    # ---- the boot check and the boot loop (a scripted card: no network, no waits)
+    check(mark_autoexec(b"@ECHO OFF\r\nPATH A:\\DOS\r\n") == BOOT_LINE + b"@ECHO OFF\r\nPATH A:\\DOS\r\n"
+          and mark_autoexec(None) == BOOT_LINE and mark_autoexec(BOOT_LINE + b"X") == BOOT_LINE + b"X",
+          "boot check: AUTOEXEC.BAT gets the marker line first, every other byte kept, once")
+    check(BOOT_LINE == b"@ECHO ZREGBOOT>>\\ZREGBOOT.TXT\r\n", "boot check: the marker line appends to the boot drive's root")
+    bf = boot_check_files(b"@ECHO OFF\r\n", sel_cs)
+    check(sorted(bf) == ["AUTOEXEC.BAT", "CONFIG.SYS"] and bf["CONFIG.SYS"] == want_cs
+          and bf["AUTOEXEC.BAT"] == BOOT_LINE + b"@ECHO OFF\r\n",
+          "boot check: SELSYS CONFIG.SYS gets the marker first in each of its 3 REM .BAT sections (any case), "
+          "CRLF and every other byte kept, and AUTOEXEC.BAT is marked too")
+    check(mark_selsys(want_cs) == (want_cs, 3), "boot check: marking a marked SELSYS CONFIG.SYS changes nothing")
+    check(set_default_profile(bf["CONFIG.SYS"], 0).count(BOOT_LINE) == 3,
+          "boot check: a per-item SELSYS profile (REM DEFAULTn) keeps every marked section")
+    check(mark_selsys(b"DEVICE=SELSYS.EXE\r\nREM .BAT")[0] == b"DEVICE=SELSYS.EXE\r\nREM .BAT\r\n" + BOOT_LINE,
+          "boot check: a REM .BAT on the last line without a line end gets one before the marker")
+    plain = b"FILES=30\r\nREM DEVICE=A:\\SELSYS.EXE\r\nREM .BAT\r\n"
+    check(boot_check_files(None, plain) == {"AUTOEXEC.BAT": BOOT_LINE}
+          and boot_check_files(None, None) == {"AUTOEXEC.BAT": BOOT_LINE},
+          "boot check: a CONFIG.SYS that does not load SELSYS (or none) is left alone; AUTOEXEC.BAT only")
+    try:
+        boot_check_files(b"@ECHO OFF\r\n", no_bat)
+        check(False, "boot check: SELSYS with .SYS profiles and no REM .BAT section is refused")
+    except SystemExit as e:
+        check("cannot work on this image" in str(e) and "--no-boot-check" in str(e),
+              f"boot check: SELSYS with .SYS profiles and no REM .BAT section is refused, saying so ({e})")
+    check(boot_check_files(None, no_bat.replace(b"-k", b"-k -s")) == {"AUTOEXEC.BAT": BOOT_LINE},
+          "boot check: SELSYS -s (AUTOEXEC.BAT left alone) needs AUTOEXEC.BAT only")
+    rows = lambda n: "ZREGBOOT \r\n" * n
+    check(count_boots(rows(3)) == 3 and count_boots(None) == 0 and count_boots("ECHO is off\r\n") == 0,
+          "boot check: the rows DOS's ECHO wrote are counted, nothing else")
+    ok, msg = judge_boot(None, 1, 40)
+    check(not ok and msg.startswith("BIOS did not boot the hard disk"), f"boot check: no marker fails, saying so ({msg})")
+    check(judge_boot(rows(1), 1, 40)[0] and judge_boot(rows(4), 4, 40, 6)[0], "boot check: one row per boot passes")
+    ok, msg = judge_boot(rows(2), 3, 40, 6)
+    check(not ok and "boot 3 of 6" in msg and "has 2 rows" in msg, f"boot check: a missed boot in a loop names it ({msg})")
+    ok, msg = judge_boot(rows(2), 1, 40)
+    check(not ok and "restarted by itself" in msg, f"boot check: an extra boot fails ({msg})")
+
+    class Card(Mister):
+        """A card that boots `load_ok` on the core load and resets[i] on the i-th OSD Enter."""
+        def __init__(self, load_ok=True, resets=(), boots_on_load=1):
+            super().__init__("nowhere", "x", dry=False)
+            self.load_ok, self.resets, self.boots_on_load = load_ok, list(resets), boots_on_load
+            self.boots, self.typed = 0, []
+
+        def sh(self, cmd, check=True, timeout=600):
+            self.plan.append(("ssh", cmd))
+            if "load_core" in cmd:
+                self.boots = self.boots_on_load if self.load_ok else 0
+            elif "ztype.py" in cmd:
+                keys = shlex.split(cmd)[-1]
+                self.typed.append(keys)
+                if keys == f"~k{KEY_ENTER};" and self.resets.pop(0):
+                    self.boots += 1
+            elif f"--cat {BOOT_MARK}" in cmd:
+                return rows(self.boots)
+            return ""
+
+        def put(self, local, remote):
+            self.created.append(remote)
+
+        def get(self, remote, local):
+            pass
+
+    global SHOT_SETTLE_S
+    settle, SHOT_SETTLE_S = SHOT_SETTLE_S, 0
+    try:
+        def ns(**kw):
+            base = dict(partition=None, pack="pc98pack-xe10.bin", uart=False, boot_wait=0, cpusuite_passes=1,
+                        cpusuite_timeout=1, probe_timeout=1, cd=None, cd_drive="E:", no_boot_check=False,
+                        boot_check_timeout=0, boot_count=6, osd_reset_downs=22, osd_verify="true", refs=None,
+                        record_refs=False, speeds=[1, 2, 3])
+            base.update(kw)
+            return argparse.Namespace(**base)
+        prep_b = {"skip": 0, "config_sys": b"", "cpusuite": ["aaa"], "manifests": {"A:": "x"}}
+        with tempfile.TemporaryDirectory() as bd:
+            bd = Path(bd)
+            for item, sc_b in (("probe", {}), ("keymap", {"keymap": {"steps": [["type", "dir\n"]], "run": 30}}),
+                               ("cpusuite", {})):
+                c = Card(load_ok=False)
+                t0 = time.time()
+                v, msg = run_item(c, item, ns(), sc_b, prep_b, bd)
+                check(v == "FAIL" and msg.startswith("BIOS did not boot the hard disk") and not c.typed
+                      and time.time() - t0 < 5 and any("screenshot" in x for _, x in c.plan),
+                      f"{item}: a load that did not boot the hard disk fails at once, nothing typed, a screenshot taken ({msg})")
+            c = Card()
+            v, msg = run_item(c, "keymap", ns(), {"keymap": {"steps": [["type", "dir\n"]], "run": 0}}, prep_b, bd)
+            check(c.typed == ["dir\n"], "keymap: a load that booted the hard disk goes on to the item's steps")
+            v, msg = run_item(Card(boots_on_load=2), "probe", ns(), {}, prep_b, bd)
+            check(v == "FAIL" and "restarted by itself" in msg, f"probe: two boots after one load fail ({msg})")
+            c = Card(resets=[True] * 5)
+            v, msg = run_item(c, "boot-loop", ns(), {}, prep_b, bd)
+            enters = [k for k in c.typed if k == f"~k{KEY_ENTER};"]
+            navs = [k for k in c.typed if k.startswith(f"~k{KEY_F12};")]
+            check(v == "PASS" and len(enters) == 5 and len(navs) == 5 and c.boots == 6
+                  and all(k.count(f"~k{KEY_DOWN};") == 22 for k in navs)
+                  and all(c.typed[i + 1] == f"~k{KEY_ENTER};" for i, k in enumerate(c.typed) if k in navs),
+                  f"boot-loop: 6 boots = the load + 5 OSD resets, each F12 + 22 Downs, verified, then Enter ({msg})")
+            # the 639674f3 pattern: boots 1 and 2 fail, then odd boots pass (here: the load passes, reset 2 fails)
+            c = Card(resets=[True, False, True, True, True])
+            v, msg = run_item(c, "boot-loop", ns(), {}, prep_b, bd)
+            check(v == "FAIL" and "boot 3 of 6" in msg and len([k for k in c.typed if k == f"~k{KEY_ENTER};"]) == 2,
+                  f"boot-loop: a later boot that misses the hard disk fails the loop there ({msg})")
+            v, msg = run_item(Card(load_ok=False), "boot-loop", ns(), {}, prep_b, bd)
+            check(v == "FAIL" and "boot 1 of 6" in msg, f"boot-loop: the load's own boot is counted ({msg})")
+            c = Card(resets=[True] * 5)
+            v, msg = run_item(c, "boot-loop", ns(osd_verify="false"), {}, prep_b, bd)
+            check(v == "FAIL" and "Enter NOT pressed" in msg and f"~k{KEY_ENTER};" not in c.typed
+                  and any(k.startswith(f"~k{KEY_ESC};") for k in c.typed),
+                  f"boot-loop: an OSD row the verifier does not confirm gets no Enter; the OSD is closed ({msg})")
+            c = Card(resets=[True] * 5)
+            check(run_item(c, "boot-loop", ns(osd_verify="counted"), {}, prep_b, bd)[0] == "PASS",
+                  "boot-loop: --osd-verify counted presses Enter after the counted Downs")
+            # speeds: one load per position, each one more boot row; the config restored either way
+            class SpeedCard(Card):
+                def __init__(self, bad_pos=None):
+                    super().__init__()
+                    self.bad_pos, self.pos, self.loads = bad_pos, None, 0
+                def sh(self, cmd, check=True, timeout=600):
+                    if cmd.startswith(f"python3 - {CARD_CFG} "):
+                        self.pos = int(cmd.split()[3])
+                    if "load_core" in cmd:
+                        self.plan.append(("ssh", cmd))
+                        self.loads += 1
+                        self.boots += 0 if self.pos == self.bad_pos else 1
+                        return ""
+                    if "test -f" in cmd and CARD_CFG in cmd:
+                        self.plan.append(("ssh", cmd))
+                        return "yes\n"
+                    return super().sh(cmd, check, timeout)
+            c = SpeedCard()
+            v, msg = run_item(c, "speeds", ns(), {}, prep_b, bd)
+            cmds = [x for _, x in c.plan]
+            check(v == "PASS" and c.loads == 3 and c.boots == 3 and "33 MHz, 25 MHz, 16 MHz" in msg
+                  and sum(x.startswith(f"python3 - {CARD_CFG} ") for x in cmds) == 3
+                  and cmds.index(f"cp {CARD_CFG} {CARD_CFG_BAK}") < min(i for i, x in enumerate(cmds) if "load_core" in x)
+                  and max(i for i, x in enumerate(cmds) if x.startswith(f"cp {CARD_CFG_BAK} {CARD_CFG}"))
+                  > max(i for i, x in enumerate(cmds) if "load_core" in x),
+                  f"speeds: three loads at 33/25/16 MHz, each booting, the config backed up before and restored after ({msg})")
+            c = SpeedCard(bad_pos=2)
+            v, msg = run_item(c, "speeds", ns(), {}, prep_b, bd)
+            cmds = [x for _, x in c.plan]
+            check(v == "FAIL" and "CPU Speed 25 MHz" in msg and "BIOS did not boot" in msg and c.loads == 2
+                  and any(x.startswith(f"cp {CARD_CFG_BAK} {CARD_CFG}") for x in cmds),
+                  f"speeds: a speed whose load does not boot fails there, naming it, config restored ({msg})")
+            c = Card(load_ok=False)
+            v, msg = run_item(c, "keymap", ns(no_boot_check=True), {"keymap": {"steps": [["type", "dir\n"]], "run": 0}},
+                              prep_b, bd)
+            check("BIOS did not boot" not in msg and c.typed == ["dir\n"], "boot check: --no-boot-check skips it")
+    finally:
+        SHOT_SETTLE_S = settle
+    check(item_needs("boot-loop", {}, ns()) is None and "--osd-reset-downs" in item_needs("boot-loop", {}, ns(osd_reset_downs=None))
+          and "--osd-verify" in item_needs("boot-loop", {}, ns(osd_verify=None))
+          and item_needs("boot-loop", {}, ns(boot_count=1)) is not None,
+          "boot-loop: runs only with the row count and its verification (else a SKIP, never a pass)")
+    check("boot-loop" in ITEMS and "boot-loop" not in DEFAULT_ITEMS, "boot-loop: opt-in, not in the default set")
     check(host_slug("root@my-card.lan") == "my-card.lan" and host_slug("a b") == "a_b",
           "host_slug: the user@ prefix is dropped and unsafe characters replaced")
     t0 = time.time()

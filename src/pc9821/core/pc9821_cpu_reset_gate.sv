@@ -13,7 +13,7 @@ module pc9821_cpu_reset_gate #(
     parameter [3:0] HOLD_CYCLES = 4'hF   // overridable so a bench can shrink the hold
 ) (
     input  wire clk,
-    input  wire reset,            // the platform reset; also restarts the SDRAM controller
+    input  wire reset,            // the platform reset; also restarts the SDRAM controller (see below)
     input  wire cpu_run,          // the pack is present (pc9821_memory_subsystem)
     input  wire hps_apply_reset,  // the OSD's own Reset action
     input  wire cpu_reset_req,    // the warm CPU-reset class
@@ -32,6 +32,10 @@ module pc9821_cpu_reset_gate #(
 // (the power-up value "must be BUSY until the init sequence finishes") and nce is tied low, so it
 // IS busy_buf: high from reset, and low for the first time only once init completes. Nothing else
 // can be that edge, which is what makes the first low safe to use as the ready signal.
+// The one platform reset that does NOT restart the controller is a boot-ROM pack download under
+// the OSD Reset level (pc9821_memory_subsystem's pack_load_hold keeps the controller out of it so
+// the pack can land); the controller then finished its initialisation during the download, its
+// busy is low once it is idle, and the term passes at its first idle cycle after the reset.
 reg sdram_ready;
 always @(posedge clk) begin
     if (reset) sdram_ready <= 1'b0;

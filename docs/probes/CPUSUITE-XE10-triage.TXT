@@ -1,0 +1,29 @@
+CPUSUITE BEGIN V1 PROGRAMS=26 PASSES=1
+CPUSUITE CPU ac=1 cpuid=none bda486=0432 detail=dma resetdx=00000432
+ac_v86_iret FAIL verdict=FF data=00004400 eax=000044FF
+bswap_486 FAIL verdict=FF data=78563401 eax=785634FF
+callgate_newstack_ss FAIL verdict=FF data=55000038 eax=550000FF
+cpl3_priv_gp FAIL verdict=FF data=00000001 eax=000000FF
+debug_bn_noenable FAIL verdict=FF data=00004000 eax=000040FF
+debug_bn_noenable_dr123 FAIL verdict=FF data=00004000 eax=000040FF
+tri_0f05_pm FAIL verdict=FF data=06AA0000 eax=000000FF
+tri_0f05_rm FAIL verdict=FF data=06AA0000 eax=06AA00FF
+tri_0f07_pm FAIL verdict=FF data=01AA0002 eax=000000FF
+tri_0f07_rm FAIL verdict=FF data=01AA0002 eax=01AA00FF
+tri_bswap16 FAIL verdict=FF data=89ABAB89 eax=000000FF
+tri_cr3_race FAIL verdict=FF data=00012000 eax=002000FF
+tri_db_rf FAIL verdict=FF data=00000046 eax=01002FFF
+tri_desc_cr2 FAIL verdict=FF data=00009818 eax=000003FF
+tri_div_edges FAIL verdict=FF data=000300E7 eax=000300FF
+tri_dr6dr7 FAIL verdict=FF data=FFFFFFFF eax=000400FF
+tri_idiv1632 FAIL verdict=FF data=01E201E2 eax=F00300FF
+tri_idiv8 FAIL verdict=FF data=01801E80 eax=000000FF
+tri_opsweep FAIL verdict=FF data=00020207 eax=012000FF
+tri_pg_grace0 FAIL verdict=FF data=00000030 eax=000000FF
+tri_pg_grace13 FAIL verdict=FF data=0000003D eax=00000DFF
+tri_pg_grace8 FAIL verdict=FF data=00000038 eax=000008FF
+tri_priv_mask FAIL verdict=FF data=00000007 eax=000000FF
+tri_rep_flags FAIL verdict=FF data=00440400 eax=044602FF
+tri_tss286_esp FAIL verdict=FF data=9B012FEC eax=000000FF
+tri_umov FAIL verdict=FF data=99000000 eax=000079FF
+CPUSUITE END PASSES=1 RUN=26 PASS=0 FAIL=26

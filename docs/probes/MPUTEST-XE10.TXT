@@ -1,0 +1,75 @@
+MPUTEST v1 tables=F3BBB5DA flow=DEFAULT,RAW raw=200
+NOTE MPUTEST (tools/hwprobe/mputest): MPU-401-family MIDI card probe. Decode with
+NOTE mputest_decode.py; its README lists the sources for these expectations.
+NOTE The core models the MPU-PC98II as NP2kai does: every intelligent-mode command
+NOTE is ACKed FE at once; 0xFF AND 0x3F each send 16 x Bn 7B 00 (all notes off) on
+NOTE MIDI OUT; in UART mode only 0xFF is answered (ACK, no burst); BUSY (bit 6) =
+NOTE its 32-byte output queue half full or a byte waiting for room; base E0D0,
+NOTE IRQ6 only; no MIDI IN.
+NOTE Expected to DIFFER on a real card: ACK latency (the card's own CPU), how long
+NOTE DRR stays busy per byte, whether 0xFF/0x3F put bytes on MIDI OUT (the Roland
+NOTE MPU-401 manual names none), the UART-mode 0xFF (the manual: NO ACK), how many
+NOTE blind /RAW bytes survive. MPU-PC98 (original): base E0D0 and INT2 (IRQ6) fixed,
+NOTE tape sync; MPU-PC98II: 16 bases C0D0-FCD0 by DIP switch, INT0/1/2/5 (IRQ
+NOTE 3/5/6/12) by jumper, default E0D0/INT2. MIDI IN bytes show as extra= on CMD.
+BEGIN:DETECT
+PORT base=C0D0 st=FF dat=FF
+PORT base=C4D0 st=FF dat=FF
+PORT base=C8D0 st=FF dat=FF
+PORT base=CCD0 st=FF dat=FF
+PORT base=D0D0 st=FF dat=FF
+PORT base=D4D0 st=FF dat=FF
+PORT base=D8D0 st=FF dat=FF
+PORT base=DCD0 st=FF dat=FF
+PORT base=E0D0 st=84 dat=04
+PORT base=E4D0 st=FF dat=FF
+PORT base=E8D0 st=FF dat=FF
+PORT base=ECD0 st=FF dat=FF
+PORT base=F0D0 st=FF dat=FF
+PORT base=F4D0 st=FF dat=FF
+PORT base=F8D0 st=FF dat=FF
+PORT base=FCD0 st=FF dat=FF
+FOUND base=E0D0
+END:DETECT
+BEGIN:RESET
+CMD RESET FF ack=FE polls=0000001C t=00002A extra=00 busy=00000000
+CMD RESET 94 ack=FE polls=00001287 t=001B62 extra=00 busy=00000000
+IRQ imr=757D before=1001 pend=9841 after=9801 ack=FE
+END:RESET
+BEGIN:UART
+CMD UART 3F ack=FE polls=00000014 t=000020 extra=00 busy=00000000
+FIFO n=00C8 first_busy=0001 busy_polls=000029D3 t=003BC7 timeouts=0000
+FIFOST FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+FIFOST FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+FIFOST FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+CMD UART FF ack=-- polls=0000511E t=007801 extra=00 busy=00000000
+END:UART
+BEGIN:PLAY
+LABEL UART mode (0x3F) - the next sound is the GS reset
+CMD PLAY 3F ack=FE polls=0000000E t=000017 extra=00 busy=00000000
+LABEL GS reset SysEx (SC-88 Pro: parts reset)
+LABEL SC-88 Pro display text 'PC-9821 MPUTEST'
+LABEL C major scale, ch1 piano (prog 1)
+LABEL chords ch1-4: piano/strings/trumpet/nylon gtr
+LABEL running status: 16 notes ch1, one 0x90 status byte
+LABEL drums ch10: kick snare hat x4
+LABEL long SysEx, 300 bytes, ID 7D (inaudible), then a note
+LABEL pitch bend sweep ch1 (strings): up 2, down 4, back
+LABEL all notes off + reset controllers ch1-16
+LABEL leave UART mode (0xFF)
+CMD PLAY FF ack=-- polls=0000512E t=007801 extra=00 busy=00000000
+LABEL intelligent mode: 0xD0 note on, 0xD0 running-status off
+CMD PLAY D0 ack=FE polls=00000009 t=00000F extra=00 busy=00000000
+CMD PLAY D0 ack=FE polls=0000000D t=000014 extra=00 busy=00000000
+LABEL intelligent mode: 0xDF SysEx (display text)
+CMD PLAY DF ack=FE polls=00000014 t=000020 extra=00 busy=00000000
+END:PLAY
+BEGIN:RAW
+CMD RAW 3F ack=FE polls=0000000B t=000013 extra=00 busy=00000000
+RAWW n=00C8 t=00004C st=FF
+CMD RAW FF ack=-- polls=00005130 t=007801 extra=00 busy=00000000
+END:RAW
+BEGIN:EXIT
+CMD EXIT FF ack=FE polls=0000000D t=000016 extra=00 busy=00000000
+END:EXIT
+MPUTEST DONE

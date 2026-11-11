@@ -1,0 +1,59 @@
+OPNAPRO: PC-9801-86 OPNA sound-register read-back probe (PC-9821)
+Run from a FRESHLY BOOTED DOS prompt: SETUP is the as-found, first-touch state.
+Redirect it: OPNAPRO > OPNA.TXT
+BEGIN:SETUP
+OPNA: the -86's four host ports and the board ID, as found. READ-ONLY: nothing is written in this section, so these are the fresh-boot (first-touch) values. Each is read twice, so a port that consumes state on read shows V1 != V2.
+  0xA460 (board ID | extension enable bit 0): 40 40
+  0x188 (write: base-bank select latch / read: the chip STATUS BUSY xxxxx FLAGB FLAGA): 03 03
+  0x18A (write: the selected register's data / read: shadow, joystick reg 0E, chip ID reg FF; sel_lo = as found): 00 00
+  0x18C (write: extended select latch / read: EXTENDED status; 0xFF until 0xA460 bit 0 is set): FF FF
+  0x18E (write: extended data / read: the extended register; 0xFF until 0xA460 bit 0 is set): FF FF
+  0x188/0x18C read the chip's STATUS, not the select latch, so the as-found select cannot be read back - the sections below report what they restore.
+END:SETUP
+BEGIN:CHIPID
+OPNA: is the card present at all? 0x18A with 0x188 = FF answers the -86 chip ID, and with 0x188 = 07 answers SSG register 7. If the card were absent both would read FF and every read-back below would be open bus.
+  0x18A with 0x188=FF (the -86 card's chip ID; a -86 answers 01): 01
+  0x18A with 0x188=07 (SSG register 7; the references' reset seed is BF): 00
+  a 00 or FF here, or FF for both, means the card (or its chip-ID read) did not answer: treat the sections below as open bus.
+END:CHIPID
+BEGIN:EXT0F
+OPNA: the 0x18E read with the extended select at 0x0F (the YM2608 A/D conversion register). The two references disagree: qemu answers the constant 0x80 (2's-complement mid-scale), NP2kai answers the register shadow s.reg[10F] (00 at reset), and our core answers the chip's ADPCM-B data bus, which matches neither. Enabling 0xA460 bit 0 first (every write here is saved and restored).
+  0xA460 after writing bit 0 = 1 (bit 0 set = the extended bank is open): 41
+  0x18E with 0x18C=0F, as reset (V1 V2): 7F 7F
+  0x18E with 0x18C=0F after writing a marker 5A through 0x18E (V1 V2): 7F 7F
+  read L1 and L2 together: L1 = 80 is qemu's constant; L1 = 00 and L2 = 5A is a WRITABLE register shadow (NP2kai's form); L2 != 5A with L1 = 00 is a fixed/other answer (the chip's data bus, or open bus when both are FF).
+END:EXT0F
+BEGIN:BASE08
+OPNA: the 0x18A read after selecting register 08 (the ADPCM-B sample stream on the chip) and register 0F (the ADPCM-B level register). NP2kai answers the register shadow s.reg[08]/s.reg[0F]; a board that forwards the chip answers the ADPCM-B data bus. Nothing is written to 0x18A here. Two reads each, so a consume-on-read (a FIFO/sample stream) shows V1 != V2.
+  0x18A with 0x188=08 (V1 V2): 00 00
+  0x18A with 0x188=0F (V1 V2): FF FF
+  a stable shadow answer is 00 (NP2kai's reset s.reg[08]/s.reg[0F]); 0F answering FF is the SSG register-15/ADPCM-B-level shadow seed the core carries; V1 != V2 means the read advanced a data bus, not a shadow.
+END:BASE08
+BEGIN:STATUS2
+OPNA: status-2's TIMER bits against the 0x110 flag mask. qemu masks status-2's low five flag bits with the mask programmed through extended register 0110 (flagmask = ~(v & 1F)); NP2kai ORs its status in unmasked; our core follows NP2kai. Timer B is programmed to set its flag, IRQ12 is masked for the window, and both timers are stopped and both flags cleared at the end.
+  the Timer B flag (0x188 bit 1) was observed set: Y
+  0110 <- 00 (qemu: no bits masked): 0188= 7F 018C= 4B
+  0110 <- 1F (qemu: status-2's flag bits masked): 0188= 48 018C= 40
+  0110 <- 00 again, flag still set (control): 018C= 48
+  the discriminator is the pair of 018C bytes: a lower value (bits 1:0 clear) in the masked row that comes back in the control row is the qemu mask; identical 018C bytes in both rows is the NP2kai unmasked form (or a machine that does not implement the 0110 mask at all - either way the core's unmasked form is the one that matches). 0188 is unmasked in both references, so it should not move.
+END:STATUS2
+BEGIN:STATUS3
+OPNA: the 0110 flag mask with the Timer B flag held set (item 18 c). Each row read at once and 100 ms later; Timer B keeps running (~37 ms a period).
+  the Timer B flag was observed set: Y
+  S3 A0 0110<-00 flag set 0188=0A 018C=0A
+  S3 A1 +100ms 0188=0A 018C=0A
+  S3 B0 0110<-1F 0188=08 018C=00
+  S3 B1 +100ms 0188=00 018C=00
+  S3 C0 0110<-00 0188=00 018C=08
+  S3 C1 +100ms 0188=0A 018C=0A
+  qemu (a read-side mask): B rows bits 1:0 clear, C0 = A0. A mask that resets the flag: B and C0 clear, C1 = A0. NP2kai (no mask): every row = A0.
+END:STATUS3
+BEGIN:RESTORE
+RESTORE: what the probe wrote, and what it put back.
+  0xA460 (extension enable bit 0) was ... replayed, now (was -> now): 40 40
+  0x188/0x18A/0x18C/0x18E left at the neutral select 00 / data 00 state egcport.com and ioprobe.com leave them in. These four are WRITE-ONLY for this purpose: a 0x188/0x18C read answers the chip/extended STATUS, not the latch, so the as-found select cannot be replayed. The SETUP block printed it as found.
+  the two registers written in the extended bank (0F, the ADPCM-B level, and 0110, the flag mask) were put back to their reset defaults 00; neither is readable on this board, so neither restore is provable from the machine. The OPNA timers are stopped and both flags cleared (0x27 <- 30), the same stop egcport.com leaves.
+  8259 slave IMR (bit 4 = IRQ12, masked for the STATUS2 window) was ... now: 75 75
+  no DOS call was made between a cli and its sti in any section; the disk was never touched.
+END:RESTORE
+OPNAPRO DONE

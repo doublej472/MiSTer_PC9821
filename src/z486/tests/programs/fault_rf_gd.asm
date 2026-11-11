@@ -1,5 +1,12 @@
-; fault_rf_gd - the #DB general-detect fault pushes RF=1 (486 PRM 11.3.1.1)
-; (site 1; derived from fault_rf_classes)
+; fault_rf_gd - the #DB general-detect fault pushes RF=0 (site 1; derived
+; from fault_rf_classes)
+;
+; Every fault but a debug exception pushes RF=1.  A real Am486DX4 pushes RF=0
+; for the general-detect #DB (CPUSUITE-XE10 run 1, fault_rf_gd FAIL
+; F0000002: site 1's vector, error code and EIP right, RF wrong); AMD APM
+; 24593 8.2.2, "When a #DB exception occurs, the processor clears RFLAGS.RF
+; to 0 in the rFLAGS image that is pushed".  The PRM text below is the rule
+; for the other faults:
 ;
 ; Intel486 PRM 11.3.1.1: "The processor sets the RF flag in the copy of the
 ; EFLAGS register pushed on the stack before entry into any fault handler",
@@ -119,13 +126,13 @@ fail:
     out 0xe0, al
     hlt
 
-; SITE n, vector, errcode (-1 none), expect_rf, insn...
-%macro SITE 5+
+; SITE n, vector, errcode (-1 none), fault (1) or trap (0), expect_rf, insn...
+%macro SITE 6+
     mov esi, %%resume
     mov dword [ss:last_vec], 0xff
     nop
 %%site:
-    %5
+    %6
 %%resume:
     mov eax, %1*16+1
     cmp dword [ss:last_vec], %2
@@ -142,7 +149,7 @@ fail:
     jne fail
     mov eax, [ss:last_efl]
     and eax, RF
-    mov ebx, %4*RF
+    mov ebx, %5*RF
     cmp eax, ebx
     je %%rf_ok
     or dword [ss:rf_bad], 1 << %1    ; RF mismatches are collected, not fatal
@@ -170,7 +177,7 @@ start:
     ; 1: #DB general detect (DR7.GD=1, MOV r32,DR0): a fault
     mov eax, 0x2000
     mov dr7, eax
-    SITE 1, 1, -1, 1, mov eax, dr0
+    SITE 1, 1, -1, 1, 0, mov eax, dr0
     mov eax, dr6
     mov ebx, 1*16+6
     test eax, 0x2000             ; DR6.BD

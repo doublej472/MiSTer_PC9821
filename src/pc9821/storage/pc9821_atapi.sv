@@ -1,6 +1,7 @@
-// PC-98 ATAPI CD-ROM on the built-in IDE: ALWAYS bank 1's MASTER (IDE unit 2), the hard disk
-// always bank 0's master (unit 0) - the stock CD-equipped Xe10's layout and NP2kai's default (HDD
-// at unit 0, CD at unit 2). Fixed, independent of the build and of the media: the Xe10
+// PC-98 ATAPI CD-ROM on the built-in IDE: bank 1's MASTER (IDE unit 2), the hard disk always
+// bank 0's master (unit 0) - the stock CD-equipped Xe10's layout and NP2kai's default (HDD at
+// unit 0, CD at unit 2), and the OSD's IDE bank 1 default; with that field at HDD2 a second hard
+// disk takes bank 1 and pc9821_system cuts this drive off the bus. Independent of the media: the Xe10
 // capture's disk on bank 1 (docs/probes/IDE.TXT) is a CF card in the CD connector, a quirk of
 // that one machine, not the layout to model.
 //
@@ -19,11 +20,13 @@
 // getidedrv()), so this device latches those writes only while it is selected; 0x064C and
 // 0x074C reach both drives of the bank (ideio_o64c, ideio_o74c).
 //
-// THE MEDIUM. One hps_io slot (OSD "S4,ISOPCD,Mount CD-ROM"; "T[11],Eject CD-ROM" is its
-// size-0 mount event): an ISO (2048-byte sectors, one data track) or a PCD (tools/cue2pcd.py:
-// a 2352-byte header holding the track table and the READ TOC address fields ready-made, then
-// raw 2352-byte sectors). The type is decided by CONTENT (the
-// header's "PC98CD01" magic), as the floppy decides D88 by content. The first 2048 bytes of the
+// THE MEDIUM. One hps_io slot (OSD "S4,ISOPCDBIN,Mount CD-ROM"; "T[11],Eject CD-ROM" is its
+// size-0 mount event): an ISO (2048-byte sectors, one data track), a RAW image (one data track
+// of raw 2352-byte sectors, user data at +16, or +24 for MODE2 form 1) or a PCD
+// (tools/cue2pcd.py: a 2352-byte header holding the track table and the READ TOC address
+// fields ready-made, then raw 2352-byte sectors). The type is decided by CONTENT (the
+// header's "PC98CD01" magic; for a raw image the CD sync pattern at the start AND a size that
+// is a whole number of 2352-byte sectors), as the floppy decides D88 by content. The first 2048 bytes of the
 // file are fetched into the upper half of the buffer RAM at mount; for a PCD that IS the TOC, and
 // for an ISO the same header fields are synthesised from the capacity (`iso_word`), so READ TOC
 // and READ SUB-CHANNEL have one implementation for both formats.
@@ -65,6 +68,12 @@ module pc9821_atapi #(
     // pc9821_ata's when it is set.
     output wire        io_own,
     output wire        irq,
+    // THE DRIVE'S DATA TRANSFERS (the front-panel access lamp, pc9821_disk_led): 1 while the
+    // engine is fetching data sectors from the image for a READ (e_st out of E_IDLE with
+    // e_kind EK_DATA). A command answered from the drive's own state (TEST UNIT READY, GET
+    // EVENT STATUS NOTIFICATION, REQUEST SENSE, INQUIRY), the mount's header fetch and CD-DA
+    // streaming never raise it. A pure view of the engine.
+    output wire        xfer,
 
     // The CD slot of hps_io (slot 4): the mount event, and the block request/ack/payload.
     input  wire        img_mounted,
@@ -163,10 +172,19 @@ module pc9821_atapi #(
   wire sel = bank1 && mine;
   wire tf_port = (io_addr[15:4] == 12'h064 && !io_addr[0]) ||
                  io_addr == 16'h0641 || io_addr == 16'h074C;
-  // 0x0433 bit 1 = "the selected bank has a connected device" (NP2kai ideio_i433: bank[1] & 1,
-  // and a device on that bank): with this drive on bank 1 that is true even with no hard disk.
   // As the bank's master the drive answers every task-file read at bank 1 (the absent slave's too).
-  assign io_own = (bank1 && tf_port) || (bank1 && io_addr == 16'h0433);
+  // 0x0433 is not this drive's: it is the interface's per-bank interrupt-pending port, which
+  // pc9821_ata answers at every bank and pc9821_system ORs this drive's INTRQ into as bit 1.
+  // Except with 0x0432 bit 2 set: the task file then reads the 0x0432 read-back at either bank
+  // (docs/probes/KIT2-XE10-IDE2.TXT:8, `IDE2B w=07 ... 01 01 01 01 01 01 01 01 01 01 00`), which
+  // pc9821_ata answers (its `tf_b2_echo`), so the drive steps aside for the read. Only the read
+  // is the measured part; the drive's side of the access is unchanged.
+  reg bank_b2;      // 0x0432 bit 2, latched like bank1
+  always @(posedge clk) begin
+    if (!rst_n) bank_b2 <= 1'b0;
+    else if (io_wr && io_addr == 16'h0432 && !io_din[7]) bank_b2 <= io_din[2];
+  end
+  assign io_own = bank1 && tf_port && !bank_b2;
 
   // ---- task file of this device ----
   // (FEATURES, 0x0642's write side, is not stored: ideio.c's CD arms never read drv->wp but
@@ -192,7 +210,18 @@ module pc9821_atapi #(
   // the image (hps_io does not re-send a mount) nor may it orphan a host transfer in flight, so
   // these registers take power-up values and are left out of the reset below.
   reg        loaded = 1'b0, changed = 1'b0, is_pcd = 1'b0, mounting = 1'b0;
-  reg [19:0] iso_cap = 20'd0;  // ISO sectors (saturated)
+  // A RAW image: no PCD magic, sector 0 starts with the ECMA-130 sync (00, ten FF, 00) and a
+  // MODE byte of 1 or 2 (raw_sync, captured as the header streams past), and the size is a
+  // whole number of 2352-byte sectors (rd_*, below). NP2kai's openiso takes the same images
+  // (fdd/sxsicd.c issec2352: `if ((fsize % 2352) != 0) goto sec2352_err; return(fsize /
+  // 2352);`, one data track, sec2352_read at `(pos * 2352) + 16`); it finds them by the ISO
+  // volume descriptor in sector 16 instead, which the 2048-byte mount fetch does not reach.
+  // MODE2 form 1 (user data at +24, after the 8-byte subheader) goes beyond NP2kai, whose
+  // issec2352 rejects such an image; form 2 sectors of a mixed-form disc are not served.
+  // Like an ISO it is data only: its TOC is the synthesised one-track iso_word, with iso_cap
+  // holding size / 2352.
+  reg        is_raw = 1'b0, raw_sync = 1'b0, raw_m2 = 1'b0;
+  reg [19:0] iso_cap = 20'd0;  // ISO (or raw) sectors (saturated)
   reg [19:0] leadout = 20'd0;  // PCD lead-out LBA
   reg [7:0]  tracks = 8'd0, first_trk = 8'd1, ctrl0 = 8'h00;
   wire [19:0] totals = !loaded ? 20'd0 : (is_pcd ? leadout : iso_cap);
@@ -292,6 +321,7 @@ module pc9821_atapi #(
   reg        e_odd = 1'b0;     // audio: the next wanted word is a right sample
   wire e_done = (e_st == E_STREAM) && !sd_ack;
   wire audio_in_flight = (e_st != E_IDLE) && (e_kind == EK_AUDIO);
+  assign xfer = (e_st != E_IDLE) && (e_kind == EK_DATA);   // see the port
   wire [12:0] e_rel = sd_buff_addr - {4'd0, e_w0};
   wire e_word = (e_st == E_STREAM) && sd_ack && sd_buff_wr &&
                 (sd_buff_addr >= {4'd0, e_w0}) && (e_rel < e_n);
@@ -767,7 +797,6 @@ module pc9821_atapi #(
     if (!sel && (io_addr == 16'h064E || io_addr == 16'h074C ||
                  io_addr == 16'h0640 || io_addr == 16'h0641)) io_dout = 8'h00;   // absent slave
     else case (io_addr)
-      16'h0433: io_dout = 8'h02;
       16'h0640: io_dout = data_in ? buf_q[7:0]  : 8'h00;
       16'h0641: io_dout = data_in ? buf_q[15:8] : 8'h00;
       16'h0642: io_dout = error;
@@ -839,6 +868,19 @@ module pc9821_atapi #(
   // the player FLAG (those plus PAUSE/RESUME, a mount and the core reset) win over the engine's
   // end-of-play write.
   wire tur_change = (cdb[0] == 8'h00) && loaded && changed;
+  // A DISC CHANGE FAILS THE READ(10) IN FLIGHT. NP2kai reads one sector per data phase
+  // (atapicmd.c atapi_dataread) and a swap first ejects the old disc (fdd/sxsi.c sxsi_devopen:
+  // `sxsi->flag = 0;` and the nc_read stub), so the next sector's sxsi_read fails and the
+  // command ends `drv->asc = 0x21; senderror(drv);` - ILLEGAL REQUEST / 0x21 - while the sector
+  // already in its buffer stays readable. Here the mount is instantaneous and the new disc may
+  // be loaded before the guest drains, so the change is remembered for the command
+  // (`rd_medchg`): a fetch completing after it, or the end of the data phase it landed in, ends
+  // the command with that error instead of presenting a sector (of either disc).
+  // `mount_edge` and `exec_go` never share a cycle (exec_go waits the edge out), so the latch's
+  // set and its clear by the next command do not collide. tb_pc9821_atapi C30.
+  wire read_active = (cmd == 8'hA0) && ((st == S_FETCH) || (st == S_DATA && dp_read));
+  reg  rd_medchg = 1'b0;
+  wire rd_fail = rd_medchg || mount_edge;   // the edge's own cycle counts (the last-word read)
   wire player_pos_cmd  = AUDIO_EN && exec_go && cmd == 8'hA0 &&
                          (tur_change || cdb[0] == 8'h1B || cdb[0] == 8'h2B ||
                           cdb[0] == 8'h45 || cdb[0] == 8'h47);
@@ -849,6 +891,12 @@ module pc9821_atapi #(
   // may be fetched at the old play's position. A drive not playing keeps its state (NP2kai's
   // ideio_notify touches only the media flags); the TEST UNIT READY that reports the new medium
   // stops it (tur_change). tb_pc9821_atapi C24.
+  // THAT INCLUDES A PAUSED PLAY (0x12), deliberately: NP2kai's paused mixer is not running
+  // (pauseresume clears the daplaying bit), so nothing finds the medium gone, and
+  // atapi_cmd_pauseresume tests only `if (drv->daflag == 0x12)` before resuming. So PLAY, PAUSE,
+  // eject, mount another disc and RESUME before any TEST UNIT READY resumes at the paused
+  // position on the NEW disc in NP2kai too; the core matches it rather than stopping the pause
+  // here. tb_pc9821_atapi C27.
   wire mount_stop      = AUDIO_EN && mount_edge;
   // THE CORE RESET stops the player (NP2kai ideio_reset, above): daflag 0x15, positions 0.
   // Held for the whole reset, as the ring's flush is (cdda.v: every CDDA_FLUSH cycle empties
@@ -870,6 +918,13 @@ module pc9821_atapi #(
   wire audio_stale_now = da_stale || (cdda_flush && audio_in_flight);
   wire audio_adv       = e_done && (e_kind == EK_AUDIO) && !da_stale;
   wire [19:0] play_next = daplaypos + {19'd0, cdda_played};
+  // A stop's da_lead (the PAUSE and the mount over a play, below): whether the sector the
+  // speakers are on had been fetched, counting a fetch COMPLETING in the stop's own cycle (R4:
+  // both events land). NP2kai's dacurpos counts a sector the moment its mixer reads it (ideio.c
+  // playdevaudio: `drv->dacurpos++;` right after the sxsicd_readraw), so a play stopped as its
+  // first sector lands reports one past it; the pre-advance dacurpos missed that sector and
+  // reported one less. tb_pc9821_atapi C26.
+  wire        stop_lead = (dacurpos + (audio_adv ? {17'd0, e_nsec} : 20'd0)) != play_next;
   // four sectors in one host request when the ring has room for them and the play has them
   wire        fetch4    = cdda_req4 && dalength >= 20'd4 && (dacurpos + 20'd4) <= totals;
   // The MSF converter's three starts (READ SUB-CHANNEL's two, the ISO mount's one) - at most one
@@ -878,6 +933,17 @@ module pc9821_atapi #(
   wire cv_start_rel = (st == S_PREP) && (pp == 3'd5) && cv_done && !cv_owner_mount;
   wire cv_start_iso = iso_msf_pend && !cv_busy && !cv_start_abs;
   wire hdr_done = e_done && (e_kind == EK_HDR);
+  // THE RAW IMAGE'S SECTOR COUNT, size / 2352 = (size / 16) / 147, by a restoring division
+  // started at the mount edge: one quotient bit per cycle, 27 cycles, long before the header
+  // fetch ends. rd_q shifts the dividend (size[30:4]) out and the quotient in; rd_r is the
+  // remainder. Sizes of 2 GiB or more, or not a multiple of 16, are not raw (rd_ok).
+  reg [26:0] rd_q = 27'd0;
+  reg [7:0]  rd_r = 8'd0;
+  reg [4:0]  rd_n = 5'd0;
+  reg        rd_ok = 1'b0;
+  wire [8:0] rd_t  = {rd_r, rd_q[26]};
+  wire       rd_ge = rd_t >= 9'd147;
+  wire       raw_size_ok = rd_ok && rd_n == 5'd0 && rd_r == 8'd0;
   wire toc_success = loaded && ((cdb[9][7:6] == 2'd0 && toc_ok) || cdb[9][7:6] == 2'd1);
   // A reset of the drive this cycle (DEVICE RESET, EXECUTE DEVICE DIAGNOSTIC, an SRST edge)
   // OWNS the command FSM: the internal progress arms (exec, builder, prep, fetch completion)
@@ -963,9 +1029,13 @@ module pc9821_atapi #(
       damsfbcd <= 1'b0;
       pp <= 3'd0; sc_e <= 7'd0; sc_r <= 7'd0; sc_rel <= 20'd0; sc_hi <= 4'h0;
       buf_we <= 1'b0; buf_waddr <= 11'd0; buf_wdata <= 16'd0;
+      rd_medchg <= 1'b0;
       for (int i = 0; i < 12; i++) cdb[i] <= 8'h00;
     end else begin
       buf_we <= 1'b0;
+      // one next-state for the change latch (above): set by a mount under a READ, cleared by
+      // the next command's execution
+      rd_medchg <= (rd_medchg && !exec_go) || (mount_edge && read_active);
 
       // ---------------- writes ----------------
       if (io_wr) begin
@@ -1075,7 +1145,8 @@ module pc9821_atapi #(
           if (cmd != 8'hA0) begin
             status <= status & ~ST_DRQ; st <= S_IDLE;
           end else if (!dp_read || rd_left == 16'd0) t_cmddone;
-          else if (!(rd_lba < totals)) t_senderror(SK_ILLEGAL, ASC_LBA_OUT_OF_RANGE, 1'b1);
+          else if (rd_fail || !(rd_lba < totals))
+            t_senderror(SK_ILLEGAL, ASC_LBA_OUT_OF_RANGE, 1'b1);
           else begin
             status <= (status & ~ST_DRQ) | ST_BSY;   // the next sector's fetch
             st <= S_FETCH;
@@ -1214,7 +1285,9 @@ module pc9821_atapi #(
       end
 
       // ---------------- READ(10): one 2048-byte sector per data phase ----------------
-      if (st == S_FETCH && e_done && e_kind == EK_DATA && !abort_now) begin
+      if (st == S_FETCH && e_done && e_kind == EK_DATA && !abort_now && rd_medchg)
+        t_senderror(SK_ILLEGAL, ASC_LBA_OUT_OF_RANGE, 1'b1);   // a fetch across a disc change
+      else if (st == S_FETCH && e_done && e_kind == EK_DATA && !abort_now) begin
         // atapi_dataread: interrupt reason IO, 2048 bytes, DRQ, interrupt
         rd_lba <= rd_lba + 20'd1; rd_left <= rd_left - 16'd1;
         sc <= INTR_IO; cy <= 16'd2048;
@@ -1268,14 +1341,26 @@ module pc9821_atapi #(
 
     // ---- the medium ----
     if (mount_edge) begin
-      loaded <= 1'b0; changed <= 1'b0; iso_msf_pend <= 1'b0;
+      rd_q <= img_size[30:4]; rd_r <= 8'd0; rd_n <= 5'd27;
+      rd_ok <= !(|img_size[63:31]) && img_size[3:0] == 4'd0;
+    end else if (rd_n != 5'd0) begin
+      rd_r <= rd_ge ? 8'(rd_t - 9'd147) : rd_t[7:0];
+      rd_q <= {rd_q[25:0], rd_ge};
+      rd_n <= rd_n - 5'd1;
+    end
+    if (mount_edge) begin
+      loaded <= 1'b0; changed <= 1'b0; iso_msf_pend <= 1'b0; is_raw <= 1'b0;
       hdr_pend <= (img_size >= 64'd2048);
       mounting <= (img_size >= 64'd2048);
       iso_cap <= (|img_size[63:31]) ? 20'hFFFFF : img_size[30:11];
     end else if (hdr_done && !hdr_pend) begin
       // the header words are in place and no newer mount is waiting; the type is the magic's
       if (is_pcd) begin loaded <= 1'b1; changed <= 1'b1; mounting <= 1'b0; end
-      else iso_msf_pend <= 1'b1;
+      else begin
+        iso_msf_pend <= 1'b1;
+        // a raw image: its capacity is the quotient (< 2^31 / 2352, so it fits 20 bits)
+        if (raw_sync && raw_size_ok) begin is_raw <= 1'b1; iso_cap <= rd_q[19:0]; end
+      end
     end else if (mounting && cv_done && cv_owner_mount && !hdr_pend &&
                  !(e_st != E_IDLE && e_kind == EK_HDR)) begin
       lo_m <= cv_m; lo_s <= cv_s; lo_f <= cv_x[6:0];
@@ -1305,7 +1390,7 @@ module pc9821_atapi #(
           dacurpos  <= play_next;
           daplaypos <= play_next;
           dalength  <= dacurpos + dalength - play_next;
-          da_lead   <= (dacurpos != play_next);
+          da_lead   <= stop_lead;
         end
       end else if (player_pos_cmd) begin
         da_lead <= 1'b0;
@@ -1337,7 +1422,7 @@ module pc9821_atapi #(
           dacurpos  <= play_next;
           daplaypos <= play_next;
           dalength  <= dacurpos + dalength - play_next;
-          da_lead   <= (dacurpos != play_next);
+          da_lead   <= stop_lead;
         end else begin
           // a RESUME (or a PAUSE of a drive not playing) leaves the positions alone, so a sector
           // completing or played in this same cycle still lands (R4: both events land)
@@ -1352,10 +1437,17 @@ module pc9821_atapi #(
         end
         daplaypos <= play_next;
         // the end of play: the length is spent or the lead-out is reached AND the speakers have
-        // played every fetched sector; or there is no PCD
+        // played every fetched sector; or there is no PCD; or there is no medium at all.
+        // NO MEDIUM is 0x14, not 0x13: NP2kai's mixer tests the device before anything else
+        // (ideio.c playdevaudio: `if ((sxsi == NULL) || (sxsi->devtype != SXSIDEV_CDROM) ||`
+        // ... `drv->daflag = 0x14;`), and an eject clears its READY flag (fdd/sxsi.c
+        // `sxsi->flag = 0;`). A RESUME of a pause across an eject or a PLAY with no disc gets
+        // here (a play under way at the eject is mount_stop's), and keeps its positions, as
+        // NP2kai's untouched dacurpos does. tb_pc9821_atapi C29.
         if (e_st == E_IDLE && daflag == DA_PLAY &&
-            (((dalength == 20'd0 || dacurpos >= totals) && daplaypos >= dacurpos) || !is_pcd))
-          daflag <= DA_DONE;
+            (((dalength == 20'd0 || dacurpos >= totals) && daplaypos >= dacurpos) || !is_pcd ||
+             !loaded))
+          daflag <= loaded ? DA_DONE : DA_ERR;
       end
     end
 
@@ -1406,13 +1498,23 @@ module pc9821_atapi #(
       if (e_kind == EK_HDR) begin
         // the PCD magic "PC98CD01" and the counts, captured as they stream past
         case (e_rel[9:0])
-          10'd0: is_pcd <= (sd_buff_dout == 16'h4350);
-          10'd1: is_pcd <= is_pcd && (sd_buff_dout == 16'h3839);
-          10'd2: is_pcd <= is_pcd && (sd_buff_dout == 16'h4443);
-          10'd3: is_pcd <= is_pcd && (sd_buff_dout == 16'h3130);
-          10'd4: if (is_pcd) begin tracks <= sd_buff_dout[7:0]; first_trk <= sd_buff_dout[15:8]; end
+          // (and the raw sync 00 FF..FF 00, little-endian words FF00 FFFF x4 00FF, then the
+          // MODE byte, byte 15: 1 or 2)
+          10'd0: begin is_pcd <= (sd_buff_dout == 16'h4350); raw_sync <= (sd_buff_dout == 16'hFF00); end
+          10'd1: begin is_pcd <= is_pcd && (sd_buff_dout == 16'h3839); raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF); end
+          10'd2: begin is_pcd <= is_pcd && (sd_buff_dout == 16'h4443); raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF); end
+          10'd3: begin is_pcd <= is_pcd && (sd_buff_dout == 16'h3130); raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF); end
+          10'd4: begin
+            if (is_pcd) begin tracks <= sd_buff_dout[7:0]; first_trk <= sd_buff_dout[15:8]; end
+            raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF);
+          end
+          10'd5: raw_sync <= raw_sync && (sd_buff_dout == 16'h00FF);
           10'd6: if (is_pcd) leadout[15:0] <= sd_buff_dout;
-          10'd7: if (is_pcd) leadout[19:16] <= sd_buff_dout[3:0];
+          10'd7: begin
+            if (is_pcd) leadout[19:16] <= sd_buff_dout[3:0];
+            raw_sync <= raw_sync && (sd_buff_dout[15:8] == 8'h01 || sd_buff_dout[15:8] == 8'h02);
+            raw_m2   <= (sd_buff_dout[15:8] == 8'h02);
+          end
           10'd8: if (is_pcd) ctrl0 <= sd_buff_dout[7:0];
           default: ;
         endcase
@@ -1433,14 +1535,16 @@ module pc9821_atapi #(
                     in_range(cdb_lba, totals);
   wire read_next  = io_rd && sel && io_addr == 16'h0641 && data_in && cmd == 8'hA0 &&
                     !({1'b0, ptr} + 11'd1 < dp_words) && dp_read && rd_left != 16'd0 &&
-                    (rd_lba < totals);
+                    !rd_fail && (rd_lba < totals);
   wire fetch_req = (read_first || read_next) && rst_n && !abort_now;
   wire e_take_data = (e_st == E_IDLE) && data_pend && !hdr_pend;
 
   // the engine's offset arithmetic (E_CALC): one multiply (a DSP block, not LAB logic)
   wire [31:0] e_l = {12'd0, e_pos};
-  wire [31:0] e_off = !is_pcd ? (e_l << 11)
-                    : (e_l * 32'd2352 + ((e_kind == EK_DATA) ? 32'd2368 : 32'd2352));
+  // (a raw image's sector L at L*2352, its user data 16 bytes in, 24 for MODE2 form 1)
+  wire [31:0] e_off = !(is_pcd || is_raw) ? (e_l << 11)
+                    : (e_l * 32'd2352 + (is_raw ? (raw_m2 ? 32'd24 : 32'd16)
+                                         : ((e_kind == EK_DATA) ? 32'd2368 : 32'd2352)));
 
   // synthesis translate_off
   // SIM-ONLY (R8): the ring's CDDA_PLAYED can only report a sector the player fetched. Outside a

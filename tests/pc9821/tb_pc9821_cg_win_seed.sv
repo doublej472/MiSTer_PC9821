@@ -61,6 +61,9 @@ module tb_pc9821_cg_win_seed;
       .font_ld_data(16'd0),
       .font_ld_we(1'b0),
       .cg_record_restore(1'b0),
+      // The OSD configuration at the measured machine's values (pc9821_iobus's setup_cfg:
+      // port 0x31 = 0xF3, docs/probes/MEMSW.TXT; 0x871E = 0x3E, docs/probes/PORTS.TXT:258).
+      .setup_cfg(24'h763EF3),
       .cfg_ram_mib(7'd5),
       .cfg_seed_en(1'b1),
       .cfg_seed_reload(1'b0),

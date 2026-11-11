@@ -32,7 +32,7 @@ module tb_pc9821_pegc_480;
   wire [9:0]  pix_dot;
   wire        pix_h_active, pix_v_active, gfx_odd_line, gfx_mode16;
   wire [31:0] gfx_dig;
-  wire        pal_wr_en, pal_commit;
+  wire        pal_wr_en;
   wire [3:0]  pal_wr_idx, pal_wr_data;
   wire [1:0]  pal_wr_chan;
   wire        pal256_wr_en;
@@ -66,7 +66,7 @@ module tb_pc9821_pegc_480;
       .pix_dot(pix_dot), .pix_h_active(pix_h_active), .pix_v_active(pix_v_active),
       .gfx_odd_line(gfx_odd_line), .gfx_mode16(gfx_mode16), .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx), .pal_wr_chan(pal_wr_chan),
-      .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_data(pal_wr_data),
       .pal256_wr_en(pal256_wr_en), .pal256_wr_idx(pal256_wr_idx),
       .pal256_wr_chan(pal256_wr_chan), .pal256_wr_data(pal256_wr_data),
       .gfx_pegc_256(pegc_256), .gfx_pegc_256e(pegc_256e),
@@ -134,7 +134,7 @@ module tb_pc9821_pegc_480;
 
   wire [7:0] r_out, g_out, b_out;
   pc9821_video_mixer u_mix (
-      .clk(clk), .rst_n(!reset),
+      .clk(clk),
       .dot_x(pix_dot), .h_active(pix_h_active), .v_active(pix_v_active),
       .gfx_odd_line(gfx_odd_line),
       .text_opaque(text_opaque), .text_cell(text_cell), .text_colour(text_colour),
@@ -143,7 +143,7 @@ module tb_pc9821_pegc_480;
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .pal_mode16(gfx_mode16), .pal_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx), .pal_wr_chan(pal_wr_chan),
-      .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_data(pal_wr_data),
       .pegc_256(pegc_256), .fold_bypass(pegc_256), .packed_idx(packed_idx),
       .pal256_wr_en(pal256_wr_en), .pal256_wr_idx(pal256_wr_idx),
       .pal256_wr_chan(pal256_wr_chan), .pal256_wr_data(pal256_wr_data),

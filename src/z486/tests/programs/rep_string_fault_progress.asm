@@ -2,10 +2,16 @@
 ;
 ; Intel486 PRM, "REP/REPE/REPZ/REPNE/REPNZ": a repeated string instruction
 ; that faults is restartable - the registers point at the faulting element and
-; everything the completed iterations did (ECX count, index registers, the
-; flags of the last completed CMPS/SCAS comparison) is architectural.  The
-; real-mode limit is 0FFFFh, so an a32 index stepping to 10000h raises
-; interrupt 13 on the *second* element.
+; what the completed iterations did to ECX, the index registers and memory is
+; architectural.  The flags are not: Intel SDM vol. 2 REP/REPE/REPZ/REPNE/
+; REPNZ, "When a fault occurs during the execution of a CMPS or SCAS
+; instruction that is prefixed with REPE or REPNE, the EFLAGS value is
+; restored to the state prior to the execution of the instruction."  A real
+; Am486DX4 pushes the pre-instruction flags too (CPUSUITE-XE10-triage:
+; tri_rep_flags data=00440400h, the FLAGS of slots 2, 4 and 5 below; slot 5
+; FLAGS 0446h = the xor dx,dx flags, with ECX=2 committed).  The real-mode
+; limit is 0FFFFh, so an a32 index stepping to 10000h raises interrupt 13 on
+; the *second* element.
 ;
 ; Each slot runs one REP string op whose first element completes and whose
 ; second faults; the #GP handler counts the fault and resumes after the
@@ -72,7 +78,8 @@ start:
 
     ; Slot 2: a32 REPNE SCASB at ES:FFFF (the A5 stored above) against AL=03:
     ; 03h-A5h = 5Eh leaves CF=1 AF=1, ZF=SF=PF=OF=0 (0011h), the loop continues
-    ; and ES:10000 faults.  Start from ZF=1 CF=0 so stale flags are visible.
+    ; and ES:10000 faults.  Start from ZF=1 PF=1 CF=0 (0044h): the fault
+    ; pushes those, not the first element's 0011h.
     mov al, 0x03
     mov edi, 0xffff
     mov ecx, 5
@@ -89,7 +96,7 @@ start:
     SLOT 3, {0xf3, 0x67, 0xa6}
 
     ; Slot 4: a32 REPNE CMPSB, same operands: ZF=0 so the loop continues and
-    ; ES:10000 faults after one element.
+    ; ES:10000 faults after one element; the pushed flags are 0044h.
     mov esi, src_byte
     mov edi, 0xffff
     mov ecx, 5
@@ -97,7 +104,8 @@ start:
     SLOT 4, {0xf2, 0x67, 0xa6}
 
     ; Slot 5: a32 REPNE SCASD with DF=1: dword at ES:0000 (zero) vs EAX=1
-    ; compares 1-0 (flags 0000h), EDI steps to FFFFFFFCh and faults.
+    ; compares 1-0 (flags 0000h), EDI steps to FFFFFFFCh and faults; the
+    ; pushed flags are the pre-instruction 0044h.
     std
     mov eax, 1
     xor edi, edi
@@ -194,5 +202,5 @@ CONT:  times 8 dw 0
 ;                slot0     slot1     slot2     slot3     slot4     slot5
 X_ECX: dd        4,        4,        4,        4,        4,        2
 X_EDI: dd  0x10000,  0x10000,  0x10000,  0x10000,  0x10000, 0xfffffffc
-X_FLG: dw   0x0044,   0x0044,   0x0011,   0x0011,   0x0011,   0x0000
+X_FLG: dw   0x0044,   0x0044,   0x0044,   0x0011,   0x0044,   0x0044
 X_FLT: db        1,        1,        1,        0,        1,        1

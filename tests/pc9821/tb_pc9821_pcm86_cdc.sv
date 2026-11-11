@@ -71,7 +71,7 @@ module tb_pc9821_pcm86_cdc;
 
   // ==== DUT ====
   // The crossing exactly as z486_mister.sv wires it: clk_sys to CLK_AUDIO, a 20x2-bit vector
-  // (z486_mister.sv:1458-1462, the -86 card's sample bus).
+  // (z486_mister.sv:1474-1478, the -86 card's sample bus).
   localparam integer W = 20;                 // bits per channel, as shipped
   reg  [2*W-1:0] data_in  = 0;
   wire [2*W-1:0] data_out;

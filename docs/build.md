@@ -6,6 +6,16 @@ analog video path, the CD-ROM and the generated PLL/SDC are put together.
 timing and area rules are in [`fitting.md`](fitting.md), the SDRAM modules the controller
 supports in [`sdram.md`](sdram.md).
 
+## Make shortcuts
+
+```sh
+make base     # apply the default 90 MHz build profile
+make build    # fit the core -> output_files/z486_mister.rbf (installed as _Computer/PC9821Z486.rbf)
+make bench    # run the Verilator benches (BENCH=<name> runs one)
+make pack PC98_DUMPS=<dir>   # build/pc98pack.bin from your own Xe10 dumps, plus build/pc98pack.mem,
+                             # the simulation benches' copy (tests/pc9821/run_userdisk.sh reads both)
+```
+
 ## The Quartus build (podman or docker)
 
 Quartus runs in a container: `CONTAINER_RUNTIME` selects it (default `podman`; `docker` works).
@@ -43,7 +53,7 @@ so a change is judged only from a real fit: read `output_files/z486_mister.fit.s
 ## Build profiles
 
 `build_profile.py` (repo root) applies a configuration: clk_sys, the SDRAM pin-clock phase,
-`TRACE_EN`, `PERF_LOG_EN`, `IO_LATENCY_PROFILE`, `MPU_EN`, `SDRAM_DQ_DDIO`, `SDRAM_OUT_DDIO`, the CD-ROM fields, the framework
+`TRACE_EN`, `PERF_LOG_EN`, `MPU_EN`, `SDRAM_DQ_DDIO`, `SDRAM_OUT_DDIO`, the CD-ROM fields, the framework
 feature `alsa_en` and `MISTER_DISABLE_YC`, and the fit technique (`AREA` in every preset: the
 design is LAB-bound and `AREA` frees LABs, `docs/trade-candidates.md` T40; `--fit-technique SPEED`
 for an A/B). The SDRAM controller runs on
@@ -53,7 +63,6 @@ clk_sys in every build: one core clock, no SDRAM clock-domain crossing.
 |---|---|---|
 | `base` | 90 MHz | the default and shipping build (90 rather than 95 MHz for margin across boards), hardware-verified; carries the MPU-PC98II MIDI card and the framework's HPS audio (ALSA) |
 | `trace` | 90 MHz | the debug build: base + instruction-trace ring + perf telemetry, without the MIDI card and ALSA |
-| `iofaithful` | 90 MHz | base + the machine-timed I/O class table |
 | `mediumoc` | 100 MHz | overclock; builds the SDRAM at CL3 (CL2 runs only below 100 MHz, `docs/trade-candidates.md` T58); CL3 hardware-confirmed (4 seeds at -6.6 to -7.5 ns: the best seed passed the hardware regression on each of two MiSTers, while a 110 MHz build of the same source failed on both, so pick a sweep's best seed and hardware-test it); SDRAM_CLK through a clk_sys output DDIO (derived, see below) |
 | `heavyoc` | 120 MHz | overclock at the board SDRAM's ~120 MHz limit; SDRAM_CLK through a clk_sys output DDIO |
 
@@ -71,6 +80,11 @@ Any field can be overridden or a custom configuration defined:
 applying it; `--check` verifies the top level, the qsf record, and the generated PLL and SDC
 agree; `--selftest` plants disagreements and must catch each. `tools/build.py` and
 `tools/seed_sweep.py` accept the same `--profile <preset>` plus overrides.
+
+**The graphics GDC's draw pacing** is a compile-time knob, 0 (unpaced) in every preset:
+`--gdc-write-pace N` paces each WRITE unit and `--gdc-fig-pace N` each figure dot to N ns of real
+time (`GDC_WRITE_PACE_NS` / `GDC_FIG_PACE_NS`, `pc9821_gdc2`'s WRITE_PACE_NS / FIG_PACE_NS). The
+Xe10 takes about 1401 ns for both (GDCTIME); the default is an open owner decision (todo item 149).
 
 ## SDRAM I/O registers
 

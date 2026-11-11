@@ -26,6 +26,15 @@ This check holds the WIRING together statically, which is the class no bench see
      i.e. dma_ready). Gating the accept alone is not enough - the subsystem's owner lock
      releases on mem_ready and re-presents the same byte - so both are required.
 
+  4. The clock-control block's ENABLE is a full-period path: `cyclonev_clkena .ena` is the
+     fabric FALLING-edge register `ce_fall`, loaded from the throttle's `ce_next`, and the
+     platform's cpu_ce is `ce_next` registered once on the rising edge. The block registers
+     `ena` on the falling edge, so an enable taken straight from a rising-edge register is a
+     half-period route into the global-clock site that the fit does not hold; placements
+     with a longer route put the CPU's edges a cycle late and never boot below Full
+     (docs/clock-domains.md, "The enable into the clock-control block").
+     No bench of the netlist can see a route.
+
   3. The CPU-clock-domain INSTANCE SET is exactly {z486, pc9821_cpu_bus_bridge} plus the
      gate itself (pc9821_cpu_clk): a new module clocked by cpu_clk or consuming cpu_ce is
      a second unbridged consumer, which is how F1 happened in the first place.
@@ -56,6 +65,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 SYSTEM_SV = pathlib.Path("src/pc9821/core/pc9821_system.sv")
 BRIDGE_SV = pathlib.Path("src/pc9821/core/pc9821_cpu_bus_bridge.sv")
+GATE_SV = pathlib.Path("src/pc9821/core/pc9821_cpu_clk.sv")
 
 # The z486 inputs that are ONE-CYCLE pulses (or one-cycle accepts) and therefore must cross
 # the gated-clock boundary through the bridge. `intr` is deliberately absent: it is a LEVEL
@@ -327,8 +337,10 @@ def check(root: pathlib.Path) -> list[str]:
     for (mod, inst, ports) in insts:
         if ports.get("clk", None) == "cpu_clk" or ports.get("cpu_ce", None) == "cpu_ce":
             dom.add(mod)
-        elif ports.get("ena", None) == "cpu_ce":
-            dom.add(mod)          # the gate itself (pc9821_cpu_clk)
+        elif ports.get("cpu_ce", None) == "cpu_ce_next":
+            dom.add(mod)          # the rate generator (cpu_throttle), one cycle ahead
+        elif ports.get("ce", None) == "cpu_ce":
+            dom.add(mod)          # the gate itself (pc9821_cpu_clk), which stages cpu_ce
     unknown = dom - CPU_DOMAIN
     for mod in sorted(unknown):
         problems.append(
@@ -337,6 +349,23 @@ def check(root: pathlib.Path) -> list[str]:
             f"cpu_ce - a second consumer needs its own hold, not a direct connection")
     for mod in sorted(CPU_DOMAIN - dom):
         problems.append(f"{mod} is no longer in the CPU clock domain - the list is stale")
+
+    # ---- 4. the clock-gate enable is staged on the falling edge ----
+    gate_path = root / GATE_SV
+    if not gate_path.is_file():
+        problems.append(f"{GATE_SV} not found (the clock gate)")
+    else:
+        g = strip_comments(gate_path.read_text())
+        if not re.search(r"always\s*@\s*\(\s*negedge\s+clk\s*\)\s*ce_fall\s*<=\s*ce_next\s*;", g):
+            problems.append(f"{GATE_SV}: no falling-edge stage `always @(negedge clk) ce_fall <= ce_next;` "
+                            f"- the clock-control block's enable must be a full-period path")
+        if not re.search(r"\.ena\s*\(\s*ce_fall\s*\)", g):
+            problems.append(f"{GATE_SV}: cyclonev_clkena .ena is not ce_fall - an enable straight from a "
+                            f"rising-edge register is a half-period path into the block")
+        if not re.search(r"always\s*@\s*\(\s*posedge\s+clk\s*\)\s*ce_q\s*<=\s*ce_next\s*;", g) or \
+           not re.search(r"assign\s+ce\s*=\s*ce_q\s*;", g):
+            problems.append(f"{GATE_SV}: the platform's cpu_ce is not ce_next registered once on the rising "
+                            f"edge - it would name a different cycle than the CPU's edge")
 
     return problems
 
@@ -348,15 +377,17 @@ def selftest() -> int:
     # Plant into the RAW text (comments and all), so the copy stays a valid source file.
     raw_sys = src_sys.read_text()
     raw_br = src_br.read_text()
+    raw_gate = (ROOT / GATE_SV).read_text()
     failures = []
 
-    def run_case(name, sys_text, expect_fail, why_hint):
+    def run_case(name, sys_text, expect_fail, why_hint, gate_text=None):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             (root / SYSTEM_SV).parent.mkdir(parents=True, exist_ok=True)
             (root / BRIDGE_SV).parent.mkdir(parents=True, exist_ok=True)
             (root / SYSTEM_SV).write_text(sys_text)
             (root / BRIDGE_SV).write_text(raw_br)
+            (root / GATE_SV).write_text(raw_gate if gate_text is None else gate_text)
             probs = check(root)
             if expect_fail and not probs:
                 failures.append(f"{name}: accepted, but {why_hint}")
@@ -393,12 +424,17 @@ def selftest() -> int:
                              ".intr(z_intr), .nmi(nmi_pulse), .inta(zc_inta),"),
              True, "no hold")
 
+    # 5. the clock-gate enable straight from the throttle's rising-edge register (the
+    #    structure every fit before the reduced-speed lane had)
+    run_case("unstaged-gate-enable", raw_sys, True, "half-period path into the block",
+             raw_gate.replace(".inclk(clk), .ena(ce_fall),", ".inclk(clk), .ena(ce_next),"))
+
     if failures:
         print("CPU-DOMAIN CHECK SELFTEST: FAIL", file=sys.stderr)
         for f in failures:
             print(f"  FAIL {f}", file=sys.stderr)
         return 1
-    print("CPU-DOMAIN CHECK SELFTEST: PASS (5 planted defects rejected, control accepted)")
+    print("CPU-DOMAIN CHECK SELFTEST: PASS (6 planted defects rejected, control accepted)")
     return 0
 
 
@@ -418,7 +454,7 @@ def main() -> int:
         return 1
     print("CPU-DOMAIN CROSSINGS: PASS (6 z486 pulse inputs held or documented, "
           "the snoop hold back-pressured on both the presentation and the accept, "
-          f"{len(CPU_DOMAIN)} CPU-domain instances)")
+          f"{len(CPU_DOMAIN)} CPU-domain instances, the gate enable staged on the falling edge)")
     return 0
 
 

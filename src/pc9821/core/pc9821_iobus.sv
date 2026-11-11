@@ -11,21 +11,8 @@ module pc9821_iobus #(
     // anything (BANK4 0x44E/0x47A/0x7E9).
     parameter SDIP_WRITES_ENABLED = 1,
     parameter [31:0] SYS_CLOCK_HZ = 32'd50_000_000,
-    // WHICH I/O-LATENCY PROFILE the bus implements. A COMPILE-TIME choice only: there is no OSD
-    // bit, no status[] bit and no runtime mux - build_profile.py picks it exactly the way it
-    // picks CLOCK_RATE_HZ, pc9821_system forwards it like SYS_FREQ, and the class table below is
-    // DERIVED from it. The unselected table const-folds away (verified:
-    // the min profile's module-alone A&S equals a build without the profile table).
-    //   0 = "min"      the default table: every class but 0x5F and the 8253 is the
-    //                  FSM floor, IO_MIN_HOLD = 4 clk_sys, bit-identical at every clock.
-    //   1 = "faithful" the machine's measured per-class, per-direction access TIMES, with the
-    //                  EGC register file's address-parity split deliberately held back.
-    //   2 = "faithful + EGC-file parity": as 1, plus the EGC file's even-address read class.
-    //                  This is the sub-knob for the one measured class whose MECHANISM is still
-    //                  unresolved (item 82): level 1 omits it rather than guessing it.
-    parameter [1:0] IO_LATENCY_PROFILE = 2'd0,
     // WHETHER THE MPU-PC98II IS ON THE BUS (z486_mister.sv's MPU_EN, which build_profile.py
-    // writes from mpu_en, on in every preset). COMPILE-TIME ONLY, like IO_LATENCY_PROFILE: with 0
+    // writes from mpu_en, on in every preset). COMPILE-TIME ONLY: with 0
     // the two 0xE0D0/0xE0D2 match lines below are constants, so the device half's OR tree is
     // the one this bus had before the card existed. pc9821_system passes its own MPU_EN here.
     parameter MPU_EN = 1'b0,
@@ -33,12 +20,13 @@ module pc9821_iobus #(
     // test-only build): its two device ports 0x5FF0/0x5FF2 (pc9821_device_select's sdph_cs).
     // With 0 the select is a constant 0 and the decode is the base one.
     parameter SDRAM_PHASE_DYN = 1'b0,
-    // WHETHER IDE UNIT 2 (bank 1's master) HOLDS A DRIVE: pc9821_system's CDROM_EN, since the
-    // ATAPI CD-ROM is always that unit (the fixed layout). COMPILE-TIME: a
-    // drive on a connector does not come and go with the disc in it. 0 sets port 0xF0 bit 6
-    // (active low, see ide_unit0_present), so the ITF leaves the empty connector out of its IDE
-    // drive bitmap. The default 1 is the measured strap's own bit 6 (clear).
-    parameter IDE_UNIT2_PRESENT = 1'b1
+    // WHETHER A PC-9801-118 GAME PORT ANSWERS 0x1480-0x1487 (pc9821_device_select's
+    // GAMEPORT_118; 0 = the Xe10, which has no -118 and reads open bus there).
+    parameter GAMEPORT_118 = 1'b0,
+    // WHETHER 0x0EE0 READS BACK debug_status. The machine answers open bus 0xFF there
+    // (docs/probes/PORTS.TXT `0EE0=FF`), so 0, the default, does too; 1 is an instrument build
+    // whose guest can read the platform status byte. The POST-code WRITE is kept either way.
+    parameter DBG_STATUS_PORT = 1'b0
 ) (
     input wire clk,
     input wire reset,
@@ -62,8 +50,13 @@ module pc9821_iobus #(
     // units). The measured Xe10 byte 0xA9 has bit 5 SET (no drive on bank 0) and bit 6 clear (the
     // measured machine's CF card in the CD connector, bank 1). The core's layout is fixed - the hard disk on
     // bank 0, the CD-ROM on bank 1, the stock Xe10's and NP2kai's (HDD unit 0, CD unit 2) - so bit
-    // 5 follows the hard disk's image and bit 6 follows IDE_UNIT2_PRESENT (the CD build).
+    // 5 follows the hard disk's image and bit 6 follows ide_unit2_present.
     input wire       ide_unit0_present,
+    // IDE UNIT 2 (bank 1's master) HAS A DRIVE: port 0xF0 bit 6 reads 0. pc9821_system drives it
+    // from the OSD's bank-1 choice: the CD drive in a CD build (a drive on a connector does not
+    // come and go with the disc in it), or the second hard disk's image. 0 sets bit 6, so the ITF
+    // leaves the empty connector out of its IDE drive bitmap.
+    input wire       ide_unit2_present,
 
     // THE GDC-CLOCK STRAP, the OSD's GDC Clock field: 0 = 2.5 MHz (the measured machine),
     // 1 = 5 MHz. On the machine this is port 0x31 bit 7 - the "DIP switch 2" strap, which
@@ -81,9 +74,50 @@ module pc9821_iobus #(
     // change cannot move the clock under the running firmware, and needs no core restart to
     // be seen once the guest has one.
     input wire gdc_clock_5m,
-    // OSD: the FDD-mode switch, 0x00BE bit 2 (1 = Fixed, 0 = Auto); pc9821_fdc latches it on
-    // reset, as POST samples it. See pc9821_fdc's dip_fixed for the evidence.
-    input wire fdd_dip_fixed,
+    // THE MEMORY-SWITCH INIT SWITCH, port 0x31 bit 4 (MAME pc9801.cpp DSW2 SW2:5 "Memory Switch
+    // Init": 0 = hold the memory-switch contents, 1 = initialise them with the system
+    // default; NP2kai's default DIP 2 byte 0xE3 has it clear, pccore.c:135 `{0x3e, 0xe3,
+    // 0x7b}`; the measured Xe10 reads 0xF3, bit 4 SET). With it set the ITF rewrites the
+    // memory-switch cells at every POST (BANK4@0x5B9A-0x5BD7: `in al,0x31 / test al,0x10 / jz`
+    // then MSW1 = 0x48, MSW2 = 0x05, MSW3 = 0x04, MSW4 = 0x00, MSW5 = 0x01, ...), which is
+    // what the measured cells hold (docs/probes/MEMSW.TXT). 1 HERE = HOLD: pc9821_system
+    // drives it when the OSD's Boot order field selects a non-default 0xA3FF2 nibble, because
+    // a machine whose memory switch holds such a value is one whose init switch is at hold -
+    // with it set the ITF overwrites the seeded cell with 0x01 before the BIOS's boot loop
+    // (BANK7@0x7F7B) reads it. Latched on this module's reset, like gdc_clock_5m. pc9821_system
+    // also drives it from the OSD's own Memory switch field (Keep), the SETUP item of the same
+    // switch (docs/bios-setup.md, DIP switch 2 bit 4).
+    input wire msw_hold,
+    // THE TEXT-LINES SWITCH, port 0x31 bit 3 (the OSD's Text lines field, SETUP's "Text lines",
+    // DIP switch 2 bit 3: 0 = 25 lines, the factory value and the measured 0xF3; 1 = 20). The
+    // BIOS reads it at POST and passes it to its own CRT-mode call: BANK7@0x5952-0x5968
+    // `mov ah,0x4 / in al,0x31 / test al,0x4 / ... test al,0x8 / jz / or ah,0x1 / mov al,ah /
+    // mov ah,0xa / int 0x18`, i.e. INT 18h AH=0Ah with AL bit 0 = 20 lines - the same formula as
+    // NP2kai bios/bios.c bios_screeninit (`al += (pccore.dipsw[1] & 0x08) >> 3;`); the ITF
+    // programs the CRTC's line registers from it too (BANK4@0x2695-0x26A5 `test al,0x8 / jz` then
+    // `out 0x70,0x1e / out 0x72,0x11 / out 0x74,0x10`). Latched on this module's reset.
+    input wire text_lines_20,
+    // THE FLOPPY DISK MODE, the OSD's Floppy mode field as its LIST POSITION (0 = auto (1M), the
+    // default; 1 = 1M, the factory value and the measured Xe10; 2 = auto (640K); 3 = 640K), so an
+    // undriven port is the OSD's default. It is SETUP's DIP switch 3 bits 1:0 (docs/bios-setup.md:
+    // 0 640K, 1 auto (640K), 2 1M, 3 auto (1M)); fdmode_setup below decodes the position to that
+    // value. The reset walk writes it into bank A 0x861E (THE OSD-OWNED SEED BYTES below) and
+    // setup_cfg carries it to the CG record row 3 and mirror; port 0x00BE bits 3:2 read it back
+    // from the store (pc9821_fdc's fd_640k/fd_auto). Latched on this module's reset.
+    input wire [1:0] floppy_mode,
+
+    // THE OSD's "I/O timing" FIELD (status[79]): which class table prices an I/O access.
+    //   0 = "Fast"  (position 0, the default): the min table - every class but the two the
+    //               firmware itself needs is the FSM floor IO_MIN_HOLD = 4 clk_sys
+    //               (io_access_cycles' Fast arm). Not a machine table: as fast as the bus can go.
+    //   1 = "Xe10"  the machine's measured per-class, per-direction access times
+    //               (docs/probes/IO.TXT, the Xe10 arm), less the core CPU's own share of an I/O
+    //               instruction (IO_XE10_CPU_CYC), so an `in`/`out` takes the machine's time.
+    // A RUNTIME CHOICE, by owner exception to the compile-time-knob rule (todo item 82,
+    // docs/policies.md): a level on clk_sys (hps_io's status word), sampled once per access at
+    // S_IDLE where the hold is computed, so a change applies from the next access and can never
+    // cut one short. An undriven port is Fast.
+    input wire io_timing_xe10,
 
     // z486's one-cycle `triple_fault_reset` (a fault arriving during #DF
     // delivery). It is the machine's CPU-RESET class, the same one `out 0xF0`
@@ -116,8 +150,15 @@ module pc9821_iobus #(
     // The machine-reset seed's one cycle: asserted at the reset ASSERTION (the walk state is
     // deliberately not reset-held, so it must start while this module is in reset - see the
     // seed block). Exported so the CG record is re-seeded by the reset too, from one event.
-    // The store's restore walk has this one source and no zero mode.
+    // The store's restore walk has this one source and no zero mode. It also fires at the
+    // guest's reboot (the 0x534 soft reset, soft_reboot below), so whatever a program - SETUP
+    // among them - wrote into the store lasts until the next reset of either kind.
     output wire       sdip_seed_pulse,
+    // THE OSD CONFIGURATION the record and mirror in pc9821_cg are built from, from this
+    // module's reset-qualified latches so the two stores and port 0x31 can never disagree:
+    // [7:0] the port-0x31 byte (dip2_reg), [15:8] the bank-A 0x871E seed byte, [23:16] the
+    // bank-A 0x861E seed byte (THE OSD-OWNED SEED BYTES below).
+    output wire [23:0] setup_cfg,
 
     // Byte transaction presented to the compartmentalized device fabric.
     output wire        device_io_wr,
@@ -151,9 +192,10 @@ module pc9821_iobus #(
   input wire        device_rd_wait,
   // A device whose read needs MORE than the one extra cycle HOLDS this HIGH: the
   // S_DEVWAIT state stays put while it is set, so the CPU waits and then captures the
-  // data the device presents when it drops. Only the CG block uses it, and only while
-  // its SDRAM glyph burst is in flight - the machine's own CG-ROM read is synchronous,
-  // so the core stalls the guest rather than answer the previous code's glyph
+  // data the device presents when it drops. The CG block uses it while its SDRAM glyph
+  // burst is in flight - the machine's own CG-ROM read is synchronous, so the core
+  // stalls the guest rather than answer the previous code's glyph - and the OPNA while
+  // a queued flag-class write has not yet reached its chip (pc9821_opna flg_pend).
   // An UNDRIVEN input is 0, so every other device and every
   // bench keeps the one-cycle timing.
   input wire        device_rd_hold,
@@ -178,7 +220,9 @@ module pc9821_iobus #(
     //          0xB0000-0xBFFFF as GVRAM or every mode set breaks the planes;
     //   0x22 = the 64 KiB memory window - the ITF's pass path fills and verifies all
     //          0x4000 dwords of it at ES=0xB000 (BANK4@0xF82C7-0xF8317), so it is RAM;
-    //   any other 0x2x (measured 0x24, and 0x21 does not share 0x20's store) = unmapped.
+    //   any other 0x2x (measured 0x24, and 0x21 does not share 0x20's store) = unmapped -
+    //          but only FROM THE PAGE: written from the identity, 0x24 leaves the planes
+    //          (docs/probes/DMAROUTE-XE10.TXT cases E1/E2, below).
     // ems_state encodes exactly that: 0 = identity/VRAM, 1 = the RAM page, 2 = unmapped.
     output reg [1:0] ems_state,
     // 0xA460 bit 0: the PC-9801-86's extension enable. On the real card that
@@ -195,7 +239,7 @@ module pc9821_iobus #(
     // so the beeper is silent until the firmware clears it.
     output wire       beep_mute,
     // The 2-bit BEEPER VOLUME from software-DIP port 0x871E bits [3:2]: ITF
-    // SETUP writes it and it scales the speaker amplitude in z486_mister (0 =
+    // SETUP writes it and it scales the speaker amplitude in pc9821_audio_mix (0 =
     // exact mute). NP2kai models the same register: io/dipsw.c:44-57 takes
     // (value >> 2) & 3 from a 0x871E write into BEEP_VOL, io/dipsw.c:97-103
     // reads it back, sound/beepg.c scales the beeper by it (linear, 0 = mute).
@@ -259,7 +303,8 @@ module pc9821_iobus #(
     // A floppy READ moves bytes FDC -> memory (a store); WRITE DATA moves them memory ->
     // FDC (a DMA read, answered on dma_mem_resp_valid).
     output wire [31:0] dma_mem_addr,
-    output wire [1:0]  dma_mem_gvwin,   // dma_mem_addr's plane-window class (pc9821_dmac mem_gvwin)
+    output wire [31:0] dma_mem_addr_nx,   // the address dma_mem_addr loads next (pc9821_dmac mem_addr_nx)
+    output wire        dma_mem_load,      // ... and the cycle it loads (pc9821_dmac mem_load)
     output wire [31:0] dma_mem_din,
     output wire [3:0]  dma_mem_be,
     output wire        dma_mem_req,
@@ -271,7 +316,7 @@ module pc9821_iobus #(
     // (mouseint's pic_setirq(0x0d), io/mouseif.c:131-140), routed to the slave
     // PIC's IR5 in pc9821_system.
     output wire       mouse_irq,
-    // hps_io's parsed PS/2 mouse packet (sys/hps_io.sv:106-107), consumed by
+    // hps_io's parsed PS/2 mouse packet (sys/hps_io.sv:121-122), consumed by
     // pc9821_mouse below: [24] toggles once per packet, [23:16] Y (PS/2:
     // positive up), [15:8] X (positive right), [2:0] {middle, right, left}.
     input  wire [24:0] ps2_mouse,
@@ -325,6 +370,11 @@ module pc9821_iobus #(
     output reg [15:0] last_unmapped_port,
     output reg  [7:0] post_code,
     output reg        post_write,
+    // One cycle at a 0x534 soft reset (the reboot, see the 0x534 declaration). A reset class,
+    // fanned out by pc9821_system: the memory subsystem clears its top-window shadow-dirty
+    // flag (so the re-POST's ROM sum reads the pack again) and the IDE devices reset their
+    // task files (so the IDE ROM finds its drives), as a machine reset does.
+    output reg        soft_reboot,
 
     // EGC gate: the EGC's extended-mode bit (FF2 num 2) AND the GRCG's CG-mode
     // bit (0x7C bit 7), supplied by pc9821_gdc_text. Both are required and both
@@ -385,6 +435,9 @@ module pc9821_iobus #(
     output reg  [7:0]  dbg_last_io_data,
     output reg         dbg_last_io_rd,
     output reg         dbg_last_io_wr,
+    // ... and one cycle with each new capture (the latch alone cannot tell two equal accesses
+    // apart): the --dbg-fdc log's event strobe.
+    output reg         dbg_last_io_stb,
 
     // The FDC's own diagnostics, passed through from pc9821_fdc for the stall record's
     // FST/FCM/FRS/FCH fields: {IRQ, DRQ, st, x_st}, the last command byte, the last
@@ -423,7 +476,9 @@ module pc9821_iobus #(
   assign dbg_artic_hi = artic_cnt[23:8];
 
   // How long ONE I/O access occupies the bus. A per-class machine property: the class
-  // gate belongs to the ACCESS, not the device. Every class but the TWO the firmware
+  // gate belongs to the ACCESS, not the device. TWO TABLES, chosen per access by the OSD's
+  // I/O timing field (io_timing_xe10): Fast, below, and Xe10, the machine's measured times
+  // (the Xe10 class table further down). In FAST every class but the TWO the firmware
   // itself needs is IO_MIN_HOLD: the FSM's own S_IDLE -> S_IOWAIT -> S_BYTE -> S_REPLY
   // plus the hold inserted before S_BYTE (the hold is the class value minus those three
   // cycles). The machine-measured classes (EGC 400 ns, text GDC 460 ns, graphics GDC
@@ -433,103 +488,130 @@ module pc9821_iobus #(
   // one access is 80 ns at 50 MHz but 33 ns at 120 MHz - measured at both
   // clocks (an open decision, docs/trade-candidates.md).
   // TWO FLOORS survive, because the firmware is the gate and neither is a timing
-  // choice: 0x005F is its own I/O-wait port, and the 8253 ports must outlast one
-  // 2.4576 MHz PIT tick or the ITF's timer self-test reads its just-written byte back.
-  // Both are TIMES in cycles.
+  // choice: 0x005F is its own I/O-wait port (its write is POSTED, IO_POST_5F below), and
+  // the 8253 ports must outlast one 2.4576 MHz PIT tick or the ITF's timer self-test reads
+  // its just-written byte back. Both are TIMES in cycles.
   localparam [15:0] IO_MIN_HOLD = 16'd4;   // the FSM floor: the minimum bus occupancy
   localparam [15:0] IO_PIT_HOLD = 16'((SYS_CLOCK_HZ + 32'd2_457_599) / 32'd2_457_600);  // 8253: ceil(one PIT tick)
   // 0x005F's DOCUMENTED anchor: the firmware's own I/O-wait port, whose delay loops were
-  // calibrated to the machine's documented 600 ns. NO profile charges that 600 ns:
-  // the faithful profile's read is IO_NS_5F_R (826) and its write IO_NS_5F_W (1621), and the
-  // min profile charges IO_NS_5F_W in BOTH directions (its arm below says why). The
-  // documented anchor is therefore a comment, not a localparam (it would be an unused one).
+  // calibrated to the machine's documented 600 ns. NEITHER table charges that 600 ns: a 0x5F
+  // READ is its table's default read class (Xe10's IO_NS_SLOW_R, 792), and a
+  // 0x5F WRITE is posted (IO_POST_5F, the posted-write block below the FSM). The documented
+  // anchor is therefore a comment, not a localparam (it would be an unused one).
 
-  // ---- the FAITHFUL profile's class table: the machine's measured access TIMES ----
-  // Every value is the `abs_ns` column of docs/probes/IO.TXT (the 2026-09-24 Xe10 capture,
-  // decoded by tools/hwprobe/ioprobe/ioprobe_decode.py; its figures are device-clock-referred
-  // and therefore absolute), converted to cycles from SYS_CLOCK_HZ with the same ceil idiom
-  // IO_WAIT_5F uses - so a class is the same REAL TIME at every profile clock and not a
-  // clk_sys count (tb_pc9821_sysclk_invariance checks that at 50 and 100 MHz).
-  // The capture prices READS and WRITES differently, which is why the faithful function takes
-  // the direction. Class / direction / the IO.TXT row it is from:
-  //   823 R   862 W   default (the 61 measured default ports). The reads are that group's own
-  //                   rows; the only measured default-class WRITES are the OPNA 0x188/0x18A
-  //                   (864.7/861.5) - and the unrelated 8253 0x77 write is also 861.5, so ~862
-  //                   is a bus write cost, not one device's.
-  //   386 R   356 W   EGC named 0x6A/0xA6 (reads 387.8/384.6, writes 356.0)
-  //   823 R   359 W   the GRCG mode/tile pair 0x7C/0x7E. 0x7C READS at 823.3 - the default read
-  //                   class, NOT the EGC one - and writes at 359.2; 0x7E is UNMEASURED and
-  //                   takes its pair's values (it carries 82 % of the Rusty wipe's writes).
-  //   444 both        text GDC 0x60/0x62 (reads 445.0/441.9; the write direction is unmeasured
-  //                   and takes the class's read value - the same choice for the rows below)
-  //   676 both        graphics GDC 0xA0/0xA2 (reads 673.9/677.1)
-  //   823 R   862 W   IDE PIO data 0x640/0x641 and the task-file/interface registers (reads 820-827)
-  //   823 R   861 W   the 8253 0x71/0x73/0x75/0x77 and the 0x3FD9 alias (write 861.5; still
-  //                   outlasts one 2.4576 MHz tick, so the ITF self-test floor is kept)
-  //   826 R  1621 W   0x005F: its READ is the default class (826.5); its WRITE is IO.TXT's
-  //                   1621 ns anchor, the port the firmware's own delay loops measure - the
-  //                   value the min profile charges in BOTH directions (a wr-dependent
-  //                   value at 0x5F trips a Quartus fitter bug).
-  //   823 R   356 W   EGC register file 0x4A0-0x4AF ODD addresses (reads 823.3-826.5)
-  //  9290 R   356 W   EGC register file EVEN addresses (reads 8608.5-9365.1, i.e. 8.6-9.4 us);
-  //                   profile 2 only - the mechanism is unresolved (item 82), so profile 1
-  //                   leaves these at the odd/default read class instead of guessing.
-  //   391 both        0x09A0, the PEGC index/data query (`PEGC9A0`, read 391.0 ns). It is the
-  //                   EGC named class' near neighbour and 2.1x FASTER than the default, so the
-  //                   default arm over-charged it. The write direction is
-  //                   unmeasured and takes the class's read value, the same choice the two GDC
-  //                   rows make. 0x09A8/0x09AE are NOT in it: neither is measured at all.
-  //   296 both        0x0FAA, the accelerator's index port (`ACCFAA`, read 295.6 ns) - the
-  //                   fastest port the capture prices, 2.8x under the default (audit-iobus F6,
-  //                   which also notes the port has no behaviour model). Its write direction is
-  //                   unmeasured; 0xFAB/0xFAC are NOT in the class, they are unmeasured.
+  // ---- the Xe10 class table: the machine's measured access TIMES ----
+  // Every value is the `net_ns` column of the Xe10's XE10T /IO section (docs/probes/XE10T-XE10.TXT,
+  // decoded by tools/hwprobe/xe10t/xe10t_decode.py: each row is 1024 back-to-back accesses timed
+  // with the ARTIC counter, less a control row that is the same loop without the access, so a
+  // row is what ONE access instruction costs the guest), converted to cycles from SYS_CLOCK_HZ
+  // with a ceil - so a class is the same REAL TIME at every profile clock and not a clk_sys
+  // count (tb_pc9821_sysclk_invariance checks that at 50 and 100 MHz).
+  // WHY XE10T AND NOT IO.TXT. The older ioprobe capture (docs/probes/IO.TXT) prices the same
+  // classes 3-5 % higher (default read 823 against 791.5, text GDC 444 against 413.3, graphics
+  // GDC 676 against 639.0) and the EGC file's even read at 8.6-9.4 us against 5989.1 ns. Kit 2's
+  // SPEED, a third method on the same machine (docs/probes/KIT2-XE10-SPEED.TXT, `in al,dx` less
+  // its dec/jnz shell; speed_decode.py: `IN02 ... net 802.30 ns`, `INA0 ... net 650.77 ns`),
+  // sides with XE10T within 1.4 % and 1.8 % where IO.TXT is 2.6 % and 3.9 % off, and XE10T is
+  // the probe that supersedes ioprobe (tools/hwprobe/README.md). Every row below is XE10T's.
+  // The capture prices READS and WRITES differently, which is why the function takes the
+  // direction. Class / direction / the XE10T-XE10.TXT row it is from:
+  //   792 R   823 W   default: the 37 measured default-class reads are 788.4-791.5 (R8_0002
+  //                   `art=254/255/256`, line 292; the 8259s, 8253 0x71/0x73, calendar, keyboard,
+  //                   0x5F/0x5C, 0x7C, the OPNA, the IDE task file and interface registers,
+  //                   0x90/0x94, 0xBE, 0x43B/0x43F/0x461/0x463 all read alike); the writes
+  //                   W8_0000/W8_0008 823.3 and W8_0188 820.2 (line 402 `art=264/265/266`)
+  //   350 R   318 W   EGC named 0x6A/0xA6: R8_006A/R8_00A6 349.7 (line 316), W8_006A 314.7,
+  //                   W8_00A6 317.9
+  //   792 R   318 W   the GRCG mode/tile pair 0x7C/0x7E: 0x7C READS at the default class (R8_007C
+  //                   791.5); W8_007C and W8_007E 317.9 (lines 396, 389, the nop=0 rows)
+  //   318 W           0x64 (the CRT interrupt reset) and 0xA4 (the display page): W8_0064 317.9,
+  //                   W8_00A4 314.7 (lines 406, 398) - the same fast write class, so a VSYNC
+  //                   handler's `out 0x64` costs the machine's time, not the default write's.
+  //                   Their reads are the default class (unmeasured).
+  //   414 both        text GDC 0x60/0x62: R8_0060/R8_0062 413.3 (line 308). The write direction
+  //                   is unmeasured as a plain write and takes the class's read value - the
+  //                   same choice for the rows below
+  //   639 both        graphics GDC 0xA0/0xA2: R8_00A0/R8_00A2 639.0 (line 312)
+  //   792 R   823 W   the 8253 0x71/0x73/0x75/0x77 and the 0x3FD9 alias: reads R8_0071/R8_0073
+  //                   791.5; the write is not in XE10T and takes the default write - IO.TXT
+  //                   priced the 0x77 write at the default write class too (861.5 against the
+  //                   OPNA's 864.7/861.5). Either way it outlasts one 2.4576 MHz tick, so the
+  //                   ITF self-test floor (IO_PIT_HOLD) is kept
+  //   792 R  post W   0x005F: R8_005F 788.4, the default read class; its WRITE is posted in
+  //                   both tables - the access itself is the FSM floor and the bus stays busy
+  //                   for IO_POST_5F (W8_005F's 1744 ns period, flat from nop=0 to nop=32)
+  //   792 R   318 W   EGC register file 0x4A0-0x4AF ODD addresses: R8_04A1 791.5 (line 324);
+  //                   the write is W16_04A8 314.7 (line 412)
+  //  5990 R   318 W   EGC register file EVEN addresses: R8_04A0/R8_04A2 5989.1 (line 322
+  //                   `art=1888/1890/1898`). Charged as measured; its MECHANISM is unresolved
+  //                   (item 82), and IO.TXT's 8.6-9.4 us for the same reads is not reconciled
+  //   353 both        0x09A0 and 0x09A8, the PEGC index/data query and the 24/31 kHz select:
+  //                   R8_09A0/R8_09A8 352.9 (lines 372, 374); writes unmeasured
+  //   255 both        0x0FAA, the accelerator's index port: R8_0FAA 254.3 (line 376), the
+  //                   fastest port measured; write unmeasured. 0xFAB/0xFAC are not in it
+  // A 16-BIT ACCESS PAYS ONE CLASS, not two: R16_005C 791.5 and R16_0188 788.4 (lines 378, 380)
+  // equal their ports' byte reads, and the word write W16_04A8 314.7 equals the byte writes of
+  // its class (io_access_hold below).
   // ceil, so a class is never short of the machine's; the (SYS_CLOCK_HZ * ns + 1e9-1) / 1e9
-  // 64-bit form keeps the product inside 64 bits at every profile clock (max 9290 ns x 120 MHz).
-  localparam [15:0] IO_NS_SLOW_R  = 16'((SYS_CLOCK_HZ * 64'd823  + 64'd999_999_999) / 64'd1_000_000_000);  // default read / 0x7C,0x7E read
-  localparam [15:0] IO_NS_SLOW_W  = 16'((SYS_CLOCK_HZ * 64'd862  + 64'd999_999_999) / 64'd1_000_000_000);  // default write
-  localparam [15:0] IO_NS_EGC_R   = 16'((SYS_CLOCK_HZ * 64'd386  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x6A/0xA6 read
-  localparam [15:0] IO_NS_EGC_W   = 16'((SYS_CLOCK_HZ * 64'd356  + 64'd999_999_999) / 64'd1_000_000_000);  // EGC/GRCG/EGC-file write
-  localparam [15:0] IO_NS_GRCG_W  = 16'((SYS_CLOCK_HZ * 64'd359  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x7C/0x7E write
-  localparam [15:0] IO_NS_GDC1    = 16'((SYS_CLOCK_HZ * 64'd444  + 64'd999_999_999) / 64'd1_000_000_000);  // text GDC 0x60/0x62
-  localparam [15:0] IO_NS_GDC2    = 16'((SYS_CLOCK_HZ * 64'd676  + 64'd999_999_999) / 64'd1_000_000_000);  // graphics GDC 0xA0/0xA2
-  localparam [15:0] IO_NS_PIT_W   = 16'((SYS_CLOCK_HZ * 64'd861  + 64'd999_999_999) / 64'd1_000_000_000);  // 8253 write
-  localparam [15:0] IO_NS_5F_R    = 16'((SYS_CLOCK_HZ * 64'd826  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x5F read
-  localparam [15:0] IO_NS_5F_W    = 16'((SYS_CLOCK_HZ * 64'd1621 + 64'd999_999_999) / 64'd1_000_000_000);  // 0x5F write (docs/probes/IO.TXT)
-  localparam [15:0] IO_NS_EGCF_HI = 16'((SYS_CLOCK_HZ * 64'd9290 + 64'd999_999_999) / 64'd1_000_000_000);  // EGC file even read (profile 2)
-  localparam [15:0] IO_NS_9A0     = 16'((SYS_CLOCK_HZ * 64'd391  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x09A0 read/write
-  localparam [15:0] IO_NS_FAA     = 16'((SYS_CLOCK_HZ * 64'd296  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x0FAA read/write
+  // 64-bit form keeps the product inside 64 bits at every profile clock (max 5990 ns x 120 MHz).
+  localparam [15:0] IO_NS_SLOW_R  = 16'((SYS_CLOCK_HZ * 64'd792  + 64'd999_999_999) / 64'd1_000_000_000);  // default read
+  localparam [15:0] IO_NS_SLOW_W  = 16'((SYS_CLOCK_HZ * 64'd823  + 64'd999_999_999) / 64'd1_000_000_000);  // default write
+  localparam [15:0] IO_NS_EGC_R   = 16'((SYS_CLOCK_HZ * 64'd350  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x6A/0xA6 read
+  localparam [15:0] IO_NS_FAST_W  = 16'((SYS_CLOCK_HZ * 64'd318  + 64'd999_999_999) / 64'd1_000_000_000);  // EGC/GRCG/0x64/0xA4/EGC-file write
+  localparam [15:0] IO_NS_GDC1    = 16'((SYS_CLOCK_HZ * 64'd414  + 64'd999_999_999) / 64'd1_000_000_000);  // text GDC 0x60/0x62
+  localparam [15:0] IO_NS_GDC2    = 16'((SYS_CLOCK_HZ * 64'd639  + 64'd999_999_999) / 64'd1_000_000_000);  // graphics GDC 0xA0/0xA2
+  localparam [15:0] IO_NS_EGCF_HI = 16'((SYS_CLOCK_HZ * 64'd5990 + 64'd999_999_999) / 64'd1_000_000_000);  // EGC file even read
+  localparam [15:0] IO_NS_9A0     = 16'((SYS_CLOCK_HZ * 64'd353  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x09A0/0x09A8 read/write
+  localparam [15:0] IO_NS_FAA     = 16'((SYS_CLOCK_HZ * 64'd255  + 64'd999_999_999) / 64'd1_000_000_000);  // 0x0FAA read/write
 
-  function automatic [15:0] io_access_cycles(input [15:0] portnum, input wr);
+  // THE CORE CPU'S OWN SHARE OF AN I/O INSTRUCTION, which the Xe10 table takes off once per
+  // access. The capture's times are what a whole `in`/`out` costs the guest on the machine
+  // (IO.TXT: the access less a register-move control; kit 2's SPEED: `in al,dx` less its
+  // dec/jnz shell). On this core the instruction costs the iobus access PLUS a fixed number of
+  // CPU cycles around it, so charging the capture's time on the bus alone would make every
+  // `in` that many cycles slower than the machine. The count is a measurement of THIS core,
+  // not a hardware fact: the same SPEED binary on the core in Fast
+  // (docs/probes/core/KIT2-CORE-SPEED.TXT at the base profile's 90 MHz, decoded by
+  // tools/hwprobe/speed/speed_decode.py: `IN02 188.90 ns/op net 133.34 ns` = 12 clk_sys for
+  // `in al,dx` at 0x02, whose Fast access is IO_MIN_HOLD = 4) leaves 12 - 4 = 8 clk_sys outside
+  // the bus. The z486 runs at clk_sys, so the share is a CYCLE count at every profile clock.
+  // Every Xe10 class is far above it (the fastest, 0x0FAA's 296 ns, is 15 clk_sys at 50 MHz),
+  // so the difference stays above the FSM's own cycles.
+  localparam [15:0] IO_XE10_CPU_CYC = 16'd8;
+
+  function automatic [15:0] io_access_cycles(input [15:0] portnum, input wr, input xe10);
     begin
-      if (IO_LATENCY_PROFILE == 2'd0) begin
-        // ---- the min profile: the smallest waits the firmware needs, not the floor -------
-        // Every class but the firmware's own hardware needs is IO_MIN_HOLD. The 0x5F arm takes
-        // the machine's measured 1621 ns (item 82, docs/probes/IO.TXT), because the
-        // BIOS POST's timer-interrupt test (BANK4@0x487) polls with `out 0x5f` and the poll
-        // window must outlast a 2.4576 MHz terminal count or it prints TIMER INTERRUPT ERROR
-        // (the 600 ns anchor was ~7 us, the terminal count ~10.6 us).
-        // It is ONE value, not the faithful profile's read/write PAIR, and that is forced by a
-        // fitter bug, not a design choice: a `wr`-dependent value at 0x5F - written either as
-        // `wr ? IO_NS_5F_W : IO_WAIT_5F` or as an if/else - trips a Quartus 17.0 internal error
-        // (Sub-system DTM, `visit_atom_stratixv_style_io_obuf`, at physical synthesis) and the
-        // fit never produces an RBF; the constant form fits. Measured: both spellings 5/5 crashing, the constant 1/1 fitting, same seed. The 8253 arm just
-        // below IS direction-aware and fits, so the bug is specific to this arm's netlist
-        // perturbation, not to `wr`-dependence in general. The read therefore also pays the
-        // write's time; 0x5F reads are not used by the firmware (0 `in 0x5F` sites against 391
-        // `out 0x5F`), and one value per address port is this profile's shape anyway.
-        // The faithful profile prices both directions at the capture's times (its arm below);
+      if (!xe10) begin
+        // ---- Fast: the smallest waits the firmware needs, not the floor -------
+        // Every class but the firmware's own hardware needs is IO_MIN_HOLD. 0x5F has no arm:
+        // its read is the default class here (the machine reads it at its default read class,
+        // 788.4 ns net: docs/probes/XE10T-XE10.TXT /IO R8_005F, against 788.4-791.5 for the
+        // other default ports), and its write is the floor too because the write is POSTED -
+        // the bus stays busy behind it for IO_POST_5F (the posted-write block below the FSM),
+        // which is what the BIOS POST's timer-interrupt test (BANK4@0x487) needs: it polls
+        // with `out 0x5f` and the poll window must outlast a 2.4576 MHz terminal count or it
+        // prints TIMER INTERRUPT ERROR (the 600 ns anchor was ~7 us, the terminal count
+        // ~10.6 us); back-to-back `out 0x5f` still cost IO_POST_5F each.
+        //   This arm used to charge the write's time in BOTH directions, because a
+        // `wr`-dependent value here crashed Quartus 17.0.2's physical synthesis (DTM,
+        // `visit_atom_stratixv_style_io_obuf`). That crash was a netlist-shape coincidence in
+        // the set of output registers the fitter PACKED into I/O cells (no single register
+        // group was the trigger, and unrelated netlist changes moved which seeds crashed); it
+        // is gone since no SDRAM output register is packed (docs/build.md "SDRAM I/O
+        // registers"). The arm is now the default, so there is no direction-dependent value
+        // at 0x5F at all in this table.
+        // The Xe10 table prices the read at the capture's time (its arm below);
         // the io_latency_profile bench displays the two tables.
         // The EGC register file is one 16-byte block, matched as a block because
         // the case arms below are exact addresses.
         if ((portnum & 16'hFFF0) == 16'h04A0)
           io_access_cycles = IO_MIN_HOLD;
         else case (portnum)
-          16'h005F:            io_access_cycles = IO_NS_5F_W;  // the I/O-wait port: the machine's write time, ONE value (see above)
           // The 8253 and its 0x3FD9 alias. The floor is there for the WRITE: the ITF's POST
           // timer self-test programs a count into the counter and reads it back, and the load
           // needs one 2.4576 MHz tick to land, so the write keeps IO_PIT_HOLD. The READ needs
           // no floor at all (the machine reads it at the default class: the capture's PITD0
-          // and PITD1 rows, 823.3 ns), and this profile's default is the FSM floor - charging
+          // and PITD1 rows, 823.3 ns), and this table's default is the FSM floor - charging
           // reads the 420 ns floor was a 2x under-charge in the slow
           // direction and a needless wait in this one.
           16'h0071, 16'h0073, 16'h0075, 16'h0077,
@@ -545,58 +627,61 @@ module pc9821_iobus #(
           default:             io_access_cycles = IO_MIN_HOLD;  // every other class
         endcase
       end else begin
-        // ---- the faithful profile: the machine's measured class times, per direction ----
+        // ---- Xe10: the machine's measured class times, per direction ----
         if ((portnum & 16'hFFF0) == 16'h04A0)
-          // Writes are the EGC's fast class; an even-address READ is the 8.6-9.4 us class (only
-          // at profile 2); an odd-address read is the default read class.
-          io_access_cycles = wr ? IO_NS_EGC_W
-                                : ((IO_LATENCY_PROFILE >= 2'd2) && !portnum[0]) ? IO_NS_EGCF_HI
-                                                                               : IO_NS_SLOW_R;
+          // Writes are the fast write class; an even-address READ is the 6 us class; an
+          // odd-address read is the default read class.
+          io_access_cycles = wr ? IO_NS_FAST_W
+                                : !portnum[0] ? IO_NS_EGCF_HI
+                                              : IO_NS_SLOW_R;
         else case (portnum)
-          16'h005F:            io_access_cycles = wr ? IO_NS_5F_W : IO_NS_5F_R;
+          16'h005F:            io_access_cycles = wr ? IO_MIN_HOLD : IO_NS_SLOW_R;  // the write is posted (IO_POST_5F)
           16'h0071, 16'h0073, 16'h0075, 16'h0077,
-          16'h3FD9, 16'h3FDB, 16'h3FDD, 16'h3FDF: io_access_cycles = wr ? IO_NS_PIT_W : IO_NS_SLOW_R;
-          16'h0640, 16'h0641, 16'h0642, 16'h0644, 16'h0646, 16'h0648, 16'h064A,
-          16'h064C, 16'h064E, 16'h074C, 16'h074E,
-          16'h0430, 16'h0432, 16'h1E8E: io_access_cycles = wr ? IO_NS_SLOW_W : IO_NS_SLOW_R;
+          16'h3FD9, 16'h3FDB, 16'h3FDD, 16'h3FDF: io_access_cycles = wr ? IO_NS_SLOW_W : IO_NS_SLOW_R;
           16'h0060, 16'h0062:  io_access_cycles = IO_NS_GDC1;
           16'h00A0, 16'h00A2:  io_access_cycles = IO_NS_GDC2;
-          16'h006A, 16'h00A6:  io_access_cycles = wr ? IO_NS_EGC_W : IO_NS_EGC_R;
-          16'h007C, 16'h007E:  io_access_cycles = wr ? IO_NS_GRCG_W : IO_NS_SLOW_R;
-          16'h09A0:            io_access_cycles = IO_NS_9A0;  // the PEGC index/data query, 391 ns
-          16'h0FAA:            io_access_cycles = IO_NS_FAA;  // the accelerator index port, 296 ns
+          16'h006A, 16'h00A6:  io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_EGC_R;
+          16'h007C, 16'h007E, 16'h0064,
+          16'h00A4:            io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_SLOW_R;
+          16'h09A0, 16'h09A8:  io_access_cycles = IO_NS_9A0;  // the PEGC query and the 31 kHz select, 353 ns
+          16'h0FAA:            io_access_cycles = IO_NS_FAA;  // the accelerator index port, 255 ns
           default:             io_access_cycles = wr ? IO_NS_SLOW_W : IO_NS_SLOW_R;
         endcase
       end
     end
   endfunction
-  // ONE I/O ACCESS PAYS EVERY LANE IT FETCHES, not just the first lane's class. On the
-  // machine each byte of a multi-byte access is its own bus cycle and is therefore classed on
-  // its own -- docs/probes/IO.TXT prices 0x005F's READ as an access in its own right (826.5 ns)
-  // -- so `in ax,0x5E`, the ARTIC timestamp read the firmware does 20 times across BANK3,
-  // BANK6, BANK7 and BIOS.ROM (`E5 5E`), pays the 0x5F read class on its HIGH lane. This core
-  // priced the whole access from the FIRST lane and charged every further lane one cycle: the
-  // 0x5F lane's class was never paid, a word read of two same-class ports paid one class
-  // instead of two, and profile 2's `in ax,0x4A0` dropped the HIGH lane's 9290 ns class. The
-  // RULE: the per-lane cost is a machine fact (each byte
-  // is an access), while what a multi-lane access costs as a WHOLE was never captured (the
-  // ioprobe measures one port at a time), so the sum of the lanes' classes is what the
-  // evidence supports and nothing else is invented.
+  // ONE I/O ACCESS PAYS EVERY LANE IT FETCHES, not just the first lane's class - in FAST. Its
+  // classes are floors, and summing them per lane keeps a multi-lane access as long as the
+  // walk it is (`in ax,0x5E`, the ARTIC timestamp read the firmware does 20 times across
+  // BANK3, BANK6, BANK7 and BIOS.ROM (`E5 5E`), pays two floors; tb_pc9821_io_class).
+  // IN XE10 A 16-BIT ACCESS PAYS ONE CLASS: the machine's word reads cost what their ports'
+  // byte reads cost (docs/probes/XE10T-XE10.TXT R16_005C 791.5 ns = R8_005C 791.5, R16_0188
+  // 788.4 = R8_0188 791.5) and so does its word write (W16_04A8 314.7 = the byte writes'
+  // 314.7-317.9), so the HIGH lane of an even-aligned pair (lane 1 after lane 0, lane 3 after
+  // lane 2) costs its one walk cycle and no class. Not measured, and left at one class per
+  // pair: a 32-bit access (two pairs) and a word that starts at an odd port (two lanes that are
+  // not a pair).
   //
-  //   be_walk:  every lane the FSM steps through. Each costs its own S_BYTE cycle (the "one
+  //   be_walk:  every lane the access requests. Each costs at least one cycle (the "one
   //            cycle per further lane").
-  //   be_fetch: the subset of those that reaches the bus and so pays a class. The one
-  //            divergence is the terminated high lane of a word read at 0x7C (term7c_hi):
-  //            the machine never fetches it (NP2kai's minus_term table; see the comment beside
-  //            term7c_hi), so it walks and pays its cycle but no class -- charging it would
-  //            put two GRCG-class reads on an ordinary guest access.
+  //   be_fetch: the subset that pays a class. The divergence is the terminated tail lane of
+  //            a word read (term_tail, the Xe10's word-read termination; see the comment beside
+  //            it): it is never fetched, so it costs its one cycle but no class -- charging it
+  //            would put two GRCG-class reads on `in ax,7Ch`. A terminated lane is taken out
+  //            of the FSM's walk (term_tail) and its one cycle moves into the hold, so the
+  //            access lasts exactly as long as a walk that stepped over it.
   //
   // The hold is the lanes' classes less the FSM's own cycles. Each FETCHED lane contributes
   // exactly its class (S_IOWAIT's hold plus its own S_BYTE cycle), and each lane that walks but
   // is not fetched contributes exactly that one S_BYTE cycle; the two cycles the FSM owns
   // regardless (S_IDLE and S_REPLY) come off once. A single lane costs exactly class - 3, and
   // a walked-but-unfetched high lane one class plus one cycle. tb_pc9821_io_class measures a two-lane read of 0x5E/0x5F against it (34 clk_sys
-  // in the min profile: 4 + 30).
+  // in Fast: 4 + 30).
+  // This function is FAST's hold (S_IDLE). XE10's is the same arithmetic over its own table,
+  // pipelined in S_IOWAIT (hold_xe10, beside io_hold's declaration), with two differences:
+  // the high lane of a fetched even-aligned pair pays no class (xe10_pair_hi), and the CPU's
+  // own share (IO_XE10_CPU_CYC) comes off ONCE per access - it is one instruction, however
+  // many lanes it walks.
   function automatic [15:0] io_access_hold(input [15:0] lane0_port,
                                           input [3:0] be_walk, input [3:0] be_fetch,
                                           input wr);
@@ -608,7 +693,7 @@ module pc9821_iobus #(
       port  = lane0_port;
       for (l = 0; l < 4; l = l + 1) begin
         if (be_walk[l] && be_fetch[l])
-          total = total + io_access_cycles(port, wr) - 16'd1;   // the lane's class, its S_BYTE cycle included
+          total = total + io_access_cycles(port, wr, 1'b0) - 16'd1;   // the lane's class, its S_BYTE cycle included
         port = port + 16'd1;
       end
       total = total - 16'd2;       // S_IDLE and S_REPLY, once per access
@@ -618,10 +703,29 @@ module pc9821_iobus #(
 
   // The FSM's own three cycles (S_IDLE -> S_BYTE -> S_REPLY) are part of the
   // access, so the hold inserted before S_BYTE is the remainder.
-  // 12 bits: profile 2 at the heaviest profile clock (120 MHz) prices an EGC-file even read at
-  // 1115 clk_sys, so `in eax,0x4A0` -- four lanes, two of them even -- sums to 2428 cycles and
-  // the hold to 2422, inside 4095. The min profile's maximum is far below it.
+  // 12 bits: Xe10 at the heaviest profile clock (120 MHz) prices an EGC-file even read at
+  // 719 clk_sys, so `in eax,0x4A0` -- two even-aligned pairs, each paying its even lane's class
+  // -- sums to 1440 cycles and the hold to 1430 after the CPU's share, inside 4095. Fast's
+  // maximum is far below it.
   reg [11:0] io_hold;
+  // THE Xe10 HOLD, PIPELINED. Its per-lane class lookup and sum is far too deep for one
+  // clk_sys from the request (it was the design's worst path, -7.1 ns at 90 MHz, from the
+  // CPU's ext_addr_r into io_hold), and still too deep in one cycle from the registered
+  // request (-9.0 ns). So it is computed in the first TWO S_IOWAIT cycles, one stage each,
+  // and loaded less the two cycles spent - the access lasts exactly as long as if S_IDLE had
+  // loaded it (tb_pc9821_io_latency_profile measures every class). hold_xe10 is the stage
+  // (0 none, 1 the per-lane lookup, 2 the sum); hold_walk the lanes walked, hold_skip the
+  // terminated lanes' cycles, hold_cls the per-lane class less its S_BYTE cycle (0 for a lane
+  // that pays none). An Xe10 hold is at least 2 cycles except the floor-priced posted 0x5F
+  // write, which is never pipelined: its hold is Fast's in both tables (S_IDLE's xe10_pipe).
+  reg [1:0]  hold_xe10;
+  reg [3:0]  hold_walk;
+  reg [1:0]  hold_skip;
+  reg [11:0] hold_cls [0:3];
+  // The posted 0x5F write's remaining bus time (the block below the FSM: THE POSTED 0x5F
+  // WRITE). Declared here because S_IOWAIT reads it.
+  localparam [11:0] IO_POST_5F = 12'((SYS_CLOCK_HZ * 64'd1744 + 64'd999_999_999) / 64'd1_000_000_000);
+  reg [11:0] post_5f;
   reg [2:0] state;
   reg [31:0] base_addr, write_data;
   reg [3:0] pending_be;
@@ -665,12 +769,15 @@ module pc9821_iobus #(
   reg [7:0] gdc_ff2;
   reg       gdc_ff2_written;
   // 0x09A8: the 24/31 kHz select beside it, a LATCH (docs/probes/RDBACK.TXT
-  // `port=09A8 before=00 wrote=01 after=01 back=00`). Bit 0 only, NP2kai's width
-  // (gdc_o9a8/gdc_i9a8 keep GDCDISP_31 and return `(gdc.display >> GDCDISP_31) & 1`);
-  // the machine's high bits are unmeasured (todo item 3). Set, it switches the raster to the
-  // separate 31 kHz dot clock (docs/probes/CRT31K.TXT `09A8 after_set31=01` and the 70.06 Hz
-  // frame that follows; pc9821_vclk_pkg) - the crt31k output.
+  // `port=09A8 before=00 wrote=01 after=01 back=00`). TWO bits wide, not NP2kai's one
+  // (gdc_o9a8/gdc_i9a8 keep GDCDISP_31 only): a write of FE reads back 02
+  // (docs/probes/XE10CFG-XE10-CFGWR.TXT `RT 09A8 was=00 wrote=FE got=02`), so bit 1 latches
+  // and bits 7:2 do not. Bit 1 has no known function here: it is read-back only. Bit 0, set,
+  // switches the raster to the separate 31 kHz dot clock (docs/probes/CRT31K.TXT
+  // `09A8 after_set31=01` and the 70.06 Hz frame that follows; pc9821_vclk_pkg) - the
+  // crt31k output.
   reg       gdc_9a8_31k;
+  reg       gdc_9a8_b1;
   assign crt31k = gdc_9a8_31k;
 
   // The bus mouse's uPD8255 PPI at 0x7FD9-0x7FDF and its 0xBFDB timer port
@@ -726,7 +833,7 @@ module pc9821_iobus #(
   // translate_off
   // The two `case (1'b1)` over `hit` (the read arm below and the write arm in the S_BYTE block)
   // carry `synthesis parallel_case`: every line is an equality of port_addr with a DISTINCT constant
-  // (the 109 `assign hit[...]` lines below), so at most one is ever set and the case's source-order priority is
+  // (the 110 `assign hit[...]` lines below), so at most one is ever set and the case's source-order priority is
   // never exercised. Without the directive the synthesiser, which cannot see that, builds a
   // priority chain behind every arm. This is the guard for that claim.
 `ifdef VERILATOR
@@ -764,32 +871,88 @@ module pc9821_iobus #(
   wire [31:0] lane_addr = base_addr + {30'd0, lane};   // (port_addr below); the upper
   /* verilator lint_on UNUSEDSIGNAL */    // half is not read by anything here
   wire [15:0] port_addr = lane_addr[15:0];
-  // THE WORD-READ TERMINATION AT THE GRCG MODE PORT. NP2kai's
-  // iocore_inp16 treats a word IN at 0x7C as "upper -" terminated: the
-  // minus_term table lists 0x7c (io/iocore16.tbl:23-26) and the handler returns
-  // the REG8 zero-extended into REG16 (io/iocore.c:781-782), so `in ax,7Ch`
-  // answers 0x00:modereg and port 0x7D is NEVER fetched. The lane walk splits
-  // every access into byte ports, so without this the high lane read 0x7D's
-  // open-bus 0xFF and the word came back 0xFF:modereg. Latched at S_IDLE with
-  // the other access qualifiers: the walk's pending_be shrinks as lanes land,
-  // so the captured byte alone cannot tell a word's high lane from a lone byte
-  // read at 0x7D (which stays open bus - NP2kai's definp8 - byte reads are not
-  // terminated). 0x7E is NOT in minus_term (the table lists 0x7a, 0x7c, then
-  // 0xa0), so `in ax,7Eh` keeps the default byte split (io/iocore.c:789-792)
-  // and its high byte is 0x7F's open bus, not zero. Only the
-  // 0x7C chunk is folded here; the rest of NP2kai's minus_term set (0x60-0x7A
-  // and 0xA0-0xAC word reads) still byte-splits. Hardware-unmeasured: no probe
-  // has word-read these ports. The folded lane (port 0x7D)
-  // is not on the device fabric, so the S_BYTE capture is the only site.
-  reg term7c_hi;
+  // THE WORD-READ TERMINATION: what a 16-bit IN at an 8-bit port answers on the Xe10
+  // (docs/probes/XE10T-XE10-AUDIT.TXT, the `X AUDIT W<port>` rows: b0/b1 the two byte reads
+  // P and P+1, w1/w2 `in ax,P` with EAX preloaded A55AC33C, d `in eax,P`). Two shapes:
+  //   SPLIT (every port not listed below): two byte reads, P then P+1, both fetched with their
+  //     side effects. Every odd-start word splits - W0031 `b0=F3 b1=45 w1=45F3`, W0041
+  //     `b0=9C b1=94 w1=949C`, W0043 `b0=85 b1=81 w1=8185`, W00AD `b0=FF b1=04 w1=04FF`, W0021
+  //     `b0=00 b1=EF w1=EF00`, and `in ax,71h` consumes the PIT latch and returns 0x72's 0F
+  //     (P0071 `w=0FE7 x1=80`) - and so does `in ax,00h`: it toggles the DMAC byte flip-flop
+  //     (D0000 `x1=C3 x2=3C`), so port 0x01 is read.
+  //   TERMINATED at an even port P with (P & 0x0C00) == 0 in the list: P is read, P+1 is NOT
+  //     fetched (`in ax,70h` leaves the PIT latch untouched, P0070 `w=0000 x1=E9 x2=80`, its
+  //     LSB first), and the high byte is a constant -
+  //     0xFF (TERM_PLUS) at 0x30-0x36 and 0x40-0x46 even and 0x7C: W0030 `b0=FF b1=F3
+  //       w1=FFFF`, W0032 `b0=45 b1=F9 w1=FF45`, W0040 `b0=00 b1=9C w1=FF00`, W0042 `b0=94
+  //       b1=85 w1=FF94`, W007C `w1=FFFF`;
+  //     0x00 (TERM_MINUS) at 0x20, 0x22 and 0x26, 0x60-0x6C even but 0x66, 0x70-0x76 even, 0x7A
+  //       and 0xA0-0xA6 even, 0xA8, 0xAC: W0060 `b1=FF w1=0004` (d=00FF0004: 0x62 too), W0064
+  //       `b0=1F b1=FF w1=001F`, W00A0 `b0=04 b1=2F w1=0004`, W00A4 `b0=00 b1=0F w1=0000`,
+  //       W0020 `w1=00FF` (d=00EF00FF), W0022 `w1=00EF`.
+  // The terminated set is NP2kai's even-port termination tables (io/iocore16.tbl plus_term,
+  // minus_term, ext08_term, applied when `if (!(port & 0x0c00)) {`, io/iocore.c:798) with the
+  // Xe10's bytes: NP2kai's ext08 `0x0800 + ret` is 0x00 on the machine (W0020/W0022) and its
+  // minus_term 0x7C is 0xFF (W007C). The rest of NP2kai's table is not the machine and is not
+  // modelled: word_term's 0x2588 (W0015 `w1=FFFF`, W0021, W00F2 `w1=FFFE`, W00F6 `w1=FF5E`,
+  // D0001 `w=7D00` with the flip-flop toggled), active_term's CPU AH (W00D0 `w1=FF21`, not the
+  // preloaded C3) and the odd plus_term ports 0x71/0x75/0x79/0xAD/0xAF all split. 0x24 SPLITS
+  // too: kit 2's /AUDIT2 reads 0x25's 0E above it (docs/probes/KIT2-XE10-AUDIT2.TXT:54, `W0024
+  // b0=FF b1=0E w1=0EFF`), where NP2kai's minus_term answers 00. (0x20, 0x22 and 0x26 cannot tell
+  // a split from a 00 term: P + 1 reads 00 there, W0020/W0022 and AUDIT2 W0026 `b1=00 w1=00FF`;
+  // they keep the term.) Ports no capture word-read take their class's shape: 0x34/0x36/
+  // 0x44/0x46, 0x72-0x76, 0xA2. W007C cannot tell a 0x7D fetch from a constant FF (0x7D reads
+  // FF); it stays terminated, its timing as before. A dword IN is two words (W0030 d=FF45FFFF,
+  // W0040 d=FF94FF00, W00A4 d=00000000), so the pairs are the access's first two lanes and its
+  // last two. Byte reads are never terminated (the capture's b0/b1 are the plain bytes).
+  localparam [1:0] TERM_NONE  = 2'd0,
+                   TERM_PLUS  = 2'd1,
+                   TERM_MINUS = 2'd2;
+  /* verilator lint_off UNUSEDSIGNAL */   // the class reads only bits 11:10 and 7:0 of the port, NP2kai's own decode
+  function automatic [1:0] xe10_term_class(input [15:0] p);
+  /* verilator lint_on UNUSEDSIGNAL */
+    begin
+      xe10_term_class = TERM_NONE;
+      if (p[11:10] == 2'b00) begin
+        case (p[7:0])
+          8'h30, 8'h32, 8'h34, 8'h36,
+          8'h40, 8'h42, 8'h44, 8'h46,
+          8'h7C:                                 xe10_term_class = TERM_PLUS;
+          8'h20, 8'h22, 8'h26,
+          8'h60, 8'h62, 8'h64, 8'h68, 8'h6A, 8'h6C,
+          8'h70, 8'h72, 8'h74, 8'h76, 8'h7A,
+          8'hA0, 8'hA2, 8'hA4, 8'hA6, 8'hA8, 8'hAC: xe10_term_class = TERM_MINUS;
+          default:                               xe10_term_class = TERM_NONE;
+        endcase
+      end
+    end
+  endfunction
+  // The byte a terminated (never fetched) high lane answers.
+  function automatic [7:0] term_hi(input [1:0] c);
+    term_hi = (c == TERM_PLUS) ? 8'hFF : 8'h00;
+  endfunction
   // The lanes the access steps through and the subset of them that reaches the bus, captured
   // from the request at S_IDLE (cpu_be == 0 is not a real access but must still resolve to one
-  // lane). io_access_hold prices each fetched lane's class; see its comment for why a walked
+  // lane). io_access_hold prices each fetched lane's class; see its comment for why a requested
   // lane is not always a fetched one.
   wire [3:0] access_be_walk  = (cpu_be == 4'd0) ? 4'b0001 : cpu_be;
-  wire       access_term7c   = !cpu_write && (cpu_addr[15:0] == 16'h007C) &&
-                               (cpu_be[1:0] == 2'b11);
-  wire [3:0] access_be_fetch = access_term7c ? (access_be_walk & 4'b1101) : access_be_walk;
+  // The word pairs of a read that can terminate: every terminated port is even, so a head is
+  // lane 0 or lane 2 of a read that also enables the next lane. (A pair at lane 1 starts at an
+  // odd port and always splits.)
+  wire       term_head0 = !cpu_write && cpu_be[0] && cpu_be[1];
+  wire       term_head2 = !cpu_write && cpu_be[2] && cpu_be[3];
+  wire [1:0] term_cls0 = term_head0 ? xe10_term_class({cpu_addr[15:2], 2'd0}) : TERM_NONE;
+  wire [1:0] term_cls2 = term_head2 ? xe10_term_class({cpu_addr[15:2], 2'd2}) : TERM_NONE;
+  // term_tail: the lane after a terminated head, never fetched; term_fill is what it answers.
+  wire [3:0] term_tail = {term_cls2 != TERM_NONE, 1'b0, term_cls0 != TERM_NONE, 1'b0};
+  wire [31:0] term_fill = {term_tail[3] ? term_hi(term_cls2) : 8'hFF, 8'hFF,
+                           term_tail[1] ? term_hi(term_cls0) : 8'hFF, 8'hFF};
+  wire [3:0] access_be_fetch = access_be_walk & ~term_tail;
+  // Xe10's 16-bit rule on the REGISTERED access (the pipelined hold's first stage): the high lane
+  // of a fetched even-aligned pair pays no class (not io_access_hold, which is Fast's).
+  wire [3:0] xe10_pair_hi = {hold_walk[2] & pending_be[2], 1'b0, hold_walk[0] & pending_be[0], 1'b0};
+  integer    xl;
+  wire [1:0] term_skip_n = {1'b0, term_tail[1]} + {1'b0, term_tail[3]};
   // Reset state is the ITF: the CPU fetches its first instruction from
   // F800:0000. Values 0-7 are the eight 32 KiB ROM banks selected by port
   // 0x043F; 8 and 9 are the two special states 0x043D selects between. They
@@ -822,13 +985,23 @@ module pc9821_iobus #(
       (lane_wdata[7:4] == 4'hE) ? {1'b0, lane_wdata[3:1]} : top_bank;
   // The EMS window's 0x043F 0x2-nibble state a write would install (see the
   // ems_state declaration): 0x20 the identity, 0x22 the RAM page, any other 0x2x
-  // unmapped. EVERY OTHER NIBBLE LEAVES THE STATE ALONE: qemu's
+  // unmapped when the page is (or was left) selected and the identity when the identity is.
+  // Both halves are measured with 0x24. From the page: docs/probes/EMS.TXT `B0000 under
+  // 20/22/24: 1111 2222 FFFF` (probe2 sec_ems writes 0x20, 0x22, 0x24 in that order, a marker
+  // under each, and reads back 0x24's own 0x4444 as FFFF while 0x20/0x22 keep theirs). From the
+  // identity: docs/probes/DMAROUTE-XE10.TXT, where every 0x24 is written right after 0x20
+  // (dmaroute.s set_state calls to_normal, `0x043F <- 0x20`, first): case E1's views V1 (0x20)
+  // and V2 (0x24) read ONE storage (`V1 PRE=D735...` = V2's prefill, written after V1's), and
+  // case E2's transfer under 0x24 lands in the planes (`E2 CPU V1 NORMAL -> D`) and reads back
+  // through 0x24 (`V2 EMS24 -> D`), the EMS page untouched (`V0 EMS22 P0 -> P0`).
+  // EVERY OTHER NIBBLE LEAVES THE STATE ALONE: qemu's
   // mem_bankctl_write switches on data & 0xf0 and acts only in its 0x20 (EMS)
   // and 0xE0 (bank) cases (pc98-mem.c:684-701), so 0x80/0xA0/0xC0 fall through
   // with the EMS window untouched (see the hit[HX_043F] write arm).
   wire [1:0] next_ems_state =
       (lane_wdata[7:4] == 4'h2) ? ((lane_wdata[3:0] == 4'h0) ? 2'd0 :
-                                   (lane_wdata[3:0] == 4'h2) ? 2'd1 : 2'd2) :
+                                   (lane_wdata[3:0] == 4'h2) ? 2'd1 :
+                                   (ems_state == 2'd0)       ? 2'd0 : 2'd2) :
                                    ems_state;
   // 0x043F's 0x8 nibble turns the window's writable shadow on (see the port declaration).
   // It is sticky until reset: the nibble is a one-way enable, and no site in the ROM set
@@ -925,7 +1098,7 @@ module pc9821_iobus #(
     else       flush_start <= flush_launch;
   end
 
-  // ONE decode for every SYSTEM port this fabric knows. ONE bank of 109 match lines below, and
+  // ONE decode for every SYSTEM port this fabric knows. ONE bank of 110 match lines below, and
   // every consumer keys off those lines instead of re-comparing the address: the classifier is
   // one OR tree, and the read and write cases are `case (1'b1)` over the same one-hot lines.
   //
@@ -934,16 +1107,16 @@ module pc9821_iobus #(
   // sibling, and two hand-kept lists drift. The instance at
   // the bottom of this file is that one decode; `device_port` is its claim.
   //
-  // 109 bits is the system-port set. Order is ascending in pc9821_ports_pkg.sv.
-  wire [108:0] hit;
+  // 110 bits is the system-port set. Order is ascending in pc9821_ports_pkg.sv.
+  wire [109:0] hit;
 
   // The per-port comments below are carried verbatim from the two classifier plane
   // functions this decode replaced; each sits above the first port it named. The
   // ports are sorted (device then system) so a comment can appear above a different
   // member of the group it describes.
   // master/slave PIC
-  // PREDECODE. The 109 match lines below are an equality of the 16-bit port with a distinct
-  // constant; the constants share only 14 distinct high bytes and 82 distinct low bytes, so each
+  // PREDECODE. The 110 match lines below are an equality of the 16-bit port with a distinct
+  // constant; the constants share only 14 distinct high bytes and 83 distinct low bytes, so each
   // line is `hb_<high byte> && lb_<low byte>` over two shared byte compares instead of its own
   // 16-bit compare (module-alone, tools/res_exp_map.py with the FDC/mouse/DMAC around it: -36
   // ALMs, measured on the earlier 194-line form, before the device ports moved to
@@ -1004,6 +1177,7 @@ module pc9821_iobus #(
   wire lb_5D = (port_addr[7:0] == 8'h5D);
   wire lb_5E = (port_addr[7:0] == 8'h5E);
   wire lb_5F = (port_addr[7:0] == 8'h5F);
+  wire lb_6C = (port_addr[7:0] == 8'h6C);
   wire lb_60 = (port_addr[7:0] == 8'h60);
   wire lb_61 = (port_addr[7:0] == 8'h61);
   wire lb_63 = (port_addr[7:0] == 8'h63);
@@ -1109,6 +1283,9 @@ module pc9821_iobus #(
   assign hit[HX_005D] = (hb_00 && lb_5D);
   assign hit[HX_005E] = (hb_00 && lb_5E);
   assign hit[HX_005F] = (hb_00 && lb_5F);
+  // 0x006C: a latch whose bits 7-4 read back (border_6c below). No device of this core
+  // decodes it (the CRTC's port list skips it), so it lives here with the other latches.
+  assign hit[HX_006C] = (hb_00 && lb_6C);
   // Present-but-unimplemented devices, answered explicitly rather than
   // by open bus so a guest probe gets an honest "absent" and fails fast.
   assign hit[HX_0090] = (hb_00 && lb_90);
@@ -1277,21 +1454,65 @@ module pc9821_iobus #(
   reg sys16m_en_q;
   assign sys16m_en = sys16m_en_q;
 
-  // 0x534: the cold/warm + soft-reset latch. The read is the CPU-mode strap
-  // (0xEC, bit 0 clear); writing bit 0 asks for a soft reset. BANK4@0x2574
+  // 0x534: the cold/warm + soft-reset latch. The read is the CPU-mode strap: the Xe10
+  // reads 0x7E at a DOS prompt (docs/probes/XE10T-XE10-AUDIT.TXT B0534 `v=7E v2=7E`;
+  // QEMU's pc98_cpu_mode_read answers 0xEC). Only bit 0 is consumed, and it is clear in
+  // both: every firmware read of the port (`mov dx,0534h / in al,dx`) tests or flips bit 0
+  // alone - BANK4@0x1C65 and BANK4@0x289C `test al,1`, BANK4@0x2574 and BIOS.ROM@0x1581F
+  // `xor al,1` - or is a save that BANK4@0x432E writes back unchanged. Writing bit 0
+  // asks for a soft reset. BANK4@0x2574
   // reads, flips bit 0 and writes it back, then executes hlt with NO trampoline
   // at all, so a dropped write is an unrecoverable hang.
+  //
+  // THE SOFT RESET IS THE REBOOT: it re-enters through the ITF, so the write also maps the
+  // ITF at 0xF8000 (top_bank <= BANK_ITF). The main BIOS's reset entry is the other writer: with SHUT0 and
+  // SHUT1 both set (a reboot, e.g. Windows 95 WIN.COM's `out 0x37,0x0B / 0x0F ... out 0xF0`)
+  // it toggles 0x534 bit 0 and only THEN maps the ITF and jumps to its reset vector
+  // (BANK7@0xFD81F-0xFD83D: `in al,dx / xor al,0x1 / out dx,al`, then 0000:04F8 = `out dx,al
+  // / jmp FFFF:0000` with dx = 0x43D, al = 0). A reset that left the BIOS bank mapped re-ran
+  // that same entry with the SHUT bits still set: 0x534 again, reset again, forever, with
+  // the GDCs blanked - the black screen after `exit` from Windows 95's MS-DOS mode. Every
+  // reference lands in the ITF here: NP2kai decodes no 0x534, so its CPU runs on into that
+  // trampoline; QEMU (hw/i386/pc98.c pc98_soft_reset) takes an armed 0x534 as a machine
+  // reset, whose pc98_mem_reset sets `s->top_bank = BANK_ITF` (hw/i386/pc98-mem.c). The ITF's
+  // own 0x534 write (above) is made with the ITF already mapped, and with both SHUT bits
+  // set first (BANK4@0x256C-0x2572 `out 0x37,0x0F / out 0x37,0x0B`), so it is a reboot too.
+  //
+  // The REST OF THE MEMORY-MAP LATCH SET takes its machine-reset value as well, as QEMU's
+  // pc98_mem_reset does on that reset: the 0x0461/0x0463 windows (`win_map[0] = 0x08`,
+  // `win_map[1] = 0x0a`), the 0xD8000 window and its IDE ROM gate (`dwin_sel = ... DWIN_IDE`,
+  // `ide_rom_gate = ... 1`, the Xe10's IDE select being 0xFC here), the IDE work-RAM gate,
+  // `bios_ram_gate = 0`, and the stored drive-bitmap byte (`s->f8e90_value =
+  // s->f8e90_reset`) - this core's top-window shadow, whose enable (top_shadow_en) and
+  // dirty flag (pc9821_memory_subsystem, via soft_reboot) are cleared. Without that the
+  // re-POST's second ROM-sum pass (after its 0x043F = 0x80) read the previous boot's
+  // stored byte at 0xF8E90 and stopped at ROM SUM ERROR (the userdisk tier, an RBOOT from
+  // DOS). The ITF re-programs every one of them in its POST, so a value it finds is never
+  // one it relies on, but its D8000 copy and its ROM sum run before it does. The EMS
+  // window and the 15-16 MiB hole are not in pc98_mem_reset's list and are left alone.
+  // No flush is owed for this remap: the CPU reset it rides on re-initialises both L1 caches (z486 l1_icache.sv and
+  // l1_cache.sv enter S_RESET_INIT on reset, clearing every tag), and the reset gate asserts
+  // the CPU's reset the cycle after the request. tb_pc9821_iobus.
   reg [7:0] cpu_mode_strap;
 
-  // Port 0x9894 is a STRAP, not a latch.
-  // Only bit 3 is a contract and it must be CLEAR: BANK4@0xFCAED
+  // Port 0x9894 reads F0 until a guest writes it (bit 3 is a latch: r9894_b3).
+  // Only bit 3 is a contract and it must be CLEAR at boot: BANK4@0xFCAED
   // continues the POST only while it is clear, and bit 3 set diverts into the clock
   // reprogram and `out 0xF0,0`. BANK7@0xFD867 forwards the same bit as a reset
   // operand that no reference consumes. The machine reads 0xF0 with bit 3 clear,
-  // stably, at a DOS prompt (/MODE), and the ITF's own writes to
-  // 0x9894 do not move that read. 0x98E0 stays undecoded for the same reason: open bus.
+  // stably, at a DOS prompt (/MODE). 0x98E0 stays undecoded: open bus.
   // Straps and latches, seeded with the MEASURED machine values
-  // (0x436=0x04, 0x439=0xB4, 0x63D=0xEC, 0x63F=0x6C, 0x149=0x00).
+  // (0x436=0x04, 0x63D=0xEC, 0x63F=0x6C, 0x149=0x00), and 0x439, the ITF's cold-start flag.
+  // 0x439 READS 0x00 OUT OF A MACHINE RESET: the measured 0xB4 is the ITF's own write. The ITF
+  // reads it (BANK4@0x40D6-0x40DF) and takes its cold branch only on 0x00, which sets the
+  // CG-window flag (`mov bl,0x4`, BANK4@0x40EA) and writes 0xB4 | (read & 2) back
+  // (BANK4@0x40EC-0x40F5); on any other value it reloads that flag from the CG cell its last
+  // boot saved (code 0x5770 row 0, BANK4@0x4101-0x4116, written at BANK4@0x4617). That cell
+  // is plain CG RAM, so a core that answered 0xB4 at reset read 0 there: the flag stayed
+  // clear, the ITF stored its boot keys through 0xE4000 instead of the CG window
+  // (BANK4@0x4DED-0x4DF6, 0x4E15, 0x4E37, 0x4E6D), read them back from the CG window as 0
+  // (BANK4@0x5B47-0x5B65), and never took the HELP key's SETUP jump (BANK4@0x5B8A-0x5B8F).
+  // The ITF's `out 0xF0` CPU reset keeps the latch, so its re-POST takes the warm branch.
   // The firmware read-modify-writes all but the last and branches on 0x63D bit 6, so
   // a constant would corrupt every one of them: on 0x63D the machine reads 0xEC where
   // QEMU returns 0x04, and bit 6, which BANK4@0x1901/0x2383/0x41D6 test, is 1 only
@@ -1299,6 +1520,26 @@ module pc9821_iobus #(
   // `mov al,imm / out dx,al`, so the firmware only ever WRITES it, and its read-back
   // (value | 1) is a contract for a guest rather than for the ROM.
   reg [7:0] config_436, config_439, config_63f, latch_149;
+  // 0x006C: bits 7-4 latch and read back, bits 3-0 read 0, 00 as found:
+  // docs/probes/KIT1-XE10-CFGWR.TXT:8 `RT 006C was=00 wrote=70 got=70` and
+  // KIT1-XE10-CFGWR.TXT:9 `RT 006C was=00 wrote=5A got=50` (`back=00` after 00 is written back).
+  // NP2kai attaches no handler there (reads FF); MAME maps 0x6C as the border colour, write
+  // only (pc9801.cpp:216 `map(0x006c, 0x006f).w(FUNC(pc9801_state::border_color_w))`). Bit 7
+  // is not in the capture (no written value had it set), and what the latch drives is not
+  // captured either: nothing here consumes it (todo item 36).
+  reg [3:0] border_6c;
+  // 0x9892 / 0x9894 BIT 3 IS A LATCH. Kit 2's write-then-read (docs/probes/KIT2-XE10-RISKY-989.TXT):
+  // both read F0 as found; `W989 9892 00`, `55` and `AA` leave 9892=F0 (lines 38-42), `W989 9892
+  // 08 -> ... 9892=F8` (line 44), and the put-back `W989 9892 F0 -> ... 9892=F8` (line 47) is
+  // ignored; 0x9894 the same (lines 49-58), each port on its own. So a write whose high nibble is
+  // 0 loads bit 3 and any other write is dropped. That 00 clears it is the firmware's: the
+  // POST's bit-3 branch writes `out 0x9894,00`, `out 0x9892,00` and resets through 0xF0
+  // (BANK4@0x4AED-0x4B13: `in al,dx`, `test al,8`, `jz`, `mov al,0`, `out dx,al` ...), which only
+  // ends if that write clears the bit; its clock-setting path writes 0x9894 <- 00, 0x9892 <- the
+  // table's low nibble, 0x9894 <- high nibble | 08 (BANK4@0x1C75-0x1C99) before a reset, so the
+  // latch survives the CPU reset (no reset arm here touches it). Bits 0-2 are not in the capture
+  // (only 00 and 08 were taken) and stay 0.
+  reg r9892_b3, r9894_b3;
   // Memory-switch register file: port 0x530 is the address latch, 0x531 the data
   // byte at that address. Contract: write<addr> to 0x530 selects a register;
   // read/write<data> at 0x531 acts on the selected register; read of 0x530
@@ -1487,7 +1728,7 @@ module pc9821_iobus #(
       .dev_dack(dma_dev_dack), .dev_we(dma_dev_we), .dev_stb(dma_dev_stb),
       .dev_tc(dma_dev_tc), .dev_ch(dma_dev_ch), .dev_dout(dma_dev_dout),
       .dev_din(fdc_dma_out),
-      .mem_addr(dma_mem_addr), .mem_gvwin(dma_mem_gvwin), .mem_we(dma_mem_we), .mem_be(dma_mem_be),
+      .mem_addr(dma_mem_addr), .mem_addr_nx(dma_mem_addr_nx), .mem_load(dma_mem_load), .mem_we(dma_mem_we), .mem_be(dma_mem_be),
       .mem_din(dma_mem_din), .mem_dout(dma_mem_dout), .mem_req(dma_mem_req),
       .mem_ready(dma_mem_ready), .mem_resp_valid(dma_mem_resp_valid),
       // mem_tc stays connected to its unused wire (see the flush launch site):
@@ -1546,6 +1787,59 @@ module pc9821_iobus #(
   wire artic_freeze = (state != S_IDLE) && (base_addr[15:2] == 14'h0017);
   reg  artic_pend;
 
+  // THE EFFECTIVE MACHINE SET: the OSD field above, re-sampled ONLY on this module's reset,
+  // which pc9821_system drives with the core's machine-reset/reload strobe
+  // `reset || !cpu_run` (pc9821_system's iobus instance) - the platform reset OR the
+  // pack-reload window, never the warm CPU-reset class (out 0xF0 / 0x534 / a z486
+  // shutdown). The 0xF0 arm below reads THIS register, so a mid-run OSD toggle has zero
+  // effect on the strap byte until the next machine reset / reload: the two ITFs read the
+  // strap's bit 5 differently and the byte must be stable for the whole boot (and across
+  // the guest's own CPU resets, which re-enter the same ITF on the same machine). Same
+  // re-sample rule as pc9821_system's ram_size_sel: it tracks the OSD while the strobe is
+  // asserted and freezes at release. tb_pc9821_bios_select pins this contract.
+  // DECLARED HERE, ahead of the software-DIP store, because the store's reset seed is built from
+  // these latches (THE OSD-OWNED SEED BYTES below).
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg [3:0] bios_set_eff = 4'd0;          // power-on default: set 0, the Xe10
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset) bios_set_eff <= bios_set;
+  end
+
+  // The GDC-clock strap's latch: the same one-decision, one-reset rule as bios_set_eff.
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg gdc_strap_eff = 1'b0;               // power-on default: 2.5 MHz, the measured machine
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset) gdc_strap_eff <= gdc_clock_5m;
+  end
+
+  // The memory-switch hold's latch (the msw_hold port's note; dip2_reg below reads it).
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg msw_hold_eff = 1'b0;                // power-on default: initialise, the measured machine
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset) msw_hold_eff <= msw_hold;
+  end
+
+  // The Text lines field's latch (the text_lines_20 port's note): the same one-decision,
+  // one-reset rule.
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg text20_eff = 1'b0;                  // power-on default: 25 lines, the measured 0xF3
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset) text20_eff <= text_lines_20;
+  end
+
+  // The Floppy mode field's latch (the floppy_mode port's note): the same one-decision,
+  // one-reset rule. It holds the list POSITION; 0 is the default, auto (1M).
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg [1:0] fdmode_eff = 2'd0;            // power-on default: auto (1M), 0x861E = 0xF7
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset) fdmode_eff <= floppy_mode;
+  end
+
   /* verilator lint_off UNUSEDSIGNAL */   // the machine's register is 8 bits; only bit 7
   reg [7:0] sdip_ctrl;   // (access enable) and bit 6 (bank select) are defined, and they are the ones read (sdip_writable, sdip_bank_index)
   /* verilator lint_on UNUSEDSIGNAL */
@@ -1598,12 +1892,19 @@ module pc9821_iobus #(
   // to the other bank's byte in the next cycle without any write to the 0x871E port.
   reg  [1:0] sdip_vol_a;   // index 3  (0x871E, bank A)
   reg  [1:0] sdip_vol_b;   // index 15 (0x871E, bank B)
+  // Bank A 0x871E bit 5 (the memory switch), which port 0x31 bit 4 reads (P31 below).
+  reg        sdip_msw_a;
+  // Bank A 0x861E bits 1:0 (SETUP's floppy disk mode), which port 0x00BE bits 3:2 read
+  // (pc9821_fdc's fd_640k/fd_auto). Bank A only, as port 0x31's 0x871E bit: SETUP stores the
+  // item in bank A (the captures' SDIPA rows move 76/F7/75/F4 while bank B stays 80,
+  // docs/probes/XE10CFG-XE10-CFG0/CFGF3/CFGF1/CFGF0.TXT).
+  reg  [1:0] sdip_fd_a;
   // The mouse's Port C strap nibble, one 3-bit image per bank, {bit 2, bits 1:0} -
   // index 0/10 for bank A and 12/22 for bank B (the write port below owns them).
   reg  [2:0] sdip_mstrap_a;
   reg  [2:0] sdip_mstrap_b;
 
-  // The beeper volume (z486_mister's speaker amplitude scale): bits [3:2] of the
+  // The beeper volume (pc9821_audio_mix's speaker amplitude scale): bits [3:2] of the
   // 0x871E byte - EXACTLY the bits a 0x871E read returns, so the amplitude can
   // never disagree with the read-back (the read side is the weak spot). 0x871E
   // is sdip[3] with the bank-A select clear and sdip[15] with it set (qemu
@@ -1626,8 +1927,9 @@ module pc9821_iobus #(
   // Per-index access rules for the twelve switch bytes.
   //
   //   data_mask: the bits the guest may write. Only 0x84's bit 1 is withheld: it is
-  //              an unmeasured strap (the measured power-up byte 0x7C has it clear,
-  //              NP2kai withholds it, io/dipsw.c, and nothing measures otherwise).
+  //              SETUP's sound "BIOS detach" bit (its writer BANK3@0x3AE7-0x3AF4, which on
+  //              the Xe10 only ever writes 0 there; the measured power-up byte 0x7C has it
+  //              clear and NP2kai withholds it, io/dipsw.c `set = value & 0xfc;`).
   //              EVERY OTHER BIT IS WRITABLE, THE PARITY BITS INCLUDED - because the
   //              machine writes them and the firmware depends on writing them. The
   //              old mask froze each register's parity bit (bit 0 for 0x84, bit 4 for
@@ -1671,7 +1973,7 @@ module pc9821_iobus #(
   // eleven is the owed capture).
   function automatic [7:0] sdip_data_mask(input [3:0] idx);
     case (idx)
-      4'h0: sdip_data_mask = 8'hFD;   // bit 1 only: an unmeasured strap (see above)
+      4'h0: sdip_data_mask = 8'hFD;   // bit 1 only: SETUP's sound BIOS-detach bit (see above)
       default: sdip_data_mask = 8'hFF; // everything else, parity bits included
     endcase
   endfunction
@@ -1696,7 +1998,8 @@ module pc9821_iobus #(
                                       // is presented on the read, not stored (below)
       5'd2:  sdip_powerup = 8'h76;   // 0x86
       5'd3:  sdip_powerup = 8'h3E;   // 0x87
-      5'd4:  sdip_powerup = 8'h7C;   // 0x88
+      5'd4:  sdip_powerup = 8'h7C;   // 0x88 -- bit 5 set: SETUP's Sound (the built-in codec) not used, as found;
+                                      // set to "used" the machine reads 0xDC (docs/probes/XE10CFG-XE10-CFGSND.TXT)
       5'd5:  sdip_powerup = 8'h7F;   // 0x89
       5'd6:  sdip_powerup = 8'hFF;   // 0x8A
       5'd7:  sdip_powerup = 8'hBF;   // 0x8B
@@ -1741,6 +2044,53 @@ module pc9821_iobus #(
                         (port_addr[15:8] <= 8'h8F);
   wire sdip_ctrl_port = (port_addr == 16'h8F1F);
 
+  // ==================== THE OSD-OWNED SEED BYTE ====================
+  // One bank-A byte of the image holds a SETUP item the OSD carries (docs/bios-setup.md, DIP
+  // switch 2): 0x871E bit 5, the memory switch (1 = initialise, 0 = keep: SETUP writes the item
+  // there, BANK3@0x1581/@0x15F7, and NP2kai io/dipsw.c makes the same bit its port-0x31 bit 4,
+  // `set = (value & 0x20) >> 1;`). It keeps the rest of the measured byte (sdip_powerup) and
+  // recomputes its parity bit 7 so the byte stays odd, as the ITF's verify requires of 0x87
+  // (BANK4@0x46E2-0x46E9 `in al,dx / test al,0xff / out dx,al / jpo`) and as NP2kai's reader
+  // forces (io/dipsw.c `if (iflags[ret] & 0x04) { ret |= 0x80; }`). At the default it is the
+  // measured 0x3E (docs/probes/PORTS.TXT:258), so the default image is unchanged.
+  // A second bank-A byte holds SETUP's floppy disk mode: 0x861E bits 1:0 (docs/bios-setup.md,
+  // DIP switch 3: 0 640K, 1 auto (640K), 2 1M, 3 auto (1M)), the OSD's Floppy mode field. The
+  // seed keeps the rest of the measured 0x76 and recomputes parity bit 7, which gives exactly
+  // the bytes the Xe10 holds after SETUP stored each value: 76 (1M), F7 (auto (1M)), 75 (auto
+  // (640K)), F4 (640K) (docs/probes/XE10CFG-XE10-CFG0/CFGF3/CFGF1/CFGF0.TXT, row SDIPA0 byte 2).
+  // POST then programs the interface from it as on the machine: the ITF writes 0x861E bit 1 into
+  // port 0xBE (BANK4@0x1B55-0x1B65), and the BIOS's floppy set-up takes 0 (640K) or 3 (1M) from
+  // 0xBE bit 3 (BANK7@0x5982-0x59AB), which reads this byte's bit 1 (pc9821_fdc's fd_640k).
+  // 0x871E follows the HOLD latch (msw_hold_eff), not the Memory switch field alone, because
+  // it is the same switch as port 0x31 bit 4 and the Boot order coupling sets that switch too.
+  function automatic [7:0] sdip_odd7(input [6:0] d);
+    sdip_odd7 = {~(^d), d};
+  endfunction
+  /* verilator lint_off UNUSEDSIGNAL */   // the parity bit and the OSD-owned bit are rebuilt
+  wire [7:0] sdip_img_a3 = sdip_powerup(5'd3);
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire [7:0] sdip_seed_a3 = sdip_odd7({sdip_img_a3[6], ~msw_hold_eff, sdip_img_a3[4:0]});
+  // The Floppy mode field's list position -> SETUP's value (0x861E bits 1:0). The positions
+  // follow the owner's order (Auto (1M) first, the default); the values are SETUP's item numbers.
+  function automatic [1:0] fdmode_setup(input [1:0] pos);
+    case (pos)
+      2'd0:    fdmode_setup = 2'd3;   // Auto (1M) (the default)
+      2'd1:    fdmode_setup = 2'd2;   // 1M (the measured machine)
+      2'd2:    fdmode_setup = 2'd1;   // Auto (640K)
+      default: fdmode_setup = 2'd0;   // 640K
+    endcase
+  endfunction
+  /* verilator lint_off UNUSEDSIGNAL */   // the parity bit and the OSD-owned bits are rebuilt
+  wire [7:0] sdip_img_a2 = sdip_powerup(5'd2);
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire [7:0] sdip_seed_a2 = sdip_odd7({sdip_img_a2[6:2], fdmode_setup(fdmode_eff)});
+  // The byte the reset walk writes at index i: the power-up image with the OSD-owned bytes.
+  function automatic [7:0] sdip_seed_byte(input [4:0] idx, input [7:0] a3, input [7:0] a2,
+                                          input [7:0] a1);
+    sdip_seed_byte = (idx == 5'd3) ? a3 : (idx == 5'd2) ? a2 : (idx == 5'd1) ? a1
+                                   : sdip_powerup(idx);
+  endfunction
+
   // ==================== THE MACHINE-RESET SEED ====================
   // The store is battery-backed on the machine, and this module's `initial` block above is its
   // power-up image - but `initial` runs at CONFIGURATION time, so without a seed a PLATFORM
@@ -1752,7 +2102,7 @@ module pc9821_iobus #(
   // (`BANK4@0xFC7B2`, the table at `BANK4@0x480C`), so a reset without the seed brings that
   // message back; the seed re-applies the image on the same strobe every other
   // configuration latch in this module uses (this module's `reset` IS `reset || !cpu_run`, the
-  // machine-reset / pack-reload strobe - see bios_set_eff below), so a machine reset restores
+  // machine-reset / pack-reload strobe - see bios_set_eff above), so a machine reset restores
   // what a fabric reload restores.
   //
   // It drives the EXISTING addressed walk rather than a second mechanism: 24 cycles, one byte
@@ -1790,7 +2140,32 @@ module pc9821_iobus #(
     sdip_reset_d    = 1'b0;   // so the strobe's ASSERTION is a rising edge at configuration time too
   end
   /* verilator lint_on PROCASSINIT */
-  wire sdip_seed_start = reset && !sdip_reset_d;   // one cycle at the machine-reset assertion
+  // THREE EVENTS START THE WALK, merged into one start (each restarts it from index 0, so a
+  // coincidence of two is one walk, R4):
+  //   - the machine-reset assertion;
+  //   - a change of a configuration latch the seed is built from WHILE the reset is held - a
+  //     core load holds the reset across the config load (Main_MiSTer user_io.cpp sets status[0]
+  //     before the config is read and releases it after), so the field values a saved config
+  //     carries arrive after the assertion, and a walk begun at the assertion alone would write
+  //     the defaults. bios_set_eff, gdc_strap_eff, text20_eff and fdmode_eff are in the set for
+  //     pc9821_cg's record rows (setup_cfg), which the same pulse restores;
+  //   - the guest's reboot, the 0x534 soft reset (soft_reboot, one cycle after the write). Every
+  //     reboot passes through it: SETUP's exit (BANK4@0x256C-0x2574 `out 0x37,0x0F / out
+  //     0x37,0x0B` then the 0x534 toggle) and the main BIOS's reset entry with both SHUT bits set
+  //     (BANK7@0xFD81F-0xFD83D, the 0x534 declaration's note). A warm CPU reset that resumes a
+  //     program (`out 0xF0` with the SHUT bits clear, a triple fault) does not reseed, so a
+  //     program's own writes survive it. NOT the machine: there the store is battery-backed and
+  //     survives every reset; on this core the OSD owns the configuration, so SETUP and every
+  //     other program's writes last only until the next reset.
+  // The latches are re-sampled only while `reset` is held, so the change detector cannot fire
+  // outside a reset window.
+  wire [8:0] seed_src = {fdmode_eff, bios_set_eff, gdc_strap_eff, msw_hold_eff, text20_eff};
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  reg  [8:0] seed_src_q = 9'd0;            // the power-up latches: auto (1M), Xe10, 2.5 MHz, init, 25
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) seed_src_q <= seed_src;
+  wire seed_src_moved  = reset && (seed_src != seed_src_q);
+  wire sdip_seed_start = (reset && !sdip_reset_d) || seed_src_moved || soft_reboot;
   assign sdip_seed_pulse = sdip_seed_start;        // ... and the CG record's restoring event
 
   // The one-cycle seed start (see the port comment): the machine-reset assertion starts a
@@ -1825,17 +2200,24 @@ module pc9821_iobus #(
   // action. The guest byte is still built from the addressed cell and the per-index data
   // mask, so 0x84's bit 1 - the one withheld bit - keeps its power-up image value.
   wire       sdip_guest_we = (state == S_BYTE) && request_write && sdip_data_port && sdip_writable;
-  wire [7:0] sdip_guest_data = (sdip_q & ~sdip_data_mask(sdip_index)) |
-                               (lane_wdata & sdip_data_mask(sdip_index));
+  // Bank A's 0x851E (index 1) stores its bit 4 alone: the Xe10 reads 0x851E = 02 after the
+  // ITF's boot merge wrote E3 there (BANK4@0x46CC-0x46D9; docs/probes/XE10CFG-XE10-CFG0.TXT),
+  // and 12 / 02 after writes of 12 / 02 (XE10CFG-XE10-CFGWR.TXT `RT 851E was=02 wrote=12
+  // got=12 ... back=02`). The write's other bits go to port 0x31 (P31 below).
+  wire [7:0] sdip_wmask = (sdip_bank_index == 5'd1) ? 8'h10 : sdip_data_mask(sdip_index);
+  wire [7:0] sdip_guest_data = (sdip_q & ~sdip_wmask) | (lane_wdata & sdip_wmask);
   wire       sdip_we       = sdip_guest_we || sdip_seq_active;
   wire [4:0] sdip_waddr    = sdip_guest_we ? sdip_bank_index : sdip_seq_idx;
   wire [7:0] sdip_wdata    = sdip_guest_we ? sdip_guest_data
-                                : sdip_powerup(sdip_seq_idx);
+                                : sdip_seed_byte(sdip_seq_idx, sdip_seed_a3, sdip_seed_a2,
+                                                 sdip_seed_a1);
   always @(posedge clk) begin
     if (sdip_we) sdip[sdip_waddr] <= sdip_wdata;
     // 0x871E is index 3 in bank A and index 15 in bank B; each shadow carries the same bits
     // the store just took, in the same cycle.
     if (sdip_we && (sdip_waddr == 5'd3))  sdip_vol_a <= sdip_wdata[3:2];
+    if (sdip_we && (sdip_waddr == 5'd3))  sdip_msw_a <= sdip_wdata[5];
+    if (sdip_we && (sdip_waddr == 5'd2))  sdip_fd_a  <= sdip_wdata[1:0];
     if (sdip_we && (sdip_waddr == 5'd15)) sdip_vol_b <= sdip_wdata[3:2];
     // The mouse's Port C strap nibble (pc9821_mouse's `dip_strap`): a SHADOW rather than a
     // second combinational read of sdip[], for the same reason as the two above and one
@@ -1859,7 +2241,8 @@ module pc9821_iobus #(
   /* verilator lint_off UNUSEDSIGNAL */
   initial begin
     reg [7:0] img;
-    img = sdip_powerup(5'd3);   sdip_vol_a = img[3:2];
+    img = sdip_powerup(5'd3);   sdip_vol_a = img[3:2];  sdip_msw_a = img[5];
+    img = sdip_powerup(5'd2);   sdip_fd_a  = img[1:0];
     img = sdip_powerup(5'd15);  sdip_vol_b = img[3:2];
     img = sdip_powerup(5'd0);   sdip_mstrap_a[1:0] = ~img[5:4];
     img = sdip_powerup(5'd10);  sdip_mstrap_a[2]   = img[4];
@@ -1877,7 +2260,7 @@ module pc9821_iobus #(
   // same decode that splits it into chip selects (the instance below), so a port cannot be
   // claimed in one list and unreachable in the other.
   wire device_port = dev_bus_cs;
-  wire system_port = |hit[108:0] || sdip_data_port || sdip_ctrl_port || dma_port;
+  wire system_port = |hit[109:0] || sdip_data_port || sdip_ctrl_port || dma_port;
   assign device_io_addr = port_addr;
   assign device_io_din = lane_wdata;
   assign device_io_wr = (state == S_BYTE) && request_write && device_port;
@@ -1910,7 +2293,9 @@ module pc9821_iobus #(
   wire fdc_rd = (state == S_BYTE) && !request_write && fdc_cs;
   wire [7:0] fdc_dout;
   pc9821_fdc #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) fdc (
-      .clk(clk), .reset(reset), .dip_fixed(fdd_dip_fixed), .cs(fdc_cs),
+      .clk(clk), .reset(reset), .cs(fdc_cs),
+      // SETUP's floppy disk mode as port 0x00BE bits 3:2 read it: bank A 0x861E bits 1:0.
+      .fd_640k(~sdip_fd_a[1]), .fd_auto(sdip_fd_a[0]),
       // 0x90/0x92/0x94 and 0xC8/0xCA/0xCC take the register index from
       // addr[2:1] -- the same index in either bank, which is NP2kai's
       // `(port >> 1) & 3` over its one handler table; 0x04BE is the separate
@@ -2029,31 +2414,6 @@ module pc9821_iobus #(
     endcase
   endfunction
 
-  // THE EFFECTIVE MACHINE SET: the OSD field above, re-sampled ONLY on this module's reset,
-  // which pc9821_system drives with the core's machine-reset/reload strobe
-  // `reset || !cpu_run` (pc9821_system's iobus instance) - the platform reset OR the
-  // pack-reload window, never the warm CPU-reset class (out 0xF0 / 0x534 / a z486
-  // shutdown). The 0xF0 arm below reads THIS register, so a mid-run OSD toggle has zero
-  // effect on the strap byte until the next machine reset / reload: the two ITFs read the
-  // strap's bit 5 differently and the byte must be stable for the whole boot (and across
-  // the guest's own CPU resets, which re-enter the same ITF on the same machine). Same
-  // re-sample rule as pc9821_system's ram_size_sel: it tracks the OSD while the strobe is
-  // asserted and freezes at release. tb_pc9821_bios_select pins this contract.
-  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
-  reg [3:0] bios_set_eff = 4'd0;          // power-on default: set 0, the Xe10
-  /* verilator lint_on PROCASSINIT */
-  always @(posedge clk) begin
-    if (reset) bios_set_eff <= bios_set;
-  end
-
-  // The GDC-clock strap's latch: the same one-decision, one-reset rule as bios_set_eff.
-  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
-  reg gdc_strap_eff = 1'b0;               // power-on default: 2.5 MHz, the measured machine
-  /* verilator lint_on PROCASSINIT */
-  always @(posedge clk) begin
-    if (reset) gdc_strap_eff <= gdc_clock_5m;
-  end
-
   // THE DIP-2 REGISTER BYTE PORT 0x31 ANSWERS, and the PARITY BIT of SDIP bank A index 1.
   //
   // The authentic ITF's verify of that register (BANK4@0xFC6C0-0xFC6DA) is a MERGE with
@@ -2104,7 +2464,14 @@ module pc9821_iobus #(
   // NP2kai's per-register table. So the value this read presents is the value the machine's
   // own SETUP would have STORED, and sdip_data_mask keeps index 1 at 0xEF because a guest
   // write to bit 4 could only be that same parity maintenance - the read owns it instead.
-  wire [7:0] dip2_reg    = gdc_strap_eff ? 8'h73 : 8'hF3;
+  // Bit 4 is the memory-switch init switch (the msw_hold port's note): SET (the measured
+  // 0xF3) unless the latched hold selection clears it. The parity below masks bit 4, as
+  // the ITF's merge does (`and ax,0x10EF`), so the hold cannot move dip2_parity.
+  // Bit 3 is the text-lines switch (the text_lines_20 port's note): CLEAR, 25 lines, as the
+  // measured 0xF3, unless the latched Text lines field sets it. Unlike bit 4 it is inside the
+  // merged data, so dip2_parity follows it and the merge stays odd.
+  wire [7:0] dip2_reg    = {~gdc_strap_eff, 2'b11, ~msw_hold_eff, text20_eff, 3'b011};
+  assign setup_cfg = {sdip_seed_a2, sdip_seed_a3, dip2_reg};
   wire       dip2_parity = ~(^(dip2_reg & 8'hEF));
 
   // The port read of SDIP bank A index 1 (0x851E) presents that bit. The STORE keeps the
@@ -2115,9 +2482,41 @@ module pc9821_iobus #(
   // bit no guest write can own. Bank B's 0x851E is a DIFFERENT cell (index 13, seed 0x80)
   // and IS directly parity-checked (BANK4@0xFC71C), so the patch is confined by the bank
   // index: sdip_bank_index is 1 for bank A index 1 and 13 for bank B's.
-  wire [7:0] sdip_read_byte = (sdip_bank_index == 5'd1)
-                              ? {sdip_q[7:5], dip2_parity, sdip_q[3:0]}
-                              : sdip_q;
+  // That bit is now SEEDED (the reset walk writes it with the store's other bytes, from the same
+  // latches) and the read is the stored byte verbatim: the Xe10 stores a written bit 4 and reads
+  // it back (docs/probes/XE10CFG-XE10-CFGWR.TXT `RT 851E was=02 wrote=12 got=12`), which a
+  // read-side derivation could not show.
+  /* verilator lint_off UNUSEDSIGNAL */   // the seed takes the image's bits around bit 4
+  wire [7:0] sdip_img_a1  = sdip_powerup(5'd1);
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire [7:0] sdip_seed_a1 = {sdip_img_a1[7:5], dip2_parity, sdip_img_a1[3:0]};
+  wire [7:0] sdip_read_byte = sdip_q;
+
+  // ==== P31: WHAT PORT 0x31 ANSWERS ====
+  // Not a constant: the Xe10's port 0x31 follows the software-DIP store at run time
+  // (docs/probes/XE10CFG-XE10-CFGWR.TXT):
+  //   - bit 4 is bank A 0x871E bit 5: `RT 871E was=3E wrote=1E got=1E p31=E3 back=3E p31=F3`
+  //     (NP2kai io/dipsw.c's 0x0700 arm, `set = (value & 0x20) >> 1;`, without its parity gate:
+  //     1E is even and lands);
+  //   - bits 7:5 and 3:0 are the last bank-A 0x851E write's: `RT 851E ... wrote=12 got=12
+  //     p31=12 back=02 p31=12` (NP2kai's 0x0500 arm masks 0xEF the same way; again no gate);
+  //   - a write to port 0x31 itself does not land: `RT 0031 was=F3 wrote=0C got=F3`.
+  // At a machine reset and at the 0x534 reboot (soft_reboot) the bits are the OSD's switches
+  // again, dip2_reg: the Xe10 reads F3 after its 0x534 reboot although a 0x851E write had moved
+  // the port to 12 (XE10CFG-XE10-CFGRB.TXT), and 6B after SETUP saved GDC 5 MHz, 20 lines and
+  // memory switch keep (XE10CFG-XE10-CFGS1B.TXT), the byte SETUP's record gives - which on this
+  // core is the OSD's record (setup_cfg). The ITF's boot merge then writes (0x851E & 10) |
+  // (0x31 & EF) back to 0x851E (BANK4@0x46CC-0x46D9), which leaves the bits as they are.
+  /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+  /* verilator lint_off UNUSEDSIGNAL */   // bit 4 is read from the 0x871E shadow instead
+  reg [7:0] p31_lat = 8'hF3;              // power-on: the measured 0xF3 (dip2_reg's default)
+  /* verilator lint_on UNUSEDSIGNAL */
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    if (reset || soft_reboot) p31_lat <= dip2_reg;
+    else if (sdip_guest_we && (sdip_bank_index == 5'd1)) p31_lat <= lane_wdata;
+  end
+  wire [7:0] p31_rd = {p31_lat[7:5], sdip_msw_a, p31_lat[3:0]};
 
   reg [7:0] lane_rdata;
   always @* begin
@@ -2129,16 +2528,11 @@ module pc9821_iobus #(
     else if (dma_port) lane_rdata = dma_reg_dout;
     else case (1'b1) // synthesis parallel_case
       // The core's own POST/debug port. 0x1F is NOT decoded: on a real PC-98 it is
-      // the uPD71071 DMA bank register.
-      // DELIBERATE DIVERGENCE: the machine has nothing at 0x0EE0 and answers
-      // the open bus 0xFF there (docs/probes/PORTS.TXT's `0EE0=FF`), and IO.TXT times that read
-      // as the default class, while this core drives the watchdog's status byte. It is the same
-      // SHAPE as the 0x9A8 constant the audit refuted - a probe port whose read is not the
-      // machine's - but this one is deliberate: the port is in no reference's decode and no
-      // firmware site touches it (every BANK's disassembly: not one 0xEE0 operand), so it can
-      // only be read by a guest that deliberately reads a port nothing answers, and the byte is
-      // the only in-sim view of the platform state (docs/pc9821-port-status.md's `ST` field).
-      hit[HX_0EE0]: lane_rdata = debug_status;
+      // the uPD71071 DMA bank register. The machine has nothing at 0x0EE0 and answers the open
+      // bus 0xFF there (docs/probes/PORTS.TXT's `0EE0=FF`), and so does this core unless
+      // DBG_STATUS_PORT builds the read-back of the platform status byte (the watchdog
+      // telemetry's `ST` field carries the same byte without it).
+      hit[HX_0EE0]: lane_rdata = DBG_STATUS_PORT ? debug_status : 8'hFF;
       // Floppy disk controller (pc9821_fdc). It answers the machine's measured
       // idle bytes (0x90 = 0x80 RQM, 0x92 = 0x80, 0x94 = 0x44 with bit 4 = 0, no
       // diskette) and moves MSR through a command so the BIOS's FDD probe
@@ -2146,7 +2540,13 @@ module pc9821_iobus #(
       // the 1.44M/RPM register (NP2kai fdc_i4be: rpm | 0xFE).
       hit[HX_0090], hit[HX_0092], hit[HX_0094],
       hit[HX_00C8], hit[HX_00CA], hit[HX_00CC], hit[HX_04BE],
-      hit[HX_00BE], hit[HX_00BF]: lane_rdata = fdc_dout;
+      hit[HX_00BE]: lane_rdata = fdc_dout;
+      // 0x00BF does not read the channel-group register: the Xe10 answers FF there in every
+      // floppy disk mode while 0x00BE reads FD/FB/F0/F4 (docs/probes/FDMODE-XE10-FDM0/FDMF3/
+      // FDMF1/FDMF0.TXT `PORT 00BF=FF`), and NP2kai attaches its reader at 0x00BE alone
+      // (io/fdc.c:1265 `iocore_attachsysinpex(0x00be, 0x0cff, fdcibe, 1);`). The write stays
+      // routed to the register (unmeasured).
+      hit[HX_00BF]: lane_rdata = 8'hFF;
       // The WSS ports 0x0F40/0x0F44/0x0F45 and 0x8F1F have no arm: the machine reads the
       // open bus 0xFF there, which the default below already answers.
       // 0x043B bit 2 round-trips the guest's own request bit (NP2kai echoes the
@@ -2204,7 +2604,7 @@ module pc9821_iobus #(
       // 0xA9 for the Xe10 (entry 0, the config-less default), 0x89 for the Xe, the
       // measured Xe10 byte for the reserved sets.
       hit[HX_00F0]: lane_rdata = (machine_id_strap(bios_set_eff) & ~{2'b00, ide_unit0_present, 5'b00000})
-                                 | {1'b0, !IDE_UNIT2_PRESENT, 6'b000000};
+                                 | {1'b0, !ide_unit2_present, 6'b000000};
       hit[HX_00F1]: lane_rdata = 8'hFF;
       // 0xF2 tracks the A20 state: NP2kai's cpuio_if2 returns
       // 0xFF - bit20(CPU_ADRSMASK) (io/cpuio.c:71-78), i.e. 0xFE with the gate
@@ -2221,7 +2621,7 @@ module pc9821_iobus #(
       // named once (dip2_reg, above) because the SDIP bank-A index-1 read derives that
       // register's PARITY BIT from it: the two bytes the ITF's merge combines must come
       // from one value, or the merge could be EVEN with both ports behaving as written.
-      hit[HX_0031]: lane_rdata = dip2_reg;
+      hit[HX_0031]: lane_rdata = p31_rd;   // P31 above: the switches as the store moves them
       // Bit 0 is the calendar's serial data output; the rest is the machine's
       // fixed strap. Returning it as a constant made every calendar read look
       // like an even second.
@@ -2249,6 +2649,7 @@ module pc9821_iobus #(
       hit[HX_005D]: lane_rdata = artic_cnt[15:8];
       hit[HX_005E]: lane_rdata = artic_cnt[15:8];   // the 0x5D mirror
       hit[HX_005F]: lane_rdata = artic_cnt[23:16];
+      hit[HX_006C]: lane_rdata = {border_6c, 4'h0};
       hit[HX_043D]: lane_rdata = 8'hFF;   // write-only; measured as open bus
       hit[HX_043F]: lane_rdata = 8'hC4;   // measured
       hit[HX_0436]: lane_rdata = config_436;
@@ -2294,7 +2695,7 @@ module pc9821_iobus #(
       //
       // 0x09A8: the 24/31 kHz select latch (its declaration has the capture). The
       // power-up read is the machine's `09A8=00 09A9=FF`.
-      hit[HX_09A8]: lane_rdata = {7'b0, gdc_9a8_31k};
+      hit[HX_09A8]: lane_rdata = {6'b0, gdc_9a8_b1, gdc_9a8_31k};
       // 0x98D7: the mouse IRQ register (Linux pc98 std_resources.c reserves it
       // as "mouse irq"). The machine reads 0x0D, twice, with no writes
       // (/MODE, `98D7=0D 0D`). NO firmware site reads it -- the ITF
@@ -2308,12 +2709,10 @@ module pc9821_iobus #(
       hit[HX_0040]: lane_rdata = prt_last_data;
       // The 0x989x mode/clock register file, measured on the machine
       // (/MODE: every port read twice, no writes) as 0xF0 at both
-      // ports. Bit 3 is the contract and it must read CLEAR -- the declaration
-      // note above owns the reasoning. Whether a WRITE moves these bytes is
-      // UNMEASURED; the firmware's only write site is unreachable on this core
-      // because 0x534 reads 0xEC. Oracle: /MODEW, sec.5.
-      hit[HX_9894]: lane_rdata = 8'hF0;
-      hit[HX_9892]: lane_rdata = 8'hF0;
+      // ports. Bit 3 must read CLEAR at boot -- the declaration note above owns the
+      // reasoning -- and is a latch kit 2 measured (r9892_b3/r9894_b3).
+      hit[HX_9894]: lane_rdata = {4'hF, r9894_b3, 3'b000};   // see r9894_b3
+      hit[HX_9892]: lane_rdata = {4'hF, r9892_b3, 3'b000};
       // ---- the bus mouse's uPD8255 PPI (pc9821_mouse; NP2kai io/mouseif.c).
       // The whole read model - the button/nibble
       // composition of 0x7FD9, Port B's 0x40, Port C's masked latch and the
@@ -2386,17 +2785,22 @@ module pc9821_iobus #(
       dbg_last_io_data <= 8'd0;
       dbg_last_io_rd   <= 1'b0;
       dbg_last_io_wr   <= 1'b0;
+      dbg_last_io_stb  <= 1'b0;
     end else if (state == S_BYTE &&
                  !(device_port && !request_write && device_rd_wait)) begin
       dbg_last_io_addr <= port_addr;
       dbg_last_io_data <= request_write ? lane_wdata : lane_rdata;
       dbg_last_io_rd   <= !request_write;
       dbg_last_io_wr   <= request_write;
+      dbg_last_io_stb  <= 1'b1;
     end else if (state == S_DEVWAIT) begin
       dbg_last_io_addr <= port_addr;
       dbg_last_io_data <= lane_rdata;
       dbg_last_io_rd   <= 1'b1;
       dbg_last_io_wr   <= 1'b0;
+      dbg_last_io_stb  <= !device_rd_hold;   // the cycle the held read lands (S_DEVWAIT's exit)
+    end else begin
+      dbg_last_io_stb  <= 1'b0;
     end
   end
 
@@ -2410,8 +2814,8 @@ module pc9821_iobus #(
       write_data <= 32'd0;
       pending_be <= 4'd0;
       request_write <= 1'b0;
+      hold_xe10 <= 2'd0;
       read_data <= 32'hFFFF_FFFF;
-      term7c_hi <= 1'b0;
       top_bank <= BANK_ITF;
       ems_state <= 2'd0;
       top_shadow_en <= 1'b0;
@@ -2439,6 +2843,7 @@ module pc9821_iobus #(
       gdc_ff2 <= 8'h00;
       gdc_ff2_written <= 1'b0;   // the un-written read is the machine's 0x01
       gdc_9a8_31k <= 1'b0;       // the machine's power-up `09A8=00`
+      gdc_9a8_b1  <= 1'b0;
       prt_last_data <= 8'h00;    // the machine's `0040 00`
       prt_i44_data  <= 8'h81;    // the machine's `0044 81`
       prt_select_count <= 4'd0;
@@ -2459,14 +2864,22 @@ module pc9821_iobus #(
       last_unmapped_port <= 16'd0;
       post_code <= 8'd0;
       post_write <= 1'b0;
+      soft_reboot <= 1'b0;
       sdip_ctrl <= 8'd0;
-      sys16m_en_q  <= 1'b0;   // hole OFF out of reset: 15-16 MiB is RAM until the guest asks
-      cpu_mode_strap <= 8'hEC;   // QEMU pc98_cpu_mode_read
+      // Bit 2 CLEAR out of reset, so the system space is enabled and 0x043B reads 0xFB: NP2kai's
+      // necio latch is zero until written (io/necio.c necio_i043b `return(necio.port043b);`)
+      // and qemu-pc98 powers up `s->sys16m = 1` (hw/i386/pc98-mem.c), which reads 0x00. The
+      // firmware writes the bit before it sizes memory (BANK4 0x0906 writes 0x04).
+      sys16m_en_q  <= 1'b1;
+      cpu_mode_strap <= 8'h7E;   // the Xe10's byte (XE10T /AUDIT B0534)
       msw_addr <= 8'h00;
       config_436 <= 8'h04;
-      config_439 <= 8'hB4;
+      config_439 <= 8'h00;       // the cold-start flag: clear until the ITF's cold branch writes it (above)
       config_63f <= 8'h6C;
       latch_149  <= 8'h00;
+      border_6c  <= 4'h0;        // 00 as found (KIT1-XE10-CFGWR.TXT:8 `was=00`)
+      r9892_b3   <= 1'b0;        // F0 as found (KIT2-XE10-RISKY-989.TXT:6,8)
+      r9894_b3   <= 1'b0;
       // The -86 extension bank is closed out of reset: 0x18C/0x18E answer
       // 0xFF until a 0xA460 bit-0 write opens it (NP2kai).
       sound_extend <= 1'b0;
@@ -2526,6 +2939,7 @@ module pc9821_iobus #(
       // outrank this default when they fire.
       cpu_reset_req <= sdip_seq_active;
       post_write <= 1'b0;
+      soft_reboot <= 1'b0;
       egc_shift_we <= 1'b0;
 
       case (state)
@@ -2533,18 +2947,32 @@ module pc9821_iobus #(
           if (cpu_valid) begin
             base_addr <= {cpu_addr[31:2], 2'b00};
             write_data <= cpu_din;
-            pending_be <= access_be_walk;
+            // A terminated lane is never walked: no strobe, no side effect, and its byte is
+            // the termination's, preset here (term_fill is 0xFF in every other lane).
+            pending_be <= access_be_walk & ~term_tail;
             request_write <= cpu_write;
-            // A 16-bit-or-wider READ at 0x7C whose chunk takes in lane 1.
-            term7c_hi <= access_term7c;
-            read_data <= 32'hFFFF_FFFF;
+            read_data <= term_fill;
             // The port is the lane address (cpu_addr carries the base and the
             // lane select rides in the byte enables), and EVERY lane the access fetches
             // pays its own class (io_access_hold), because on the machine each byte of a
             // multi-byte access is a bus cycle of its own.
-            /* verilator lint_off WIDTHTRUNC */   // io_access_hold returns at most 16'd2422 of 4095 (profile 2 at 120 MHz: `in eax,0x4A0` over the EGC register file, 1115 + 99 + 1115 + 99 = 2428 cycles, less the FSM's own), so it always fits io_hold's 12 bits; the min profile's maximum is far below it
+            /* verilator lint_off WIDTHTRUNC */   // Fast's io_access_hold is a few floors, far inside io_hold's 12 bits (Xe10's maximum, 1430, is at io_hold's declaration)
+            // FAST's hold is loaded here, from the request itself (its table const-folds to
+            // a few floors). XE10's is NOT computed on this path: its per-lane class lookup
+            // and sum from cpu_addr was the design's worst clk_sys path (-7.1 ns at 90 MHz,
+            // pc9821_iobus io_hold[10] from the CPU's ext_addr_r). It is computed in the first
+            // two S_IOWAIT cycles from the access's own registers instead (hold_xe10, beside
+            // io_hold's declaration) and replaces this value there, so the access lasts exactly
+            // as long as if it had been loaded here (tb_pc9821_io_latency_profile).
             io_hold <= io_access_hold(cpu_addr[15:0] & 16'hFFFC,
-                                      access_be_walk, access_be_fetch, cpu_write);
+                                      access_be_walk, access_be_fetch, cpu_write) +
+                       {14'd0, term_skip_n};
+            // Not the 0x5F-only write: it is the floor in both tables (posted, IO_POST_5F).
+            hold_xe10 <= (io_timing_xe10 &&
+                          !(cpu_write && (cpu_addr[15:2] == 14'h0017) && (access_be_walk == 4'b1000)))
+                         ? 2'd1 : 2'd0;
+            hold_walk <= access_be_walk;
+            hold_skip <= term_skip_n;
             /* verilator lint_on WIDTHTRUNC */
             state <= S_IOWAIT;
           end
@@ -2568,8 +2996,30 @@ module pc9821_iobus #(
           // expired: io_hold HOLDS at zero rather than wrapping 0 -> 2047, which
           // would quantize the re-check to 2048-cycle chunks and leave a freed
           // device waiting up to 2047 dead cycles (the shortest-stall rule). The bus-time class hold itself is untouched.
-          if (io_hold == 12'd0) begin
-            if (!(device_port && request_write && device_wr_wait)) state <= S_BYTE;
+          // A posted 0x5F write still occupying the bus (post_5f) holds every
+          // following access here, before its strobe, until that write's time is up.
+          // XE10: the first two S_IOWAIT cycles compute the Xe10 hold from the registered
+          // port (base_addr), lanes (hold_walk, and pending_be, which is still the fetched set
+          // here) and direction - io_access_hold's arithmetic split in two stages - and load
+          // it less the two cycles they spend. Neither cycle leaves the state.
+          if (hold_xe10 == 2'd1) begin
+            hold_xe10 <= 2'd2;
+            for (xl = 0; xl < 4; xl = xl + 1)
+              /* verilator lint_off WIDTHTRUNC */   // a lane's class is at most 719 cycles (5990 ns at 120 MHz)
+              hold_cls[xl] <= (hold_walk[xl] && pending_be[xl] && !xe10_pair_hi[xl])
+                              ? io_access_cycles(base_addr[15:0] + 16'(xl), request_write, 1'b1) - 16'd1
+                              : 16'd0;
+              /* verilator lint_on WIDTHTRUNC */
+          end else if (hold_xe10 == 2'd2) begin
+            hold_xe10 <= 2'd0;
+            // The lanes' classes, less S_IDLE and S_REPLY and the CPU's share (the Xe10
+            // total; never below 2 for an access that reaches this stage), less the two
+            // cycles spent here.
+            io_hold <= hold_cls[0] + hold_cls[1] + hold_cls[2] + hold_cls[3] + {10'd0, hold_skip}
+                       - 12'd2 - 12'(IO_XE10_CPU_CYC) - 12'd2;
+          end else if (io_hold == 12'd0) begin
+            if ((post_5f == 12'd0) && !(device_port && request_write && device_wr_wait))
+              state <= S_BYTE;
           end else begin
             io_hold <= io_hold - 12'd1;
           end
@@ -2625,14 +3075,12 @@ module pc9821_iobus #(
                 top_shadow_en <= next_top_shadow_en;
                 if (lane_wdata[7:4] == 4'hE) begin
                   top_bank <= {1'b0, lane_wdata[3:1]};
-                end else if (lane_wdata[7:4] == 4'h2) begin
-                  // The low nibble chooses which of the three measured states the window
-                  // takes (see the ems_state declaration). 0x20 is the identity, so it is
-                  // the state that must NOT divert the planes.
-                  ems_state <= (lane_wdata[3:0] == 4'h0) ? 2'd0 :
-                               (lane_wdata[3:0] == 4'h2) ? 2'd1 : 2'd2;
                 end
-                // Every OTHER nibble leaves ems_state alone: qemu's
+                // The 0x2 nibble's low nibble chooses which of the three measured states the
+                // window takes (next_ems_state, see the ems_state declaration). 0x20 is the
+                // identity, so it is the state that must NOT divert the planes.
+                ems_state <= next_ems_state;
+                // Every OTHER nibble leaves ems_state alone (next_ems_state holds it): qemu's
                 // mem_bankctl_write acts only on 0x20 (EMS) and 0xE0 (bank)
                 // (pc98-mem.c:684-701), so 0x80 (the shadow enable above) / 0xA0
                 // (the 486 cache flush the firmware emits before every `mov cr0`)
@@ -2712,8 +3160,12 @@ module pc9821_iobus #(
                 gdc_ff2_written <= 1'b1;
               end
               // 0x9A8: the latch (see its declaration).
-              hit[HX_09A8]: gdc_9a8_31k <= lane_wdata[0];
-              // 0x5F is the firmware's I/O wait on the write side.
+              hit[HX_09A8]: begin
+                gdc_9a8_31k <= lane_wdata[0];
+                gdc_9a8_b1  <= lane_wdata[1];
+              end
+              // 0x5F is the firmware's I/O wait on the write side: the write is posted
+              // (post_5f, loaded on this same S_BYTE by the posted-write block).
               hit[HX_005F]: ;
               // Write-only in every observed firmware site: accepted and
               // ignored so the unmapped-write counter stays meaningful.
@@ -2747,12 +3199,11 @@ module pc9821_iobus #(
               hit[HX_0E00], hit[HX_0E02], hit[HX_0E05], hit[HX_0E07],
               hit[HX_0E09], hit[HX_0E0B], hit[HX_0E0F],
               hit[HX_0FAA], hit[HX_0FAB], hit[HX_0FAC]: ;
-              // The ITF's clock pair (BANK4@0xFCAF5). Writing 0x9894 must not
-              // move what the read answers (see the declaration): the measured
-              // datum is the machine's no-write read 0xF0, and whether a write
-              // moves it is unmeasured until /MODEW runs. 0x98E0 is not
-              // decoded, on purpose.
-              hit[HX_9894], hit[HX_9892]: ;
+              // The ITF's clock pair (BANK4@0xFCAF5): bit 3 latches from a write
+              // whose high nibble is 0 (see r9894_b3). 0x98E0 is not decoded, on
+              // purpose.
+              hit[HX_9894]: if (lane_wdata[7:4] == 4'h0) r9894_b3 <= lane_wdata[3];
+              hit[HX_9892]: if (lane_wdata[7:4] == 4'h0) r9892_b3 <= lane_wdata[3];
               // The EGC register file. Every write is gated by the EGC enable
               // (NP2kai egc_o4a0 checks `vramop.operate & (1<<VOPBIT_EGC)` before
               // it does anything, so a guest that writes 0x4A4 without enabling
@@ -2824,20 +3275,34 @@ module pc9821_iobus #(
               end
               hit[HX_0463]: win1_sel   <= lane_wdata;
               hit[HX_0149]: latch_149  <= lane_wdata;
+              hit[HX_006C]: border_6c  <= lane_wdata[7:4];
               // 0xA460: bit 0 is the -86 extension enable (see the port list
               // and the read arm in lane_rdata). Nothing else about the port is
               // modelled: the ID nibble is a strap and the write cannot move it.
               hit[HX_A460]: sound_extend <= lane_wdata[0];
-              // 0x534 bit 0 = soft reset request (see the declaration).
+              // 0x534 bit 0 = soft reset request: the reboot. The memory-map latches take
+              // their machine-reset values and the CPU re-enters through the ITF (see the
+              // declaration).
               hit[HX_0534]: if (lane_wdata[0]) begin
-                cpu_reset_req <= 1'b1;
-                a20_enable <= 1'b0;
+                cpu_reset_req   <= 1'b1;
+                a20_enable      <= 1'b0;
+                top_bank        <= BANK_ITF;
+                rom_gate_ide    <= 1'b1;
+                bios_ram_gate   <= 1'b0;
+                ide_ram_gate    <= 1'b0;
+                pci_d8_select   <= 8'hFC;
+                win0_sel        <= 8'h08;
+                win0_sel_moved  <= 1'b0;
+                win1_sel        <= 8'h0A;
+                top_shadow_en   <= 1'b0;
+                soft_reboot <= 1'b1;
               end
               // 0x31: the ITF writes the complement of an SDIP image byte here
               // (BANK4@0x46AB/0x47D7/0x4AE9) and then reads the *strap* back
               // later in the same routine (BANK4@0x46D2), so latching the write
-              // would make the ITF's own bit-4 merge self-defeating. The read
-              // stays the measured constant 0xF3; the write is ignored.
+              // would make the ITF's own bit-4 merge self-defeating. The write is
+              // ignored, as on the Xe10 (XE10CFG-XE10-CFGWR.TXT `RT 0031 was=F3
+              // wrote=0C got=F3`); the read is P31's.
               hit[HX_0031]: ;
               default: begin
                 if (sdip_ctrl_port) begin
@@ -2850,8 +3315,7 @@ module pc9821_iobus #(
               end
             endcase
           end else begin
-            read_data[{lane, 3'b000} +: 8] <= (term7c_hi && (lane == 2'd1))
-                                            ? 8'h00 : lane_rdata;
+            read_data[{lane, 3'b000} +: 8] <= lane_rdata;
             // The read side effects: 0x11 clears
             // dmac.stat's low nibble on the read (NP2kai dmac_i11,
             // io/dmac.c:290-295) and 0x42 consumes its one-shot SELECT-BUSY
@@ -2893,7 +3357,7 @@ module pc9821_iobus #(
         // pipelined CPU need not present one request per valid, and two back-to-back
         // accesses to this port with valid held would deadlock here. See
         // pc9821_memory_subsystem.sv's responder contract; the same state is implemented the same
-        // unconditional way in pc9821_window_responder.sv:331 (S_HOLD: state <= S_IDLE) -- the one
+        // unconditional way in pc9821_window_responder.sv:366 (S_HOLD: state <= S_IDLE) -- the one
         // engine of the TRAM and CG windows -- in
         // pc9821_open_bus.sv:73 (S_HOLD: state <= S_IDLE) and
         // pc9821_grcg.sv:511 (G_HOLD:  gstate <= G_IDLE) - each file's one-cycle unconditional hold
@@ -2923,6 +3387,29 @@ module pc9821_iobus #(
         a20_enable    <= 1'b0;
       end
     end
+  end
+
+  // ==================== THE POSTED 0x5F WRITE =============================
+  // The machine POSTS `out 0x5f`: the CPU goes on at once and the bus stays busy behind it.
+  // docs/probes/XE10T-XE10.TXT /IO W8_005F times 1024 back-to-back writes with k nops
+  // between them (k = 0, 2, 4, 8, 16, 32): the period is flat at 1744.0-1744.4 ns by the
+  // PIT (1751.6 ns by the coarser ARTIC) while the nops alone grow from 19 to 340 ns
+  // (`SWEEP W8_005F period 1751.6 ns ... KNEE-NOT-FOUND`), so up to 340 ns of following
+  // work overlaps each write and the write itself occupies the bus for 1744 ns. The
+  // capture does not say whether a following access to ANOTHER port waits for it; this
+  // model makes every following I/O access wait (S_IOWAIT), the bus-held reading, which
+  // keeps the firmware's `out 0x02 / out 0x5F` delay pairs at least the machine's length.
+  //   post_5f is loaded on the write's own S_BYTE with IO_POST_5F - 2, so the next
+  // access's S_BYTE (S_IOWAIT exits on post_5f == 0) lands exactly IO_POST_5F cycles after
+  // this one: a back-to-back `out 0x5f` loop runs at the machine's period. Its one writer
+  // is this block; its one reader is S_IOWAIT's exit.
+  // ceil, like every class: at 90 MHz 157 clk = 1744.4 ns. The (SYS_CLOCK_HZ * ns + 1e9-1)
+  // / 1e9 form is the class table's.
+  wire        post_5f_load = (state == S_BYTE) && request_write && hit[HX_005F];
+  always @(posedge clk) begin
+    if (reset)              post_5f <= 12'd0;
+    else if (post_5f_load)  post_5f <= IO_POST_5F - 12'd2;
+    else if (post_5f != 0)  post_5f <= post_5f - 12'd1;
   end
 
 `ifdef VERILATOR
@@ -2974,7 +3461,8 @@ module pc9821_iobus #(
   // access, so the selects are valid in the access's own cycle. The claim stays inside this file (device_port above): nothing
   // outside needs it, only the chip selects cross the port list.
   wire dev_bus_cs;
-  pc9821_device_select #(.MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN)) u_device_select (
+  pc9821_device_select #(.MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN),
+                         .GAMEPORT_118(GAMEPORT_118)) u_device_select (
       .addr(device_io_addr),
       .pic_master_cs(pic_master_cs), .pic_slave_cs(pic_slave_cs), .pit_cs(pit_cs),
       .interrupt_cs(interrupt_cs), .cal_cs(cal_cs), .kbd_cs(kbd_cs),

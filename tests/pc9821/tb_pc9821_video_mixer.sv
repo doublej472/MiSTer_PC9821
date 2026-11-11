@@ -12,11 +12,8 @@
 // The bench therefore drives the fold, the palette and the mixer independently
 // and then asserts that the compositor's answer CHANGES when the select does.
 //
-// The analogue table is pc9821_gfx_palette's ping-pong RAM now, so
-// the bench loads it through the CPU write port and swaps the banks with the
-// frame-boundary commit, exactly as pc9821_gdc_text drives it; and because the
-// MLAB read is registered, the mixer presents the NEXT dot's index - the section
-// that pins the line-buffer read address says what that does to the sequencer.
+// The analogue table is loaded through the CPU write port, exactly as pc9821_gdc_text
+// drives it (a write reaches the table at once, so no commit follows it).
 //
 // Everything here is a synthetic vector list -- there is no photograph to take
 // and none is needed: what a hardware probe settles is which rule the hardware
@@ -53,7 +50,6 @@ module tb_pc9821_video_mixer;
   reg  [3:0]  pwid = 4'd0;
   reg  [1:0]  pwch = 2'd0;
   reg  [3:0]  pwdat = 4'd0;
-  reg         pcommit = 1'b0;
   // The PEGC 256-colour table's write port and dot read (row 4).
   reg         p256_we = 1'b0;
   reg  [7:0]  p256_widx = 8'd0, p256_wdata = 8'd0;
@@ -62,9 +58,9 @@ module tb_pc9821_video_mixer;
   wire [23:0] pal_colour256;
   wire [11:0] pal_colour;
   pc9821_gfx_palette u_pal (
-      .clk(clk), .rst_n(rst_n),
+      .clk(clk),
       .idx(pal_idx), .mode16(pal_mode16), .dig(pal_dig),
-      .we(pwe), .widx(pwid), .wchan(pwch), .wdata(pwdat), .commit(pcommit),
+      .we(pwe), .widx(pwid), .wchan(pwch), .wdata(pwdat),
       .colour(pal_colour),
       .p256_we(p256_we), .p256_widx(p256_widx),
       .p256_wchan(p256_wchan), .p256_wdata(p256_wdata),
@@ -90,7 +86,6 @@ module tb_pc9821_video_mixer;
   reg  [3:0]  mwid = 4'd0;
   reg  [1:0]  mwch = 2'd0;
   reg  [3:0]  mwdat = 4'd0;
-  reg         mcommit = 1'b0;
   // The PEGC arm's inputs (row 4): the view select, the odd-line gate and the
   // mixer's own 256-colour write port.
   reg         mix_pegc_256 = 1'b0;
@@ -100,14 +95,14 @@ module tb_pc9821_video_mixer;
   reg  [1:0]  m256wch = 2'd0;
   wire [7:0]  r_out, g_out, b_out;
   pc9821_video_mixer u_mix (
-      .clk(clk), .rst_n(rst_n),
+      .clk(clk),
       .dot_x(dot_x), .h_active(h_active), .v_active(v_active),
       .text_opaque(text_opaque), .text_cell(text_cell), .text_colour(text_colour),
       .line_data(line_data), .line_ready(line_ready), .line_sel(line_sel),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .pal_mode16(pal_mode16), .pal_dig(pal_dig),
       .pal_wr_en(mwe), .pal_wr_idx(mwid), .pal_wr_chan(mwch),
-      .pal_wr_data(mwdat), .pal_commit(mcommit),
+      .pal_wr_data(mwdat),
       .pegc_256(mix_pegc_256),
       .fold_bypass(fold_bypass), .packed_idx(packed_idx),
       .pal256_wr_en(m256we), .pal256_wr_idx(m256wid),
@@ -212,7 +207,7 @@ module tb_pc9821_video_mixer;
   endtask
 
   // Load the palette's analogue table with `c` for every entry, through the write
-  // port, and swap the banks. `sel` picks which instance is loaded (0 = the
+  // port. `sel` picks which instance is loaded (0 = the
   // standalone palette, 1 = the mixer's internal one).
   task automatic load_table(input [11:0] v [0:15]);
     integer j;
@@ -228,11 +223,6 @@ module tb_pc9821_video_mixer;
         pwe = 1'b0;
       end
       @(negedge clk);
-      pcommit = 1'b1;
-      @(negedge clk);
-      pcommit = 1'b0;
-      // the live-to-displayed copy walks 16 entries over 17 clk_sys
-      repeat (24) @(negedge clk);
     end
   endtask
 
@@ -250,11 +240,6 @@ module tb_pc9821_video_mixer;
         mwe = 1'b0;
       end
       @(negedge clk);
-      mcommit = 1'b1;
-      @(negedge clk);
-      mcommit = 1'b0;
-      // the live-to-displayed copy walks 16 entries over 17 clk_sys
-      repeat (24) @(negedge clk);
     end
   endtask
 
@@ -356,8 +341,7 @@ module tb_pc9821_video_mixer;
     // 2. The palette: the 16-entry analogue table, read by the 4-bit index.
     // ---------------------------------------------------------------
     // A distinctive value per entry per channel, so a swapped channel or a
-    // wrong entry is visible rather than plausible. The writes land in the BACK
-    // bank; the commit makes them the displayed one.
+    // wrong entry is visible rather than plausible.
     for (k = 0; k < 16; k = k + 1) tbl[k] = want_analogue(k[3:0]);
     load_table(tbl);
     pal_mode16 = 1'b1;

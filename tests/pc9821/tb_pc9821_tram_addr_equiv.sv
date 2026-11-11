@@ -108,7 +108,7 @@ module tb_pc9821_tram_addr_equiv;
   wire [9:0]  pix_dot;
   wire        pix_h_active, pix_v_active, gfx_odd_line, gfx_mode16;
   wire [31:0] gfx_dig;
-  wire        pal_wr_en, pal_commit;
+  wire        pal_wr_en;
   wire [3:0]  pal_wr_idx, pal_wr_data;
   wire [1:0]  pal_wr_chan;
   wire        hs_out, vs_out, de_out;
@@ -141,7 +141,7 @@ module tb_pc9821_tram_addr_equiv;
       .gfx_odd_line(gfx_odd_line),
       .gfx_mode16(gfx_mode16), .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
-      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
       .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out)
   );
 
@@ -225,7 +225,8 @@ module tb_pc9821_tram_addr_equiv;
       vfbs  = vs_f + vfp_f + vbp_f;
       if (vfbs == 0) vfbs = 1;                      // `if (!vfbs) vfbs = 1`
       x_raw = cr + hs_f + hfp_f + 3;                // 3 = NP2kai's h back porch
-      x     = (x_raw < 100) ? 100 : (x_raw > 112) ? 112 : x_raw;
+      // x floor 90: the real Xe10 runs x = 90 (docs/probes/KIT2-XE10-TXTMODE.TXT:36, AW 64)
+      x     = (x_raw < 90) ? 90 : (x_raw > 112) ? 112 : x_raw;
       y_raw = lf + vfbs;
       y     = (y_raw < 400) ? 400 : (y_raw > 575) ? 575 : y_raw;
       g_htotal  = 8 * x;
@@ -243,7 +244,10 @@ module tb_pc9821_tram_addr_equiv;
       m_snap_copy  = m_frame_end && m_cfg_dirty_sync[1];
 
       // ---- the fetch cone (the documented fetch schedule) ----
-      m_last_cell = m_col40_x ? ((m_hdot >> 4) == 39) : ((m_hdot >> 3) == 79);
+      // the line's own last cell, capped at 79/39 (the Xe10 draws an AW 64/78 row's own first
+      // word in column 0, KIT2-XE10-TXTMODE.TXT P3/P4)
+      m_last_cell = m_col40_x ? ((m_hdot >> 4) == (((g_hactive >> 4) > 40) ? 39 : (g_hactive >> 4) - 1))
+                              : ((m_hdot >> 3) == (((g_hactive >> 3) > 80) ? 79 : (g_hactive >> 3) - 1));
       c40 = m_last_cell ? 0 : (((m_hdot >> 4) + 1) & 63);
       c80 = m_last_cell ? 0 : (((m_hdot >> 3) + 1) & 127);
       // f_line: the NEXT line's coordinates at the line's last cell (the wrap cell fetches
@@ -331,6 +335,8 @@ module tb_pc9821_tram_addr_equiv;
           8'h60: begin  // GDC1 parameter port
             if (m_sync_pending) begin
               m_slive[m_sync_cnt] <= io_din;
+              // the C/R byte loads the pitch (the Xe10's TXTMODE P1-P6, KIT2-XE10-TXTMODE.TXT)
+              if (m_sync_cnt == 3'd1) m_pitch <= {io_din[7:1], 1'b0};
               if (m_sync_cnt == 3'd7) begin
                 m_sync_pending <= 1'b0;
                 m_sync_cnt <= 3'd0;

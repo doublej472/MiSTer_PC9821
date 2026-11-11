@@ -3,6 +3,10 @@
 ; Each case prints (case << 16) | (#DB count << 8) | flags to port 0xE4 with
 ; flags bit0 = first #DB EIP was the expected one, bit1 = B0 in its DR6,
 ; bit2 = BS in its DR6.  The pass/fail decision is in the CHECK lines.
+; An instruction-breakpoint #DB pushes RF=0 (a real Am486DX4, CPUSUITE-XE10;
+; Intel SDM vol. 3 17.3.1.1), so the handler sets RF in the frame when DR6
+; reports a breakpoint (every DRn here is an execute breakpoint), as a
+; debugger does; a single-step trap returns with RF as pushed.
 BITS 32
 ORG 0
 CODE_BASE equ 0x10000
@@ -59,11 +63,15 @@ idtr: dw idt_end-idt-1
 db_handler:
     push eax
     push ebx
+    mov eax, dr6
+    test eax, 0xf
+    jz .no_rf
+    or dword [esp + 16], 0x10000       ; RF: resume the breakpointed instruction
+.no_rf:
     mov ebx, [CNT]
     cmp ebx, 4
     jae .skip
     shl ebx, 3
-    mov eax, dr6
     mov [LOG + ebx], eax
     mov eax, [esp + 8]
     mov [LOG + ebx + 4], eax

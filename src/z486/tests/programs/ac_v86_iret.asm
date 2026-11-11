@@ -92,7 +92,13 @@ ac_handler:
     mov bp, sp
     mov ax, SEL_DATA0
     mov ds, ax
-    cmp dword [bp], 0                ; error code 0
+    cmp word [bp], 0                 ; error code 0, its low word only: the
+                                     ; 486 writes 2 bytes of the dword slot
+                                     ; (Intel SDM vol. 3, Architecture
+                                     ; Compatibility, "Error Code Pushes"),
+                                     ; the upper half is what the stack held
+                                     ; (a real Am486DX4: CPUSUITE-XE10-
+                                     ; triage ac_v86_iret data=00004400h)
     jne .bad
     inc word [ac_count]
     and dword [bp+12], ~0x40000      ; clear AC in the saved EFLAGS

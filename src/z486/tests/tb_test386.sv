@@ -263,18 +263,19 @@ module tb_test386;
         force dut.FS = 16'h0000;
         force dut.GS = 16'h0000;
 
-        // General registers
-        force dut.EAX = 32'h0;
-        force dut.ECX = 32'h0;
-        force dut.EDX = 32'h0;
-        force dut.EBX = 32'h0;
-        force dut.ESP = 32'h0;
-        force dut.EBP = 32'h0;
-        force dut.ESI = 32'h0;
-        force dut.EDI = 32'h0;
+        // General registers: data_unit's own, not the dut.EAX.. nets its
+        // output ports drive; see tests/dhrystone/tb_dhrystone.sv.
+        force dut.data_unit_inst.eax = 32'h0;
+        force dut.data_unit_inst.ecx = 32'h0;
+        force dut.data_unit_inst.edx = 32'h0;
+        force dut.data_unit_inst.ebx = 32'h0;
+        force dut.data_unit_inst.esp = 32'h0;
+        force dut.data_unit_inst.ebp = 32'h0;
+        force dut.data_unit_inst.esi = 32'h0;
+        force dut.data_unit_inst.edi = 32'h0;
 
         // Flags and control
-        force dut.EFLAGS = 32'h00000002;
+        force dut.data_unit_inst.eflags = 32'h00000002;
         force dut.CR0 = 32'h0;  // Real mode
 
         // Force continuous mode - prevent single-step halt
@@ -293,15 +294,15 @@ module tb_test386;
         release dut.SS;
         release dut.FS;
         release dut.GS;
-        release dut.EAX;
-        release dut.ECX;
-        release dut.EDX;
-        release dut.EBX;
-        release dut.ESP;
-        release dut.EBP;
-        release dut.ESI;
-        release dut.EDI;
-        release dut.EFLAGS;
+        release dut.data_unit_inst.eax;
+        release dut.data_unit_inst.ecx;
+        release dut.data_unit_inst.edx;
+        release dut.data_unit_inst.ebx;
+        release dut.data_unit_inst.esp;
+        release dut.data_unit_inst.ebp;
+        release dut.data_unit_inst.esi;
+        release dut.data_unit_inst.edi;
+        release dut.data_unit_inst.eflags;
         release dut.CR0;
 
         $display("CPU reset complete, starting at F000:FFF0");

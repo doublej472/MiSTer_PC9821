@@ -22,6 +22,10 @@
 
 // ==== DUT ====
 module tb_pc9821_fill_beat_uniform;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -31,6 +35,7 @@ module tb_pc9821_fill_beat_uniform;
   reg ide_ram_gate = 1;
   reg bios_ram_gate = 0;
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   wire       win0_sel_moved = (win0_sel != 8'h08);   // pc9821_iobus's registered compare
   reg  sys16m_en = 1'b1;
@@ -67,6 +72,8 @@ module tb_pc9821_fill_beat_uniform;
   wire        font_we;
 
   reg        scan_enable = 0;
+
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -159,7 +166,9 @@ module tb_pc9821_fill_beat_uniform;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
-  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
+  wire        dma_load    = 1'b0;
   wire [31:0] dma_din  = 32'd0;
   wire  [3:0] dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -211,6 +220,9 @@ module tb_pc9821_fill_beat_uniform;
   // 0x063C bank select into the 0xD8000 window: 0 = the IDE option ROM, the reset bank.
 
   reg  [1:0] d8_bank = 2'b00;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
 

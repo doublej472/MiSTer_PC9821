@@ -37,7 +37,7 @@
 // the set is allowed to change.
 //
 // THE MANIFEST'S CLAIM, word for word (one line, so the checker's whitespace-normalised match sees it):
-// The Machine field applies ONLY at machine reset / reload: after a reset latches the Xe10 set, port 0xF0 reads the measured 0xA9, and a mid-run OSD flip to the Xe set (or any reserved set) leaves the strap at 0xA9 on every later read and across the warm CPU-reset class (out 0xF0, 0x534, a z486 shutdown); only the next machine reset / reload re-samples the field and moves the strap to the Xe byte 0x89, and the reset after that restores 0xA9 with the OSD back on the config-less default. The strap must be stable for the whole boot because the two ITFs read its bit 5 differently (the Xe10 masks bits 5 and 6 together at BANK4@0xF8207, the Xe tests bit 5 alone at BANK4@0xF81DF). Fail-first: on the old live-apply wiring the mid-run flip reads 0x89 immediately and this bench fails at step (b). And the OSD GDC Clock field (port 0x31 bit 7 - the machine's own GDC 2.5/5 MHz strap, 0xF3 with bit 7 set at 2.5 MHz, 0x73 at 5 MHz, the BIOS sampling it once at POST at BIOS.ROM@0xFD93C and deriving the games' work-area 0x54D bit 2 from it) follows the identical contract on its own byte: entry 0 answers the measured 0xF3, a mid-run flip and the warm CPU-reset class move it not at all, and only the next machine reset applies 0x73 - each step FAIL-FIRST against a live-apply wiring, which answers 0x73 immediately in step (d2). And the ITF's own software-DIP-switch verify is transcribed whole (BANK4@0xFC6BA-0xFC726: the direct odd-parity pass over bank A's 0x84/0x86-0x88/0x89^0x8A/0x8B-0x8F, the port-0x31 MERGE for 0x851E, and bank B's ten direct bytes) and passes at BOTH straps, because index 1's bit 4 is the DIP-2 register's parity bit and is PRESENTED on the read from the reset-qualified strap latch while the store keeps the measured 0x02 byte; FAIL-FIRST, because with bit 4 stored the 5 MHz merge (0x73 & 0xEF) | (0x02 & 0x10) = 0x63 is EVEN, the ITF's repair path cannot own the bit, and its SET THE SOFTWARE DIP-SWITCH printer (BANK4@0xFC8DE-0xFC903) writes 0xF0 = 0x00 - a reboot loop on this core. Step (e3) pins the SHAPE of that fix at both straps: after a machine reset - the store's restore walk, now the ONLY restore, the OSD `Reset DIPs` action this step used to name having been removed - the store holds the MEASURED 0x02 - the machine's own bank A image, docs/probes/PORTS.TXT:258 - and it is the PORT that presents bit 4, so 0x851E reads 0x12 with 5 MHz selected and 0x02 at the machine's own 2.5 MHz, a recovery route that does not work on hardware. And port 0xF0 bit 5 is IDE unit 0's drive-present line: the ITF builds its IDE drive bitmap and the 0x457 byte from bits 5/6 (BANK4@0x19DF-0x19F2, BANK4@0x1B6C-0x1B8F), so with a drive on bank 0 (the hard disk, bank 0's master in the core's fixed layout) the measured 0xA9 reads 0x89 and returns to 0xA9 without it (step f).
+// The Machine field applies ONLY at machine reset / reload: after a reset latches the Xe10 set, port 0xF0 reads the measured 0xA9, and a mid-run OSD flip to the Xe set (or any reserved set) leaves the strap at 0xA9 on every later read and across the warm CPU-reset class (out 0xF0, 0x534, a z486 shutdown); only the next machine reset / reload re-samples the field and moves the strap to the Xe byte 0x89, and the reset after that restores 0xA9 with the OSD back on the config-less default. The strap must be stable for the whole boot because the two ITFs read its bit 5 differently (the Xe10 masks bits 5 and 6 together at BANK4@0xF8207, the Xe tests bit 5 alone at BANK4@0xF81DF). Fail-first: on the old live-apply wiring the mid-run flip reads 0x89 immediately and this bench fails at step (b). And the OSD GDC Clock field (port 0x31 bit 7 - the machine's own GDC 2.5/5 MHz strap, 0xF3 with bit 7 set at 2.5 MHz, 0x73 at 5 MHz, the BIOS sampling it once at POST at BIOS.ROM@0xFD93C and deriving the games' work-area 0x54D bit 2 from it) follows the identical contract on its own byte: entry 0 answers the measured 0xF3, a mid-run flip and the warm CPU-reset class move it not at all, and only the next machine reset applies 0x73 - each step FAIL-FIRST against a live-apply wiring, which answers 0x73 immediately in step (d2). And the ITF's own software-DIP-switch verify is transcribed whole (BANK4@0xFC6BA-0xFC726: the direct odd-parity pass over bank A's 0x84/0x86-0x88/0x89^0x8A/0x8B-0x8F, the port-0x31 MERGE for 0x851E, and bank B's ten direct bytes) and passes at BOTH straps, because index 1's bit 4 is the DIP-2 register's parity bit and the machine-reset walk SEEDS it from the reset-qualified strap latch over the measured 0x02 byte; FAIL-FIRST, because with bit 4 stored the 5 MHz merge (0x73 & 0xEF) | (0x02 & 0x10) = 0x63 is EVEN, the ITF's repair path cannot own the bit, and its SET THE SOFTWARE DIP-SWITCH printer (BANK4@0xFC8DE-0xFC903) writes 0xF0 = 0x00 - a reboot loop on this core. Step (e3) pins the SHAPE of that fix at both straps: after a machine reset - the store's restore walk, now the ONLY restore, the OSD `Reset DIPs` action this step used to name having been removed - the store holds the MEASURED 0x02 data - the machine's own bank A image, docs/probes/PORTS.TXT:258 - with bit 4 seeded, so 0x851E reads 0x12 with 5 MHz selected and 0x02 at the machine's own 2.5 MHz, a recovery route that does not work on hardware. And port 0xF0 bit 5 is IDE unit 0's drive-present line: the ITF builds its IDE drive bitmap and the 0x457 byte from bits 5/6 (BANK4@0x19DF-0x19F2, BANK4@0x1B6C-0x1B8F), so with a drive on bank 0 (the hard disk, bank 0's master in the core's fixed layout) the measured 0xA9 reads 0x89 and returns to 0xA9 without it (step f).
 
 
 module tb_pc9821_bios_select;
@@ -77,6 +77,7 @@ module tb_pc9821_bios_select;
   wire sound_extend, beep_mute, fdc_irq;
   wire [7:0] win0_sel;
   wire sys16m_en, ide_rom_enable, top_shadow_en, bios_ram_gate;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire a20_enable, cpu_reset_req;
   wire [15:0] unmapped_writes, unmapped_reads, last_unmapped_port;
   wire [7:0] post_code;
@@ -113,10 +114,10 @@ module tb_pc9821_bios_select;
   wire       fdd_abort;
 
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(ide_unit0),
+      .ide_unit0_present(ide_unit0), .ide_unit2_present(1'b1),
       .clk(clk),
       .bios_set(bios_set),
-      .gdc_clock_5m(gdc_clock_5m), .fdd_dip_fixed(1'b0),
+      .gdc_clock_5m(gdc_clock_5m), 
       .reset(reset),
       .triple_fault_reset(triple_fault_reset),
       .cpu_addr(cpu_addr),
@@ -615,8 +616,11 @@ module tb_pc9821_bios_select;
     read_port;
     $display("  (e3) after a machine reset at 5 MHz: the store holds 0x%02x and 0x851E reads 0x%02x",
              dut.sdip[5'd1], got);
-    if (dut.sdip[5'd1] !== 8'h02) begin
-      $display("FAIL step (e3): the store's index 1 is 0x%02x, want the MEASURED 0x02 (docs/probes/PORTS.TXT:258) - the parity bit is PRESENTED on the read, not stored, because an `initial` seed cannot see an OSD field",
+    // The reset walk SEEDS that bit from the same strap latch (the Xe10 stores a written bit 4
+    // and reads it back: docs/probes/XE10CFG-XE10-CFGWR.TXT `RT 851E was=02 wrote=12 got=12`),
+    // so the store holds the measured 0x02 data with the parity bit set: 0x12.
+    if (dut.sdip[5'd1] !== 8'h12) begin
+      $display("FAIL step (e3): the store's index 1 is 0x%02x, want 0x12 (the measured 0x02 data with the seeded parity bit)",
                dut.sdip[5'd1]);
       errors = errors + 1;
     end
@@ -651,7 +655,7 @@ module tb_pc9821_bios_select;
     //     connector, bank 1), so with a drive on bank 0 as well the byte is 0xA9 & ~0x20 = 0x89 -
     //     and nothing else moves. 0x89 is the stock CD-equipped Xe10's layout (disk on bank 0, CD
     //     on bank 1), which the core's CD build reproduces; bit 6 in the build without the CD is
-    //     tb_pc9821_ide_layout's (this bench builds the iobus at its default, a bank-1 drive).
+    //     tb_pc9821_ide_layout's (this bench ties ide_unit2_present to 1, a bank-1 drive).
     bios_set = 4'd0;
     machine_reset;
     check_f0(8'hA9);

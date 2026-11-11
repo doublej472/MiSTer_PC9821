@@ -63,6 +63,19 @@ module tb_pc9821_userdisk;
   wire hdd1_wr = 1'b0;
   reg hdd1_ack = 0;
   wire [15:0] hdd1_buff_din = 16'd0;
+  // +HDD2_FILE=<path>: the SECOND hard disk on hps_io slot 3, served by this host model's fourth
+  // leg from the file; with +IMG_RW its writes land in an in-memory overlay. It is IDE bank 1's
+  // master only with +IDE_BANK1_HDD (the OSD's IDE bank 1 field = HDD2) or in a build without the
+  // CD; otherwise the CD drive is bank 1's master and the image is not connected.
+  reg         hdd2_mounted = 0;
+  reg         ide_bank1_hdd_osd = 1'b0;
+  initial if ($test$plusargs("IDE_BANK1_HDD")) ide_bank1_hdd_osd = 1'b1;
+  reg  [63:0] hdd2_size = 0;
+  wire [31:0] hdd2_lba;
+  wire [5:0]  hdd2_blk_cnt;
+  wire        hdd2_rd, hdd2_wr;
+  reg         hdd2_ack = 0;
+  wire [15:0] hdd2_buff_din;
 `ifdef USERDISK_CD
   localparam TB_CDROM = 1'b1;
 `else
@@ -321,6 +334,22 @@ module tb_pc9821_userdisk;
   // set and the Xe path is reproducible:
   //   TB_ARGS="+BIOS_MODEL_XE" PC98_PACK=<xe pack> bash tests/pc9821/run_userdisk.sh <image>
   reg [3:0] bios_set = 4'd0;
+  // +KBD_MON prints every 8251 access of the keyboard.
+  reg kbd_mon = 1'b0;
+  initial kbd_mon = $test$plusargs("KBD_MON");
+  always @(posedge clk_sys)
+    if (kbd_mon && dut.kbd_cs && (dut.device_io_wr || (dut.device_io_rd &&
+        (!dut.device_io_addr[1] || dut.kbd_io_dout[1]))))   // a status read only with RxRDY
+      $display("KBDMON %s %s %02x cyc=%0d", dut.device_io_wr ? "WR" : "RD",
+               dut.device_io_addr[1] ? "43" : "41",
+               dut.device_io_wr ? dut.device_io_din : dut.kbd_io_dout, tb_cycle);
+  // +KBD_MON also logs every CG-RAM store to the ITF's boot-key cells (code 0x5640 rows,
+  // store 0x1000..0x101F, and code 0x5770, store 0x1C20..0x1C3F) and the port 0x37 writes.
+  always @(posedge clk_sys)
+    if (kbd_mon && dut.u_cg.cg_we &&
+        (dut.u_cg.cg_wr_addr[12:5] == 8'h80 || dut.u_cg.cg_wr_addr[12:5] == 8'hE1))
+      $display("KEYCELL WR st=%04x d=%02x cyc=%0d", dut.u_cg.cg_wr_addr,
+               dut.u_cg.cg_wr_data, tb_cycle);
   initial if ($test$plusargs("BIOS_MODEL_XE")) bios_set = 4'd1;
   // The OSD GDC Clock field: 0 = 2.5 MHz, the measured machine's port-0x31 strap (entry 0,
   // the config-less default, and what this tier boots unless asked otherwise), 1 = 5 MHz.
@@ -335,14 +364,28 @@ module tb_pc9821_userdisk;
   // record - is the setting.
   reg gdc_5mhz = 1'b0;
   initial if ($test$plusargs("GDC_CLOCK_5MHZ")) gdc_5mhz = 1'b1;
-  // +FDD_FIXED: the FDD-mode switch at Fixed (0x00BE bit 2 = 1, the measured unit); default Auto.
-  reg fdd_fixed = 1'b0;
-  initial if ($test$plusargs("FDD_FIXED")) fdd_fixed = 1'b1;
   // +FDD_MODE=<n>: the OSD's Boot order list position (cfg_fdd_mode: 0 Auto, 1 640K, 2 1M, ...),
   // the 0xA3FF2 memory-switch nibble the BIOS boot helper reads (BANK7@0x5991).
   reg [2:0] fdd_mode = 3'd0;
   integer   fdd_mode_arg = 0;
   initial if ($value$plusargs("FDD_MODE=%d", fdd_mode_arg)) fdd_mode = fdd_mode_arg[2:0];
+  // The OSD's SETUP items, each off (the measured machine) unless asked for: +TEXT_LINES_20
+  // (port 0x31 bit 3) and +MSW_KEEP (port 0x31 bit 4 and 0x871E bit 5 at keep).
+  reg text20_osd = 1'b0, msw_keep_osd = 1'b0;
+  initial begin
+    if ($test$plusargs("TEXT_LINES_20")) text20_osd   = 1'b1;
+    if ($test$plusargs("MSW_KEEP"))      msw_keep_osd = 1'b1;
+  end
+  // +FLOPPY_MODE=<n>: the OSD's Floppy mode list position (0 Auto (1M), the default; 1 1M;
+  // 2 Auto (640K); 3 640K). The FLOPPY MODE line at the end reports what the firmware made of
+  // it beside the Xe10's captured bytes; it is a report, not an assertion, because the captures
+  // are taken at the DOS prompt and a run that does not boot DOS passes through the BIOS boot
+  // loop, whose floppy boot re-selects the interface (a blank-disk run at 220M cycles reads
+  // 0x00BE = F3 at 640K). The ITF/BIOS path itself is tb_pc9821_floppy_mode's.
+  reg [1:0] floppy_mode_osd = 2'd0;
+  integer   floppy_mode_arg = 0;
+  initial if ($value$plusargs("FLOPPY_MODE=%d", floppy_mode_arg))
+    floppy_mode_osd = floppy_mode_arg[1:0];
   // The strap as the FIRMWARE published it, sampled rather than read once, so a
   // measurement run cut short (+STOP_AT_CYCLE) still carries the answer: bit 5 is the
   // BIOS's direct copy of port 0x31 bit 7 (BIOS.ROM@0xFD93C) and bit 2 is what the games
@@ -513,6 +556,54 @@ module tb_pc9821_userdisk;
     end
   end
 
+  // +RESET_EVERY=<n> (+RESETS=<k>, default 3; +RESET_HOLD=<c>, default 2000): a machine reset
+  // (the OSD Reset's strobe, the same `reset` input) every n cycles after the first, k times, so
+  // the boot can be watched across repeated machine resets.
+  // +SYSDIP_LOG: every access to ports 0x0031, 0x841E-0x8F1E (the data ports) and 0x8F1F, with
+  // the instruction that made it, and 0:055D at every port 0x0031 read.
+  longint unsigned mr_every = 0, mr_next = 0;
+  integer mr_left = 3, mr_hold = 2000, mr_cnt = 0, mr_boot = 0;
+  reg mr_reset = 1'b0;
+  reg sysdip_log = 1'b0;
+  integer sysdip_n = 0;
+  initial begin
+    if ($value$plusargs("RESET_EVERY=%d", mr_every)) mr_next = mr_every;
+    void'($value$plusargs("RESETS=%d", mr_left));
+    void'($value$plusargs("RESET_HOLD=%d", mr_hold));
+    sysdip_log = $test$plusargs("SYSDIP_LOG");
+  end
+  always @(posedge clk_sys) begin
+    if (mr_every != 0 && mr_left != 0 && !mr_reset && tb_cycle >= mr_next) begin
+      mr_reset <= 1'b1;
+      mr_cnt = 0;
+      mr_boot = mr_boot + 1;
+      $display("MRESET %0d assert cyc=%0d", mr_boot, tb_cycle);
+      dump_tram_text;
+    end else if (mr_reset) begin
+      mr_cnt = mr_cnt + 1;
+      if (mr_cnt >= mr_hold) begin
+        mr_reset <= 1'b0;
+        mr_left = mr_left - 1;
+        mr_next = tb_cycle + mr_every;
+        $display("MRESET %0d release cyc=%0d", mr_boot, tb_cycle);
+      end
+    end
+  end
+  reg sysdip_land_q = 1'b0;
+  always @(posedge clk_sys) begin
+    sysdip_land_q <= dut.iobus.state == dut.iobus.S_BYTE;
+    if (sysdip_log && sysdip_land_q && sysdip_n < 3000 &&
+        (dut.dbg_last_io_addr == 16'h0031 || dut.dbg_last_io_addr == 16'h8F1F ||
+         (dut.dbg_last_io_addr[7:0] == 8'h1E && dut.dbg_last_io_addr[15:12] == 4'h8 &&
+          dut.dbg_last_io_addr[11:8] >= 4'h4))) begin
+      $display("SYSDIP boot=%0d %s %04x %s=%02x at %04x:%08x cyc=%0d p31_lat=%02x msw_a=%0d", mr_boot,
+               dut.dbg_last_io_wr ? "OUT" : "IN ", dut.dbg_last_io_addr,
+               dut.dbg_last_io_wr ? "d" : "q", dut.dbg_last_io_data, cpu_cs, cpu_eip, tb_cycle,
+               dut.iobus.p31_lat, dut.iobus.sdip_msw_a);
+      sysdip_n = sysdip_n + 1;
+    end
+  end
+
   // The whole 1 MiB pack: the layout is verified against the dumps by
   // tools/check_pack.py before the run, so the loads below are exact and the
   // byte ranges they cover are the ones the pack describes. The array must reach
@@ -560,15 +651,13 @@ module tb_pc9821_userdisk;
     end
   end
 
-  // WHICH I/O-LATENCY PROFILE this tier builds. The bench default is the min table
-  // (IO_LATENCY_PROFILE 0, the same one the card runs); `-DIO_FAITHFUL` selects 2, the
-  // machine's own measured access TIMES (docs/probes/IO.TXT), which is the compile-time
-  // devkit switch.
+  // WHICH I/O TIMING this tier runs: the OSD's I/O timing field, pc9821_system's
+  // io_timing_xe10. The bench default is Fast (0, the card's default); `-DIO_XE10` ties it
+  // to Xe10, the machine's own measured access TIMES (docs/probes/XE10T-XE10.TXT /IO).
   // One source, one variable, so a boot A/B is one build per side and the delta is
-  // attributable. The faithful table prices 0x005F by direction (826 ns read / IO.TXT's
-  // 1621 ns write), while the min profile charges its ONE value, 1621 ns, in both directions
-  // (a wr-dependent value there trips a Quartus fitter bug); that port is what the BIOS's own
-  // delay loops are calibrated on.
+  // attributable. Both tables post a 0x005F write (the next I/O access waits until
+  // 1744 ns after it, the XE10T capture's write period); its read is each table's default
+  // read class. That port is what the BIOS's own delay loops are calibrated on.
   // The CD-DA ring (src/soc/cdda.v), as occupancy only: the player's stereo samples go in on
   // cdda_wr and drain at 44.1 kHz (one per 50 MHz / 44100 = 1134 clk_sys); CDDA_REQ is up while
   // a sector fits in its 6144 samples (CDDA_REQ4 while four do), CDDA_PLAYED pulses per 588
@@ -597,10 +686,10 @@ module tb_pc9821_userdisk;
     end
   end
 
-`ifdef IO_FAITHFUL
-  localparam [1:0] TB_IO_PROFILE = 2'd2;
+`ifdef IO_XE10
+  localparam TB_IO_XE10 = 1'b1;
 `else
-  localparam [1:0] TB_IO_PROFILE = 2'd0;
+  localparam TB_IO_XE10 = 1'b0;
 `endif
 
   // USERDISK_SYSFREQ / USERDISK_CACHE_BITS (run_userdisk.sh): build the tier at the card's
@@ -619,7 +708,7 @@ module tb_pc9821_userdisk;
 
   pc9821_system #(
       .SYS_FREQ(TB_FREQ), .DCACHE_SET_BITS(TB_CBITS), .ICACHE_SET_BITS(TB_CBITS),
-      .ENABLE_X87(1'b0), .IO_LATENCY_PROFILE(TB_IO_PROFILE),
+      .ENABLE_X87(1'b0),
       .CDROM_EN(TB_CDROM), .CDROM_AUDIO_EN(TB_CDROM), .CDROM_LOG_EN(TB_CDROM),
       .SDRAM_PHASE_DYN(TB_SDPH)
   // ==== DUT ====
@@ -628,7 +717,8 @@ module tb_pc9821_userdisk;
       // The dot rate is an enable on clk_sys inside the system, so
       // there is no separate video clock to drive here.
       .clk_sys(clk_sys),
-      .reset(reset | guest_reset), .hps_apply_reset(hps_apply_reset),
+      .io_timing_xe10(TB_IO_XE10),
+      .reset(reset | guest_reset | mr_reset), .hps_apply_reset(hps_apply_reset),
       .rtc(rtc),
       .ext_mem_busy(1'b0),
       .ext_mem0_addr(ext_mem0_addr), .ext_mem0_din(ext_mem0_din),
@@ -659,6 +749,9 @@ module tb_pc9821_userdisk;
       .fdd1_mounted(fdd1_mounted), .fdd1_size(fdd1_size), .fdd1_lba(fdd1_lba),
       .fdd1_blk_cnt(fdd1_blk_cnt), .fdd1_rd(fdd1_rd), .fdd1_wr(fdd1_wr), .fdd1_ack(fdd1_ack),
       .fdd1_buff_din(fdd1_buff_din),
+      .hdd1_mounted(hdd2_mounted), .hdd1_size(hdd2_size), .hdd1_lba(hdd2_lba),
+      .hdd1_blk_cnt(hdd2_blk_cnt), .hdd1_rd(hdd2_rd), .hdd1_wr(hdd2_wr), .hdd1_ack(hdd2_ack),
+      .hdd1_buff_din(hdd2_buff_din),
       .cd_mounted(hdd1_mounted), .cd_size(hdd1_size), .cd_lba(hdd1_lba),
       .cd_blk_cnt(hdd1_blk_cnt), .cd_rd(hdd1_rd), .cd_ack(hdd1_ack),
       .cdda_req(cdda_req), .cdda_req4(cdda_req4), .cdda_played(cdda_played),
@@ -672,12 +765,13 @@ module tb_pc9821_userdisk;
       .ram_size_max(ram_size),
       // The OSD's BIOS set: +BIOS_MODEL_XE selects the PC-9821Xe strap.
       .bios_set(bios_set),
+      // The OSD's IDE bank 1 field: +IDE_BANK1_HDD puts the second hard disk on bank 1's master.
+      .ide_bank1_hdd(ide_bank1_hdd_osd || !TB_CDROM),
       // The OSD's GDC Clock field: +GDC_CLOCK_5MHZ selects 0x73 (port 0x31 bit 7 clear).
-      .gdc_clock_5m(gdc_5mhz), .fdd_dip_fixed(fdd_fixed),
+      .gdc_clock_5m(gdc_5mhz), 
       .cfg_fdd_mode(fdd_mode),
-      // 5 MHz: this bench mounts disks into the real firmware and so must not change the
-      // display's GDC line step. The strap decode and the step have their own benches.
-      .bios_setup(1'b0),
+      .text_lines_20(text20_osd), .msw_keep(msw_keep_osd),
+      .floppy_mode(floppy_mode_osd),
       // The debug UART FIFO and its accept handshake live in the top level (z486_mister.sv),
       // which this tier does not build - and nothing here reads dbg_uart_byte either. Tying
       // accept high lets the report emitter free-run at one byte per clk_sys (the design leaves
@@ -767,7 +861,7 @@ module tb_pc9821_userdisk;
   initial begin : img1_file_open
     reg [1023:0] img1_path;
     if ($value$plusargs("IMG1_FILE=%s", img1_path))
-      $fatal(1, "TB_PC9821_USERDISK: FAIL (+IMG1_FILE: the second hard disk was removed)");
+      $fatal(1, "TB_PC9821_USERDISK: FAIL (+IMG1_FILE is retired: the second hard disk is +HDD2_FILE)");
     if ($value$plusargs("CD_FILE=%s", img1_path)) begin
       if (!TB_CDROM) $fatal(1, "TB_PC9821_USERDISK: FAIL (+CD_FILE needs a -DUSERDISK_CD build)");
       img1_fd = $fopen(img1_path, "rb");
@@ -787,6 +881,29 @@ module tb_pc9821_userdisk;
     end
   endtask
   integer hdd1_rd_log = 0;
+  integer    img2_fd = 0;
+  reg        srv2 = 0;          // the session in flight is slot 3's (HDD2)
+  reg [15:0] img2_ovl [longint];
+  integer    hdd2_log = 0;
+  initial begin : img2_file_open
+    reg [1023:0] img2_path;
+    if ($value$plusargs("HDD2_FILE=%s", img2_path)) begin
+      img2_fd = $fopen(img2_path, "rb");
+      if (img2_fd == 0) $fatal(1, "TB_PC9821_USERDISK: FAIL (+HDD2_FILE could not be opened)");
+      $display("HDD2_FILE slot 3 (HDD2) served from the image file (fd %0d)", img2_fd);
+    end
+  end
+  task automatic img2_file_read(input [31:0] lba, input [15:0] words);
+    integer w, lo, hi;
+    begin
+      void'($fseek(img2_fd, lba * 512, 0));
+      for (w = 0; w < words; w = w + 1) begin
+        lo = $fgetc(img2_fd); hi = $fgetc(img2_fd);
+        file_buf[w] = (lo < 0 || hi < 0) ? 16'd0 : {hi[7:0], lo[7:0]};
+        if (img2_ovl.exists(longint'(lba) * 256 + w)) file_buf[w] = img2_ovl[longint'(lba) * 256 + w];
+      end
+    end
+  endtask
   integer    fdd_fd = 0;
   reg        srvf = 0;          // the session in flight is slot 1's (FDD1)
   reg [15:0] fdd_ovl [longint];
@@ -857,11 +974,34 @@ module tb_pc9821_userdisk;
     img_buff_wr <= 1'b0;
     case (disk_state)
       0: if ((hdd1_rd || hdd1_wr || img_rd || img_wr || (fdd_rd && fdd_fd != 0) ||
-             (fdd1_rd && fdd2_fd != 0)) && hps_wait < hps_delay) begin
+             (fdd1_rd && fdd2_fd != 0) || ((hdd2_rd || hdd2_wr) && img2_fd != 0)) &&
+             hps_wait < hps_delay) begin
         hps_wait <= hps_wait + 1;
+      end else if (hdd2_rd && img2_fd != 0) begin
+        hps_wait <= 0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0; srv2 <= 1'b1;
+        hdd2_ack <= 1'b1;
+        disk_index <= 0;
+        img2_file_read(hdd2_lba, ({10'd0, hdd2_blk_cnt} + 16'd1) << 8);
+        disk_total <= ({10'd0, hdd2_blk_cnt} + 16'd1) << 8;
+        if (hdd2_log < 400)
+          $display("HDD2 READ lba=%0d blocks=%0d cyc=%0d", hdd2_lba, hdd2_blk_cnt + 1, tb_cycle);
+        hdd2_log = hdd2_log + 1;
+        disk_state <= 1;
+      end else if (hdd2_wr && img2_fd != 0) begin
+        hps_wait <= 0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0; srv2 <= 1'b1;
+        hdd2_ack <= 1'b1;
+        disk_index <= 0;
+        img_buff_addr <= 13'd0;
+        disk_total <= ({10'd0, hdd2_blk_cnt} + 16'd1) << 8;
+        if (hdd2_log < 400)
+          $display("HDD2 WRITE lba=%0d blocks=%0d cyc=%0d", hdd2_lba, hdd2_blk_cnt + 1, tb_cycle);
+        hdd2_log = hdd2_log + 1;
+        disk_state <= 3;
       end else if (fdd_rd && fdd_fd != 0) begin
         hps_wait <= 0;
-        srv1 <= 1'b0; srvf <= 1'b1; srvf2 <= 1'b0;
+        srv1 <= 1'b0; srvf <= 1'b1; srvf2 <= 1'b0; srv2 <= 1'b0;
         fdd_ack <= 1'b1;
         disk_index <= 0;
         fdd_file_read(fdd_lba, ({10'd0, fdd_blk_cnt} + 16'd1) << 8);
@@ -872,7 +1012,7 @@ module tb_pc9821_userdisk;
         disk_state <= 1;
       end else if (fdd1_rd && fdd2_fd != 0) begin
         hps_wait <= 0;
-        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b1;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b1; srv2 <= 1'b0;
         fdd1_ack <= 1'b1;
         disk_index <= 0;
         fdd2_file_read(fdd1_lba, ({10'd0, fdd1_blk_cnt} + 16'd1) << 8);
@@ -883,7 +1023,7 @@ module tb_pc9821_userdisk;
         disk_state <= 1;
       end else if (fdd1_wr && fdd2_fd != 0) begin
         hps_wait <= 0;
-        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b1;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b1; srv2 <= 1'b0;
         fdd1_ack <= 1'b1;
         disk_index <= 0;
         img_buff_addr <= 13'd0;
@@ -892,7 +1032,7 @@ module tb_pc9821_userdisk;
         disk_state <= 3;
       end else if (fdd_wr && fdd_fd != 0) begin
         hps_wait <= 0;
-        srv1 <= 1'b0; srvf <= 1'b1; srvf2 <= 1'b0;
+        srv1 <= 1'b0; srvf <= 1'b1; srvf2 <= 1'b0; srv2 <= 1'b0;
         fdd_ack <= 1'b1;
         disk_index <= 0;
         img_buff_addr <= 13'd0;
@@ -902,7 +1042,7 @@ module tb_pc9821_userdisk;
       end else if (hdd1_rd && img1_fd != 0) begin
         hps_wait <= 0;
         // Slot 3: the same read session, from the second file.
-        srv1 <= 1'b1; srvf <= 1'b0; srvf2 <= 1'b0;
+        srv1 <= 1'b1; srvf <= 1'b0; srvf2 <= 1'b0; srv2 <= 1'b0;
         hdd1_ack <= 1'b1;
         disk_index <= 0;
         img1_file_read(hdd1_lba, ({10'd0, hdd1_blk_cnt} + 16'd1) << 8);
@@ -913,7 +1053,7 @@ module tb_pc9821_userdisk;
         disk_state <= 1;
       end else if (hdd1_wr && img1_fd != 0) begin
         hps_wait <= 0;
-        srv1 <= 1'b1;
+        srv1 <= 1'b1; srv2 <= 1'b0;
         hdd1_ack <= 1'b1;
         disk_index <= 0;
         img_buff_addr <= 13'd0;
@@ -922,7 +1062,7 @@ module tb_pc9821_userdisk;
         disk_state <= 3;
       end else if (img_rd) begin
         hps_wait <= 0;
-        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0; srv2 <= 1'b0;
         img_ack <= 1'b1;
         disk_index <= 0;
         if (img_fd != 0) img_file_read(img_lba, ({10'd0, img_blk_cnt} + 16'd1) << 8);
@@ -934,7 +1074,7 @@ module tb_pc9821_userdisk;
         disk_state <= 1;
       end else if (img_wr && !img_readonly) begin
         hps_wait <= 0;
-        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0;
+        srv1 <= 1'b0; srvf <= 1'b0; srvf2 <= 1'b0; srv2 <= 1'b0;
         // Write session: the host reads the drive's sector buffer, presenting the
         // address and sampling img_buff_dout. The buffer read is registered, so each
         // address is held two cycles (states 3, 4) before the word is taken (state 5).
@@ -953,6 +1093,7 @@ module tb_pc9821_userdisk;
         if (srvf) fdd_ovl[longint'(fdd_lba) * 256 + disk_index] = fdd_buff_din;
         else if (srvf2) fdd2_ovl[longint'(fdd1_lba) * 256 + disk_index] = fdd1_buff_din;
         else if (srv1) img1_ovl[longint'(hdd1_lba) * 256 + disk_index] = hdd1_buff_din;
+        else if (srv2) img2_ovl[longint'(hdd2_lba) * 256 + disk_index] = hdd2_buff_din;
         else      img_ovl[longint'(img_lba) * 256 + disk_index] = img_buff_dout;
         if (disk_index == (disk_total - 16'd1)) disk_state <= 2;
         else begin
@@ -966,7 +1107,7 @@ module tb_pc9821_userdisk;
         hps_gapc <= 0;
         img_buff_wr <= 1'b1;
         img_buff_addr <= disk_index[12:0];
-        img_buff_din <= (img_fd != 0 || srv1 || srvf || srvf2) ? file_buf[disk_index[13:0]] :
+        img_buff_din <= (img_fd != 0 || srv1 || srvf || srvf2 || srv2) ? file_buf[disk_index[13:0]] :
             (img_lba*32'd256 + {16'd0, disk_index}) < IMG_WORDS ?
             disk_words[img_lba*32'd256 + {16'd0, disk_index}] : 16'd0;
         if (disk_index == (disk_total - 16'd1)) disk_state <= 2;
@@ -975,6 +1116,7 @@ module tb_pc9821_userdisk;
       2: begin
         img_ack <= 1'b0;
         hdd1_ack <= 1'b0;
+        hdd2_ack <= 1'b0;
         fdd_ack <= 1'b0;
         fdd1_ack <= 1'b0;
         disk_state <= 0;
@@ -2849,6 +2991,21 @@ module tb_pc9821_userdisk;
   // checks all passed with the disk completely broken.
   reg saw_ipl;
   always @(posedge clk_sys) if (cpu_cs == 16'h1FC0) saw_ipl <= 1'b1;
+  // What the IDE BIOS registered by the time it hands over to the IPL: the IDE ROM's
+  // registered-drive mask 0x5BA (BANK3@0x0A96 `or [0x5ba],1<<slot`), DISK_EQUIP's IDE byte 0x55D
+  // (BANK3@0x0DC0) and the 0x457 byte (BANK3@0x0E1C), plus the commands written at bank 1.
+  integer bank1_cmds = 0;
+  reg     ipl_reported = 1'b0;
+  always @(posedge clk_sys) begin
+    if (dut.device_io_wr && dut.device_io_addr == 16'h064E && dut.ata.channel_reg[0])
+      bank1_cmds = bank1_cmds + 1;
+    if (saw_ipl && !ipl_reported) begin
+      ipl_reported <= 1'b1;
+      $display("IDE REGISTERED at IPL cyc=%0d: 0x5BA=%02x 0x55D=%02x 0x457=%02x bank-1 commands=%0d",
+               tb_cycle, ram_byte(32'h0000_05BA), ram_byte(32'h0000_055D),
+               ram_byte(32'h0000_0457), bank1_cmds);
+    end
+  end
 
   // ---- the option-ROM window at the moment the BIOS calls it -------------
   // The main BIOS installs the IDE option ROM by far-calling D800:000C (the
@@ -3231,6 +3388,34 @@ module tb_pc9821_userdisk;
                  dut.u_cg.cg_code, dut.u_cg.cg_lr, tb_cycle, pc_now);
         msw_evt_n = msw_evt_n + 1;
       end
+    end
+  end
+
+  // ---- +MSW_CELL_TRACE: every write to the eight memory-switch cells ------
+  // The cells are 0xA3FE2 + i*4 (NP2kai bios/biosmem.h MEMB_MSW1..8). This prints each
+  // write that lands on one - the reset seed's (pc9821_text_mem msw_seed_en) and the
+  // guest's - with the writer's PC, so what the firmware does with a seeded switch after
+  // reset is measured rather than inferred. The seed rewrites its two cells every other
+  // cycle while the reset strobe is held, so only a CHANGE of a cell's byte is printed.
+  reg       msw_cell_trace = 1'b0;
+  reg [7:0] msw_cell_last [0:7];
+  integer   msw_cell_n = 0;
+  initial begin
+    msw_cell_trace = $test$plusargs("MSW_CELL_TRACE");
+    for (int k = 0; k < 8; k++) msw_cell_last[k] = 8'hxx;
+  end
+  always @(posedge clk_sys) begin
+    if (msw_cell_trace && msw_cell_n < 200 && dut.u_crtc.u_text_mem.tram_a_we &&
+        dut.u_crtc.u_text_mem.tram_a_addr[1:0] == 2'b10 &&
+        dut.u_crtc.u_text_mem.tram_a_addr[13:2] >= 12'hFF8 &&
+        dut.u_crtc.u_text_mem.tram_a_data !==
+          msw_cell_last[dut.u_crtc.u_text_mem.tram_a_addr[4:2]]) begin
+      msw_cell_last[dut.u_crtc.u_text_mem.tram_a_addr[4:2]] <= dut.u_crtc.u_text_mem.tram_a_data;
+      $display("MSWCELL A%04x <- %02x %s cyc=%0d pc=%08x",
+               dut.u_crtc.u_text_mem.tram_a_addr, dut.u_crtc.u_text_mem.tram_a_data,
+               dut.u_crtc.u_text_mem.msw_seed_en ? "seed " : "guest",
+               tb_cycle, pc_now);
+      msw_cell_n = msw_cell_n + 1;
     end
   end
 
@@ -4450,6 +4635,17 @@ module tb_pc9821_userdisk;
         img_readonly = ro_save;
       end
     end
+    if (img2_fd != 0) begin
+      // Slot 3's own pulse, with the second file's size in hps_io's one img_size register.
+      repeat (2) @(negedge clk_sys);
+      void'($fseek(img2_fd, 0, 2));
+      hdd2_size = 64'($ftell(img2_fd));
+      img_size = hdd2_size;
+      $display("HDD2_FILE size %0d bytes", hdd2_size);
+      hdd2_mounted = 1'b1;
+      @(negedge clk_sys);
+      hdd2_mounted = 1'b0;
+    end
     if (img1_fd != 0 && !cd_late) begin
       // hps_io's img_size is one register, valid for the mount that pulses: set it to the
       // second file's size for slot 3's own pulse.
@@ -4523,6 +4719,23 @@ module tb_pc9821_userdisk;
       end
     end
     dump_timeout_state();
+    // +IMG_OVL_OUT=<file>: the +IMG_RW overlay as text, one `<word index hex> <word hex>` per
+    // line (word index = lba*256 + word), so the files a guest wrote can be read back out of
+    // a copy of the image (tools/hwprobe/integ/ovl_extract.py applies it).
+    begin : ovl_dump
+      reg [1023:0] ovl_path;
+      integer ovl_fd;
+      longint k;
+      if ($value$plusargs("IMG_OVL_OUT=%s", ovl_path)) begin
+        ovl_fd = $fopen(ovl_path, "w");
+        if (ovl_fd != 0) begin
+          if (img_ovl.first(k)) do $fwrite(ovl_fd, "%0h %04h\n", k, img_ovl[k]);
+                                while (img_ovl.next(k));
+          $fclose(ovl_fd);
+          $display("IMG_OVL_OUT wrote %0d overlay words", img_ovl.num());
+        end
+      end
+    end
     $write("USERDISK FINAL CS:EIP=", cpu_cs, ":", cpu_eip,
            " base=", cpu_cs_base, " pe=", cpu_pe, "\n");
     // The window question, answered where it is observable: did the guest ever
@@ -4546,6 +4759,33 @@ module tb_pc9821_userdisk;
     // merely a measurement still says where the record got to.
     $display("DIPREC cold boot: record accepted (stage 0x05) = %0d, repair wrote store 0x811 = %0d",
              record_accepted, record_repair_write);
+    // THE FLOPPY MODE, as the firmware left it at the end of the run (a report, see +FLOPPY_MODE): port 0x00BE (pc9821_fdc's read of
+    // its channel-group register, rebuilt from the same terms), the BIOS's interface byte 0x500
+    // and the equipment bytes 0x55C/0x55D. The Xe10 (docs/probes/FDMODE-XE10-FDM0/FDMF3/FDMF1/
+    // FDMF0.TXT and XE10CFG-XE10-CFG0/CFGF3/CFGF1/CFGF0.TXT):
+    //   auto (1M)   0x00BE FB  0x500 03  0x55C/0x55D 03/01   (position 0, the default)
+    //   1M          0x00BE FF  0x500 03  0x55C/0x55D 03/01   (position 1)
+    //   auto (640K) 0x00BE F0  0x500 05  0x55C/0x55D 00/31
+    //   640K        0x00BE F4  0x500 05  0x55C/0x55D 00/31
+    begin : floppy_mode_report
+      reg [7:0] be, want_be, want_500, want_55c, want_55d;
+      reg       m640;
+      be = {4'b1111, ~dut.iobus.fdc.fd_640k,
+            ~dut.iobus.fdc.fd_auto, dut.iobus.fdc.chgreg[1:0]};
+      m640     = floppy_mode_osd[1];
+      case (floppy_mode_osd)
+        2'd0:    want_be = 8'hFB;   // the captures' bytes: auto (1M)
+        2'd1:    want_be = 8'hFF;   // 1M
+        2'd2:    want_be = 8'hF0;
+        default: want_be = 8'hF4;
+      endcase
+      want_500 = m640 ? 8'h05 : 8'h03;
+      want_55c = m640 ? 8'h00 : 8'h03;
+      want_55d = m640 ? 8'h31 : 8'h01;
+      $display("FLOPPY MODE position=%0d: 0x00BE=%02x 0x500=%02x 0x55C=%02x 0x55D=%02x (want %02x %02x %02x %02x)",
+               floppy_mode_osd, be, ram_byte(24'h000500), ram_byte(24'h00055C),
+               ram_byte(24'h00055D), want_be, want_500, want_55c, want_55d);
+    end
     // The GDC clock, as the FIRMWARE published it: the BIOS's own derivation, read out of
     // guest low RAM rather than from any core-side register. bit 5 is the strap's direct
     // copy (BIOS.ROM@0xFD93C) and bit 2 is what the games read; with the OSD on entry 0

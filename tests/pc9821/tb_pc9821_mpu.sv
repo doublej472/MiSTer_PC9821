@@ -1,13 +1,17 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_MPU: The MPU-PC98II register model answers the read side the driver hangs on (idle status 0x80, the ACK 0xFE per command with bit 7 clearing while it is queued, the data register's last-read latch), frames the intelligent-mode transfers it receives (0xD0 + 3 bytes emitted as one complete 0x90 40 7F message, 0xDF + F0..F7 byte-identically), emits the 0xFF reset's 16-channel all-notes-off burst in order, produces no MIDI bytes for a follow-byte command, enters UART mode on 0x3F, and raises the H.CLK 0xFD after 0x95 - all at the real 31250-baud line rate, which a two-clock probe measures as the SAME 32 us bit time and 320 us byte time at 50 and 100 MHz.
+// TB_PC9821_MPU: The MPU-PC98II register model answers the read side the driver hangs on (idle status 0x80, the ACK 0xFE per command with bit 7 clearing while it is queued, the data register's last-read latch), raises one IRQ edge per response byte (an enqueue onto a non-empty queue and a read that leaves a byte each re-raise, the drain does not), frames the intelligent-mode transfers it receives (0xD0 + 3 bytes emitted as one complete 0x90 40 7F message, a 0xD0 message sent under running status without its status byte re-emitted with the full status byte as 0x91 3C 00, 0xDF + F0..F7 byte-identically), emits the 0xFF reset's 16-channel all-notes-off burst in order, produces no MIDI bytes for a follow-byte command, enters UART mode on 0x3F and leaves it on 0xFF with no ACK (the MPU-401 manual's one unacknowledged command: status bit 7 stays set, no request, no byte on the line) while the next intelligent-mode command is ACKed, raises the H.CLK 0xFD after 0x95, and loses no byte from a writer that polls BUSY (status bit 6, the MPU-401's DRR) before every write - every byte reaches the line in order across the 0x3F burst, the 32-byte queue filling and a 63-byte 0xDF system exclusive behind the 0xFF burst, and BUSY reads set whenever a byte is parked waiting for room - all at the real 31250-baud line rate, which a two-clock probe measures as the SAME 32 us bit time and 320 us byte time at 50 and 100 MHz.
 //
 // The expected values are the reference's, not this RTL's: NP2kai's model
-// (../NP2kai/cbus/mpu98ii.c) for the status polarity (:1101-1104), the ACK (:1030), the short
-// message's framing and length table (:100, :777-812), the system-exclusive framing (:806-838),
-// the reset burst (:223-233), the H.CLK tick and its stepclock (:111-129, :333-356, :532-537),
-// and the register defaults (:1149 data = MPUMSG_ACK); and MMD.COM's own primitives for what
+// (../NP2kai/cbus/mpu98ii.c at 5939e0c) for the status polarity (:1129-1131 `if ((mpu98.r.cnt
+// == 0) && (mpu98.intreq == 0)) { ret |= MIDIIN_AVAIL;`), the ACK (:1054
+// `setrecvdata(MPUMSG_ACK);`), the short message's framing and length table (:124-125
+// `shortmsgleng`, sendmpumsg :797-822), the system-exclusive framing (:823-854), the reset
+// burst (sendmpureset :247-258), the H.CLK tick and its stepclock (makeintclock :135-153,
+// midiint :353-376, mpucmd_9x case 0x05 :552-557), and the register defaults (:1178
+// `mpu98.data = MPUMSG_ACK;`); the Roland MPU-401 Technical Reference Manual's DRR handshake
+// for the polled writer (section 13); and MMD.COM's own primitives for what
 // the driver polls (CS:0x01C6 read, CS:0x01D3 write, CS:0x15AC presence probe, CS:0x167E H.CLK
 // wait), every one of them read from the driver's disassembly.
 //
@@ -15,7 +19,11 @@
 // gives an undecoded port) the idle-status check reads 0xFF and the driver's `test al,al / js`
 // loop never exits; with the message assembly removed the 0x90 40 7F check sees three separate
 // bytes instead of one message; with the reset burst removed the 48-byte check sees zero; with
-// the H.CLK arm removed the 0xFD check times out; and with the serialiser's divider taken from
+// the H.CLK arm removed the 0xFD check times out; with the running-status data byte left at
+// index 1 instead of advancing to 2 (the pre-fix core) the second 0x91 3C 00 never reaches the
+// line; with BUSY taken from the queue count alone (the pre-fix core) the 0x3F burst's first
+// cycles read BUSY clear while a byte is parked, and the polled UART-mode writer's bytes are
+// overwritten there; and with the serialiser's divider taken from
 // a fixed clk_sys count instead of SYS_CLOCK_HZ the 100 MHz probe's bit time halves.
 
 module tb_pc9821_mpu;
@@ -120,18 +128,102 @@ module tb_pc9821_mpu;
     end
   endtask
 
+  // MMD's write primitive (CS:0x01D3 `in al,0xE0D2 / test al,0x40 / jnz`): read the status
+  // until BUSY (bit 6) is clear. Every status read also checks the one property a polling
+  // writer relies on: a byte parked outside the MIDI-out queue reads as BUSY. The park flag is
+  // sampled at the same instant as the status byte.
+  integer parked_polls = 0;
+  task automatic poll_ready;
+    reg [7:0] st;
+    reg       parked;
+    integer   n;
+    begin
+      n = 0;
+      st = 8'h40;
+      while (st[6]) begin
+        @(negedge clk);
+        cs = 1'b1; addr = 16'hE0D2; rd = 1'b1; wr = 1'b0;
+        #1;
+        st = dout;
+        parked = dut.pend_valid;
+        @(negedge clk);
+        rd = 1'b0; cs = 1'b0;
+        if (parked) parked_polls = parked_polls + 1;
+        chk(!parked || st[6],
+            "BUSY (status bit 6) reads clear while a byte is parked waiting for room");
+        n = n + 1;
+        chk(n < 2_000_000, "BUSY never cleared for a polling writer");
+      end
+    end
+  endtask
+
+  // A polled command: wait for BUSY clear, write it, then take every response byte queued
+  // (the ACK; MMD reads it before the next write).
+  task automatic polled_cmd(input [7:0] c);
+    reg [7:0] st, d;
+    begin
+      poll_ready();
+      bus_wr(16'hE0D2, c);
+      bus_rd(16'hE0D2, st);
+      chk(st[7] == 1'b0, "a polled command was not ACKed");
+      while (!st[7]) begin
+        bus_rd(16'hE0D0, d);
+        bus_rd(16'hE0D2, st);
+      end
+    end
+  endtask
+
+  // The UART-mode exit: 0xFF written BUSY-polled, which the MPU-401 does not acknowledge
+  // (section 10a), so nothing is waited for or drained.
+  task automatic polled_uart_exit;
+    begin
+      poll_ready();
+      bus_wr(16'hE0D2, 8'hFF);
+    end
+  endtask
+
+  task automatic polled_dat(input [7:0] b);
+    begin
+      poll_ready();
+      bus_wr(16'hE0D0, b);
+    end
+  endtask
+
+  // Done when no new byte has started on the line for four byte times.
+  task automatic wait_line_idle;
+    integer idle, base;
+    begin
+      idle = 0;
+      base = stream_len;
+      while (idle < 4 * 10 * BIT_CYCLES) begin
+        @(posedge clk);
+        if (stream_len != base) begin base = stream_len; idle = 0; end
+        else idle = idle + 1;
+      end
+    end
+  endtask
+
   reg [7:0] b0, b1;
   integer   t0;
+
+  // The PIC is an edge latch (pc9821_pic.sv ir_set = ir_in & ~ir_prev): what reaches the guest is
+  // one request per RISING edge of the line, so that is what this counter measures.
+  reg       irq_q = 1'b0;
+  integer   irq_rises = 0;
+  always @(posedge clk) begin
+    irq_q <= irq;
+    if (irq && !irq_q) irq_rises <= irq_rises + 1;
+  end
 
   wire [31:0] rate50_bit_ns, rate100_bit_ns;
 
   initial begin
     fork
       // A bench that stops making progress names itself instead of hanging the runner.
-      // 200 ms of simulated time covers every burst and tick this bench waits for.
+      // 400 ms of simulated time covers every burst and tick this bench waits for.
       begin
-        #200_000_000;
-        $fatal(1, "tb_pc9821_mpu did not finish in 200 ms of simulated time");
+        #400_000_000;
+        $fatal(1, "tb_pc9821_mpu did not finish in 400 ms of simulated time");
       end
       begin
         reset = 1'b1;
@@ -186,6 +278,37 @@ module tb_pc9821_mpu;
         chk(stream[0] == 8'h90, "short message byte 0 is wrong");
         chk(stream[1] == 8'h40, "short message byte 1 is wrong");
         chk(stream[2] == 8'h7F, "short message byte 2 is wrong");
+
+        // ---- 5b. 0xD0 under running status: the status byte is re-emitted -------------
+        // 0xD0, 91 3C 40 (a full message), then 0xD0, 3C 00 (no status byte). NP2kai's
+        // sendmpumsg (../NP2kai/cbus/mpu98ii.c at 5939e0c) stores the running status at the
+        // first message (:809 `cmd->rstat = data;`), puts it at index 0 of the second
+        // (:803 `cmd->data[0] = cmd->rstat;`, :804 `cmd->datapos = 1;`), stores 3C at index 1
+        // and advances to 2 (:816 `cmd->datapos++;`), so 00 completes it and
+        // sendmpushortmsg puts all three bytes out: the line carries 91 3C 40 91 3C 00. NP2kai's
+        // own MIDI-OUT file from MPUTEST /BYTES holds the same six bytes (the mputest lane's
+        // cross-check). The wire carries the full status again: sendmpushortmsg writes every
+        // byte it is handed (:230-231 `cm->write(cm, dat[i]);`), with no running-status
+        // compression on the way out.
+        stream_len = 0;
+        bus_wr(16'hE0D2, 8'hD0);
+        bus_rd(16'hE0D0, b0);
+        chk(b0 == 8'hFE, "the first 0xD0 of the running-status pair was not ACKed");
+        bus_wr(16'hE0D0, 8'h91);
+        bus_wr(16'hE0D0, 8'h3C);
+        bus_wr(16'hE0D0, 8'h40);
+        bus_wr(16'hE0D2, 8'hD0);
+        bus_rd(16'hE0D0, b0);
+        chk(b0 == 8'hFE, "the second 0xD0 of the running-status pair was not ACKed");
+        bus_wr(16'hE0D0, 8'h3C);
+        bus_wr(16'hE0D0, 8'h00);
+        idle_cycles(120_000);               // ~2.4 ms: six byte times
+        chk(stream_len == 6, "0xD0 + a running-status message did not put 6 bytes out");
+        chk(stream[0] == 8'h91 && stream[1] == 8'h3C && stream[2] == 8'h40,
+            "the full message before the running-status one is wrong");
+        chk(stream[3] == 8'h91, "the running-status message did not re-emit its status 0x91");
+        chk(stream[4] == 8'h3C, "the running-status message's note is not 0x3C");
+        chk(stream[5] == 8'h00, "the running-status message's velocity is not 0x00");
 
         // ---- 6. 0xDF + a system exclusive passes through byte-identically --------------
         stream_len = 0;
@@ -268,14 +391,42 @@ module tb_pc9821_mpu;
         idle_cycles(60_000);
         chk(stream_len == 1 && stream[0] == 8'h5A,
             "a UART-mode data write did not pass straight through");
-        // A command that is not 0xFF is NOT ACKed in UART mode (mpu98ii_o2's mode branch), and
-        // 0xFF returns to intelligent mode with an ACK.
+        // A command that is not 0xFF is NOT ACKed in UART mode (mpu98ii_o2's mode branch).
         bus_wr(16'hE0D2, 8'h94);
         bus_rd(16'hE0D2, b0);
         chk(b0 == 8'h80, "a command was ACKed in UART mode");
+        // ---- 10a. 0xFF leaves UART mode and is NOT acknowledged (todo item 173) ---------
+        // The Roland MPU-401 Technical Reference Manual, section 5.3 ($3F): "To return from
+        // this mode back to normal MPU-401 operation use the SYSTEM RESET command ($FF). The
+        // MPU-401 will not return an ACK ($FE) in this one case."; section 4.1 repeats it: "An
+        // ACK will not be sent back upon sending a SYSTEM RESET to leave the UART MODE ($3F)."
+        // DOSBox-X agrees (src/hardware/mpu401.cpp, MPU401_WriteCommand case 0xff:
+        // `return;	//do not send ack in UART mode`), and a real MPU-PC98 does not ACK it
+        // (docs/probes/MPUTEST-XE10.TXT and MPUTEST-XE10-BYTES.TXT: every UART-mode 0xFF row
+        // reads `ack=--`, 4 of 4). NP2kai
+        // ACKs it; the owner follows the manual and the hardware. So: no data byte becomes
+        // readable (status bit 7, DSR, stays 1), no request is raised, no byte reaches the line
+        // (no burst from UART mode), and the card is back in intelligent mode, where the next
+        // command is ACKed as before.
+        stream_len = 0;
+        t0 = irq_rises;
         bus_wr(16'hE0D2, 8'hFF);
+        idle_cycles(2000);
+        bus_rd(16'hE0D2, b0);
+        chk(b0 == 8'h80, "0xFF leaving UART mode was acknowledged (status bit 7 cleared)");
+        chk(irq == 1'b0 && irq_rises == t0,
+            "0xFF leaving UART mode raised a request (an ACK was queued)");
+        chk(dut.rq_cnt == 5'd0, "0xFF leaving UART mode queued a response byte");
+        idle_cycles(60_000);
+        chk(stream_len == 0, "0xFF leaving UART mode put bytes on the line");
+        bus_wr(16'hE0D2, 8'h94);            // intelligent mode again: ACKed as before
+        bus_rd(16'hE0D2, b0);
+        chk(b0 == 8'h00, "the command after leaving UART mode was not ACKed (still in UART mode?)");
+        chk(irq_rises == t0 + 1, "the intelligent-mode ACK after leaving UART mode raised no request");
         bus_rd(16'hE0D0, b0);
-        chk(b0 == 8'hFE, "0xFF did not return from UART mode with an ACK");
+        chk(b0 == 8'hFE, "the intelligent-mode ACK after leaving UART mode is not 0xFE");
+        bus_rd(16'hE0D2, b0);
+        chk(b0 == 8'h80, "a byte other than the one ACK followed the intelligent-mode command");
 
         // ---- 10b. the response queue holds two values: ACK 0xFE and H.CLK 0xFD, and ---
         // ----      an ACK outranks a tick when both land on the same cycle --------------
@@ -312,6 +463,81 @@ module tb_pc9821_mpu;
         chk(b0 == 8'hFE, "the same-cycle ACK did not outrank the H.CLK kick (second byte)");
         bus_rd(16'hE0D2, b0);
         chk(b0 == 8'h80, "the dropped H.CLK kick left a byte behind the two ACKs");
+
+        // ---- 12. one request per response byte (NP2kai mpu98ii.c:1101-1102 re-raises after a
+        //         read that leaves a byte; :1054-1059 raises on every ACK enqueue) -------------
+        // An ISR that reads ONE byte per interrupt must be interrupted again for the next one.
+        idle_cycles(4);
+        t0 = irq_rises;
+        bus_wr(16'hE0D2, 8'h94);            // ACK 1: the line rises from an empty queue
+        idle_cycles(4);
+        chk(irq_rises == t0 + 1, "the first ACK raised no request");
+        bus_wr(16'hE0D2, 8'h94);            // ACK 2 onto a non-empty queue: a fresh request
+        idle_cycles(4);
+        chk(irq_rises == t0 + 2, "an ACK queued behind another raised no new request");
+        bus_rd(16'hE0D0, b0);               // one byte read, one still queued: a fresh request
+        idle_cycles(4);
+        chk(b0 == 8'hFE, "the first queued ACK is not 0xFE");
+        chk(irq == 1'b1, "the line is low with a byte still queued");
+        chk(irq_rises == t0 + 3, "a read that left a byte queued raised no new request");
+        bus_rd(16'hE0D0, b0);               // the last byte: the line falls, no request
+        idle_cycles(4);
+        chk(b0 == 8'hFE, "the second queued ACK is not 0xFE");
+        chk(irq == 1'b0, "the line stayed high after the queue drained");
+        chk(irq_rises == t0 + 3, "the draining read raised a request");
+
+        // ---- 13. a writer that polls BUSY before every write never loses a byte --------
+        // The Roland MPU-401 Technical Reference Manual (CPU v1.5A, Manual v1.5; status port
+        // "bit 6 : DRR*", "DRR bit 6 of MPU status byte (Data Receive Ready, active low)", and
+        // the section 9A handshake "1. test DRR (bit 6) of STATPORT. 2. if bit 6 = 1, then goto
+        // step 1.") gives the host one flow control: bit 6 clear means the card takes the next
+        // byte. So a write made with bit 6 clear must never be lost. NP2kai never drops one
+        // (../NP2kai/cbus/mpu98ii.c at 5939e0c: mpu98ii_o0's UART branch :1028
+        // `sent = cm_mpu98->write(cm_mpu98, (UINT8)dat);` hands each byte on, and the status
+        // read :1128 `ret = mpu98.status;` reports MIDIOUT_BUSY as midiwait :399-400 set it).
+        // The writer below is MMD's CS:0x01D3 primitive at this bench's fastest bus rate; at
+        // every poll, a byte parked outside the queue (dut.pend_valid) must read as BUSY.
+        //
+        // 13a, UART mode: 0x3F starts the 48-byte all-notes-off burst, then 120 bytes are
+        // written as fast as BUSY allows - into the burst's first cycles, while the 32-byte
+        // queue fills, and on after it has drained. The line must carry the burst and then all
+        // 120 bytes in order. FAIL-FIRST: with BUSY taken from the queue count alone, the
+        // writes in the burst's first 16 cycles overwrite the parked byte.
+        stream_len = 0;
+        polled_cmd(8'h3F);
+        for (t0 = 0; t0 < 120; t0 = t0 + 1) polled_dat(t0[7:0]);
+        wait_line_idle();
+        chk(stream_len == 48 + 120,
+            "a BUSY-polled UART-mode writer lost or gained bytes across the 0x3F burst");
+        for (t0 = 0; t0 < 48; t0 = t0 + 1)
+          chk(stream[t0] == ((t0 % 3 == 0) ? (8'hB0 + 8'(t0 / 3)) :
+                             (t0 % 3 == 1) ? 8'h7B : 8'h00),
+              "the 0x3F burst is not 16 x Bn 7B 00 ahead of the polled bytes");
+        for (t0 = 0; t0 < 120 && 48 + t0 < stream_len; t0 = t0 + 1)
+          chk(stream[48 + t0] == t0[7:0],
+              "a BUSY-polled UART-mode byte is missing or out of order");
+        polled_uart_exit();                 // back to intelligent mode (no burst, no ACK)
+        wait_line_idle();
+
+        // 13b, intelligent mode: 0xFF's burst, then 0xDF and a 63-byte system exclusive
+        // (F0 7D 00..3B F7) written BUSY-polled, longer than the queue. Same invariant.
+        stream_len = 0;
+        polled_cmd(8'hFF);
+        polled_cmd(8'hDF);
+        polled_dat(8'hF0);
+        polled_dat(8'h7D);
+        for (t0 = 0; t0 < 60; t0 = t0 + 1) polled_dat(t0[7:0]);
+        polled_dat(8'hF7);
+        wait_line_idle();
+        chk(stream_len == 48 + 63,
+            "a BUSY-polled 0xDF writer lost or gained bytes across the 0xFF burst");
+        chk(stream[48] == 8'hF0 && stream[49] == 8'h7D && stream[48 + 62] == 8'hF7,
+            "the BUSY-polled system exclusive is not framed F0 7D .. F7 after the burst");
+        for (t0 = 0; t0 < 60; t0 = t0 + 1)
+          chk(stream[50 + t0] == t0[7:0],
+              "a BUSY-polled system exclusive byte is missing or out of order");
+        chk(parked_polls > 0,
+            "no poll ever met a parked byte: the BUSY-while-parked check never ran");
 
         // ---- 11. the two-clock line rate ----------------------------------------------
         // The probes run their own DUTs from the same reset; a fixed clk_sys count would read

@@ -32,8 +32,11 @@
 //      swapped for one cycle at most: order by the cycle stamp.
 //   0x43  TRACE entry, 15 bytes: 0xA5, 0x43, index (16), CS, EIP (32), SP, EFLAGS[15:0], 0x5A -
 //      the frozen ring dumped oldest first, once
-//   0x44  TRIGGER, 13 bytes: 0xA5, 0x44, stage (1 or 2), address (32), data (32), byte enables,
-//      0x5A - the event that froze the trace (a PC trigger carries EIP and {16'b0, CS})
+//   0x44  TRIGGER, 13 bytes: 0xA5, 0x44, stage, address (32), data (32), byte enables, 0x5A - the
+//      event that froze the trace (a PC trigger carries EIP and {16'b0, CS}; an I/O trigger carries
+//      {16'b0, port} and {matches since ARM_S [23:0] (saturating), the byte}). The stage byte is
+//      {tag[3:0], 1'b0, last, stage[1:0]}: stage 1 or 2, last = 1 in the LAST_MS mode, tag = 4 for
+//      the I/O trigger and 0 for the others (whose records are unchanged).
 //
 // THE TRACE: every instruction issue writes {CS, next EIP, SP, EFLAGS[15:0]} into a 2^TRACE_AW ring.
 // (The general registers are not in it: z486 exports no tap for them, and the CPU is the fork's.)
@@ -42,6 +45,16 @@
 //   2 WRITE   the first CPU write covering the byte at physical TRIG_ADDR
 //   3 RELOAD  a CPU write of a nonzero 16-bit word to the even-aligned word at TRIG_ADDR that
 //             follows a write of zero to it (the pn-stall method: a stub's header reload)
+//   4 IO      the first CPU OUT of the byte TRIG_ADDR[7:0] to the port TRIG_ADDR[23:8] (any byte
+//             when TRIG_ADDR[24] is set), seen on the iobus's last-access latch (lio_*), so it
+//             covers the ports the iobus answers itself (the FDC) as well as the device bus. The
+//             trace entry of the OUT itself is already in the ring when the latch lands.
+// LAST_MS != 0 selects the LAST occurrence instead of the first (single stage; PC, WRITE or IO):
+// every match re-arms, records POST issues after it and then holds that capture as the candidate
+// while recording goes on in a second ring bank (so the next match has its own history); the
+// candidate is dumped once LAST_MS ms pass with no further match. A match that comes within the
+// POST issues of the previous one restarts the count (the capture follows the later match). The
+// dump then carries only the entries written since that bank was last started (at most 2^TRACE_AW).
 // Nothing fires before ARM_S seconds have passed (boot-time traffic). With a second stage
 // (TRIG2_LO != TRIG2_HI) the first trigger only ARMS the second: the first CPU write into
 // [TRIG2_LO, TRIG2_HI) after it is the trigger that counts (pn-stall: the overlay overwrite that
@@ -84,7 +97,8 @@ module pc9821_dbg_cpu #(
     parameter [31:0]  TRIG2_HI   = 32'h0,
     parameter integer ARM_S      = 0,
     parameter integer POST       = 32,
-    parameter integer TRACE_AW   = 9
+    parameter integer TRACE_AW   = 9,
+    parameter integer LAST_MS    = 0
 ) (
     input  wire        clk,
     input  wire [15:0] cpu_cs,
@@ -111,6 +125,11 @@ module pc9821_dbg_cpu #(
     input  wire [31:0] gate_addr,
     input  wire        issue,
     input  wire [31:0] issue_eip,
+    // the iobus's last-access latch (pc9821_iobus dbg_last_io_*): one strobe per landed access
+    input  wire        lio_stb,
+    input  wire        lio_wr,
+    input  wire [15:0] lio_addr,
+    input  wire [7:0]  lio_data,
     // the CPU's memory port (accepted requests and response beats)
     input  wire        m_valid,
     input  wire        m_ready,
@@ -134,6 +153,8 @@ module pc9821_dbg_cpu #(
   localparam [POST_W-1:0] POST_LAST = POST_W'(POST - 1);   // (unused when POST = 0)
   localparam integer EQW = 101;
   localparam [TRACE_AW:0] D_FULL = (TRACE_AW+1)'(TRACE_N);   // the dump has loaded every entry
+  localparam         IS_LAST = HAS_TRACE && (LAST_MS != 0);
+  localparam integer TAW = TRACE_AW + (IS_LAST ? 1 : 0);      // a second ring bank in the LAST mode
 
   // ---- time ----
   reg [31:0] ms_div = 32'd0;
@@ -305,25 +326,79 @@ module pc9821_dbg_cpu #(
   wire        wrd_hit = acc_wr && m_addr[31:2] == WORD_ADDR[31:2] && (|m_be[{WORD_ADDR[1], 1'b0} +: 2]);
   wire [15:0] wrd_val = WORD_ADDR[1] ? m_wdata[31:16] : m_wdata[15:0];
   wire        pc_hit  = issue && cpu_cs == TRIG_CS && issue_eip == TRIG_ADDR;
+  wire        io_hit  = lio_stb && lio_wr && lio_addr == TRIG_ADDR[23:8] &&
+                        (TRIG_ADDR[24] || lio_data == TRIG_ADDR[7:0]);
   reg         hdr_zero = 1'b0;
   reg         stage1 = 1'b0, tr_trig = 1'b0, tr_frozen = 1'b0;
   reg  [POST_W-1:0] tr_post = {POST_W{1'b0}};
   reg  [1:0]  trg_stage = 2'd0;
   reg  [31:0] trg_addr = 32'd0, trg_data = 32'd0;
   reg  [3:0]  trg_be = 4'd0;
-  wire        s1_fire = HAS_TRACE && armed && !stage1 && !tr_trig && !tr_frozen &&
+  // the I/O trigger's match count since ARM_S, reported in its record (saturating)
+  reg  [23:0] io_cnt = 24'd0;
+  wire [23:0] io_cnt_n = (io_cnt == 24'hFFFFFF) ? io_cnt : io_cnt + 24'd1;
+  always @(posedge clk) if (TRIG_KIND == 4 && armed && !tr_frozen && io_hit) io_cnt <= io_cnt_n;
+  wire [31:0] io_tdata = {io_cnt_n, lio_data};
+  wire        s1_fire = HAS_TRACE && !IS_LAST && armed && !stage1 && !tr_trig && !tr_frozen &&
                         ((TRIG_KIND == 1 && pc_hit) ||
                          (TRIG_KIND == 2 && wr_hit) ||
-                         (TRIG_KIND == 3 && wrd_hit && wrd_val != 16'd0 && hdr_zero));
+                         (TRIG_KIND == 3 && wrd_hit && wrd_val != 16'd0 && hdr_zero) ||
+                         (TRIG_KIND == 4 && io_hit));
   wire        s2_fire = HAS_TRACE && HAS_STAGE2 && stage1 && !tr_trig && !tr_frozen && acc_wr &&
                         m_addr >= TRIG2_LO && m_addr < TRIG2_HI;
   wire        tr_wr = !tr_frozen && issue;
-  (* ramstyle = "M10K" *) reg [79:0] tr [0:TRACE_N-1];
+  (* ramstyle = "M10K" *) reg [79:0] tr [0:(1 << TAW)-1];
   reg [TRACE_AW-1:0] tr_wp = {TRACE_AW{1'b0}};
-  generate if (HAS_TRACE) begin : g_tr
+  // the LAST mode's state: the bank being written and how full it is, the held candidate
+  reg         rec_bank = 1'b0, cand_bank = 1'b0, in_post = 1'b0, have_cand = 1'b0;
+  reg  [TRACE_AW:0]   fill = {(TRACE_AW+1){1'b0}}, cand_fill = {(TRACE_AW+1){1'b0}};
+  reg  [TRACE_AW-1:0] cand_wp = {TRACE_AW{1'b0}};
+  reg  [31:0] quiet = 32'd0;
+  reg  [31:0] lv_addr = 32'd0, lv_data = 32'd0;   // the latest match, until its capture commits
+  reg  [3:0]  lv_be = 4'd0;
+  reg  [TRACE_AW-1:0] d_rp = {TRACE_AW{1'b0}};    // the dump's read pointer (the serialiser's)
+  wire [TAW-1:0] wr_ix, rd_ix;
+  generate if (IS_LAST) begin : g_ix2
+    assign wr_ix = {rec_bank, tr_wp};
+    assign rd_ix = {cand_bank, d_rp};
+  end else begin : g_ix1
+    assign wr_ix = tr_wp;
+    assign rd_ix = d_rp;
+  end endgenerate
+  generate if (IS_LAST) begin : g_last
+    wire l_hit = armed && !tr_frozen &&
+                 ((TRIG_KIND == 1 && pc_hit) || (TRIG_KIND == 2 && wr_hit) || (TRIG_KIND == 4 && io_hit));
+    wire [TRACE_AW-1:0] wp_n = tr_wp + 1'b1;
+    wire [TRACE_AW:0]   fill_n = (fill == D_FULL) ? D_FULL : fill + 1'b1;
+    // the capture of the latest match is complete: POST issues after it (POST = 0: at once)
+    wire l_commit = in_post && !l_hit && (POST == 0 || (tr_wr && tr_post == POST_LAST));
     always @(posedge clk) begin
       if (tr_wr) begin
-        tr[tr_wp] <= {cpu_cs, issue_eip, cpu_sp, cpu_flags};
+        tr[wr_ix] <= {cpu_cs, issue_eip, cpu_sp, cpu_flags};
+        tr_wp <= wp_n;
+        fill <= fill_n;
+        if (in_post) tr_post <= tr_post + 1'b1;
+      end
+      if (l_hit) begin
+        in_post <= 1'b1; tr_post <= {POST_W{1'b0}};   // (the quiet time restarts at the commit)
+        lv_addr <= (TRIG_KIND == 1) ? issue_eip : (TRIG_KIND == 4) ? {16'd0, lio_addr} : m_addr;
+        lv_data <= (TRIG_KIND == 1) ? {16'd0, cpu_cs} : (TRIG_KIND == 4) ? io_tdata : m_wdata;
+        lv_be   <= (TRIG_KIND == 2) ? m_be : 4'd0;
+      end else if (l_commit) begin
+        // hold this bank as the candidate, record on in the other one from empty
+        in_post <= 1'b0; have_cand <= 1'b1; quiet <= 32'd0;
+        cand_bank <= rec_bank; cand_wp <= tr_wr ? wp_n : tr_wp; cand_fill <= tr_wr ? fill_n : fill;
+        rec_bank <= ~rec_bank; tr_wp <= {TRACE_AW{1'b0}}; fill <= {(TRACE_AW+1){1'b0}};
+        trg_stage <= 2'd1; trg_addr <= lv_addr; trg_data <= lv_data; trg_be <= lv_be;
+      end else if (have_cand && !in_post && !tr_frozen && ms_tick) begin
+        quiet <= quiet + 32'd1;
+        if (quiet + 32'd1 >= LAST_MS) tr_frozen <= 1'b1;
+      end
+    end
+  end else if (HAS_TRACE) begin : g_tr
+    always @(posedge clk) begin
+      if (tr_wr) begin
+        tr[wr_ix] <= {cpu_cs, issue_eip, cpu_sp, cpu_flags};
         tr_wp <= tr_wp + 1'b1;
         if (tr_trig) begin
           tr_post <= tr_post + 1'b1;
@@ -333,9 +408,9 @@ module pc9821_dbg_cpu #(
       if (TRIG_KIND == 3 && armed && wrd_hit && !stage1 && !tr_trig && wrd_val == 16'd0) hdr_zero <= 1'b1;
       if (s1_fire) begin
         trg_stage <= 2'd1;
-        trg_addr <= (TRIG_KIND == 1) ? issue_eip : m_addr;
-        trg_data <= (TRIG_KIND == 1) ? {16'd0, cpu_cs} : m_wdata;
-        trg_be   <= (TRIG_KIND == 1) ? 4'd0 : m_be;
+        trg_addr <= (TRIG_KIND == 1) ? issue_eip : (TRIG_KIND == 4) ? {16'd0, lio_addr} : m_addr;
+        trg_data <= (TRIG_KIND == 1) ? {16'd0, cpu_cs} : (TRIG_KIND == 4) ? io_tdata : m_wdata;
+        trg_be   <= (TRIG_KIND == 1 || TRIG_KIND == 4) ? 4'd0 : m_be;
         if (HAS_STAGE2) stage1 <= 1'b1; else tr_trig <= 1'b1;
       end
       if (s2_fire) begin
@@ -355,8 +430,12 @@ module pc9821_dbg_cpu #(
   reg [79:0]  t_cur;
   reg [7:0]   smp_t = 8'h20;
   reg [47:0]  lst_snap = 48'd0;    // {cycle of the first loss, count}, taken when the record starts
-  reg [TRACE_AW-1:0] d_rp = {TRACE_AW{1'b0}};
   reg [TRACE_AW:0]   d_n = {(TRACE_AW+1){1'b0}};   // entries loaded so far
+  // the dump: the whole ring oldest first, or (LAST mode) the candidate bank's filled entries
+  wire [TRACE_AW:0]   d_total = IS_LAST ? cand_fill : D_FULL;
+  wire [TRACE_AW-1:0] d_start = IS_LAST ? cand_wp - cand_fill[TRACE_AW-1:0] : tr_wp;
+  localparam [3:0]    TRG_TAG = (TRIG_KIND == 4) ? 4'd4 : 4'd0;
+  localparam [0:0]    TRG_LAST = IS_LAST ? 1'b1 : 1'b0;
   reg        d_state = 1'b0;       // the dump has started
   reg        d_done = 1'b0;
   reg        trg_sent = 1'b0;
@@ -370,7 +449,7 @@ module pc9821_dbg_cpu #(
   wire [TRACE_AW:0] d_idx_w = d_n - 1'b1;
   wire [15:0]  d_idx = 16'(d_idx_w);
   wire [119:0] rec_t = {8'hA5, 8'h43, d_idx, t_cur, 8'h5A};
-  wire [103:0] rec_g = {8'hA5, 8'h44, 6'd0, trg_stage, trg_addr, trg_data, 4'h0, trg_be, 8'h5A};
+  wire [103:0] rec_g = {8'hA5, 8'h44, TRG_TAG, 1'b0, TRG_LAST, trg_stage, trg_addr, trg_data, 4'h0, trg_be, 8'h5A};
   wire [5:0]   k_len = (kind == K_SMP) ? 6'd34 : (kind == K_EVT) ? 6'd15 : (kind == K_LST) ? 6'd8 :
                        (kind == K_TRC) ? 6'd15 : 6'd13;
   assign s_busy = (kind == K_SMP);
@@ -396,7 +475,7 @@ module pc9821_dbg_cpu #(
     if (ld) begin
       ld <= 1'b0;
       if (kind == K_EVT) begin e_cur <= eq[eq_rp[7:0]]; eq_rp <= eq_rp + 9'd1; end
-      if (kind == K_TRC) begin t_cur <= tr[d_rp]; d_rp <= d_rp + 1'b1; d_n <= d_n + 1'b1; end
+      if (kind == K_TRC) begin t_cur <= tr[rd_ix]; d_rp <= d_rp + 1'b1; d_n <= d_n + 1'b1; end
     end else if (kind != K_NONE) begin
       bi <= bi + 6'd1;
       if (bi == k_len - 6'd1) begin
@@ -412,8 +491,8 @@ module pc9821_dbg_cpu #(
       end else if (take_smp) begin
         kind <= K_SMP; smp_t <= s_lost ? 8'h21 : 8'h20;
       end else if (HAS_TRACE && tr_frozen && !d_done) begin
-        if (!d_state) begin d_state <= 1'b1; d_rp <= tr_wp; d_n <= {(TRACE_AW+1){1'b0}}; end
-        else if (d_n == D_FULL) d_done <= 1'b1;
+        if (!d_state) begin d_state <= 1'b1; d_rp <= d_start; d_n <= {(TRACE_AW+1){1'b0}}; end
+        else if (d_n == d_total) d_done <= 1'b1;
         else begin kind <= K_TRC; ld <= 1'b1; end
       end else if (HAS_TRACE && d_done && !trg_sent) begin
         kind <= K_TRG;

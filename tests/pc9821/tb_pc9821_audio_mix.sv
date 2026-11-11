@@ -2,7 +2,7 @@
 // and the CLK_AUDIO final mix must be the single-clamp sum the references have.
 //
 // ==== WHAT THIS PROVES ====
-// The PC-9801-86's sample reaches AUDIO_L, and the volume stage obeys the law at its three broken points: with the mixer wired exactly as z486_mister.sv wires it - the same ten-channel sb_volume concat and the same volumes pc9821_system.sv drives, INCLUDING both vol_cd ends - 5'd31 (the OSD CD audio volume field's 0 dB step) and 5'd0 (its Off step, and the constant without CD audio, pc9821_system.sv CDROM_AUDIO_EN; F6 asked for the muted arm) - a sample on the -86 slot comes out bit-identical at unity through the real pc9821_audio_volume, volume code 0 is TRUE MUTE (a full-scale CD-DA sample at vol_cd 0 contributes EXACTLY zero through the module and at mix_dry, both polarities - NP2kai volume-0 is exact 0, sound/beepg.c:161-163), and MASTER SCALING LANDS BEFORE THE FINAL SATURATION (NP2kai scales every source by vol_master pre-sum, sound/fmboard.c:103-133): at master code 28 (-6 dB) the over-rail sum +40000 comes out +20047 = floor(40000*32846/2^16) UNSATURATED and -40000 comes out -20048, where the old post-clamp master emitted +16422/-16423 of clipped audio turned down. It also pins the final DAC's arithmetic (datapaths.md F1/F2): spk + the -86 stream + CD sum WIDE (20-bit, no wrap) and saturate ONCE at mix_dry on the master-scaled sum - a positive overflow clamps to 0x7FFF (the pre-fix 17-bit mix_tmp wrapped and the saturator emitted 0x8000: wrong rail AND polarity), the sum swept through 65530..65545 stays on the +rail across the wrap boundary, a large negative clamps to 0x8000, and a wide (-86-scale) sample_86 crosses pc9821_audio_volume unclipped at unity to be clipped exactly once at the DAC.
+// The PC-9801-86's sample reaches AUDIO_L, and the volume stage obeys the law at its three broken points: with the mixer wired exactly as pc9821_audio_mix wires it at the OSD Audio page's 0 dB - the same ten-channel sb_volume concat and the same volumes pc9821_system.sv drives, INCLUDING both vol_cd ends - 5'd31 (the OSD CD audio volume field's 0 dB step) and 5'd0 (its Off step, and the constant without CD audio, pc9821_system.sv CDROM_AUDIO_EN; F6 asked for the muted arm) - a sample on the -86 slot comes out bit-identical at unity through the real pc9821_audio_volume, volume code 0 is TRUE MUTE (a full-scale CD-DA sample at vol_cd 0 contributes EXACTLY zero through the module and at mix_dry, both polarities - NP2kai volume-0 is exact 0, sound/beepg.c:161-163), and MASTER SCALING LANDS BEFORE THE FINAL SATURATION (NP2kai scales every source by vol_master pre-sum, sound/fmboard.c:103-133): at master code 28 (-6 dB) the over-rail sum +40000 comes out +20047 = floor(40000*32846/2^16) UNSATURATED and -40000 comes out -20048, where the old post-clamp master emitted +16422/-16423 of clipped audio turned down. It also pins the final DAC's arithmetic (datapaths.md F1/F2): spk + the -86 stream + CD sum WIDE (20-bit, no wrap) and saturate ONCE at mix_dry on the master-scaled sum - a positive overflow clamps to 0x7FFF (the pre-fix 17-bit mix_tmp wrapped and the saturator emitted 0x8000: wrong rail AND polarity), the sum swept through 65530..65545 stays on the +rail across the wrap boundary, a large negative clamps to 0x8000, and a wide (-86-scale) sample_86 crosses pc9821_audio_volume unclipped at unity to be clipped exactly once at the DAC.
 //
 // The PC-9801-86's sample reaches AUDIO_L at the WARRANTED VALUE, not merely nonzero:
 // the ten-channel sb_volume chain runs with the volumes pc9821_system.sv hard-wires
@@ -22,7 +22,7 @@
 //
 // ==== WARRANT (the wiring copy is re-sourced, not self-referenced) ====
 // The slot/channel assignment and the ten-channel concat order follow the MiSTer
-// framework's sound.v channel order (the sb_volume contract z486_mister.sv implements)
+// framework's sound.v channel order (the sb_volume contract pc9821_audio_mix implements)
 // and NP2kai's -86 -> soundout routing (the OPNA/86 mix is the `soundout` sum at the
 // DAC); the volumes are pc9821_system.sv's own hard-wires. The expected values are
 // COMPUTED from the gain law (volume 31 = unity, documented in the gain table), not
@@ -37,7 +37,7 @@
 // with the real ten-channel wiring, and the framework mixer's combinational lines.
 // NOT the top level: that needs the framework, so this bench pins the wiring, which is
 // where a card with working ports would hide. The mixer's sum/saturate copy is
-// byte-for-byte the shipped z486_mister.sv block and the checks below are the golden
+// byte-for-byte the shipped pc9821_audio_mix block and the checks below are the golden
 // model, so the pre-fix block (17-bit mix_tmp wrapping at 65536 and the (^mix[16:15])
 // saturator clamping a positive overflow to 0x8000) fails them - the fail-first for F2 -
 // and the widened one passes.
@@ -122,11 +122,11 @@ module tb_pc9821_audio_mix;
   reg signed [19:0] sample_86_r = 20'sd4000;
   reg signed [15:0] cdda_l      = 16'sd0;
   reg signed [15:0] cdda_r      = 16'sd0;
-  reg        [16:0] spk_out     = 17'd0;      // 0..16384, z486_mister's spk register
+  reg        [16:0] spk_out     = 17'd0;      // 0..16384, pc9821_audio_mix's spk register
   reg               vol_en_cd_l = 1'b1;       // z486_mister's vol_en[2]
   reg               vol_en_cd_r = 1'b1;       // z486_mister's vol_en[1]
 
-  // ---- the mixer's own state, as z486_mister.sv holds it -------------------
+  // ---- the mixer's own state, as pc9821_audio_mix holds it ---------------
   reg signed [19:0] mix_tmp_l = 20'sd0;
   reg signed [19:0] mix_tmp_r = 20'sd0;
   reg        [15:0] mix_dry_l = 16'd0;
@@ -163,7 +163,7 @@ module tb_pc9821_audio_mix;
     .valid(sb_volume_valid)
   );
 
-  // MIRROR of z486_mister.sv's CLK_AUDIO final mix (spk + the -86 stream + CD),
+  // MIRROR of pc9821_audio_mix's final mix (spk + the -86 stream + CD),
   // kept byte-identical to the shipped block. This is the F1/F2 fix site: the sum
   // is 20-bit signed (max 16384 + 255996 + 32767 = 305147, no wrap) and the ONE
   // saturation is mix_dry's, symmetric at the 16-bit rails - and it lands on the

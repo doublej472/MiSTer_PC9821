@@ -20,8 +20,9 @@
 #   PC9821Z486-xe.mgl                 the other set
 #   games/PC9821/pc98pack-xe10.bin    the packs, from your own dumps
 #   games/PC9821/pc98pack-xe.bin
-#   Scripts/pc9821_cue2pcd.sh         the Scripts-menu CUE/BIN -> PCD converter, and the
-#   Scripts/.pc9821/cue2pcd.py        tools/cue2pcd.py it runs (copied with the RBF)
+#
+# Nothing is copied to Scripts/: no script is installed on the MiSTer (the image converters
+# run on a computer).
 #
 #   tools/mister_load.sh                 # default set: RBF + pack + MGL + image, load
 #   tools/mister_load.sh --both          # both sets' packs and MGLs
@@ -33,6 +34,10 @@
 #                                        # also list a floppy per DRIVE in the MGL
 #                                        # (hps_io slots 1 and 2); the OSD's own S1/S2
 #                                        # entries mount either drive at any time
+#   tools/mister_load.sh --hdd2 B.img    # also list a second hard disk (hps_io slot 3) in
+#                                        # the MGL; it is IDE bank 1's master only while the
+#                                        # OSD's "IDE bank 1" field says HDD2 (status[67],
+#                                        # PC9821.CFG byte 8 bit 3), which an MGL cannot set
 #   tools/mister_load.sh --pack          # replace the pack already on the card
 #   tools/mister_load.sh --dumps DIR     # where the machine dumps live (see below)
 #   tools/mister_load.sh --skip-pack-check   # do NOT verify the local pack against
@@ -57,9 +62,8 @@
 # name docs/mister-testing.md gives every test build, e.g. MISTER_CORE=PC9821Z486-zreg), every
 # file this script writes or deletes on the card has "zreg" in its name: the RBF and the MGLs
 # are named after the core; the disk image and any floppy must be zreg-named copies (MISTER_IMG,
-# --fdd0/--fdd1; the card's own hdd.img is never mounted, use --no-image for none); the pack is
-# never written (the card's pack is checked read-only: --pack is refused); the Scripts-menu
-# converter is not copied; and --clean-stale removes only zreg-named PC9821 cores and MGLs.
+# --hdd2, --fdd0/--fdd1; the card's own hdd.img is never mounted, use --no-image for none); the pack is
+# never written (the card's pack is checked read-only: --pack is refused); and --clean-stale removes only zreg-named PC9821 cores and MGLs.
 #
 # The local pack (build/pc98pack-<machine>.bin) is verified against the dumps with
 # tools/check_pack.py BEFORE it is deployed, and a pack already on the card that
@@ -78,6 +82,7 @@
 #                     hdd.img if it is already on the card),
 #        MISTER_FDD0 / MISTER_FDD1 (floppy images to upload and list for drive 0
 #                     and drive 1; the same as --fdd0/--fdd1)
+#        MISTER_HDD2 (a second hard-disk image to upload and list; the same as --hdd2)
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -103,6 +108,8 @@ IMGNAME=${IMGNAME:-hdd.img}
 # so the guest finds it on its first access instead of needing a menu visit.
 FDD0=${MISTER_FDD0:-}
 FDD1=${MISTER_FDD1:-}
+# The second hard disk's image (hps_io slot 3), OPTIONAL in the same way.
+HDD2=${MISTER_HDD2:-}
 
 # Authentication: password "1" (the stock MiSTer root password) by default, through sshpass -e (it reads
 # SSHPASS from the environment, so the password never appears on a command line).
@@ -138,6 +145,8 @@ while [ $# -gt 0 ]; do
     --fdd0=*)   FDD0=${arg#*=} ;;
     --fdd1)     FDD1=${2:?--fdd1 needs a path}; shift ;;
     --fdd1=*)   FDD1=${arg#*=} ;;
+    --hdd2)     HDD2=${2:?--hdd2 needs a path}; shift ;;
+    --hdd2=*)   HDD2=${arg#*=} ;;
     --pack)     force_pack=1 ;;
     --dumps)    dumps_base=${2:?--dumps needs a directory}; shift ;;
     --dumps=*)  dumps_base=${arg#*=} ;;
@@ -364,9 +373,9 @@ if [ "$zreg_mode" = "1" ]; then
         echo "       copy with MISTER_IMG=<path>/<something>-zreg.img, or pass --no-image" >&2
         exit 2
     fi
-    for f in "$FDD0" "$FDD1"; do
+    for f in "$FDD0" "$FDD1" "$HDD2"; do
         if [ -n "$f" ] && ! is_zreg "$(basename "$f")"; then
-            echo "ERROR: floppy $f is not a zreg-named copy" >&2; exit 2
+            echo "ERROR: image $f is not a zreg-named copy" >&2; exit 2
         fi
     done
 fi
@@ -413,17 +422,6 @@ if [ "$copy" = "1" ]; then
     REMOTE_SUM=$($SSHP ssh $SSHO $HOST "sha256sum '$DEST'" | awk '{print $1}')
     [ "$LOCAL_SUM" = "$REMOTE_SUM" ] || { echo "RBF checksum mismatch" >&2; exit 1; }
     echo "  RBF sha256 $LOCAL_SUM verified"
-
-    # The Scripts-menu converter travels with the core, so the card's copy matches this tree.
-    # Not for a test core: the card's converter is not a zreg file.
-    if [ "$zreg_mode" = "1" ]; then
-        echo "test core: the card's Scripts-menu converter is left as it is"
-    else
-        echo "copying CUE/BIN converter -> /media/fat/Scripts/pc9821_cue2pcd.sh"
-        $SSHP ssh $SSHO $HOST "mkdir -p /media/fat/Scripts/.pc9821"
-        $SSHP scp $SSHO tools/mister/pc9821_cue2pcd.sh $HOST:/media/fat/Scripts/pc9821_cue2pcd.sh
-        $SSHP scp $SSHO tools/cue2pcd.py $HOST:/media/fat/Scripts/.pc9821/cue2pcd.py
-    fi
 fi
 
 # The packs are runtime inputs holding the user's own dumped firmware. Whatever goes
@@ -518,6 +516,15 @@ for pair in "0:$FDD0" "1:$FDD1"; do
     fi
     if [ "$drv" = "0" ]; then FDDNAME0=$name; else FDDNAME1=$name; fi
 done
+HDD2NAME=""
+if [ -n "$HDD2" ]; then
+    [ -f "$HDD2" ] || { echo "second hard-disk image not found: $HDD2" >&2; exit 1; }
+    HDD2NAME=$(basename "$HDD2")
+    if [ "$copy" = "1" ]; then
+        echo "copying HDD2 image -> $GAMES/$HDD2NAME"
+        $SSHP scp $SSHO "$HDD2" $HOST:$GAMES/$HDD2NAME
+    fi
+fi
 
 # Other PC9821 cores and MGLs this run does not write: LISTED, and deleted only with
 # --clean-stale (header, "NOTHING IS DELETED UNLESS ASKED"). For a test core the candidates are
@@ -554,7 +561,7 @@ $SSHP ssh $SSHO $HOST "
 # THE FLOPPY ENTRIES FOLLOW THE SAME RULE, and an S entry's `index` IS the hps_io
 # SLOT: 0 is the disk (CONF_STR S0), 1 is FDD0 (S1) and 2 is FDD1 (S2). Main_MiSTer
 # passes it straight through to user_io_file_mount (menu.cpp's mount action) and
-# hps_io answers with that slot's bit in img_mounted (sys/hps_io.sv:461 (img_mounted  <= io_din[VD:0] ? io_din[VD:0] : 1'b1;)).
+# hps_io answers with that slot's bit in img_mounted (sys/hps_io.sv:490 (img_mounted  <= io_din[VD:0] ? io_din[VD:0] : 1'b1;)).
 if [ "$mount_image" = "1" ]; then
     IMG_LINE="	<file delay=\"1\" type=\"s\" index=\"0\" path=\"$IMGNAME\"/>"
 else
@@ -564,6 +571,9 @@ FDD_LINE0=""
 FDD_LINE1=""
 if [ -n "$FDDNAME0" ]; then FDD_LINE0="	<file delay=\"1\" type=\"s\" index=\"1\" path=\"$FDDNAME0\"/>"; fi
 if [ -n "$FDDNAME1" ]; then FDD_LINE1="	<file delay=\"1\" type=\"s\" index=\"2\" path=\"$FDDNAME1\"/>"; fi
+# Slot 3 is the second hard disk (CONF_STR S3).
+HDD2_LINE=""
+if [ -n "$HDD2NAME" ]; then HDD2_LINE="	<file delay=\"1\" type=\"s\" index=\"3\" path=\"$HDD2NAME\"/>"; fi
 
 # WHY THERE IS NOTHING TO INSTALL. MiSTer gives a CONF_STR option no default entry
 # (MkDocs_MiSTer developer/conf_str.md: the `O` field names a range, a label and the
@@ -601,7 +611,7 @@ if $SSHP ssh $SSHO $HOST "test -f '$CFG'"; then
             echo "    Fix it on the card - either is enough, they are equivalent:"
             echo "      ssh root@<mister> 'rm /media/fat/config/$SETNAME.CFG'"
             echo "      ssh root@<mister> 'dd if=/dev/zero of=/media/fat/config/$SETNAME.CFG bs=16 count=1'"
-            echo "    or re-select the size in the OSD, which rewrites the file." ;;
+            echo "    or re-select the size in the OSD and choose Save settings, which rewrites the file." ;;
         *)  echo "  all zero: that IS the default now (16 MB). Nothing to do."
             echo "    One thing to know: before the rotation an all-zero file selected 1 MB, so"
             echo "    if this card was deliberately set to 1 MB it is now 16 MB. Re-select it in"
@@ -624,6 +634,7 @@ for m in $MACHINES; do
 	<rbf>_Computer/$CORE</rbf>
 	<setname>$SETNAME</setname>
 $IMG_LINE
+$HDD2_LINE
 $FDD_LINE0
 $FDD_LINE1
 	<file delay=\"1\" type=\"f\" index=\"0\" path=\"$PACK\"/>

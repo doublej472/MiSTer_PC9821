@@ -13,7 +13,11 @@
 // FOLLOWS THE PIT CHANNEL-0 OUT PIN (2826 falls / 2826 rises with ch0 in mode
 // 3), and that the keyboard (IRQ1) and IDE (IRQ9) requests clear when their
 // acking register read lowers the device line. IRQ2 (VSYNC, the in-service
-// measurement in docs/probes/VSYNC.TXT) and IRQ12 (OPNA register 0x27) HOLD.
+// measurement in docs/probes/VSYNC.TXT) HOLDS. IRQ11 (FDC) and IRQ12 (the 86 board's OPNA)
+// clear with their lines: docs/probes/XE10T-XE10-FDC.TXT `irq11_taken=0`, XE10T-XE10-OPNA2.TXT
+// FR_TMRA/B `irr1=00` 32/32 (IRQWD's IRQ12 row read the IRR before that ~12 us drop). IR6
+// (INT2, the MPU-PC98) clears with its line too: docs/probes/MPUTEST-XE10.TXT `pend=9841
+// after=9801`.
 // So the machine is a per-line mix, and WD_MASK names the lines that clear
 // their latched request on the device line's FALLING edge while the line is
 // MASKED. Gating on the mask is deliberate: an unmasked falling edge landing in

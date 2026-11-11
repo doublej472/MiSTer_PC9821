@@ -209,7 +209,10 @@ checked_ports = 0
 for p in wc_files:
     raw = p.read_text(errors="ignore")
     live = strip_comments_sv(raw)
-    for m in re.finditer(r"\b([a-z_]\w*)\s*(?:#\([^;]*?\))?\s+\w+\s*\(\s*\.\*\s*\)", live):
+    # The `.*` may follow named connections (`dut (.ide_unit0_present(1'b0), .*)`), so the
+    # list before it is allowed: 35 benches instantiate pc9821_iobus that way and a new
+    # port without a bench signal passed this check until it was widened.
+    for m in re.finditer(r"\b([a-z_]\w*)\s*(?:#\([^;]*?\))?\s+\w+\s*\((?:[^;]*?,)?\s*\.\*\s*\)", live):
         dut_mod = m.group(1)
         ports = module_ports(dut_mod)
         if ports is None:
@@ -413,7 +416,7 @@ check("core_soft_reset_req" not in top,
       "z486_mister.sv does not export the CPU's shutdown request as a button")
 check(re.search(r"wire\s+reset_req\s*=\s*buttons\[1\]\s*\|\s*status\[0\]", top) is not None,
       "the framework's own reset_req = buttons[1] | status[0] still starts the core's reset wire")
-# This is the text z486_mister.sv:530 `reset_req = buttons[1] | status[0]` names as
+# This is the text z486_mister.sv:627 `reset_req = buttons[1] | status[0]` names as
 # LOAD-BEARING. It is a CONTAINMENT check and
 # not an end-anchored one on purpose: the wire legitimately gained a third term
 # (`| disk_change_reset`, the HPS disk-change reset) and the framework's two terms still
@@ -421,13 +424,25 @@ check(re.search(r"wire\s+reset_req\s*=\s*buttons\[1\]\s*\|\s*status\[0\]", top) 
 # it by case alone). What must not happen is a rename of that port or the loss of either
 # term -- and an end-anchored regex would have called the third term a wiring break.
 
+# THE BOOT-ROM PACK DOWNLOAD. Main_MiSTer holds status[0] across a boot0.rom transfer, so the
+# SDRAM backend the loader writes through is on the platform reset EXCEPT while
+# pc9821_system's pack_load_hold is high (tb_pc9821_boot0_load drives the real pc9821_system
+# with this reset modelled; z486_mister.sv itself is in no bench, so the two texts are pinned
+# here). Losing the gate leaves the controller in reset for the whole download; losing the
+# port connection leaves the hold undriven.
+check(re.search(r"\)\s*de10_guest_memory\s*\((?:(?!\);).)*?\.reset\(\s*reset_sync_r\[2\]\s*&&\s*!pack_load_hold\s*\)",
+                top, re.S) is not None,
+      "the SDRAM backend's reset is reset_sync_r[2] && !pack_load_hold")
+check(re.search(r"\.pack_load_hold\s*\(\s*pack_load_hold\s*\)", top) is not None,
+      "z486_mister.sv connects pc9821_system's pack_load_hold")
+
 # The PC speaker is a real device on this machine, so a CONSTANT `speaker_out` is always
 # wrong -- and that is exactly what it was: `assign speaker_out = 1'b0;` tied off the last
 # wire of a path z486_mister.sv had carried all along, so the beeper computed nothing and
-# reached no DAC. The rest of the chain is pc9821_system -> z486_mister.sv's synchronizer
-# (:954), its level shift (:962) and its term in mix_tmp_l/r (:1039), and it ends AT THE
-# TOP LEVEL, so no unit bench reaches it (z486_mister.sv is in no bench's file list -- the
-# same reason the BUTTONS checks above are static). These two are the cheap half of that
+# reached no DAC. The rest of the chain is pc9821_system -> z486_mister.sv's synchronizer and
+# the pc9821_audio_mix instance (its amplitude stage and its term in mix_tmp_l/r), and the
+# wiring between them is AT THE TOP LEVEL, so no unit bench reaches it (z486_mister.sv is in no
+# bench's file list -- the same reason the BUTTONS checks above are static). These two are the cheap half of that
 # coverage: one fires if the line is tied off again, the other if it is driven by only
 # half of the pair the machine uses, i.e. a tone with no mute or a mute with no tone.
 system_src = (ROOT / "src/pc9821/core/pc9821_system.sv").read_text()
@@ -451,18 +466,25 @@ if speaker_assign:
     tb_speaker = re.search(r"wire\s+speaker\s*=\s*([^;]*);", beeper_tb)
     check(tb_speaker is not None and norm(tb_speaker.group(1)) == norm(speaker_rhs),
           "pc9821_system's speaker_out is the expression tb_pc9821_beeper proves (channel 1, muted)")
-    top_src = (ROOT / "z486_mister.sv").read_text()
-    amp_re = r"spk\s*<=\s*\w+\s*\?\s*\(\{15'd0,\s*beep_vol\}\s*<<\s*(.*?)\)\s*:\s*17'd0\s*;"
-    def shift_of(text):
-        m = re.search(amp_re, text)
-        if not m:
-            return None
-        # the bench spells the shift (5'd10 + 5'd0); the top level spells it 10
-        return sum(int(x) for x in re.findall(r"(?:\d+'d)?(\d+)", re.sub(r"[()]", "", m.group(1))))
-    top_shift, tb_shift = shift_of(top_src), shift_of(beeper_tb)
-    check(top_shift is not None and top_shift == tb_shift,
-          f"z486_mister.sv's speaker amplitude ({{15'd0, beep_vol}} << {top_shift}) is the block "
-          f"tb_pc9821_beeper mirrors (<< {tb_shift})")
+    # The amplitude block itself is no longer mirrored: the bench instantiates pc9821_audio_mix,
+    # the module z486_mister.sv instantiates for the mix, at the OSD Beeper level's 0 dB. What
+    # stays static is that both really do: the top level drives the mix's tone from the
+    # synchronised speaker_out, and the bench feeds it its own tone at gain code 31.
+    top_live_src = strip_comments_sv((ROOT / "z486_mister.sv").read_text())
+    mix_inst = re.search(r"\bpc9821_audio_mix\s+u_audio_mix\s*\((?:(?!\);).)*\);", top_live_src, re.S)
+    check(mix_inst is not None, "z486_mister.sv instantiates pc9821_audio_mix (u_audio_mix)")
+    if mix_inst:
+        inst = mix_inst.group(0)
+        check(re.search(r"\.speaker\s*\(\s*speaker_out_audio\s*\)", inst) is not None
+              and re.search(r"\.beep_vol\s*\(\s*beep_vol\s*\)", inst) is not None,
+              "the mix's tone is the synchronised speaker_out and its ladder the 0x871E beep_vol")
+        check(re.search(r"\.beep_level\s*\(\s*beep_level_code\s*\)", inst) is not None
+              and re.search(r"\.snd86_level\s*\(\s*snd86_level_code\s*\)", inst) is not None,
+              "the mix's Beeper and PC-9801-86 levels are pc9821_osd's decoded codes")
+    tb_live = strip_comments_sv(beeper_tb)
+    check(re.search(r"\bpc9821_audio_mix\s+u_mix\s*\((?:(?!\);).)*\.beep_level\s*\(\s*5'd31\s*\)"
+                    r"(?:(?!\);).)*\.speaker\s*\(\s*speaker\s*\)", tb_live, re.S) is not None,
+          "tb_pc9821_beeper measures the shipped pc9821_audio_mix at the Beeper level's 0 dB")
 
 # The slave 8259's request lines are wired in pc9821_system's `.slave_irq({...})`
 # concatenation, and the benches that prove a device's IRQ lands on its vector
@@ -472,17 +494,25 @@ if speaker_assign:
 # bit, MSB first: IR7 calendar, IR6 none, IR5 bus mouse (NP2kai io/mouseif.c:135
 # `pic_setirq(0x0d)`), IR4 the sound card's INT5 = IRQ12 (OPNA timers and 86-PCM),
 # IR3 FDC (the BIOS's vector 0x13 ISR), IR2 the FDC's 2DD-window IRQ10, IR1 IDE (HDD and
-# CD share the one channel IRQ), IR0 none.
+# CD share the one channel IRQ), IR0 none. IR4 is int5_irq, the output of the pc9821_irq_share
+# junction whose two inputs are the OPNA's and the 86-PCM's lines (tb_pc9821_irq_share: every
+# event from either is its own request), held below too.
 slave = re.search(r"\.slave_irq\s*\(\s*\{([^}]*)\}\s*\)", system_src)
 check(slave is not None, "pc9821_system.sv wires the slave PIC as a .slave_irq({...}) concatenation")
 if slave:
     terms = [re.sub(r"\s+", "", t) for t in slave.group(1).split(",")]
-    want = [{"cal_irq"}, {"1'b0"}, {"mouse_irq"}, {"opna_irq", "pcm86_irq"}, {"fdc_irq"},
+    want = [{"cal_irq"}, {"1'b0"}, {"mouse_irq"}, {"int5_irq"}, {"fdc_irq"},
             {"fdc_irq10"}, {"ata_irq", "cd_irq"}, {"1'b0"}]
     got = [set(t.split("|")) for t in terms]
     check(got == want,
-          f"the slave PIC's IR7..IR0 are calendar, -, mouse, OPNA|PCM86, FDC, FDC-2DD, IDE|CD, - "
+          f"the slave PIC's IR7..IR0 are calendar, -, mouse, INT5 (OPNA+PCM86), FDC, FDC-2DD, IDE|CD, - "
           f"(found {terms})")
+share = re.search(r"\bpc9821_irq_share\s+\w+\s*\(((?:(?!\);).)*)\);", system_src, re.S)
+check(share is not None
+      and re.search(r"\.irq_a\s*\(\s*opna_irq\s*\)", share.group(1)) is not None
+      and re.search(r"\.irq_b\s*\(\s*pcm86_irq\s*\)", share.group(1)) is not None
+      and re.search(r"\.irq\s*\(\s*int5_irq\s*\)", share.group(1)) is not None,
+      "pc9821_system.sv's pc9821_irq_share takes opna_irq and pcm86_irq and drives int5_irq")
 
 print("== the top level drives the video PLL with the cut-down reconfiguration core ==")
 # z486_mister.sv used to instantiate the full `pll_cfg` (altera_pll_reconfig_top/-core: the
@@ -501,7 +531,7 @@ check("pll_cfg" not in top_inst,
 
 print("== the framework hears every 24/31 kHz switch, and the UART line follows the OSD mode ==")
 # hps_io re-reports the video mode only when the active hcnt/vcnt change or new_vmode differs from
-# the level latched at the previous frame (sys/hps_io.sv:957 `old_vmode != new_vmode`). The 24 kHz
+# the level latched at the previous frame (sys/hps_io.sv:986 `old_vmode != new_vmode`). The 24 kHz
 # and 31 kHz rasters are both 640 x 400 active, so on the native path new_vmode is the only notice:
 # the top level tied it to 1'b0 and Main kept the 56 Hz frame timing for a 70 Hz picture.
 # tb_pc9821_vmode_notify proves video_out's vmode_31 makes video_calc report each switch; this holds
@@ -522,6 +552,33 @@ check(dbg_mode is not None, "uart_debug_mode is uart_mode == 0 (the OSD's None)"
 check(rhs.count("debug_uart_tx") == 1 and "uart_debug_mode?debug_uart_tx:1'b1" in rhs
       and "uart_midi_mode?mpu_uart_tx:" in rhs,
       f"UART_TXD carries the MPU in MIDI, the debug UART only in None, and idles high otherwise ({rhs!r})")
+
+print("== the Memory switch and Boot order fields drive the memory-switch hold on port 0x31 ==")
+# tb_pc9821_msw_hold pins pc9821_iobus's side (the latch and bit 4); the decode from the OSD
+# fields lives in pc9821_system's iobus instance, which no unit bench reaches. The Memory switch
+# field's Keep (msw_keep) holds it; so do Boot order positions 1..6, which seed a non-default
+# 0xA3FF2 nibble (pc9821_text_mem msw_fdd_nib); 0 and 7 decode to the measured nibble and leave
+# the switch to the Memory switch field.
+_sys_live = re.sub(r"//[^\n]*", "", (ROOT / "src/pc9821/core/pc9821_system.sv").read_text())
+check(re.search(r"\.msw_hold\(msw_keep\s*\|\|\s*\(\(cfg_fdd_mode\s*!=\s*3'd0\)\s*&&\s*"
+                r"\(cfg_fdd_mode\s*!=\s*3'd7\)\)\)", _sys_live) is not None,
+      "pc9821_system connects iobus msw_hold to msw_keep || ((cfg_fdd_mode != 0) && (cfg_fdd_mode != 7))")
+# The Text lines field reaches the iobus by name, and its setup_cfg reaches pc9821_cg.
+check(re.search(r"\.text_lines_20\(text_lines_20\)", _sys_live) is not None,
+      "pc9821_system connects the Text lines field to the iobus")
+check(len(re.findall(r"\.setup_cfg\(setup_cfg\)", _sys_live)) == 2,
+      "pc9821_system connects the iobus's setup_cfg to pc9821_cg")
+# The Floppy mode field reaches the iobus by name (tb_pc9821_floppy_mode pins the iobus side),
+# and the top level reaches pc9821_system with it; setup_cfg is the 24-bit {0x861E, 0x871E,
+# port 0x31} seed both stores are built from.
+check(re.search(r"\.floppy_mode\(floppy_mode\)", _sys_live) is not None,
+      "pc9821_system connects the Floppy mode field to the iobus")
+check(re.search(r"wire\s*\[23:0\]\s*setup_cfg;", _sys_live) is not None,
+      "pc9821_system's setup_cfg carries the three seed bytes (24 bits)")
+_top_live = re.sub(r"//[^\n]*", "", (ROOT / "z486_mister.sv").read_text())
+check(re.search(r"\.osd_floppy_mode\(status\[72:71\]\)", _top_live) is not None
+      and re.search(r"\.floppy_mode\s*\(floppy_mode\)", _top_live) is not None,
+      "z486_mister decodes status[72:71] in pc9821_osd and passes floppy_mode to pc9821_system")
 
 print()
 for n in NOTE:

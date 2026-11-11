@@ -1,0 +1,4 @@
+XE10CFG configuration stores (tools/hwprobe/xe10cfg)
+MSW5 A3FF2 was=01 wrote=01 now=01
+MODE68 before/after-0D/after-0C 18 58 18
+XE10CFG DONE

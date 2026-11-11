@@ -61,7 +61,33 @@ DST's name and an existing DST untouched. DST may not be SRC or a link to it, ev
 COPYRIGHT. No NEC code is embedded: the IPL, loader and boot sectors come from the input
 image, or (--ipl-from) from a user-supplied donor image with 512-byte sectors.
 
+A BLANK DISK (--new SIZE DST). Writes an empty disk in the layout above: 512-byte sectors, 8
+heads x 17 sectors, so its size is a whole number of 69,632-byte cylinders. SIZE is megabytes
+(`40`, `40M`, `40MB`) or cylinders (`600c`, `600cyl`). Megabytes become cylinders by NP2kai's
+own rule for a new IDE disk in this layout (fdd/newdisk.c hddsize2CHS: `*C = size;` with
+`size = (FILELEN)hddsizeMB * 15;`, `*H = 8;`, `*S = 17;`, `*SS = 512;`), so `40` is 600
+cylinders (41,779,200 bytes). The limits:
+  - at least 1 MB (15 cylinders), NP2kai's lower bound (newdisk.c: `(hddsize < 1)` is refused);
+  - at most 65,535 cylinders (4,563,333,120 bytes). The cylinder is a 16-bit number at every
+    level the disk is addressed through: the ATA task file (cylinder low/high registers), the
+    IDENTIFY current-cylinders word 54, which the core saturates at 0xFFFF
+    (src/pc9821/storage/pc9821_ata.sv `current_cylinders <= (|div_quotient_next[31:16]) ?
+    16'hFFFF`), and the BIOS disk call's 16-bit cylinder (NP2kai's 8x17 rule stops at 4351 MB
+    = 65,265 cylinders for the same reason: `if(hddsizeMB <= 4351){`). The machine's own
+    drive is 57,945 cylinders in this layout (docs/probes/IDE.TXT, IDENTIFY w54=E259). A
+    megabyte SIZE is held to NP2kai's 4351.
+The disk is all zeros: no IPL and no partition table. The BIOS does not boot from it (it starts
+the floppy instead); NEC MS-DOS's FORMAT, run from a DOS boot floppy, partitions it, formats
+it and writes the system. An image over 4 GiB - 1 byte (more than 61,680 cylinders) does not
+fit on a FAT32-formatted SD card (exFAT holds it); the tool says so. A `.hdi` DST gets the
+4096-byte HDI header, any other name a raw image. The image is written to a temporary file
+beside DST and renamed only when complete; an existing DST is refused without --force. The
+zeros are not held in memory (the file is extended, not written byte by byte), so any size
+runs in a few MB of RAM.
+
 Usage:
+  tools/pc98_hdd_convert.py --new 500 BLANK.img     # a blank 500 MB disk (7500 cylinders)
+  tools/pc98_hdd_convert.py --new 1000c BLANK.img   # a blank 1000-cylinder disk
   tools/pc98_hdd_convert.py SRC.hdi DST.hdi        # convert (DST .hdi -> HDI, else raw)
   tools/pc98_hdd_convert.py SRC DST --ipl-from DONOR.hdi
   tools/pc98_hdd_convert.py --info IMG [IMG...]    # header, partition table, BPBs
@@ -69,7 +95,10 @@ Usage:
   tools/pc98_hdd_convert.py --verify SRC DST       # every file in every FAT partition matches
   tools/pc98_hdd_convert.py --selftest             # synthetic SASI/IDE images round-trip
 
-Inputs: HDI (Anex86/NP2), NHD (T98-NEXT), or a raw image with --src-geometry SS,H,S.
+Inputs: HDI (Anex86/NP2), NHD (T98-NEXT), or a raw image with --src-geometry SS,H,S. An
+HDI's header may be any size of at least 32 bytes (its own +8 field); an HDI output always has
+the 4096-byte header, so SRC.hdi -> DST.hdi also turns an HDI whose header is not whole 512-byte
+sectors (which the core does not read) into one it does, with the files unchanged.
 Python 3.9 compatible.
 """
 
@@ -646,6 +675,143 @@ def build_disk(ss, heads, spt, cyls, parts_spec):
     return Image(bytes(d), ss, heads, spt, cyls, "hdi")
 
 
+# ----------------------------------------------------------------------------- blank disk
+
+NEW_HEADS, NEW_SPT, NEW_SS = 8, 17, 512
+NEW_CYL_BYTES = NEW_HEADS * NEW_SPT * NEW_SS        # 69,632
+NEW_CYLS_PER_MB = 15        # NP2kai fdd/newdisk.c hddsize2CHS: `size = (FILELEN)hddsizeMB * 15;`
+NEW_MIN_MB, NEW_MAX_MB = 1, 4351                    # newdisk.c: `(hddsize < 1)`, `<= 4351`
+NEW_MIN_CYLS, NEW_MAX_CYLS = NEW_MIN_MB * NEW_CYLS_PER_MB, 65535   # the 16-bit cylinder
+FAT32_FILE_MAX = 2 ** 32 - 1
+
+
+def parse_new_size(text):
+    """SIZE -> cylinders. `N`, `NM`, `NMB` are megabytes (x15 cylinders, NP2kai's rule);
+    `Nc`, `Ncyl` are cylinders. Raises ConvertError outside the limits."""
+    t = text.strip().lower()
+    for suffix, unit in (("cyl", "c"), ("c", "c"), ("mb", "m"), ("m", "m"), ("", "m")):
+        if t.endswith(suffix) and t[:len(t) - len(suffix)].isdigit():
+            n = int(t[:len(t) - len(suffix)])
+            break
+    else:
+        raise ConvertError("SIZE %r: give megabytes (500, 500M) or cylinders (7500c)" % text)
+    if unit == "m":
+        if not NEW_MIN_MB <= n <= NEW_MAX_MB:
+            raise ConvertError("SIZE %s: %d MB is outside %d..%d MB (%d..%d cylinders in "
+                               "megabytes; give cylinders, up to %d, for a larger disk)"
+                               % (text, n, NEW_MIN_MB, NEW_MAX_MB, NEW_MIN_CYLS,
+                                  NEW_MAX_MB * NEW_CYLS_PER_MB, NEW_MAX_CYLS))
+        return n * NEW_CYLS_PER_MB
+    if not NEW_MIN_CYLS <= n <= NEW_MAX_CYLS:
+        raise ConvertError("SIZE %s: %d cylinders is outside %d..%d (8 heads x 17 sectors x "
+                           "512 bytes per cylinder; the cylinder number is 16 bits)"
+                           % (text, n, NEW_MIN_CYLS, NEW_MAX_CYLS))
+    return n
+
+
+def new_disk(cyls, dst_path, fmt, force=False, log=print):
+    """Write an all-zero disk of `cyls` 8x17x512 cylinders to dst_path (raw or HDI). The data
+    is made by extending the file (truncate), so no image-sized buffer exists. Written to a
+    temporary beside dst_path and renamed only when complete and the right size."""
+    if os.path.isdir(dst_path):
+        raise ConvertError("%s is a directory" % dst_path)
+    if os.path.lexists(dst_path) and not force:
+        raise ConvertError("%s exists (--force to overwrite)" % dst_path)
+    data_bytes = cyls * NEW_CYL_BYTES
+    header = hdi_header(data_bytes, NEW_SS, NEW_SPT, NEW_HEADS, cyls) if fmt == "hdi" else b""
+    total = len(header) + data_bytes
+    d = os.path.dirname(os.path.abspath(dst_path))
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(dst_path) + ".", suffix=".part",
+                               dir=d)
+    umask = os.umask(0)
+    os.umask(umask)
+    try:
+        os.chmod(tmp, 0o666 & ~umask)
+        with os.fdopen(fd, "wb") as f:
+            fd = None
+            f.write(header)
+            f.truncate(total)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.getsize(tmp) != total:
+            raise ConvertError("the new image is %d bytes, not %d" % (os.path.getsize(tmp), total))
+        os.replace(tmp, dst_path)
+        tmp = None
+    except OSError as e:
+        raise ConvertError("writing %s: %s" % (dst_path, e))
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp is not None and os.path.exists(tmp):
+            os.unlink(tmp)
+    log("wrote %s: blank %s disk, 512-byte sectors, %d heads x %d sectors x %d cylinders, "
+        "%d bytes (%.1f MiB)" % (dst_path, fmt.upper(), NEW_HEADS, NEW_SPT, cyls, total,
+                                 total / 1048576.0))
+    if total > FAT32_FILE_MAX:
+        log("note: this file is larger than 4 GiB - 1 byte; it fits on an exFAT SD card, "
+            "not on a FAT32 one")
+    return total
+
+
+def selftest_new(quiet):
+    """--new: SIZE parsing and its limits, the exact size and zero contents of raw and HDI
+    output, that the image reads back in the core's layout, and the safe-output rules."""
+    fails = []
+    want = {"1": 15, "40": 600, "40M": 600, "40mb": 600, "4351": 65265, "15c": 15,
+            "600cyl": 600, "65535c": 65535, " 500 ": 7500}
+    for text, cyls in want.items():
+        try:
+            got = parse_new_size(text)
+            if got != cyls:
+                fails.append("--new SIZE %r: %d cylinders, want %d" % (text, got, cyls))
+        except ConvertError as e:
+            fails.append("--new SIZE %r refused: %s" % (text, e))
+    for text in ("0", "4352", "14c", "65536c", "", "M", "1.5", "-5", "40k", "0x10"):
+        try:
+            parse_new_size(text)
+            fails.append("--new SIZE %r was not refused" % text)
+        except ConvertError:
+            pass
+    with tempfile.TemporaryDirectory() as td:
+        for name, fmt in (("blank.img", "raw"), ("blank.hdi", "hdi")):
+            dp = os.path.join(td, name)
+            if main_quiet(["--new", "2", dp]) != 0:
+                fails.append("--new 2 %s: failed" % name)
+                continue
+            with open(dp, "rb") as f:
+                raw = f.read()
+            hdr = HDI_HEADER if fmt == "hdi" else 0
+            if len(raw) != hdr + 30 * 69632:
+                fails.append("--new 2 %s: %d bytes, want %d" % (name, len(raw), hdr + 30 * 69632))
+            if raw[hdr:].count(0) != len(raw) - hdr:
+                fails.append("--new %s: the disk is not all zeros" % name)
+            img = load_image(dp, None if fmt == "hdi" else (512, 8, 17))
+            if (img.ss, img.heads, img.spt, img.cyls, len(img.data)) != (512, 8, 17, 30,
+                                                                         30 * 69632):
+                fails.append("--new %s: reads back as %d/%d/%d x %d" % (name, img.ss, img.heads,
+                                                                       img.spt, img.cyls))
+            if fmt == "hdi" and struct.unpack_from("<8I", raw, 0) != (0, 0, 4096, 30 * 69632,
+                                                                      512, 17, 8, 30):
+                fails.append("--new blank.hdi: HDI header fields")
+        # an existing DST is refused and kept; --force replaces it; nothing else is left behind
+        dp = os.path.join(td, "blank.img")
+        if main_quiet(["--new", "1", dp]) == 0:
+            fails.append("--new over an existing file: not refused")
+        if os.path.getsize(dp) != 30 * 69632:
+            fails.append("--new over an existing file: the file was changed")
+        if main_quiet(["--new", "1", dp, "--force"]) != 0 or os.path.getsize(dp) != 15 * 69632:
+            fails.append("--new --force: the file was not replaced")
+        if main_quiet(["--new", "1", td]) == 0:
+            fails.append("--new onto a directory: not refused")
+        if main_quiet(["--new", "4352", os.path.join(td, "big.img")]) == 0:
+            fails.append("--new 4352: not refused")
+        if main_quiet(["--new", "1", os.path.join(td, "geo.img"), "--heads", "16"]) == 0:
+            fails.append("--new with --heads 16: not refused")
+        if sorted(os.listdir(td)) != ["blank.hdi", "blank.img"]:
+            fails.append("--new: unexpected files left: %s" % sorted(os.listdir(td)))
+    return fails
+
+
 def selftest():
     fails = []
     quiet = lambda *a: None
@@ -724,11 +890,46 @@ def selftest():
     except ConvertError:
         pass
     fails += selftest_fat32(payload, quiet) + selftest_safe_output(payload)
+    fails += selftest_short_header(payload)
+    fails += selftest_new(quiet)
     for f in fails:
         print("FAIL: " + f)
-    print("selftest: %s (%d layouts, FAT32 refusal, safe output)"
+    print("selftest: %s (%d layouts, FAT32 refusal, safe output, blank disk)"
           % ("PASS" if not fails else "FAIL", len(cases)))
     return 1 if fails else 0
+
+
+def selftest_short_header(payload):
+    """An HDI whose header is not whole 512-byte sectors (a 32-byte one: hsize = 32 at +8)
+    is read, and SRC.hdi -> DST.hdi rewrites it with the 4096-byte header; a disk already in
+    the target geometry keeps its data area byte for byte."""
+    fails = []
+    for label, ss, h, s, cyls in (("IDE 8h/17s", 512, 8, 17, 30), ("SASI 4h/33s", 256, 4, 33, 40)):
+        nbytes = (cyls - 1) * h * s * ss
+        fs, _ = build_fat(1024, 4, payload, nbytes // 1024 - 3)
+        src = build_disk(ss, h, s, cyls, [(1, cyls - 1, fs, "DOS", True)])
+        with tempfile.TemporaryDirectory() as td:
+            sp, dp = os.path.join(td, "short.hdi"), os.path.join(td, "out.hdi")
+            with open(sp, "wb") as f:
+                f.write(struct.pack("<8I", 0, 0, 32, len(src.data), ss, s, h, cyls) + src.data)
+            try:
+                if load_image(sp).data != src.data:
+                    fails.append(label + ": a 32-byte-header HDI does not read as its data")
+            except ConvertError as e:
+                fails.append(label + ": a 32-byte-header HDI is not read: %s" % e)
+                continue
+            if main_quiet([sp, dp]) != 0:
+                fails.append(label + ": a 32-byte-header HDI did not convert")
+                continue
+            with open(dp, "rb") as f:
+                out = f.read()
+            if struct.unpack_from("<I", out, 8)[0] != HDI_HEADER or len(out) % 512:
+                fails.append(label + ": the output header is not %d bytes" % HDI_HEADER)
+            if (ss, h, s) == (512, 8, 17) and out[HDI_HEADER:] != src.data:
+                fails.append(label + ": an 8h/17s disk's data area changed")
+            if not verify(src, load_image(dp), log=lambda *a: None):
+                fails.append(label + ": the files differ after the header rewrite")
+    return fails
 
 
 def as_fat32(disk, idx):
@@ -888,6 +1089,8 @@ def main(argv=None):
     ap.add_argument("--verify", nargs=2, metavar=("SRC", "DST"),
                     help="compare every file in every FAT partition")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--new", metavar="SIZE", help="write a blank 8-head x 17-sector disk to "
+                    "the one file argument; SIZE in MB (500, 500M) or cylinders (7500c)")
     ap.add_argument("--ipl-from", metavar="DONOR", help="take the IPL sector and loader "
                     "from this 512-byte-sector image instead of the source")
     ap.add_argument("--format", choices=("hdi", "raw"), help="default: from DST's extension")
@@ -901,6 +1104,18 @@ def main(argv=None):
     if args.selftest:
         return selftest()
     try:
+        if args.new is not None:
+            if not args.src or args.dst:
+                ap.error("--new SIZE takes exactly one file: the image to write")
+            if args.heads != NEW_HEADS or args.spt != NEW_SPT or args.src_geometry \
+                    or args.ipl_from:
+                raise ConvertError("--new writes only the core's layout (8 heads x 17 "
+                                   "sectors); --heads/--spt/--src-geometry/--ipl-from do "
+                                   "not apply")
+            cyls = parse_new_size(args.new)
+            fmt = args.format or ("hdi" if args.src.lower().endswith(".hdi") else "raw")
+            new_disk(cyls, args.src, fmt, force=args.force)
+            return 0
         if args.info:
             for p in args.info:
                 info(p, args)

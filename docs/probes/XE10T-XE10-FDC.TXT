@@ -1,0 +1,105 @@
+XE10T v1 sha=bb80c006ddfe967e crc=CEDE7589 imgcrc=CEDE7589 size=25982 build=gas-xe10t args= /FDC DA 91 tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0032 cr0=00000032 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=00 bda0458=02 bda045C=40 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=00 bda0595=00
+I ID dos=6.20 bufseg=183C bufparas=4000 sel=00008000 rep=5 da=91 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=16B1
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6146 pit=49160
+P CAL PITWIN i=1 art=6146 pit=49165
+P CAL PITWIN i=2 art=6145 pit=49161
+P CAL PITWIN i=3 art=6145 pit=49161
+P CAL PITWIN i=4 art=6145 pit=49159
+P CAL PITWIN i=5 art=6145 pit=49154
+P CAL PITWIN i=6 art=6144 pit=49157
+P CAL PITWIN i=7 art=6146 pit=49161
+P CAL PITEDGE edges=19 art=155647 vmax=65534 vmin=0
+P CAL VSYNC edges=60 art=326696 pit=2579821 tsc=-
+I CAL pit_mod=65536 ratio_x1000=7999 vsync_x10=54449 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=BD91
+BEGIN:FDC
+STATE FDC imr_s=75 bda0480=DB bda0485=00 msr=80
+ROW FDC DRIVE91 port=0092
+X FDC DRIVE da=91 st3=39 motor=01 st3_spun=39 recal_st0=21 pcn=00 n=03 OK
+I FDC using da=91 n=03 dma_phys=00020000
+ROW FDC SEEK port=0092
+X FDC SEEK i=0 out40_art=50741 in0_art=50693 st0=21
+X FDC SEEK i=1 out40_art=50634 in0_art=50723 st0=21
+X FDC SEEK i=2 out40_art=50638 in0_art=50711 st0=21
+T FDC SEEK40 trials=3 out40_art=50634/50638/50741 in0_art=50693/50711/50723
+ROW FDC READ_ID port=0092
+X FDC READID i=0 art=5930 st0=01 st1=00 st2=00 c=00 h=00 r=04 n=03
+X FDC READID i=1 art=5926 st0=01 st1=00 st2=00 c=00 h=00 r=05 n=03
+X FDC READID i=2 art=5921 st0=01 st1=00 st2=00 c=00 h=00 r=06 n=03
+X FDC READID i=3 art=5918 st0=01 st1=00 st2=00 c=00 h=00 r=07 n=03
+X FDC READID i=4 art=5925 st0=01 st1=00 st2=00 c=00 h=00 r=08 n=03
+X FDC READID i=5 art=9842 st0=01 st1=00 st2=00 c=00 h=00 r=01 n=03
+X FDC READID i=6 art=5912 st0=01 st1=00 st2=00 c=00 h=00 r=02 n=03
+X FDC READID i=7 art=5911 st0=01 st1=00 st2=00 c=00 h=00 r=03 n=03
+X FDC READID i=8 art=5913 st0=01 st1=00 st2=00 c=00 h=00 r=04 n=03
+X FDC READID i=9 art=5919 st0=01 st1=00 st2=00 c=00 h=00 r=05 n=03
+X FDC READID i=10 art=5911 st0=01 st1=00 st2=00 c=00 h=00 r=06 n=03
+X FDC READID i=11 art=5910 st0=01 st1=00 st2=00 c=00 h=00 r=07 n=03
+X FDC READID i=12 art=5920 st0=01 st1=00 st2=00 c=00 h=00 r=08 n=03
+X FDC READID i=13 art=9835 st0=01 st1=00 st2=00 c=00 h=00 r=01 n=03
+X FDC READID i=14 art=5910 st0=01 st1=00 st2=00 c=00 h=00 r=02 n=03
+X FDC READID i=15 art=5908 st0=01 st1=00 st2=00 c=00 h=00 r=03 n=03
+X FDC READID i=16 art=5910 st0=01 st1=00 st2=00 c=00 h=00 r=04 n=03
+X FDC READID i=17 art=5917 st0=01 st1=00 st2=00 c=00 h=00 r=05 n=03
+X FDC READID i=18 art=5914 st0=01 st1=00 st2=00 c=00 h=00 r=06 n=03
+X FDC READID i=19 art=5910 st0=01 st1=00 st2=00 c=00 h=00 r=07 n=03
+T FDC READID trials=20 c2c_art=5908/5917/9842
+ROW FDC READ_DATA port=0092
+X FDC READ1 i=0 art=51221 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=1 art=51221 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=2 art=51219 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=3 art=51220 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=4 art=51222 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=5 art=51219 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=6 art=51219 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=7 art=51217 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=8 art=51220 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=9 art=51221 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=10 art=51219 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=11 art=51218 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=12 art=51218 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=13 art=51217 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=14 art=51220 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=15 art=51218 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=16 art=51214 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=17 art=51222 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=18 art=51219 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+X FDC READ1 i=19 art=51218 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+T FDC READ1 trials=20 c2c_art=51214/51219/51222
+ROW FDC READ_DATA8 port=0092
+X FDC READ8 sectors=8 bytes=8192 art=86513 st0=01 st1=00 st2=00 c=01 h=00 r=01 n=03
+RESTORE FDC DMA2_MASK was=- now=06 kind=default OK
+I FDC irq11_taken=0
+RESTORE FDC P94_MOTOR_HANDBACK_BDA0485 was=- now=96 kind=default OK
+RESTORE FDC VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE FDC IMR_S was=75 now=75 kind=readback OK
+END:FDC rows=48 sum=ADC1
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=20BE
+XE10T DONE sections=4 sum=86F9E854

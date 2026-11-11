@@ -13,7 +13,7 @@ and the CD log's lengths are a fourth: tools/decode_cdlog.py (the CD log's own d
 + payload) must give the same totals as the table's 0x01-0x0B rows.
 
 This checks 1 against 2, 2 against the CD log's decoder, and that every record type the emitters
-in pc9821_dbg_cpu.sv / pc9821_gdc_log.sv name is in the table with the length their record builders
+in pc9821_dbg_cpu.sv / pc9821_gdc_log.sv / pc9821_fdc_log.sv name is in the table with the length their record builders
 declare. The benches (tb_pc9821_dbg_mux, tb_pc9821_dbg_cpu) carry their OWN tables, written from the
 record definitions, so a change must be made in all of them or a bench fails.
 
@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 MUX = ROOT / "src/pc9821/core/pc9821_dbg_mux.sv"
 CPU = ROOT / "src/pc9821/core/pc9821_dbg_cpu.sv"
 GDC = ROOT / "src/pc9821/video/pc9821_gdc_log.sv"
+FDC = ROOT / "src/pc9821/storage/pc9821_fdc_log.sv"
 CDDEC = ROOT / "tools/decode_cdlog.py"
 
 
@@ -63,7 +64,8 @@ def table_problems(mux_text: str | None = None) -> list[str]:
     return problems
 
 
-def emitter_problems(cpu_text: str | None = None, gdc_text: str | None = None) -> list[str]:
+def emitter_problems(cpu_text: str | None = None, gdc_text: str | None = None,
+                     fdc_text: str | None = None) -> list[str]:
     import decode_dbglog as d
     cpu = cpu_text if cpu_text is not None else CPU.read_text()
     gdc = gdc_text if gdc_text is not None else GDC.read_text()
@@ -104,6 +106,21 @@ def emitter_problems(cpu_text: str | None = None, gdc_text: str | None = None) -
             problems.append(f"pc9821_gdc_log.sv no longer names type 0x{t:02X}")
     if "r_long ? 4'd8 : 4'd6" not in gdc:
         problems.append("pc9821_gdc_log.sv's record lengths (r_last = r_long ? 8 : 6) changed: re-check the table's 0x10-0x19 rows")
+    # the floppy log: every type it builds (the access event's e_type and the stage's r_type) is a
+    # seven-byte record, its serialiser ends at r_i == 6
+    fdc = fdc_text if fdc_text is not None else FDC.read_text()
+    ftypes = {int(x, 16) for x in re.findall(r"(?:r_type|e_type)\s*<?=\s*8'h([0-9A-Fa-f]{2})", fdc)}
+    ftypes |= {int(x, 16) for x in re.findall(r"e_type\s*=\s*io_wr\s*\?\s*8'h([0-9A-Fa-f]{2})\s*:\s*8'h([0-9A-Fa-f]{2})", fdc)[0]} \
+        if re.search(r"e_type\s*=\s*io_wr\s*\?", fdc) else set()
+    ftypes.discard(0x00)
+    for t in sorted(ftypes):
+        if d.LEN.get(t) != 7:
+            problems.append(f"pc9821_fdc_log.sv emits type 0x{t:02X}, which the table gives {d.LEN.get(t)} bytes, not 7")
+    for t in (0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x5E, 0x5F):
+        if t not in ftypes:
+            problems.append(f"pc9821_fdc_log.sv no longer names type 0x{t:02X}")
+    if "if (r_i == 3'd6) busy <= 1'b0;" not in fdc:
+        problems.append("pc9821_fdc_log.sv's record length (r_i == 6, seven bytes) changed: re-check the table's 0x50-0x5F rows")
     return problems
 
 
@@ -125,6 +142,10 @@ def selftest() -> int:
     gdc = GDC.read_text()
     if not any("0x1E" in p for p in emitter_problems(None, gdc.replace("8'h1E", "8'h09"))):
         print("SELFTEST FAIL: the display log reverting LOST to the CD log's type was not caught")
+        bad += 1
+    fdc = FDC.read_text()
+    if not any("0x5E" in p for p in emitter_problems(None, None, fdc.replace("8'h5E", "8'h1E"))):
+        print("SELFTEST FAIL: the floppy log emitting another instrument's LOST type was not caught")
         bad += 1
     if table_problems() or emitter_problems():
         print("SELFTEST FAIL: the real tree is not clean")

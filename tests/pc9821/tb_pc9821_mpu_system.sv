@@ -72,7 +72,7 @@ module tb_pc9821_mpu_system;
       .img_buff_din(16'd0), .img_buff_wr(1'b0),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
       .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
-      .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0),
+      .ram_size(3'd5), .ram_size_max(3'd7), .bios_set(4'd0),
       .mpu_present(1'b1));   // MIDI mode: without the card built there is still nothing there
 
   // the build WITH the card (the base preset: build_profile.py's mpu_en)
@@ -90,12 +90,18 @@ module tb_pc9821_mpu_system;
       .img_buff_din(16'd0), .img_buff_wr(1'b0),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
       .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
-      .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0),
+      .ram_size(3'd5), .ram_size_max(3'd7), .bios_set(4'd0),
       .mpu_present(present_on));
 
   // ==== THE CPU SIDE ====
   initial begin
-    force dut_off.cpu_run = 1'b1;   force dut_on.cpu_run = 1'b1;
+    // cpu_run is forced at its DRIVER, the loader's register, not on pc9821_system's net: that
+    // net reaches pc9821_memory_subsystem through an output port, and IEEE 1800-2017 23.3.3.7
+    // makes both sides one net, but Verilator keeps them apart unless it inlines the module,
+    // so a force on the outer net left the subsystem's own copy at 0 (its open bus, windows
+    // and PEGC held in reset) under 5.054, which inlines after scoping. A force on the
+    // variable reaches every reader through the port assigns under any inlining.
+    force dut_off.memory.loader.cpu_run = 1'b1;   force dut_on.memory.loader.cpu_run = 1'b1;
     force dut_off.z_inta = 1'b0;    force dut_on.z_inta = 1'b0;
     force dut_off.z_io = 1'b1;      force dut_on.z_io = 1'b1;
     force dut_off.z_valid = valid_off; force dut_on.z_valid = valid_on;

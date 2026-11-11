@@ -29,6 +29,7 @@ module tb_pc9821_pram;
   wire       win0_sel_moved;   // pc9821_iobus's registered `win0_sel != 8'h08`
   wire sys16m_en;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
   wire a20_enable, cpu_reset_req;
@@ -51,6 +52,7 @@ module tb_pc9821_pram;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -75,7 +77,13 @@ module tb_pc9821_pram;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  // Floppy mode list position 1, 1M: 0x861E = 0x76, the measured bank-A image
+  // (docs/probes/PORTS.TXT) this bench reads back. The OSD default, position 0 = Auto (1M),
+  // seeds 0xF7 (tb_pc9821_floppy_mode).
+  reg  [1:0] floppy_mode = 2'd1;
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -103,7 +111,8 @@ module tb_pc9821_pram;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -124,8 +133,10 @@ module tb_pc9821_pram;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   integer errors = 0;
   integer waived = 0;
@@ -221,6 +232,10 @@ module tb_pc9821_pram;
   function automatic [7:0] data_mask(input [3:0] idx);
     case (idx)
       4'h0: data_mask = 8'hFD;
+      // Bank A 0x851E stores its bit 4 alone; the write's other bits go to port 0x31 (the
+      // Xe10: docs/probes/XE10CFG-XE10-CFGWR.TXT `RT 851E was=02 wrote=12 got=12 p31=12`, and
+      // 0x851E reads 02 after the ITF's E3 merge, XE10CFG-XE10-CFG0.TXT).
+      4'h1: data_mask = 8'h10;
       default: data_mask = 8'hFF;
     endcase
   endfunction
@@ -383,12 +398,8 @@ module tb_pc9821_pram;
       for (integer n = 0; n < 12; n = n + 1) begin
         // Start from the power-up byte so 0x84's withheld bit 1 stays the machine's.
         base = machine_banka[n];
-        // Everything the write owns is stored as written; the one exception on the READ
-        // side is index 1's bit 4, which the port read derives from the DIP-2 strap
-        // (pc9821_iobus.sv sdip_read_byte) - the ITF merges that bit with port 0x31's
-        // data and no write moves it. At the entry-0 strap (0xF3) the derived bit is 0.
-        want = (base & ~data_mask(n[3:0])) | (8'h55 & data_mask(n[3:0]))
-               & (n == 1 ? 8'hEF : 8'hFF);
+        // Everything the write owns is stored as written (index 1: bit 4 only).
+        want = (base & ~data_mask(n[3:0])) | (8'h55 & data_mask(n[3:0]));
         write_byte(16'h841E + (n << 8), 8'h55);
         read_byte(16'h841E + (n << 8), want);
       end
@@ -403,7 +414,7 @@ module tb_pc9821_pram;
     write_byte(16'h841E, 8'h00);
     read_byte(16'h841E, 8'h00);
     write_byte(16'h851E, 8'h00);
-    read_byte(16'h851E, 8'h00);
+    read_byte(16'h851E, 8'h02);   // bit 4 cleared; the measured 0x02 data is not the write's
     write_byte(16'h861E, 8'h00);
     read_byte(16'h861E, 8'h00);
 
@@ -473,6 +484,9 @@ module tb_pc9821_pram;
           write_byte(16'h841E + (n << 8), v == 0 ? 8'h54 : (v == 1 ? 8'h7F : 8'h01));
           np_write(16'h841E + (n << 8), v == 0 ? 8'h54 : (v == 1 ? 8'h7F : 8'h01));
           read_raw(16'h841E + (n << 8), rtl_read);
+          // 0x851E's data bits are port 0x31's on the Xe10 (CFGWR.TXT `wrote=12 p31=12`), which
+          // is where NP2kai keeps them too (dipsw[1] IS its port 0x31): compare the port.
+          if (n == 1) read_raw(16'h0031, rtl_read);
           np = np_dipsw[n];
           // THIS EXPECTATION WAS INVERTED BY THE MACHINE'S EVIDENCE. NP2kai's STORE
           // masks each register's PARITY bit (bit 0 of 0x84, bit 4 of 0x85, bit 7 of

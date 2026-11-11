@@ -12,6 +12,11 @@
 //     `if ((fdc.tc) || (fdc.R++ == fdc.eot)) { fdc.R = 1; ... fdc.C++; fdcsend_success7(); }`,
 //     and success7 is {hd<<2|us, 0, 0, C, H, R, N} (:120-158). ST3's WP is the medium's own
 //     protect flag (FDC_SenseDeviceStatus, :370-372).
+//   * EXCEPT a terminal count that ends a command BEFORE EOT (W5, W13a): the C/H/R there are
+//     the uPD765's end-of-sector step of the last sector, R+1 with C unchanged (the datasheet's
+//     table; MAME src/devices/machine/upd765.cpp `command[4]++`), the step the real Xe10 is
+//     measured taking at EOT (docs/probes/XE10T-XE10-FDC.TXT READ1/READ8 `c=01 h=00 r=01`,
+//     where NP2kai's terminal-count arms answer otherwise; tb_pc9821_fdc_read T14).
 //   * WHERE A SECTOR'S BYTES LIVE IN THE FILE is the image format's own layout, the one the read
 //     benches already pin: a raw body's sector is at ((((C*2+H) * sects) + R-1) << (7+N)), and a
 //     D88 sector's data follows its 16-byte _D88SEC header with `size` bytes stored (the read
@@ -244,6 +249,7 @@ module tb_pc9821_fdd_write;
   integer    hr_disk = 0;
 
   reg [12:0] widx, wtotal;
+  reg [15:0] hword_q;   // the word the host model is about to present (see its use)
   reg [31:0] hlba;
   reg        hbusy, hlast, hwrite;
   reg  [1:0] hslot;              // 0 = A (disk), 1 = B, 2 = C
@@ -323,7 +329,14 @@ module tb_pc9821_fdd_write;
     end else begin
       sd_buff_wr   <= 1'b1;
       sd_buff_addr <= widx;
-      word_for(hslot, hlba + {19'd0, widx[12:8]}, widx[7:0], sd_buff_dout);
+      // The word is formed in a process-local variable and reaches the port through a
+      // NONBLOCKING assignment, like sd_buff_addr and sd_buff_wr beside it: hps_io drives
+      // all three from registers (sys/hps_io.sv:156 `output reg [DW:0] sd_buff_dout,`). A
+      // blocking write here is read by the adapter's own posedge process in the same time
+      // step, a race IEEE 1800-2017 4.7 leaves to the simulator's process order (Verilator
+      // 5.052 resolved it as the old word, 5.054 as the new one, one word early).
+      word_for(hslot, hlba + {19'd0, widx[12:8]}, widx[7:0], hword_q);
+      sd_buff_dout <= hword_q;
       if (hlast) begin
         hbusy <= 1'b0; sd_ack_a <= 1'b0; sd_ack_b <= 1'b0; sd_ack_c <= 1'b0;
         sd_buff_wr <= 1'b0; hlast <= 1'b0;
@@ -645,14 +658,15 @@ module tb_pc9821_fdd_write;
     cmp_raw("W4 the raw image is unchanged");
 
     // ---------------- W5: a terminal count inside a sector ---------------------------
-    // 512 bytes for a 1024-byte sector: the command ends with tc's R = 1, C+1 (FDC_WriteData's
-    // `(fdc.tc) ||` arm), and its first 512 bytes are in the image. The sector's tail is NOT
+    // 512 bytes for a 1024-byte sector: the command ends after R=1 with the uPD765 step below
+    // EOT, R = 2 with C unchanged (NP2kai's `(fdc.tc) ||` arm answers R = 1, C+1; see the
+    // header), and its first 512 bytes are in the image. The sector's tail is NOT
     // asserted (NP2kai writes whatever fdc.buf held; see the report), only that the
     // controller and the medium are not left wedged - W6 issues the next command.
     arm_dma_out(512, 7);
     data_cmd(8'h45, 8'h00, 8'h03, 8'h00, 8'h01, 8'h03, 8'h08);
     wait_irq(400000, "W5");
-    expect_result(8'h00, 8'h00, 8'h04, 8'h00, 8'h01, 8'h03, "W5 TC mid-sector");
+    expect_result(8'h00, 8'h00, 8'h03, 8'h00, 8'h02, 8'h03, "W5 TC mid-sector");
     expecti(dm_n, 512, "W5 the guest's 512 bytes");
     t0 = raw_off(3, 0, 1);
     for (j = 0; j < 512; j = j + 1) expA[t0 + j] = pw(7, j);
@@ -769,19 +783,16 @@ module tb_pc9821_fdd_write;
     cmp_raw("W7b the image swapped in under the queued write is unchanged");
 
     // ---------------- W8: a write to an EJECTED drive ---------------------------------
-    // No medium: the controller's no-media class (IC0|NR|hd<<2|us, FDC_DriveCheck's first arm,
-    // through this model's deferred completion) and NOTHING reaches the host.
+    // No medium: the controller's no-media class (IC0|NR|hd<<2|us, FDC_DriveCheck's first arm) in
+    // its own seven-byte result with the interrupt (NP2kai's fdcsend_error7 shape, and the real
+    // Xe10's for a not-ready READ DATA, pc9821_fdc `exec_res`), and NOTHING reaches the host.
     hwa0 = hw_a; hwn0 = hw_n;
     mount0(64'd16, 1'b0);
     expecti(fdd_present, 2'b10, "W8 drive 0 ejected");
     arm_dma_out(1024, 13);
     data_cmd(8'h45, 8'h00, 8'h00, 8'h00, 8'h01, 8'h03, 8'h01);
     wait_irq(200000, "W8");
-    rd8(3'd0);
-    expect8(rd_val & 8'hC0, 8'h80, "W8 no result phase for the ejected drive");
-    wr8(3'd1, 8'h08);
-    get_result;
-    expect8(g_rs[0], 8'h48, "W8 ST0 = IC0|NR|unit 0");
+    expect_result(8'h48, 8'h00, 8'h00, 8'h00, 8'h01, 8'h03, "W8 the ejected drive: IC0|NR|unit 0");
     expecti(dm_n, 0, "W8 no byte moves to an ejected drive");
     repeat (20000) @(negedge clk);
     expecti((hw_a - hwa0) + (hw_n - hwn0), 0, "W8 no host write after the eject");
@@ -833,14 +844,15 @@ module tb_pc9821_fdd_write;
     expecti(n, 0, "W9 the last sector landed in the image's last block");
 
     // ---------------- W10: READ DATA's EOT end keeps the command's H -------------------
-    // The read and the write share the sector-end step now, and NP2kai's success7 sends fdc.H,
-    // which only MT flips (FDC_ReadData NEXTDATA, io/fdc.c:556-576): a non-MT read of side 1
-    // that ends at EOT answers H = 1, not 0. The DMA count is larger than the sector, so EOT
-    // (not the terminal count) ends it.
+    // A non-MT read of side 1 that reaches EOT with no terminal count (the DMA count is larger
+    // than the sector) ends ABNORMALLY on the real Xe10 with C/H/R the last sector's, H the
+    // command's 1: ST0 IC=01|HD|us, ST1 EN (docs/probes/XE10T-XE10-FDC2A.TXT `EOT_NT ... st0=40
+    // st1=80 st2=00 c=00 h=00 r=08`, and `EOT_MT ... st0=44 st1=80 st2=00 c=00 h=01 r=08` for the
+    // side-1 head; pc9821_fdc X_WEND).
     arm_dma_in(2048);
     data_cmd(8'h46, 8'h05, 8'h0A, 8'h01, 8'h12, 8'h02, 8'h12);
     wait_irq(400000, "W10");
-    expect_result(8'h05, 8'h00, 8'h0B, 8'h01, 8'h01, 8'h02, "W10 non-MT read at side 1's EOT");
+    expect_result(8'h45, 8'h80, 8'h0A, 8'h01, 8'h12, 8'h02, "W10 non-MT read at side 1's EOT");
     expecti(dm_n, 512, "W10 one sector moved");
     dm_run = 0;
 
@@ -889,13 +901,14 @@ module tb_pc9821_fdd_write;
     cmp_raw("W12 the raw image is unchanged");
 
     // ---------------- W13: READ DATA whose count ends INSIDE a sector ----------------------
-    // NP2kai answers at the terminal count (R = 1, C unchanged - fdc_dataread :1016-1026) and
-    // just stops reading. The next command must be served: before the fix the medium stayed
+    // The controller answers at the terminal count with the step of the sector it ended in
+    // (R = 3, C unchanged; NP2kai's R = 1 is fdc_dataread :1016-1026, see the header) and just
+    // stops reading. The next command must be served: before the fix the medium stayed
     // mid-sector with bytes owed, `ready` never rose, and the next READ hung in X_REQ.
     arm_dma_in(300);
     data_cmd(8'h46, 8'h00, 8'h0B, 8'h00, 8'h02, 8'h03, 8'h08);
     wait_irq(400000, "W13a");
-    expect_result(8'h00, 8'h00, 8'h0B, 8'h00, 8'h01, 8'h03, "W13a READ ended by TC after 300 bytes");
+    expect_result(8'h00, 8'h00, 8'h0B, 8'h00, 8'h03, 8'h03, "W13a READ ended by TC after 300 bytes");
     expecti(dm_n, 300, "W13a 300 bytes moved");
     arm_dma_in(1024);
     data_cmd(8'h46, 8'h00, 8'h0B, 8'h00, 8'h03, 8'h03, 8'h03);
@@ -971,9 +984,31 @@ module tb_pc9821_fdd_write;
     // READ ID after the format: crcn = 1, so fdd_readid_common answers R = ++crcn = 2
     // (diskimage/fddfile.c:321-350).
     wr8(3'd1, 8'h4A); wr8(3'd1, 8'h04);
-    wait_irq(200000, "W15 READ ID");
+    // The answer waits one sector period for its ID field (pc9821_fdc X_IDW; pinned by
+    // tb_pc9821_fdc_readid_wait): at most one 1/5 s revolution of the 50 MHz default, plus slack.
+    wait_irq(50_000_000 / 5 + 100_000, "W15 READ ID");
     get_result;
     expect8(g_rs[5], 8'h02, "W15 READ ID after FORMAT answers R = 2 (crcn = 1)");
+
+    // ---------------- W15c: a FORMAT whose SC is more than the track holds ends at the index --
+    // The uPD765A formats sector after sector until the index pulse comes round again and then
+    // ends the command (NEC uPD765A data sheet, FORMAT A TRACK); MAME upd765.cpp counts SC down
+    // from 0 through 255 (`command[3]--`) and its live write ends at the index, answering ST0 =
+    // hd<<2|us with no ST1 bit. Windows 95's full format of a 1.44 MB disk on this core sends SC =
+    // 0 (fdd-mediachg3 capture: `4D 00 02 00 00 E5`), which ran the raw medium past its last
+    // sector and was answered IC0|NW - the "write-protected" dialog. Here: SC = 0 on C9 H0 of the
+    // 8-sector track: success7, the whole track filled with D, nothing else changed.
+    wr8(3'd1, 8'h4D); wr8(3'd1, 8'h00); wr8(3'd1, 8'h03); wr8(3'd1, 8'h00);
+    wr8(3'd1, 8'h74); wr8(3'd1, 8'hE5);
+    wait_irq(1200000, "W15c FORMAT SC=0");
+    get_result;
+    expecti(g_rlen, 7, "W15c FORMAT result length");
+    expect8(g_rs[0], 8'h00, "W15c FORMAT SC=0 ST0 = hd<<2|us (ended at the index)");
+    expect8(g_rs[1], 8'h00, "W15c FORMAT SC=0 ST1 (no NW: the disk is writable)");
+    expect8(g_rs[2], 8'h00, "W15c FORMAT SC=0 ST2");
+    t0 = ((9 * 2 + 0) * 8) * 1024;
+    for (j = 0; j < 8 * 1024; j = j + 1) expA[t0 + j] = 8'hE5;
+    cmp_raw("W15c the track (C9 H0) is filled with D and nothing else changed");
 
     // ---------------- W16: FORMAT of a D88 is not modelled: IC0|NW, image untouched --------
     // NP2kai rebuilds the D88 track (fdd_formating_d88, diskimage/fd/fdd_d88.c:693-737, growing

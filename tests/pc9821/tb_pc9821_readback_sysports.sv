@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The system-port read-backs, against NP2kai and the machine captures: 0x9A0 is the extended-video INDEX/DATA QUERY (write the index, read the indexed bit; un-written it answers the machine's 0x01), 0x043B round-trips the guest's own bit-2 request on the machine's base byte, the bus mouse's uPD8255 PPI answers its live latches through NP2kai's mode-masked read model (mouseif.c), the printer trio echoes lastData and the strobe latch and carries the one-shot SELECT-BUSY read side effect, 0x11 returns the DMA status register and clears its low nibble on the read, and 0x00BE/0x00BF decode the FDD channel-group media strap instead of floating. 0xA460 reads the board ID 0x40 with the extension-enable bit 0 following the guest's write (0x40 as found, 0x41 once enabled; docs/probes/OPNA.TXT:6).
+// The system-port read-backs, against NP2kai and the machine captures: 0x9A0 is the extended-video INDEX/DATA QUERY (write the index, read the indexed bit; un-written it answers the machine's 0x01), 0x043B round-trips the guest's own bit-2 request on the machine's base byte, the bus mouse's uPD8255 PPI answers its live latches through NP2kai's mode-masked read model (mouseif.c), the printer trio echoes lastData and the strobe latch and carries the one-shot SELECT-BUSY read side effect, 0x11 returns the DMA status register and clears its low nibble on the read, and 0x00BE/0x00BF decode the FDD channel-group media strap instead of floating. 0xA460 reads the board ID 0x40 with the extension-enable bit 0 following the guest's write (0x40 as found, 0x41 once enabled; docs/probes/OPNA.TXT:6). 0x006C is a latch of bits 7-4 that reads 00 as found, 70 after a write of 70, 50 after 5A and 00 again after 00 (docs/probes/KIT1-XE10-CFGWR.TXT:8-9 `RT 006C was=00 wrote=70 got=70`, `wrote=5A got=50`), where the core read open bus FF and NP2kai attaches nothing.
 //
 // The system-port read-backs (P1/P4/P8-P13), against
 // NP2kai and the machine captures: 0x9A0 is the extended-video INDEX/DATA QUERY
@@ -87,7 +87,13 @@ module tb_pc9821_readback_sysports;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  // Floppy mode list position 1, 1M (0x861E = 0x76): the measured machine, whose capture
+  // (docs/probes/FDMODE-XE10.TXT, 0x00BE = FF) P13 cites. The OSD default, position 0 =
+  // Auto (1M), reads 0x00BE bit 2 clear (tb_pc9821_floppy_mode).
+  reg  [1:0] floppy_mode = 2'd1;
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   wire        beep_mute;
   wire [1:0]  beep_vol;   // 0x871E bits [3:2], the beeper volume (see pc9821_iobus)
 
@@ -135,6 +141,7 @@ module tb_pc9821_readback_sysports;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -153,6 +160,7 @@ module tb_pc9821_readback_sysports;
 
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
 
@@ -181,7 +189,8 @@ module tb_pc9821_readback_sysports;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -203,8 +212,10 @@ module tb_pc9821_readback_sysports;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   integer errors = 0, cases = 0;
 
@@ -272,6 +283,15 @@ module tb_pc9821_readback_sysports;
     // 0xA460 reads the board ID 0x40 with the extension-enable bit (bit 0) as the guest set it:
     // `0xA460 (board ID | extension enable bit 0): 40 40` as found (docs/probes/OPNA.TXT:6); the bit follows
     // the guest's own write (the register is the extension gate the same capture names).
+    // 0x006C: bits 7-4 latch, bits 3-0 read 0, 00 as found and after 00 is written back
+    // (docs/probes/KIT1-XE10-CFGWR.TXT:8 `RT 006C was=00 wrote=70 got=70 p31=12 back=00`,
+    // KIT1-XE10-CFGWR.TXT:9 `RT 006C was=00 wrote=5A got=50 p31=12 back=00`). Fails on the
+    // tree that left the port undecoded (FF every row).
+    rd_is(16'h006C, 8'h00, "6C as found = 00");
+    wr(16'h006C, 8'h70); rd_is(16'h006C, 8'h70, "6C after a write of 70 = 70");
+    wr(16'h006C, 8'h00); rd_is(16'h006C, 8'h00, "6C written back 00 = 00");
+    wr(16'h006C, 8'h5A); rd_is(16'h006C, 8'h50, "6C after a write of 5A = 50 (bits 3-0 read 0)");
+    wr(16'h006C, 8'h00); rd_is(16'h006C, 8'h00, "6C written back 00 again = 00");
     rd_is(16'hA460, 8'h40, "A460 as found = board ID 0x40, extension clear");
     wr(16'hA460, 8'h01); rd_is(16'hA460, 8'h41, "A460 after enabling the extension = 0x41");
     wr(16'hA460, 8'h00); rd_is(16'hA460, 8'h40, "A460 after clearing it = 0x40");
@@ -310,16 +330,19 @@ module tb_pc9821_readback_sysports;
     wr(16'h09A0, 8'h00); rd_is(16'h09A0, 8'hFF, "P1 index 0 stays FF under the clock bit");
     gdc_ff2_state = 11'd0;
 
-    // ==== 0x9A8: a LATCH, not a constant (todo item 3) =====================
+    // ==== 0x9A8: a LATCH, not a constant =====================
     // The machine reads 00, then 01 after writing 01, then 00 after the restore
     // (docs/probes/RDBACK.TXT `port=09A8 before=00 wrote=01 after=01 back=00`).
-    // NP2kai gdc_o9a8/gdc_i9a8 (SUPPORT_CRT31KHZ) keep bit 0 only: `return((gdc.display
-    // >> GDCDISP_31) & 1)`, so a write of 0xFF reads 0x01 there (the machine has not been
-    // asked about the high bits - the item's open width question).
+    // The width is TWO bits, not NP2kai's one (gdc_i9a8 returns bit 0 only): the machine
+    // reads 02 after a write of FE (docs/probes/XE10CFG-XE10-CFGWR.TXT
+    // `RT 09A8 was=00 wrote=FE got=02 p31=12 back=00`), so bit 1 latches and bits 7:2 do not.
     rd_is(16'h09A8, 8'h00, "9A8 power-up reads 00 (RDBACK.TXT before=00)");
     wr(16'h09A8, 8'h01); rd_is(16'h09A8, 8'h01, "9A8 write 01 reads 01 (RDBACK.TXT after=01)");
     wr(16'h09A8, 8'h00); rd_is(16'h09A8, 8'h00, "9A8 restore 00 reads 00 (RDBACK.TXT back=00)");
-    wr(16'h09A8, 8'hFF); rd_is(16'h09A8, 8'h01, "9A8 keeps bit 0 only (NP2kai gdc_i9a8)");
+    wr(16'h09A8, 8'hFE); rd_is(16'h09A8, 8'h02, "9A8 write FE reads 02 (XE10CFG-XE10-CFGWR.TXT got=02)");
+    if (crt31k !== 1'b0) $fatal(1, "9A8 FE must leave bit 0 (31 kHz) clear");
+    wr(16'h09A8, 8'h00); rd_is(16'h09A8, 8'h00, "9A8 restore 00 reads 00 (CFGWR.TXT back=00)");
+    wr(16'h09A8, 8'hFF); rd_is(16'h09A8, 8'h03, "9A8 keeps bits 1:0");
     wr(16'h09A8, 8'h00);
 
     // ==== P4: 0x043B echoes the live bit-2 request ========================
@@ -415,11 +438,14 @@ module tb_pc9821_readback_sysports;
     // The machine reads FF at the power-up strap (docs/probes/FDMODE-XE10.TXT PORT 00BE=FF,
     // PORT 00BF=FF): bits 7:2 one, bits 1:0 the strap.
     rd_is(16'h00BE, 8'hFF, "P13 0xBE power-up: chgreg 3 -> FF (FDMODE-XE10.TXT)");
-    rd_is(16'h00BF, 8'hFF, "P13 0xBF is the same register (FDMODE-XE10.TXT)");
+    rd_is(16'h00BF, 8'hFF, "P13 0xBF reads FF (FDMODE-XE10.TXT)");
     wr(16'h00BE, 8'h01);
     rd_is(16'h00BE, 8'hFD, "P13 the write lands: (1 & 3) | FC");
+    // 0xBF does not read the register: FF while 0xBE reads FD (FDMODE-XE10-FDM0.TXT `PORT
+    // 00BE=FD` / `PORT 00BF=FF`), and FF in every floppy disk mode (FDMODE-XE10-FDMF*.TXT).
+    rd_is(16'h00BF, 8'hFF, "P13 0xBF reads FF while 0xBE reads FD (FDMODE-XE10-FDM0.TXT)");
     wr(16'h00BF, 8'h02);
-    rd_is(16'h00BE, 8'hFE, "P13 the pair is one register (2 & 3) | FC");
+    rd_is(16'h00BE, 8'hFE, "P13 a 0xBF write lands in the register (2 & 3) | FC");
     wr(16'h00BE, 8'hFB);
     rd_is(16'h00BE, 8'hFF, "P13 only the low two bits read back (a written bit 2 = 0 still reads 1)");
     // The read is decoded traffic: it must not count as unmapped.
@@ -450,12 +476,12 @@ module tb_pc9821_readback_sysports;
     //   * bank: NP2kai `((port >> 1) + 1) & 3` (io/dmac.c:236-237) => 0x21 is
     //     channel 1 and 0x27 is channel 0; qemu the same formula, stated as a
     //     contract in its header (`hw/dma/pc98-dma.c:6,269-272`); our own
-    //     pc9821_dmac.sv:213 `cpu_bank_ch = idx[1:0] + 2'd1`. Each port reads its own channel, so the
+    //     pc9821_dmac.sv:204 `cpu_bank_ch = idx[1:0] + 2'd1`. Each port reads its own channel, so the
     //     rotation is invisible here and is checked in tb_pc9821_dma_regs at the array.
     //   * bound: NP2kai stores per channel (`dmach = dmac.dmach + (dat & 3);
     //     dmach->bound = (dat >> 2) & 3`, io/dmac.c:260-263) and so does qemu
     //     (`regs[data & 3].bank_wrap`), NOT one global latch; the read exposes
-    //     CHANNEL 0 alone (pc9821_dmac.sv:557 `ch_bound[0]`, and 0x29 has no read handler in
+    //     CHANNEL 0 alone (pc9821_dmac.sv:545 `ch_bound[0]`, and 0x29 has no read handler in
     //     either reference). Both models return the same bytes for the capture's
     //     three writes (all channel 0) - the rows below are what separates them.
     // The bytes below are now THE ENGINE'S (pc9821_dmac) at reset, which is what the

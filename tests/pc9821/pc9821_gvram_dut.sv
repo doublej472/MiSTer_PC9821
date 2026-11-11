@@ -19,6 +19,10 @@ module pc9821_gvram_dut #(
     input wire reset,
 
     input wire        access_page,
+    // pc9821_gvram_arb's Xe10 store table (OSD I/O timing = Xe10) and the graphics GDC's fetch
+    // window it keys on. A bench that leaves them unconnected runs Fast.
+    input wire        timing_xe10,
+    input wire        gfx_scan_on,
 
     input  wire [1:0]   win_plane,
     input  wire [14:0]  win_offset,
@@ -204,6 +208,7 @@ module pc9821_gvram_dut #(
 
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_arb (
       .clk(clk), .reset(reset),
+      .timing_xe10(timing_xe10), .gfx_scan_on(gfx_scan_on),
       .access_page(gvr_page),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
       .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),

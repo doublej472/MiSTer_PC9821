@@ -1,0 +1,53 @@
+MPUTEST v1 tables=F3BBB5DA flow=BYTES raw=200
+NOTE MPUTEST (tools/hwprobe/mputest): MPU-401-family MIDI card probe. Decode with
+NOTE mputest_decode.py; its README lists the sources for these expectations.
+NOTE The core models the MPU-PC98II as NP2kai does: every intelligent-mode command
+NOTE is ACKed FE at once; 0xFF AND 0x3F each send 16 x Bn 7B 00 (all notes off) on
+NOTE MIDI OUT; in UART mode only 0xFF is answered (ACK, no burst); BUSY (bit 6) =
+NOTE its 32-byte output queue half full or a byte waiting for room; base E0D0,
+NOTE IRQ6 only; no MIDI IN.
+NOTE Expected to DIFFER on a real card: ACK latency (the card's own CPU), how long
+NOTE DRR stays busy per byte, whether 0xFF/0x3F put bytes on MIDI OUT (the Roland
+NOTE MPU-401 manual names none), the UART-mode 0xFF (the manual: NO ACK), how many
+NOTE blind /RAW bytes survive. MPU-PC98 (original): base E0D0 and INT2 (IRQ6) fixed,
+NOTE tape sync; MPU-PC98II: 16 bases C0D0-FCD0 by DIP switch, INT0/1/2/5 (IRQ
+NOTE 3/5/6/12) by jumper, default E0D0/INT2. MIDI IN bytes show as extra= on CMD.
+BEGIN:DETECT
+PORT base=C0D0 st=FF dat=FF
+PORT base=C4D0 st=FF dat=FF
+PORT base=C8D0 st=FF dat=FF
+PORT base=CCD0 st=FF dat=FF
+PORT base=D0D0 st=FF dat=FF
+PORT base=D4D0 st=FF dat=FF
+PORT base=D8D0 st=FF dat=FF
+PORT base=DCD0 st=FF dat=FF
+PORT base=E0D0 st=BF dat=FE
+PORT base=E4D0 st=FF dat=FF
+PORT base=E8D0 st=FF dat=FF
+PORT base=ECD0 st=FF dat=FF
+PORT base=F0D0 st=FF dat=FF
+PORT base=F4D0 st=FF dat=FF
+PORT base=F8D0 st=FF dat=FF
+PORT base=FCD0 st=FF dat=FF
+FOUND base=E0D0
+END:DETECT
+BEGIN:BYTES
+LABEL BYTES 1 reset 0xFF
+CMD BYTES FF ack=FE polls=0000000B t=000013 extra=00 busy=00000000
+LABEL BYTES 2 UART mode 0x3F
+CMD BYTES 3F ack=FE polls=00000FAA t=001727 extra=00 busy=00000000
+LABEL BYTES 3 GS reset
+LABEL BYTES 4 program change + running-status run
+LABEL BYTES 5 140-byte SysEx ID 7D
+LABEL BYTES 6 pitch bend centre + all notes off ch1
+LABEL BYTES 7 0xFF in UART mode
+CMD BYTES FF ack=-- polls=0000512D t=007802 extra=00 busy=00000000
+LABEL BYTES 8 0xD0 short messages, running status
+CMD BYTES D0 ack=FE polls=00000014 t=000020 extra=00 busy=00000000
+CMD BYTES D0 ack=FE polls=0000008A t=0000CE extra=00 busy=00000005
+LABEL BYTES 9 0xDF SysEx
+CMD BYTES DF ack=FE polls=00000012 t=00001C extra=00 busy=00000000
+LABEL BYTES 10 reset 0xFF
+CMD BYTES FF ack=FE polls=00000016 t=000022 extra=00 busy=00000000
+END:BYTES
+MPUTEST DONE

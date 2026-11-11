@@ -56,6 +56,11 @@
  *   EXT0F     the 0x18E/0x0F read-back question                    [(1) above]
  *   BASE08    the 0x18A read-back question
  *   STATUS2   the status-2 timer bits vs the 0x110 flag mask       [(2) above]
+ *   STATUS3   (2026-11 kit, todo item 18 (c)) STATUS2 again with the Timer B flag HELD: the
+ *             Xe10's STATUS2 control row read 48 (OPNA.TXT), so its masked row could not be told
+ *             from a flag that had gone. Each row is read at once and again after 100 ms (the
+ *             timer keeps running, ~37 ms a period, so a flag the mask only hides comes back
+ *             in the unmasked rows, and a flag the mask clears is set again 100 ms later)
  *   RESTORE   what was written and what was put back
  *
  * The run ends with `OPNAPRO DONE`, which RUNOPNA.BAT greps for. Redirect it:
@@ -115,6 +120,7 @@ _start:
     call    sec_ext0f
     call    sec_base08
     call    sec_status2
+    call    sec_status3
     call    sec_restore
 
     mov     dx, offset msg_done
@@ -466,6 +472,179 @@ st2_seen_done:
     mov     dx, offset msg_end_status2
     call    puts
     ret
+
+/* ==================================================================
+ * section: STATUS3 - item 18 (c): the 0x110 mask with the Timer B flag held set
+ * ================================================================== */
+/* Rows (each `S3 <tag> 0188=xx 018C=xx`):
+ *   A0   0x110 <- 00, Timer B (0x26 <- 00, 0x27 <- 2A) and the flag seen set: the unmasked read
+ *   A1   100 ms later, nothing written: the flag holds (expected: as A0)
+ *   B0   0x110 <- 1F, read at once          B1  100 ms later
+ *   C0   0x110 <- 00 again, read at once    C1  100 ms later
+ * qemu (fmopn.c:3353, a read-side mask): B0/B1 bits 1:0 clear, C0 = A0 again. A mask that
+ * resets the flags: B0/B1 clear, C0 clear, C1 = A0 (the running timer sets it again). NP2kai
+ * (opna.c:379-397, no mask): every row = A0. */
+sec_status3:
+    mov     dx, offset msg_begin_status3
+    call    puts
+    cli
+    mov     dx, 0x000A
+    in      al, dx
+    mov     [imr_s_found], al
+    or      al, 0x10
+    out     dx, al
+    mov     al, 1
+    call    opna_ext
+    mov     al, 0x10
+    call    opna_selhi
+    xor     al, al
+    call    opna_exdata
+    mov     al, 0x26
+    call    opna_sello
+    xor     al, al
+    call    opna_lo_data
+    mov     al, 0x27
+    call    opna_sello
+    mov     al, 0x2A
+    call    opna_lo_data
+    call    opna_flag_wait
+    mov     al, [flag_seen]
+    mov     [s3_seen], al
+    mov     di, offset s3_val
+    call    s3_read             /* A0 */
+    call    s3_wait
+    call    s3_read             /* A1 */
+    mov     al, 0x10
+    call    opna_selhi
+    mov     al, 0x1F
+    call    opna_exdata
+    call    s3_read             /* B0 */
+    call    s3_wait
+    call    s3_read             /* B1 */
+    mov     al, 0x10
+    call    opna_selhi
+    xor     al, al
+    call    opna_exdata
+    call    s3_read             /* C0 */
+    call    s3_wait
+    call    s3_read             /* C1 */
+    mov     al, 0x27
+    call    opna_sello
+    mov     al, 0x30
+    call    opna_lo_data
+    mov     dx, 0x000A
+    mov     al, [imr_s_found]
+    out     dx, al
+    mov     al, [a460_found]
+    and     al, 1
+    call    opna_ext
+    sti
+    mov     dx, offset msg_s3_seen
+    call    puts
+    mov     dl, 'N'
+    cmp     byte ptr [s3_seen], 0
+    je      1f
+    mov     dl, 'Y'
+1:  call    putc
+    call    putnl
+    mov     si, offset s3_val
+    mov     bx, offset s3_tags
+    mov     cx, 6
+2:  mov     dx, offset msg_s3
+    call    puts
+    mov     dx, [bx]
+    call    puts
+    mov     dx, offset msg_s3_188
+    call    puts
+    mov     al, [si]
+    call    puthex8
+    mov     dx, offset msg_s3_18c
+    call    puts
+    mov     al, [si + 1]
+    call    puthex8
+    call    putnl
+    add     si, 2
+    add     bx, 2
+    loop    2b
+    mov     dx, offset msg_s3_note
+    call    puts
+    mov     dx, offset msg_end_status3
+    call    puts
+    ret
+
+/* s3_read: [DI] = 0x188, [DI+1] = 0x18C (each after the BUSY bit drops, bounded); DI += 2 */
+s3_read:
+    call    io_delay
+    mov     dx, 0x0188
+    mov     cx, 0x4000
+1:  in      al, dx
+    test    al, 0x80
+    jz      2f
+    loop    1b
+2:  mov     [di], al
+    mov     dx, 0x018C
+    in      al, dx
+    mov     [di + 1], al
+    add     di, 2
+    ret
+/* s3_wait: 100 ms of the ARTIC (30720 ticks at 307200 Hz) */
+s3_wait:
+    push    eax
+    push    ebx
+    call    s3_artic
+    mov     ebx, eax
+1:  call    s3_artic
+    sub     eax, ebx
+    and     eax, 0x00FFFFFF
+    cmp     eax, 30720
+    jb      1b
+    pop     ebx
+    pop     eax
+    ret
+s3_artic:                       /* EAX = the 24-bit ARTIC (0x5C word, 0x5F high), as ym29 */
+    push    dx
+    push    ebx
+    push    ecx
+    mov     dx, 0x005F
+    in      al, dx
+    movzx   ebx, al
+    mov     dx, 0x005C
+    in      ax, dx
+    movzx   ecx, ax
+    mov     dx, 0x005F
+    in      al, dx
+    movzx   eax, al
+    cmp     eax, ebx
+    je      1f
+    cmp     ecx, 0x8000
+    jb      1f
+    mov     eax, ebx
+1:  shl     eax, 16
+    or      eax, ecx
+    pop     ecx
+    pop     ebx
+    pop     dx
+    ret
+s3_seen:    .byte 0
+s3_val:     .space 12
+    .balign 2
+s3_tags:    .word t_a0, t_a1, t_b0, t_b1, t_c0, t_c1
+t_a0:       .ascii "A0 0110<-00 flag set$"
+t_a1:       .ascii "A1 +100ms$"
+t_b0:       .ascii "B0 0110<-1F$"
+t_b1:       .ascii "B1 +100ms$"
+t_c0:       .ascii "C0 0110<-00$"
+t_c1:       .ascii "C1 +100ms$"
+msg_begin_status3:
+    .ascii "BEGIN:STATUS3\r\nOPNA: the 0110 flag mask with the Timer B flag held set (item 18 c). Each row read at once and 100 ms later; Timer B keeps running (~37 ms a period).\r\n$"
+msg_s3_seen: .ascii "  the Timer B flag was observed set: $"
+msg_s3:     .ascii "  S3 $"
+msg_s3_188: .ascii " 0188=$"
+msg_s3_18c: .ascii " 018C=$"
+msg_s3_note:
+    .ascii "  qemu (a read-side mask): B rows bits 1:0 clear, C0 = A0. A mask that resets the flag: B and C0 clear, C1 = A0. NP2kai (no mask): every row = A0.\r\n$"
+msg_end_status3:
+    .ascii "END:STATUS3\r\n$"
 
 /* ==================================================================
  * section: RESTORE - what was written and what was put back

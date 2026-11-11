@@ -126,7 +126,7 @@ module pc9821_mouse #(
     // is derived rather than hardcoded.
     input  wire [2:0]  dip_strap,
 
-    // hps_io's parsed PS/2 mouse packet (sys/hps_io.sv:106-107, 368-370):
+    // hps_io's parsed PS/2 mouse packet (sys/hps_io.sv:121-122, 368-370):
     // [24] toggles once per packet, [23:16] = Y delta (PS/2: positive = up),
     // [15:8] = X delta (positive = right), [2:0] = {middle, right, left},
     // 1 = pressed. The PC-98 counters are x positive = right, y positive =

@@ -206,7 +206,6 @@ module pc9821_crtc (
     output wire [3:0]  pal_wr_idx,
     output wire [1:0]  pal_wr_chan,
     output wire [3:0]  pal_wr_data,
-    output wire        pal_commit,
     // The PEGC 256-colour palette's CPU write port (row 5): the UNMASKED 8-bit
     // 0xA8 index and FULL-byte channel writes, mode-gated on mode2_256col (NP2kai
     // gdc_oaa/oac/oae write `anareg[(16*3) + palnum*4 + c] = dat` under
@@ -261,7 +260,13 @@ module pc9821_crtc (
   // (the constant 3 is NP2kai's horizontal back porch, and y is 1 line when all four of its
   // blanking fields are zero: `if (!vfbs) vfbs = 1`). x and y are then CLAMPED into the
   // 24 kHz machine's monitor range - gdcclk[1] (io/gdc.c:34) is THIS machine's entry: the
-  // character clock 21052600/8 with minx 100, maxx 112, miny 400, maxy 575. The GDC clock
+  // character clock 21052600/8 with minx 100, maxx 112, miny 400, maxy 575 - EXCEPT THE x
+  // FLOOR, WHICH THE MACHINE SETS LOWER: the real Xe10 runs a SYNC block with AW 64 (C/R 0x3E,
+  // x = 64 + 26 = 90) as a 720-dot line, 29.24 kHz / 66.46 Hz on the OSSC
+  // (docs/probes/KIT2-XE10-TXTMODE.TXT:36 `FRAME 16 VSYNC ticks=000120F1 lines=01B8`, against
+  // the default's :9 `ticks=0001544F`: 848 x 0x120F1 / 0x1544F = 720.0 dots), where NP2kai's
+  // minx 100 would hold it at 800. So minx is 90, the lowest x the machine was seen to run; a
+  // block below it is not measured and stays clamped there (todo item 85). The GDC clock
   // select (0x6A nums 0x41/0x42) never moves the raster (measured on the machine), and gdcclk[0]
   // (15.98 kHz) belongs to other machines' monitors. WHILE 0x09A8 BIT 0 IS SET (crt31k) the dot
   // clock is the separate 31 kHz oscillator (pc9821_vclk_pkg, docs/probes/CRT31K.TXT) and the range
@@ -297,8 +302,9 @@ module pc9821_crtc (
   // 2 097 152 its own always-set bit 2 (0x200000 samples) prints - a mis-derivation
   // (docs/probes/GDC.TXT).
   // ---------------------------------------------------------------
-  // gdcclk[1]'s range (see above), in characters and lines, and NP2kai's own h back porch.
-  localparam [9:0] CLK_MINX = 10'd100, CLK_MAXX = 10'd112;
+  // gdcclk[1]'s range (see above), in characters and lines, and NP2kai's own h back porch; the
+  // x floor is the machine's measured 90 (KIT2-XE10-TXTMODE.TXT:36, above), not gdcclk[1]'s 100.
+  localparam [9:0] CLK_MINX = 10'd90, CLK_MAXX = 10'd112;
   localparam [9:0] CLK_MINY = 10'd400, CLK_MAXY = 10'd575;
   localparam [9:0] CLK31_MINX = 10'd92, CLK31_MAXX = 10'd108;   // gdcclk[2]; y as gdcclk[1]
   localparam [8:0] HBP_CH   = 9'd3;
@@ -333,7 +339,7 @@ module pc9821_crtc (
   // (and reset, which loads both halves with the default block's values together). So geom_d
   // can differ from crtc_d(the roots) only in the ONE clk_sys right after that edge, when
   // hdot = vline = 0. Every compare made there has the same answer for ANY two geometries:
-  // HS_ON >= 16 and VS_ON >= VACTIVE >= 1 (no pulse at dot 0 / line 0), and HTOT_M1 >= 735,
+  // HS_ON >= 16 and VS_ON >= VACTIVE >= 1 (no pulse at dot 0 / line 0), and HTOT_M1 >= 719,
   // VTOT_M1 >= 399, WK_SNAP >= 383 (no line
   // end, frame end or walk slot) - tools/equiv/crtc_geom_lag.sv proves exactly that for every
   // pair of blocks. The one compare against VACT_M1 sampled there is the text line sequencer's
@@ -403,6 +409,19 @@ module pc9821_crtc (
       crtc_hact = (hact8 > {3'b000, hactmax}) ? hactmax : hact8[9:0];
     end
   endfunction
+  // The text fetch's last cell: the last whole cell of HACTIVE (8 dots in 80 columns, 16 in 40),
+  // capped at column 79 / 39. Below 80 columns it is the GDC's own line end: the real Xe10 draws
+  // an AW 78 or AW 64 line's first cell from the next row's word, not the cell past the line
+  // (KIT2-XE10-TXTMODE.TXT P3/P4, filmed). Above 80 the cap keeps the old wrap cell - no capture
+  // has a line wider than 80 (the row cache holds 80 cells; todo item 85).
+  function automatic [6:0] crtc_lc80;
+    input [9:0] hact;
+    crtc_lc80 = (hact[9:3] > 7'd80) ? 7'd79 : (hact[9:3] - 7'd1);
+  endfunction
+  function automatic [5:0] crtc_lc40;
+    input [9:0] hact;
+    crtc_lc40 = (hact[9:4] > 6'd40) ? 6'd39 : (hact[9:4] - 6'd1);
+  endfunction
   function automatic [9:0] crtc_vact;
     input [9:0] y; input [10:0] lf;
     reg [9:0] lfmax;
@@ -436,7 +455,7 @@ module pc9821_crtc (
       hfp_f   = {1'b0, b3[7:2]} + 7'd1;
       vs_f    = {b3[1:0], b2[7:5]};
       vfp_f   = b5[5:0];
-      // HTOTAL = 8*x characters: 736..896 dots (800..896 at 24 kHz); VTOTAL = y: 400..575 lines; the pulse fits
+      // HTOTAL = 8*x characters: 720..896 dots (720..896 at 24 kHz, 736..864 at 31 kHz); VTOTAL = y: 400..575 lines; the pulse fits
       // inside the blanking the active window leaves.
       htotal  = x * 10'd8;
       vtotal  = y;
@@ -456,7 +475,7 @@ module pc9821_crtc (
       wk_slot = (vtotal - 10'd1) & 10'h3F0;
       // Each operand is the 10-bit value its consumer compared against before (the pulses'
       // bounds were 10-bit sums in a 10-bit compare; the "- 1" bounds are exact because
-      // HTOTAL >= 736 and VTOTAL >= 400 never wrap).
+      // HTOTAL >= 720 and VTOTAL >= 400 never wrap).
       crtc_d = {vsync_w, vfp, wk_slot - 10'd1, wk_slot,
                 vactive + vfp + vsync_w, vactive + vfp, vactive - 10'd1,
                 vtotal - 10'd1,
@@ -471,9 +490,13 @@ module pc9821_crtc (
   reg  [9:0] s_y_r;    // the clamped y = VTOTAL
   reg  [9:0] s_ha_r;   // HACTIVE
   reg  [9:0] s_va_r;   // VACTIVE
+  // The last cell of the line the GDC reads (80- and 40-column), from HACTIVE: the text fetch's
+  // wrap cell (see last_cell). Roots like HACTIVE, so the fetch compares a register.
+  reg  [6:0] s_lc80_r;
+  reg  [5:0] s_lc40_r;
   // The derived operands (registered every clk_sys, below).
   reg [G_W-1:0] geom_d;
-  wire [9:0] HTOTAL   = s_x_r * 10'd8;            // 736..896 dots (8*x: a shift)
+  wire [9:0] HTOTAL   = s_x_r * 10'd8;            // 720..896 dots (8*x: a shift)
   wire [9:0] VTOTAL   = s_y_r;                    // 400..575 lines
   wire [9:0] HTOT_M1  = geom_d[G_HTOT_M1 +: 10];
   wire [9:0] HACTIVE  = s_ha_r;
@@ -533,6 +556,8 @@ module pc9821_crtc (
       s_y_r  <= 10'd440;   // ...its y
       s_ha_r <= 10'd640;   // ...its HACTIVE (8*cr)
       s_va_r <= 10'd400;   // ...and its VACTIVE (lf)
+      s_lc80_r <= 7'd79;   // ...and its last cells (80 columns, 40 columns)
+      s_lc40_r <= 6'd39;
     end else if (pixel_ce && frame_end) begin
       v_sync[0] <= sync_live[0]; v_sync[1] <= sync_live[1];
       v_sync[2] <= sync_live[2]; v_sync[3] <= sync_live[3];
@@ -544,6 +569,10 @@ module pc9821_crtc (
                           sync_live[1]);
       s_va_r <= crtc_vact(crtc_y(sync_live[2], sync_live[3], sync_live[5], sync_live[6],
                                  sync_live[7]), crtc_lf(sync_live[6], sync_live[7]));
+      s_lc80_r <= crtc_lc80(crtc_hact(crtc_x(crt31k, sync_live[1], sync_live[2], sync_live[3],
+                                             sync_live[4]), sync_live[1]));
+      s_lc40_r <= crtc_lc40(crtc_hact(crtc_x(crt31k, sync_live[1], sync_live[2], sync_live[3],
+                                             sync_live[4]), sync_live[1]));
     end
   end
   // The derived operands, every clk_sys from the roots (one clk_sys behind them; see above).
@@ -617,12 +646,11 @@ module pc9821_crtc (
   reg [2:0] sync_cnt;
   reg gdc_start;  // GDC1 character display started
 
-  // MODE FF2 bits 1 (the FF2 num-1 latch) and GDCANALOG_256E (the FF2 dat
-  // 0x68/0x69 form), and the two GDC clock-select bits (dat 0x82/0x83 and
-  // 0x84/0x85). NP2kai toggles all of these unconditionally (its gdc_o6a bit
-  // form and dat cases, io/gdc.c:501-603) and reads them back through the 0x6A
-  // register (bit 1) and the 0x9A0 query table. Nothing else consumes them.
-  reg mode2_ff2b1;
+  // GDCANALOG_256E (the FF2 dat 0x68/0x69 form) and the two GDC clock-select bits (dat
+  // 0x82/0x83 and 0x84/0x85). NP2kai toggles them unconditionally (its gdc_o6a dat cases,
+  // io/gdc.c:501-603) and reads them back through the 0x9A0 query table. Nothing else
+  // consumes them. (FF2 num 1 stores nothing: its only reader was the 0x6A read-back, and
+  // the machine's 0x6A reads 00, see the read arm.)
   reg mode2_256e;
   reg [1:0] gdc_clock;
 
@@ -796,7 +824,6 @@ module pc9821_crtc (
       mode2_wren <= 1'b0;
       mode2_256col <= 1'b0;
       mode2_textshift <= 1'b0;
-      mode2_ff2b1 <= 1'b0;
       mode2_256e <= 1'b0;
       gdc_clock <= 2'b00;   // NP2kai gdc_biosreset: gdc.clock = 0 (io/gdc.c:1121)
       pal_sel <= 8'd0;
@@ -846,6 +873,16 @@ module pc9821_crtc (
             // The SYNC block's eight bytes, in arrival order (NP2kai gdc_work stores each
             // parameter byte into para[ptr++] as it arrives, io/gdc.c:341-345).
             sync_live[sync_cnt] <= io_din;
+            // THE C/R BYTE (the second, AW - 2) ALSO LOADS THE TEXT PITCH on the real Xe10, for
+            // SYNC 0x0F and the display-off 0x0E alike, and a later PITCH command overrides it
+            // (docs/probes/KIT2-XE10-TXTMODE.TXT, filmed: P1 `OUT C0F P10 P4E ...` with no PITCH
+            // shears the rows 2 cells each = pitch 78, P3 `P4C` 4 cells = pitch 76, P4 `P3E` 18
+            // cells = pitch 62, P5 `OUT C0E P10 P4E ... C0D` 2 cells, P6 `OUT C47 P50 C0F P10
+            // P4E ...` 2 cells - the SYNC wins - and P2/P7, PITCH 0x50 after the block, none).
+            // MAME (upd7220.cpp, pitch = AW) and NP2kai (SYNC leaves the pitch) both differ; the
+            // machine outranks them. The byte is stored as PITCH stores it (the odd bit dropped,
+            // NP2kai maketext.c:194): every C/R the capture used is even, and it is one register.
+            if (sync_cnt == 3'd1) pitch <= {io_din[7:1], 1'b0};
             if (sync_cnt == 3'd7) begin
               sync_pending <= 1'b0;
               sync_cnt <= 3'd0;
@@ -970,10 +1007,8 @@ module pc9821_crtc (
           case ((io_din >> 1) & 8'h7F)
             // num 0: 8-colour (digital) vs 16-colour (analogue) select.
             8'h00: mode2_16color <= io_din[0];
-            // num 1: mode2 bit 1. It moves no pixel in any reference, but a guest
-            // RMW of 0x6A must round-trip it (NP2kai returns the live gdc.mode2,
-            // io/gdc.c:703).
-            8'h01: mode2_ff2b1 <= io_din[0];
+            // num 1: mode2 bit 1. It moves no pixel in any reference, and with 0x6A
+            // reading 00 on the machine (see the read arm) nothing reads it back.
             // num 3: the EGC/PEGC register write enable. A real guard, not decoration:
             // the firmware always brackets the bits below with it (master.lib EGC_ON;
             // BANK6@0xFFD4F-0xFFD87), and QEMU takes num 2 only while it is set.
@@ -1182,11 +1217,6 @@ module pc9821_crtc (
   reg [7:0] v_pitch;
   reg [7:0] v_sad_lo, v_sad_hi;
   reg v_row0_stale;  // row 0's cache was filled with the previous frame's display start
-  // The DIGITAL palette's frame-boundary snapshot. The analogue table is not here any
-  // more (#2): it is pc9821_gfx_palette's ping-pong MLAB, and what stays in this
-  // module is the 0xA8 index and the read mirror. The 0xAA = green / 0xAC = red /
-  // 0xAE = blue order is applied at the write (pal_wr_chan) and at the read.
-  reg [7:0] v_dig_a8, v_dig_aa, v_dig_ac, v_dig_ae;
   reg [7:0] v_csrform[0:2];
   reg [7:0] v_csread[0:1];
 
@@ -1211,10 +1241,6 @@ module pc9821_crtc (
       v_csrform[2] <= 8'h7B;
       v_csread[0] <= 8'h00;
       v_csread[1] <= 8'h00;
-      v_dig_a8 <= 8'hFF;
-      v_dig_aa <= 8'hFF;
-      v_dig_ac <= 8'hFF;
-      v_dig_ae <= 8'hFF;
       v_row0_stale <= 1'b0;
       cfg_epoch_snap <= 2'd0;
     end else if (pixel_ce) begin
@@ -1254,10 +1280,6 @@ module pc9821_crtc (
         v_csrform[2] <= csr_form[2];
         v_csread[0] <= csr_ead[0];
         v_csread[1] <= csr_ead[1];
-        v_dig_a8 <= dig_a8;
-        v_dig_aa <= dig_aa;
-        v_dig_ac <= dig_ac;
-        v_dig_ae <= dig_ae;
         // The write epoch as of THIS edge: the ack this copy raises may only
         // clear cfg_dirty while no write has moved past it (see the clear rule).
         cfg_epoch_snap <= cfg_epoch;
@@ -1541,7 +1563,12 @@ module pc9821_crtc (
   wire cell_done = txt_on && cell_end;
 
   // next-cell coordinates for the fetch (cell after the one on screen)
-  wire last_cell = v_col40 ? (adot[9:4] == 6'd39) : (adot[9:3] == 7'd79);
+  // The LINE's last cell, where the fetch takes the next line's column 0: HACTIVE's last whole
+  // cell (s_lc80_r/s_lc40_r, capped at 79/39), not a fixed column 79. With a SYNC block narrower
+  // than 80 cells a fixed 79 is never reached, so the prefetch past the line's end (cell AW) was
+  // left in the render registers and drawn as the next line's first cell - the core's screenshots
+  // of TXTMODE P3/P4 (AW 78/64) showed it; the machine draws the row's own first word there.
+  wire last_cell = v_col40 ? (adot[9:4] == s_lc40_r) : (adot[9:3] == s_lc80_r);
   wire [5:0] f_c40 = last_cell ? 6'd0 : (adot[9:4] + 6'd1);
   wire [6:0] f_c80 = last_cell ? 7'd0 : (adot[9:3] + 7'd1);
   // ---- THE FETCHED LINE: the line sequencer's state for this line, or the next one ----
@@ -1569,9 +1596,10 @@ module pc9821_crtc (
   // is one adder pair and the mux below; the start word is added there, as it was before the
   // text line sequencer - the shape the multiply keeps to the DSP block it always mapped to). f_k/f_rp and v_pitch/v_sad
   // only move at a line's first dot (the c_* copy and the snapshots land on the HTOTAL-1
-  // edge), the last cell's first dot (632 / 624, where the n_* side is selected) and dot 640
-  // (where it switches back) - n_* itself is written in the line's first few dots, long before
-  // last_cell - and the dots that CONSUME f_wordidx are
+  // edge), the last cell's first dot (8 x s_lc80_r / 16 x s_lc40_r, 632 / 624 on an 80-cell
+  // line, where the n_* side is selected) and the next cell's first dot (where it switches
+  // back) - n_* itself is written in the line's first few dots, long before last_cell - and
+  // the dots that CONSUME f_wordidx are
   // never those: the fetch arms sit at dots 3/4/5 of a cell (11/12/13 in 40-column) and the
   // render captures at cell_done (dot 7 / 15). The registered product therefore equals the
   // combinational one at every consuming dot, and tram_vid_addr is bit-identical at EVERY
@@ -1653,7 +1681,12 @@ module pc9821_crtc (
   // needs to know whether the fetched cell is a JIS glyph inside the grid, so that the row cache
   // and the ANK store can be told apart.
   wire [7:0]  f_ku_i  = {1'b0, code_lo_r[6:0]} - 8'h01;   // ku - 0x21
-  wire        f_row_in = (f_ku_i < 92);   // JIS_ROWS
+  // The grid is rows ku 0x21-0x7C and columns ten 0x20-0x7F (FONT.ROM's 0x60 cells per row); a
+  // column below 0x20 has no slot and draws blank, as both references' all-zero grid outside
+  // the loaded range does (NP2kai font/fontv98.c v98knjcpy `for (j=0x20; j<0x80; j++)`, QEMU
+  // pc98-vga.c kanji_copy the same). Without the column test the walker's dump offset wraps
+  // it into a later row: the 0x0120 a game clears its text plane with drew JIS 0x4241.
+  wire        f_row_in = (f_ku_i < 92) && (code_hi_r[6:0] >= 7'h20);   // JIS_ROWS, ten >= 0x20
   // The right half reuses the pair's own row and column and IGNORES its own TRAM code, which
   // is what NP2kai's kanji2nd arm does (bitmap[x] = lastbitp + 0x800). The carried right-half
   // flag must NOT survive the line wrap: last_cell's fetch is the NEXT line's column 0, and
@@ -1693,9 +1726,14 @@ module pc9821_crtc (
     end else if (pixel_ce && fetch_fo) begin
       f_jis_here_r <= f_jis_here;
       f_pair2nd_r  <= f_pair2nd;   // both describe the cell addressed at THIS dot
-      if (f_jis && f_row_in && !f_pair2nd) begin
+      // A code outside the grid still consumes its right cell: NP2kai sets kanji2nd for every
+      // non-gaiji two-byte code but the ver0.78 rows whatever the grid holds (vram/maketext.c
+      // :291-294), QEMU likewise (pc98-vga.c `if (lo2 < 0x09 || lo2 >= 0x0c) kanji2nd = 1`), and
+      // both then draw that pair from their all-zero slot - a BLANK pair (f_jis_ok clear,
+      // r_blank_2nd below), whatever code the right cell carries.
+      if (f_jis && !f_pair2nd) begin
         f_jis2nd <= 1'b1;        // this cell is a left half; the next is its right half
-        f_jis_ok  <= 1'b1;
+        f_jis_ok  <= f_row_in;
       end else begin
         f_jis2nd <= 1'b0;
         f_jis_ok  <= 1'b0;
@@ -1847,7 +1885,7 @@ module pc9821_crtc (
                         (((r_code_lo & 8'h7F) == 8'h56) ||
                          ((r_code_lo & 8'h7F) == 8'h57));
   // The row-cache cells draw from the cache exactly as the ANK do; r_jis_ok is false for
-  // a row the grid does not hold (ku above 0x7C), which keeps those cells blank rather
+  // a row or column the grid does not hold (ku above 0x7C, ten below 0x20), which keeps those cells blank rather
   // than showing a wrapped address's glyph. It covers the kanji left cells, the ver0.78
   // half-width rows (maketext.c:280-296), and the pair's right cell, whose
   // own code is ignored (maketext.c:254 `if (kanji2nd)` comes first). That right cell
@@ -1855,7 +1893,11 @@ module pc9821_crtc (
   // cleared 0x0020, and NP2kai/QEMU ignore it), so it usually arrives here as the ANK
   // class with r_font already holding the JIS half - the ANK arm above is what draws it.
   wire       jis_ok   = (|r_code_hi) && !gaiji_ok && r_jis_ok;
-  wire       glyph_on = (ank_ok || gaiji_ok || jis_ok) && glyph_bit;
+  // The right cell of a pair whose code is outside the grid draws nothing of its own (see
+  // f_jis_ok): r_jis_2nd with r_jis_ok clear is exactly that cell, since an in-grid pair's
+  // right cell always carries r_jis_ok.
+  wire       r_blank_2nd = r_jis_2nd && !r_jis_ok;
+  wire       glyph_on = (ank_ok || gaiji_ok || jis_ok) && glyph_bit && !r_blank_2nd;
 
   // Attribute decode (ReactOS sdk/.../pc98/video.h, ReC98, QEMU ATTR_COL):
   //   bit0 visible  bit1 blink  bit2 reverse  bit3 underline  bit4 vertical line
@@ -2036,7 +2078,17 @@ module pc9821_crtc (
   wire at_line_tick = (hdot == HTOT_M1);
   assign gfx_odd_line = v_mode1_200 && (at_line_tick ? feed_odd : vline[0]);
   assign gfx_mode16   = v_mode16;
-  assign gfx_dig      = {v_dig_a8, v_dig_aa, v_dig_ac, v_dig_ae};
+  // The DIGITAL palette bytes go out LIVE, not as a frame-boundary snapshot: the real Xe10's
+  // 8-colour palette takes each write at once, like its analogue DAC. XE10T /RASTER's DTOGGLE
+  // phase (docs/probes/XE10T-XE10-RASTER.TXT:28 `P RASTER DTOGGLE frames=283 to=0 target=1800`,
+  // 1024 `out 0xAE` writes toggling digital entry 0 between blue and black over ~9.4 lines,
+  // each `out` ~7.8 dots long) filmed staggered blue/black dashes inside every line of the
+  // band, the same picture as the analogue TOGGLE phase, where a per-frame latch shows one
+  // colour for the whole frame (both references draw the digital bytes per frame: NP2kai
+  // vram/scrndraw.c, MAME pc9801_v.cpp; the machine outranks them). A write lands in dig_* on
+  // its io_wr edge, as an analogue write lands in pc9821_gfx_palette's table, so the next dot
+  // shows it (tb_pc9821_raster_palette).
+  assign gfx_dig      = {dig_a8, dig_aa, dig_ac, dig_ae};
   // The analogue table's CPU write port, and its read mirror (see the declarations).
   // 256-colour writes go to the PEGC mirror below instead (NP2kai checks GDCANALOG_256
   // first in gdc_oaa/oac/oae); the 16-colour DAC port and its masked index are
@@ -2048,7 +2100,6 @@ module pc9821_crtc (
   assign pal_wr_idx  = pal_sel[3:0];
   assign pal_wr_chan = (pc == 5'd22) ? 2'd0 : (pc == 5'd23) ? 2'd1 : 2'd2;
   assign pal_wr_data = io_din[3:0];
-  assign pal_commit  = frame_end;
   assign gfx_pegc_256  = mode2_256col;
   assign gfx_pegc_256e = mode2_256e;
   // THE PEGC 256-COLOUR READ MIRROR (row 5). Three 256x8 M10K byte lanes, the
@@ -2218,7 +2269,15 @@ module pc9821_crtc (
       // with nothing pending (NP2kai gdc_i62, io/gdc.c:684). The pop is in the
       // sequential block; gdc_snd_q is the byte the pop returns.
       5'd1:  io_dout_r = gdc_snd_q;
-      5'd3:  io_dout_r = mode1;
+      // 0x68: the mode flip-flops, bit 7 (DISP) reading 0 although it is set. The Xe10 reads
+      // 0x18 at the DOS prompt after the ITF's `mov al,0x0F / out 0x68,al` (BANK4@0x24C0)
+      // turned the display on (docs/probes/PORTS.TXT, MEMSW.TXT, XE10CFG-XE10-CFGWR.TXT
+      // `MODE68 before/after-0C 18 18`), while FF6 reads back as written
+      // (XE10CFG-XE10-P6INIT.TXT `MODE68 before/after-0D/after-0C 18 58 18`). NP2kai's gdc_i68
+      // returns the whole byte (0x98); the captures overrule it. With the display off the bit
+      // reads 0 as well: docs/probes/KIT1-XE10-CFGWR.TXT:11
+      // `MODE68OFF before/after-0E/after-0E-20ms/after-0F 18 18 18 18`.
+      5'd3:  io_dout_r = {1'b0, mode1[6:0]};
       // 0x6E is write-only on this machine, so do not answer a latch.
       5'd5:  io_dout_r = 8'hFF;
       5'd6:  io_dout_r = crtc_pl;
@@ -2234,13 +2293,17 @@ module pc9821_crtc (
       // no live register is behind the read). The GRCG's mode still reaches
       // its consumers as a signal (pc9821_grcg owns it; the EGC gate takes it directly),
       // so only the guest read is open bus. The 16-bit `in ax,7Ch` FOLD
-      // (pc9821_iobus's term7c_hi forces lane 1 to 0x00) and this LOW lane make
-      // `in ax,7Ch` read 0x00FF; the word
-      // form was never machine-measured (TODO item 42).
+      // (pc9821_iobus's word-read termination fills lane 1 with 0xFF) and this LOW lane make
+      // `in ax,7Ch` read 0xFFFF, the Xe10's value
+      // (docs/probes/XE10T-XE10-AUDIT.TXT W007C `w1=FFFF`).
       5'd12: io_dout_r = 8'hFF;
-      // NP2kai gdc_i6a returns gdc.mode2 itself, so a set bit reads back (io/gdc.c:703),
-      // bit 1 included (the FF2 num-1 latch round-trips).
-      5'd4:  io_dout_r = {4'b0000, mode2_wren, mode2_egc, mode2_ff2b1, mode2_16color};
+      // 0x6A READS 00 on the machine, in the 16-colour and the 256-colour state alike:
+      // docs/probes/KIT1-XE10-PEGCRD.TXT:3 `MODE 6A=00 9A0_04=01` (16 colours) and
+      // KIT1-XE10-PEGCRD.TXT:14 `MODE 6A=00 9A0_04=00 9A0_07=00 9A0_08=01 9A0_0A=01` (256
+      // colours), as docs/probes/PEGCRD-XE10.TXT reads it too. NP2kai gdc_i6a returns
+      // gdc.mode2 (io/gdc.c:703); the capture outranks it. The mode bits still reach the
+      // 0x9A0 query (gdc_ff2_state) and the display.
+      5'd4:  io_dout_r = 8'h00;
       // NP2kai gdc_ia8 returns gdc.palnum VERBATIM in analogue modes (io/gdc.c:913-919):
       // out 0xA8,0xAB / in 0xA8 reads 0xAB, not 0x0B. This is the ANALOGUE path: the
       // machine capture that settles the DIGITAL path below ran in

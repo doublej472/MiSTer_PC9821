@@ -62,11 +62,11 @@ module pc9821_pcm86 #(
     // latched flag OR the live buffer-low level). It is LOW while the guest
     // masks it and rises AGAIN on a re-enable with the flag still latched,
     // which is the fresh edge the edge-latched PIC consumes
-    // (pc9821_pic.sv:168 `ir_set = ir_in & ~ir_prev`). The guest clears the
+    // (pc9821_pic.sv:172 `ir_set = ir_in & ~ir_prev`). The guest clears the
     // latched flag by writing 0xA468 with bit 4 clear. On the card one strap
-    // feeds the OPNA's timers and this block, so pc9821_system ORs this into
-    // the OPNA's IRQ line rather than giving the two devices different
-    // interrupt numbers.
+    // feeds the OPNA's timers and this block, so pc9821_system puts this and
+    // the OPNA's IRQ line on one 8259 input (pc9821_irq_share) rather than
+    // giving the two devices different interrupt numbers.
     output wire        irq,
 
     // The logical byte count, for the bench. The card has no port that exposes
@@ -364,7 +364,7 @@ module pc9821_pcm86 #(
   // A wire driven by irq_pending alone is NOT that query: it stays HIGH through
   // an 0xA468 write of 0x90 (bit 5 clear, bit 4 set, so the latch survives -
   // cbus/pcm86io.c:114-121) and eats the re-enable's rising edge at the PIC
-  // (pc9821_pic.sv:168; wired in at pc9821_system.sv:1457, `opna_irq | pcm86_irq`). tb_pc9821_pcm86_irqmask.
+  // (pc9821_pic.sv:168; wired in through pc9821_system.sv:1533, `.irq_a(opna_irq), .irq_b(pcm86_irq),`). tb_pc9821_pcm86_irqmask.
   wire irq_query = (irq_pending || (count <= fifosize)) && fifo[5];
 
   // EVERY ARMED THRESHOLD EVENT IS A FRESH REQUEST. NP2kai delivers each one with its own
@@ -401,15 +401,16 @@ module pc9821_pcm86 #(
       // one of them is visible at a time (pcm86_ia46a).
       P_DAC:    io_dout = dactrl;
       // The four even ports of the block this core does not model: 0xA462 and
-      // 0xA464 are the WaveStar/CS4231 magic-sequence ports on a DIFFERENT card
-      // (NP2kai attaches no write for them in 86 mode and a dummy read), 0xA46C
-      // is write-only in both references, and 0xA46E is unattached in 86 mode.
-      // They are decoded here so the block's traffic stops being counted as
-      // unmapped (the boot-stop U= instrument). NP2kai attaches pcm86_inpdummy
-      // to all four (cbus/pcm86io.c:342-346, at :433-434,483-484,489-490) and it
-      // returns 0, so the primary reference answers 0x00 where the open-bus
-      // default was 0xFF.
-      P_SPARE0, P_SPARE1, P_DATA, P_SPARE2: io_dout = 8'h00;
+      // 0xA464 are the WaveStar/CS4231 magic-sequence ports on a DIFFERENT card,
+      // 0xA46C is the sample port (write-only in both references), and 0xA46E is
+      // unattached in 86 mode. They are decoded here so the block's traffic stops being
+      // counted as unmapped (the boot-stop U= instrument). Their READS are the Xe10's
+      // bytes (docs/probes/XE10T-XE10-AUDIT.TXT, read twice at a DOS prompt with no sound
+      // driver: BA462 `v=FF v2=FF`, BA464 `v=FF v2=FF`, BA46C `v=EE v2=EE`, BA46E `v=FF
+      // v2=FF`), not NP2kai's pcm86_inpdummy 0x00 (cbus/pcm86io.c). Whether 0xA46C's EE
+      // moves with the board's state is not measured (one setting, todo item 42).
+      P_SPARE0, P_SPARE1, P_SPARE2: io_dout = 8'hFF;
+      P_DATA:   io_dout = 8'hEE;
       default:  io_dout = 8'hFF;
     endcase
   end

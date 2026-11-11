@@ -106,7 +106,13 @@ module tb_pc9821_gvram_pagecopy;
   wire [14:0] gvram_win_offset;
 
   // ==== DUT ====
+  // The 16-colour mode (the guest's OUT 0x6A,0x01, FF2 num 0): this bench reaches the E plane at
+  // 0xE0000-0xE7FFF, which the machine maps only in that mode (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b1;
+  wire       e_plane_nc;
   pc9821_memory_map map_dut (
+      .mode2_16color(mode2_16color),
+      .e_plane_nc(e_plane_nc),
       .top_bank(4'd8), .ide_rom_enable(1'b0), .d8_bank(2'b00),
       .ide_ram_gate(1'b1),
       .bios_ram_gate(1'b0), .win0_sel(8'h08), .win0_sel_moved(1'b0),
@@ -199,7 +205,7 @@ module tb_pc9821_gvram_pagecopy;
   // z486 presents an I/O access as a DWORD-ALIGNED address with the operand's byte
   // lane carried only in `be` (pc9821_system forms {z_addr, 2'b00}); pc9821_iobus
   // steps `lane` = be's first set bit and forms the byte port as base_addr + lane
-  // (pc9821_iobus.sv:764-766, `lane_addr = base_addr + {30'd0, lane}`). The responder MUST do the same: without it
+  // (pc9821_iobus.sv:870-872, `lane_addr = base_addr + {30'd0, lane}`). The responder MUST do the same: without it
   // `out 0x7E,al` (base 0x7C, lane 2) decodes as `out 0x7C,al` and every tile write
   // lands on the mode register, so the GRCG is never armed - which is exactly the
   // false failure this bench reported before the lane was modelled.

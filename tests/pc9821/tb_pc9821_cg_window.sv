@@ -159,8 +159,12 @@ module tb_pc9821_cg_window;
   wire [31:0] line_data;
   wire        line_sel;
   wire        line_ready;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem dut_mem (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk_sys), .reset(reset),
       .top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(1'b1),
@@ -262,6 +266,16 @@ module tb_pc9821_cg_window;
   // a valid record.
   localparam [7:0] RECORD_BYTES [0:9] = '{8'hc1, 8'h8c, 8'h81, 8'hcd, 8'hff,
                                           8'h00, 8'h00, 8'haa, 8'h55, 8'h67};
+  // The record a fresh power-up store holds: the factory table above with the one item the
+  // owner's Xe10 as found differs in, Sound "not used" (docs/bios-setup.md "The Xe10 as
+  // found"; its 0x881E reads 0x7C in docs/probes/XE10CFG-XE10-CFG0.TXT). SETUP stores that
+  // item in row 4 bit 1, 1 = not used, so row 4 is 0xcf; and GDC clock 2.5 MHz, which SETUP
+  // stores in row 2 bit 7 inverted (the getter BANK3@0x37A3 `call 0x20db / shr al,0x7`, value
+  // 1 = 2.5 MHz; this bench's setup_cfg 0x763EF3 is that machine), so row 2 is 0x0c. The
+  // completing byte is 0x67 - 2 + 0x80 = 0xe5, and the sum is still 0x500.
+  // pc9821_cg.sv's CG_RECORD_INIT.
+  localparam [7:0] POWERUP_RECORD [0:9] = '{8'hc1, 8'h0c, 8'h81, 8'hcf, 8'hff,
+                                            8'h00, 8'h00, 8'haa, 8'h55, 8'he5};
   // ==== STIMULUS ====
 
   task automatic fail(input [8*96-1:0] message);
@@ -369,7 +383,8 @@ module tb_pc9821_cg_window;
     //    AH and es:0x13 into AL and compare against 0xAA55 at 0xFC681, then
     //    BANK4@0xFC699-0xFC6B5 adds the ten bytes at es:[3],[5],...,[0x15] into
     //    BL and requires the 8-bit sum to be zero; the ten bytes are this
-    //    machine's own ITF table (count 0x0A at BANK4@0x4923, bytes at 0x4924).
+    //    machine's own ITF table (count 0x0A at BANK4@0x4923, bytes at 0x4924)
+    //    with Sound "not used" in row 4 (POWERUP_RECORD above).
     //    The section below (3b) writes the record through the same window, which
     //    is why it cannot catch a store that powers up zeroed -- these
     //    assertions must run first, and they do.
@@ -384,7 +399,7 @@ module tb_pc9821_cg_window;
     sum_powerup = 0;
     for (integer k = 0; k < 10; k = k + 1) begin
       mem_read_byte(32'h000A_4000 + 3 + k * 2, rval);
-      if (rval !== RECORD_BYTES[k])
+      if (rval !== POWERUP_RECORD[k])
         fail("power-up record byte at the ITF's own window offset");
       sum_powerup = sum_powerup + rval;
     end

@@ -3,6 +3,14 @@
 ; fall-through Jcc, so the next-instruction GPR read mask must name the
 ; source register (store and register forms) or the pending write is missed.
 ; NASM has no UMOV mnemonic: each form is spelled with db.
+; UMOV outside an ICE behaves as MOV on the 486: R. Collins, "Undocumented
+; OpCodes: UMOV": "Available on all 80386/80486 processors", "If UMOV is
+; executed by a user program, it will appear it is a alias for MOV".  A real
+; Am486DX4 executes every form without #UD and its register form moves the
+; byte (CPUSUITE-XE10-triage: tri_umov data=99000000h, umov bl,ah = 99h);
+; its memory forms did not reach normal memory there (store not landing,
+; load 0079h), which no source explains, so z486 keeps them plain MOV and
+; this program checks memory forms against MOV.
 BITS 16
 org 0
 

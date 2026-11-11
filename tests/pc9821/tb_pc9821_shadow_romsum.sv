@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SHADOW_ROMSUM: an OSD reset no longer fails the ITF's own ROM sum. The window at 0xF8000-0xFFFFF has TWO layers -- the selected pack bank and a writable shadow in the SDRAM reserve above the pack -- and the gated STORE the ITF makes at 0xF8E90 goes to the shadow, never the pack, so the pack the sum reads stays pristine. The READ serves the shadow only while the shadow is enabled (0x043F's 0x8 nibble, reset-cleared) AND has been written since reset, so a boot that has not stored yet reads the pack.
+// TB_PC9821_SHADOW_ROMSUM: an OSD reset no longer fails the ITF's own ROM sum. The window at 0xF8000-0xFFFFF has TWO layers -- the selected pack bank and a writable shadow in the SDRAM reserve above the pack -- and the gated STORE the ITF makes at 0xF8E90 goes to the shadow, never the pack, so the pack the sum reads stays pristine. The READ serves the shadow only while the shadow is enabled (0x043F's 0x8 nibble, reset-cleared) AND has been written since reset, so a boot that has not stored yet reads the pack. And a SOFT REBOOT - the 0x534 soft reset, with RAM and the shadow's stored 0x04 intact and no platform reset - clears the dirty flag through pc9821_iobus's soft_reboot strobe, as QEMU's armed-0x534 machine reset restores the stored byte (pc98_mem_reset: `s->f8e90_value = s->f8e90_reset`), so the re-POST's second sum pass reads the pack's 0x00 and a new store is read back; FAIL-FIRST, because the dirty flag survived the reboot and the pass read the stale 0x04 - ROM SUM ERROR after a software reboot.
 //
 // WHY. The authentic ITF sums the top window TWICE per POST. Both loops are byte-wise
 // (lodsw / add dl,al / add dh,ah) over physical 0x0F8000-0x0FFFFF (the 32 KiB window) and
@@ -46,6 +46,7 @@ module tb_pc9821_shadow_romsum;
   // by hand because it is testing the memory subsystem, not the port decode: on the card
   // the ITF installs it with `out 0x43F,0x80` before its store (BANK4@0x1D0/0x19CE).
   reg        top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // pc9821_iobus's reboot strobe (the 0x534 soft reset)
   // 0x043F's 0x2 nibble; the identity, so nothing here is diverted to the EMS page.
   reg  [1:0] ems_state = 2'd0;
   reg [7:0]  win0_sel = 8'h08;
@@ -111,11 +112,15 @@ module tb_pc9821_shadow_romsum;
   wire [31:0] mem_accepts, mem_beats;
 
   // ==== DUT ====
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk), .reset(reset), .top_bank(top_bank),
       .ems_state(ems_state), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(1'b1),
-      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en),
+      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en), .soft_reboot(soft_reboot),
       .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08), .sys16m_en(1'b0),
       .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
       .gvram_access_page(gvram_access_page),
@@ -381,6 +386,38 @@ module tb_pc9821_shadow_romsum;
     $display("  WARM option-ROM read after the new store = %02x", rd[7:0]);
     if (rd[7:0] !== 8'h04) begin
       $display("FAIL the warm boot's option-ROM read is 0x%02x, want the stored 0x04", rd[7:0]);
+      errors = errors + 1;
+    end
+
+    // ---- SOFT REBOOT: the 0x534 soft reset, NO platform reset. ----
+    // A software reboot (Windows 95's WIN.COM stub -> the BIOS reset entry's 0x534 toggle,
+    // BANK7@0xFD81F) re-runs the ITF's POST with RAM - and so the shadow's stored 0x04 -
+    // intact. QEMU's armed-0x534 machine reset restores the stored byte (pc98_mem_reset:
+    // `s->f8e90_value = s->f8e90_reset`), and pc9821_iobus pulses soft_reboot there, so
+    // the re-POST's second sum pass must read the pack again. FAIL-FIRST: without the
+    // strobe the dirty flag survived and the pass read the stale 0x04 - ROM SUM ERROR in the
+    // userdisk tier after RBOOT.
+    bios_ram_gate = 0;
+    top_shadow_en = 0;                     // pc9821_iobus clears it on the same write
+    @(negedge clk);
+    soft_reboot = 1'b1;
+    @(negedge clk);
+    soft_reboot = 1'b0;
+    repeat (4) @(negedge clk);
+    check_pack_top_pristine(5);
+    top_shadow_en = 1;                     // the re-POST's own 0x043F = 0x80
+    cpu_read(32'h000F_8E90, rd);
+    $display("  REBOOT 0xF8E90 read (shadow enabled, stale 04 present) = %02x", rd[7:0]);
+    if (rd[7:0] !== 8'h00) begin
+      $display("FAIL the soft reboot's second pass read the shadow's stale 0x%02x, want the pack's 0x00",
+               rd[7:0]);
+      errors = errors + 1;
+    end
+    bios_ram_gate = 1;
+    cpu_write_byte(32'h000F_8E90, 8'h04);
+    cpu_read(32'h000F_8E90, rd);
+    if (rd[7:0] !== 8'h04) begin
+      $display("FAIL after the soft reboot the option-ROM read is 0x%02x, want the stored 0x04", rd[7:0]);
       errors = errors + 1;
     end
 

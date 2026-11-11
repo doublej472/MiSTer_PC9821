@@ -17,7 +17,7 @@
 // FOLLOWS THE PIT CHANNEL-0 OUT PIN (2826 falls / 2826 rises with ch0 in mode
 // 3), and that the keyboard (IRQ1) and IDE (IRQ9) requests clear when their
 // acking register read lowers the device line. IRQ2 (VSYNC, the in-service
-// measurement in docs/probes/VSYNC.TXT) and IRQ12 (OPNA register 0x27) HOLD.
+// measurement in docs/probes/VSYNC.TXT) HOLDS; IRQ12 withdraws (docs/probes/XE10T-XE10-OPNA2.TXT).
 // So the machine is a per-line mix, and WD_MASK names the lines that clear
 // their latched request on the device line's FALLING edge while the line is
 // MASKED. Gating on the mask is deliberate: an unmasked falling edge landing in

@@ -1,14 +1,29 @@
 PC-9821 z486 MiSTer core
 Copyright 2026 Jonathan Frederick and the project's contributors
 
-Third-party notices.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+the files the License covers except in compliance with the License. A copy of
+the License is in LICENSE, and at http://www.apache.org/licenses/LICENSE-2.0.
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
 
-The licence for this project's own code has not been decided yet; until it is,
-no licence is granted for it beyond what the third-party parts below carry for
-their own code.
+What the Apache License 2.0 covers: the code and documentation written for this
+project - its own RTL (src/pc9821/, src/pcm86/, src/memory/, src/soc/,
+src/common/ and the glue in src/opna/ that src/opna/LICENSE-SCOPE.md marks as
+written here), tools/, tests/, docs/, the firmware/ test pack and the build
+files - except the parts listed below.
 
-This project is built on, and redistributes, work by others. Each part listed
-below keeps its own licence, stated in that part.
+What it does not cover: the parts listed below keep their own licences, stated
+in each part, and this project does not relicense them. A file of part 1, 2, 3,
+6 or 7 that the project has changed stays under that part's licence as a whole.
+Where a file mixes the project's own code with code or data from another
+project (the files parts 4, 5 and 8 name), the Apache License 2.0 covers only
+the project's own contributions to it; the rest keeps the licence its part
+states, or, for part 5, has no licence confirmed yet.
+
+This project is built on, and redistributes, work by others:
 
 --------------------------------------------------------------------------------
 1. z486 CPU - src/z486/
@@ -18,16 +33,20 @@ below keeps its own licence, stated in that part.
    src/z486/LICENSE-SCOPE.md: the grant covers *.sv, *.svh, *.py and *.md only.
    ucode.hex is expressly excluded, and the other data files (the other *.hex
    images and the *.mif files) fall outside the grant as well.
+   Two CPU test programs, src/z486/tests/programs/x87_qemu_exceptions.asm and
+   x87_qemu_special.asm, are ported from QEMU's tests and carry their own
+   header, SPDX GPL-2.0-or-later; they are test inputs, not in the bitstream.
 
 --------------------------------------------------------------------------------
 2. MiSTer framework - sys/
 --------------------------------------------------------------------------------
    Template_MiSTer, https://github.com/MiSTer-devel/Template_MiSTer
    Copyright Alexey Melnikov (Sorgelig) and the MiSTer-devel contributors.
-   An unmodified copy. GNU General Public License: the repository's LICENSE is
-   GPL version 2; per-file headers say "either version 2 ... or (at your option)
-   any later version", "either version 3 ... or any later version", or "GPL
-   Licensed" without a version. See each file's header.
+   An unmodified copy of upstream commit 76dd8f5 (2026-10-28). GNU General
+   Public License: the repository's LICENSE is GPL version 2; per-file headers
+   say "either version 2 ... or (at your option) any later version", "either
+   version 3 ... or any later version", or "GPL Licensed" without a version.
+   See each file's header.
    Some sys/ files are Altera/Intel megafunction wizard output and carry
    Altera's own notice, which applies to them.
 
@@ -61,8 +80,11 @@ below keeps its own licence, stated in that part.
      src/common/synchronizer.sv
      src/pc9821/audio/pc9821_audio_volume.sv (gain table and multiply from
        ao486 rtl/soc/sound/sound.v, module sb_volume)
-     tests/pc9821/cdda_ref.v, tests/pc9821/pc9821_audio_volume_ref.sv
-       (simulation-only copies of the two above)
+     src/pc9821/audio/pc9821_audio_mix.sv (the volume concat, vol_en and the
+       speaker shift follow ao486 rtl/soc/sound/sound.v)
+     tests/pc9821/cdda_ref.v, tests/pc9821/pc9821_audio_volume_ref.sv,
+       tests/pc9821/pc9821_audio_mix_ref.sv
+       (simulation-only copies of the three above)
 
    Copyright (c) 2014, Aleksander Osman
    Copyright (C) 2017-2020 Alexey Melnikov
@@ -95,7 +117,10 @@ below keeps its own licence, stated in that part.
 --------------------------------------------------------------------------------
    Portions derived from nand2mario's z486_MiSTer port
    (https://github.com/nand2mario/z486_MiSTer); licence to be confirmed: that
-   repository states no licence.
+   repository states no licence, so this project cannot license those
+   portions. The project's Apache License 2.0 grant covers only the project's
+   own contributions to the files below, not the portions that came from the
+   port.
    Files with surviving portions:
      z486_mister.sv (the top level; parts of it also follow ao486_MiSTer's
        ao486.sv and Template_MiSTer's Template.sv, GNU GPL version 2 or later,
@@ -201,8 +226,15 @@ below keeps its own licence, stated in that part.
 --------------------------------------------------------------------------------
 The compiled bitstream
 --------------------------------------------------------------------------------
-   The FPGA bitstream (.rbf) combines the parts above with this project's own
-   code. It includes GPL-3 code (part 3) and the GPL framework (part 2), whose
-   GNU General Public License terms apply to the bitstream; the Apache-2.0
-   (part 1), BSD (part 4) and MIT (parts 6 and 8) parts are compatible with
-   GPL version 3. This repository is its corresponding source.
+   The FPGA bitstream (.rbf) combines this project's Apache-2.0 code with the
+   parts above, among them GPL code: the framework (part 2) and the sound
+   cores (part 3). The GNU General Public License terms of those parts apply
+   to the bitstream, and this repository is its corresponding source.
+   The Apache License 2.0 is compatible with GPL version 3 (not with GPL
+   version 2 alone). The GPL parts here state "version 2 or later" or
+   "version 3 or later" in their headers, or "GPL Licensed" with no version;
+   the sys/ files with no header carry only the Template_MiSTer repository's
+   LICENSE, the GPL version 2 text. No file in sys/ or src/opna/ states
+   "version 2 only". See each file's header. The BSD (part 4) and MIT (part 8)
+   parts are compatible with GPL version 3. Part 6 is used only in simulation
+   and is not in the bitstream. Parts 5 and 7 are described in their sections.

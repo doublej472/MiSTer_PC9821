@@ -120,14 +120,13 @@ module tb_pc9821_pegc_scan_dot;
   reg         p256_we = 1'b0;
 
   pc9821_video_mixer u_mix (
-      .clk(clk), .rst_n(~reset),
+      .clk(clk),
       .dot_x(hdot), .h_active(h_active), .v_active(1'b1),
       .text_opaque(1'b0), .text_cell(1'b0), .text_colour(12'h000),
       .line_data(32'h0000_0000), .line_ready(peg_line_ready), .line_sel(peg_line_sel),
       .line_rd_addr(), .line_rd_sel(),
       .pal_mode16(1'b1), .pal_dig(32'h0000_0000),
       .pal_wr_en(1'b0), .pal_wr_idx(4'd0), .pal_wr_chan(2'd0), .pal_wr_data(4'd0),
-      .pal_commit(1'b0),
       .pegc_256(1'b1), .fold_bypass(1'b1), .packed_idx(packed_idx),
       .pal256_wr_en(p256_we), .pal256_wr_idx(p256_widx),
       .pal256_wr_chan(p256_wchan), .pal256_wr_data(p256_wdata),

@@ -21,7 +21,9 @@ module cdda #(parameter CLK_AUDIO_RATE, parameter RING_WORDS = 6144)
 	// LOCAL CHANGE (PC-9821 core): read-ahead. CDDA_REQ4 says the ring has room for four whole
 	// sectors (the drive then fetches four in one host request), CDDA_PLAYED pulses once per 588
 	// samples taken out of the ring (one sector's worth reached the speakers: the drive's played
-	// position), and CDDA_FLUSH (one CLK cycle, from the drive's player) empties the ring at once.
+	// position), and CDDA_FLUSH (from the drive's player) empties the ring at once. It is one CLK
+	// cycle for a STOP, SEEK, PLAY, PAUSE or mount, and HELD for the whole core reset (the
+	// player's reset_stop); every flush cycle empties the ring, so a held flush is the same as one.
 	output reg        CDDA_REQ4 = 0,
 	output reg        CDDA_PLAYED = 0,
 	input             CDDA_FLUSH,
@@ -163,8 +165,8 @@ always @(posedge CLK) begin
 	if(clk_d2 == clk_d1) old_clk <= clk_d2;
 
 	if(CDDA_FLUSH) begin
-		// The flush (one CLK cycle, from the drive's player): the ring is empty from the next
-		// cycle. A write being stored this cycle (wr_req) lands at write_addr and is skipped with
+		// The flush (one CLK cycle for a player command or a mount, every cycle of a core reset):
+		// the ring is empty from the next cycle, and stays empty while the flush is held. A write being stored this cycle (wr_req) lands at write_addr and is skipped with
 		// the rest; a write edge seen this cycle is not taken; the 44.1 kHz tick in this cycle
 		// sends silence; no played pulse of the old contents follows.
 		read_addr  <= wr_req ? write_addr_inc : write_addr;

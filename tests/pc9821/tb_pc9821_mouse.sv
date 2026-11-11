@@ -100,7 +100,10 @@ module tb_pc9821_mouse;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   wire beep_mute;
   wire [1:0] beep_vol;      // fix-audio-volume added this iobus output (beeper 2-bit volume)
 
@@ -145,6 +148,7 @@ module tb_pc9821_mouse;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -163,6 +167,7 @@ module tb_pc9821_mouse;
 
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
 
@@ -192,7 +197,8 @@ module tb_pc9821_mouse;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -215,8 +221,10 @@ module tb_pc9821_mouse;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1), .SYS_CLOCK_HZ(CLK_HZ)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   integer errors = 0, cases = 0;
   integer collision_hits = 0;
@@ -274,7 +282,7 @@ module tb_pc9821_mouse;
     end
   endtask
 
-  // One host mouse packet through hps_io's field layout (sys/hps_io.sv:368-370):
+  // One host mouse packet through hps_io's field layout (sys/hps_io.sv:397-399):
   // [24] toggles once per packet, [23:16] Y (PS/2: positive = up), [15:8] X
   // (positive = right), [2:0] {middle, right, left}, 1 = pressed. Byte 0 carries the
   // 9-bit deltas' sign bits (bit 5 Y, bit 4 X) as Main_MiSTer user_io_mouse builds them;

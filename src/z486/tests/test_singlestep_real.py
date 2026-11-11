@@ -218,6 +218,10 @@ def apply_mask(value, mask):
     return value & mask
 
 
+# The arithmetic flags a CMPS/SCAS writes: OF SF ZF AF PF CF.
+REP_CMPS_FLAGS = 0x08D5
+
+
 def decode_opcode_and_width(nbytes, init_regs):
     """Return the opcode position and effective operand width."""
     prefixes = {0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3}
@@ -371,161 +375,6 @@ def is_aam_fault(nbytes, init_regs, final_regs):
     return final_regs.get('cs', init_cs) != init_cs
 
 
-SEG_PREFIXES = {0x26: 'es', 0x2E: 'cs', 0x36: 'ss', 0x3E: 'ds',
-                0x64: 'fs', 0x65: 'gs'}
-
-
-def rm_operand(nbytes, idx, init_regs, init_mem, size):
-    """Value of the ModRM r/m operand at nbytes[idx] (real mode), or None.
-
-    Memory operands are read from the initial RAM; a byte it lacks, or an
-    offset past the 64 KiB real-mode limit, gives None.
-    """
-    pre = nbytes[:idx]
-    addr32 = (0x67 in pre) != bool(init_regs.get('d', 0))
-    seg = None
-    for b in pre:
-        seg = SEG_PREFIXES.get(b, seg)
-    if idx + 1 >= len(nbytes):
-        return None
-    modrm = nbytes[idx + 1]
-    mod, rm = modrm >> 6, modrm & 7
-    regs32 = ['eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi']
-    reg = lambda n: init_regs.get(regs32[n], 0)
-    mask = (1 << (8 * size)) - 1
-    if mod == 3:
-        if size == 1:
-            return (reg(rm & 3) >> (8 if rm & 4 else 0)) & 0xFF
-        return reg(rm) & mask
-    pos = idx + 2
-
-    def disp(n):
-        if pos + n > len(nbytes):
-            return None
-        v = int.from_bytes(bytes(nbytes[pos:pos + n]), 'little')
-        return v - (1 << (8 * n)) if v >> (8 * n - 1) else v
-
-    stack = False
-    if addr32:
-        if rm == 4:
-            sib = nbytes[pos]
-            pos += 1
-            scale, index, base = sib >> 6, (sib >> 3) & 7, sib & 7
-            if index == 4 and scale:
-                return None  # undefined encoding (the 386 scales the base)
-            off = 0 if index == 4 else reg(index) << scale
-            if base == 5 and mod == 0:
-                d = disp(4)
-                pos += 4
-                off += d if d is not None else 0
-                d = 0 if d is not None else None
-            else:
-                off += reg(base)
-                stack = base in (4, 5)
-                d = 0
-        elif rm == 5 and mod == 0:
-            off, d = 0, disp(4)
-        else:
-            off, d = reg(rm), 0
-            stack = rm == 5
-        if d == 0 and mod:
-            d = disp(1 if mod == 1 else 4)
-        if d is None:
-            return None
-        off = (off + d) & 0xFFFFFFFF
-    else:
-        r16 = lambda n: reg(n) & 0xFFFF
-        bases = [r16(3) + r16(6), r16(3) + r16(7), r16(5) + r16(6),
-                 r16(5) + r16(7), r16(6), r16(7), r16(5), r16(3)]
-        if rm == 6 and mod == 0:
-            off, d = 0, disp(2)
-        else:
-            off, d = bases[rm], (disp(1) if mod == 1 else
-                                 disp(2) if mod == 2 else 0)
-            stack = rm in (2, 3, 6)
-        if d is None:
-            return None
-        off = (off + d) & 0xFFFF
-    if off + size - 1 > 0xFFFF:
-        return None
-    base = init_regs.get(seg or ('ss' if stack else 'ds'), 0) << 4
-    addrs = [base + off + k for k in range(size)]
-    if not all(a in init_mem for a in addrs):
-        return None
-    return sum(init_mem[a] << (8 * k) for k, a in enumerate(addrs))
-
-
-def idiv_overflow_final(test):
-    """486 final state for an IDIV the 80386 capture completed out of range.
-
-    Intel486 PRM, IDIV: "#DE if the quotient is too large for the designated
-    register" (Operation: "IF temp > 7FH or temp < 80H THEN #DE", likewise for
-    7FFFH/8000H and 7FFFFFFFH/80000000H).  The 386EX captures complete some
-    IDIV r/m8 whose true quotient is far below -128 (e.g. 67F6.7 idx 375:
-    AX=741Eh / CL=98h = -285 r 86) with AL=80h and a junk AH, and no fault.
-    A 486 raises #DE there: the registers are unchanged, the real-mode frame
-    FLAGS/CS/IP (IP of the IDIV itself) is pushed at SS:SP-6, and execution
-    enters the vector-0 handler.  Returns the replacement 'final' dict, or
-    None when the case is not such an IDIV.
-    """
-    nbytes = test.get('bytes', [])
-    init_regs = test['initial'].get('regs', {})
-    fin = test['final']
-    fin_regs = fin.get('regs', {})
-    idx, opcode, data32 = decode_opcode_and_width(nbytes, init_regs)
-    if opcode not in (0xF6, 0xF7) or idx + 1 >= len(nbytes):
-        return None
-    if (nbytes[idx + 1] >> 3) & 7 != 7:
-        return None
-    if init_regs.get('cr0', 0) & 1:
-        return None
-    if fin_regs.get('cs', init_regs.get('cs', 0)) != init_regs.get('cs', 0):
-        return None  # the capture faulted too
-    size = 1 if opcode == 0xF6 else (4 if data32 else 2)
-    init_mem = dict(test['initial'].get('ram', []))
-    divisor = rm_operand(nbytes, idx, init_regs, init_mem, size)
-    if divisor is None:
-        return None
-    bits = 8 * size
-    eax, edx = init_regs.get('eax', 0), init_regs.get('edx', 0)
-    if size == 1:
-        dividend = eax & 0xFFFF
-    elif size == 2:
-        dividend = ((edx & 0xFFFF) << 16) | (eax & 0xFFFF)
-    else:
-        dividend = (edx << 32) | eax
-    sx = lambda v, n: v - (1 << n) if v >> (n - 1) & 1 else v
-    num, den = sx(dividend, 2 * bits), sx(divisor, bits)
-    if den == 0:
-        return None
-    quot = abs(num) // abs(den) * (1 if (num < 0) == (den < 0) else -1)
-    if -(1 << (bits - 1)) <= quot < (1 << (bits - 1)):
-        return None
-    sp = (init_regs.get('esp', 0) - 6) & 0xFFFF
-    ss_base = init_regs.get('ss', 0) << 4
-    vec = [init_mem.get(a, 0) for a in range(4)]
-    frame = [init_regs.get('eip', 0) & 0xFFFF, init_regs.get('cs', 0),
-             init_regs.get('eflags', 0) & 0xFFFF]
-    ram = dict(fin.get('ram', []))
-    for k, word in enumerate(frame):
-        for j in range(2):
-            ram[ss_base + ((sp + 2 * k + j) & 0xFFFF)] = (word >> (8 * j)) & 0xFF
-    regs = dict(fin_regs)
-    regs.update({
-        'eax': eax, 'edx': edx,
-        'esp': (init_regs.get('esp', 0) & 0xFFFF0000) | sp,
-        'cs': vec[2] | (vec[3] << 8),
-        # +1: the capture's handler is entered at a HLT (see the EIP note
-        # in run_test); its FLAGS are undefined after a divide error.
-        'eip': (vec[0] | (vec[1] << 8)) + 1,
-        'eflags': init_regs.get('eflags', 0) & ~0x00040300,
-    })
-    new_fin = dict(fin)
-    new_fin['regs'] = regs
-    new_fin['ram'] = sorted(ram.items())
-    return new_fin
-
-
 def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
     """
     Run a single test case through the testbench.
@@ -539,10 +388,11 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
     Returns:
         tuple: (passed, output)
     """
-    if cpu_mode == '486':
-        div_final = idiv_overflow_final(test)
-        if div_final is not None:
-            test = dict(test, final=div_final)
+    # IDIV r/m8 captures that complete with a quotient below -128 (e.g. 67F6.7
+    # idx 375: AX=741Eh / CL=98h -> AX=1E80h, no #DE) are compared as captured:
+    # the 486 shares the 386 divider's missed overflow (a real Am486DX4 completes
+    # the same IDIV with AH=1Eh, CPUSUITE-XE10 idiv_quotient_bounds case 7;
+    # US 5,689,721 names the 386 and 486).
 
     name = test.get('name', '')
     init = test['initial']
@@ -578,6 +428,23 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
     # The final state is an interrupt/exception handler entry.
     delivered = (not completed and opcode is not None and
                  (is_fault_test(test) or opcode in (0xCC, 0xCD, 0xCE)))
+
+    # A REPE/REPNE CMPS/SCAS that faults on a later element (ECX already
+    # stepped, the frame's IP the instruction's own): the 386EX capture pushes
+    # the last completed compare's flags; the 486 restores the flags from
+    # before the instruction (Intel SDM vol. 2, REP/REPE/REPZ/REPNE/REPNZ:
+    # "When a fault occurs during the execution of a CMPS or SCAS instruction
+    # that is prefixed with REPE or REPNE, the EFLAGS value is restored to the
+    # state prior to the execution of the instruction"; a real Am486DX4 does,
+    # CPUSUITE-XE10-triage tri_rep_flags).  Its arithmetic flags (OF SF ZF AF
+    # PF CF) in EFLAGS and in the pushed FLAGS are the initial ones.
+    rep_cmps_fault_flags = None
+    if cpu_mode == '486' and delivered and opcode in (0xA6, 0xA7, 0xAE, 0xAF):
+        oi = decode_opcode_and_width(nbytes, init_regs)[0]
+        if (any(b in (0xF2, 0xF3) for b in nbytes[:oi]) and
+                fin_regs0.get('ecx', init_regs.get('ecx', 0)) !=
+                init_regs.get('ecx', 0)):
+            rep_cmps_fault_flags = init_regs.get('eflags', 0) & REP_CMPS_FLAGS
 
     # Real-mode IRETD loads all of EFLAGS from the popped image (Intel486 PRM,
     # IRET/IRETD Operation: "EFLAGS <- Pop()"), including the 486's AC.
@@ -800,6 +667,10 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
             expected_val &= in_port_mask
             got_val &= in_port_mask
 
+        if reg == 'eflags' and rep_cmps_fault_flags is not None:
+            expected_val = ((expected_val & ~REP_CMPS_FLAGS) |
+                            rep_cmps_fault_flags)
+
         # A real-mode interrupt or exception delivery clears AC with IF and TF
         # (Intel SDM, INT n/INTO/INT3 Operation, REAL-ADDRESS-MODE: "AC <- 0";
         # the core's CROM masks EFLAGS to its low word).  The 386 has no AC, so
@@ -899,6 +770,22 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
                 frame_flags_mask = {fl_addrs[0]: undef & 0xFF,
                                     fl_addrs[1]: (undef >> 8) & 0xFF}
 
+    # The pushed FLAGS of a REPE/REPNE CMPS/SCAS fault on a later element
+    # (see rep_cmps_fault_flags): the arithmetic flags from before it.
+    rep_cmps_frame = {}
+    if rep_cmps_fault_flags is not None and 'esp' in final_regs:
+        fin_mem = dict(final_ram)
+        ss_base = final_regs.get('ss', init_regs.get('ss', 0)) << 4
+        fsp = final_regs['esp'] & 0xFFFF
+        ip_addrs = [(ss_base + ((fsp + k) & 0xFFFF)) for k in range(2)]
+        if all(a in fin_mem for a in ip_addrs):
+            pushed_ip = fin_mem[ip_addrs[0]] | (fin_mem[ip_addrs[1]] << 8)
+            if pushed_ip == (init_regs.get('eip', 0) & 0xFFFF):
+                for k in range(2):
+                    a = ss_base + ((fsp + 4 + k) & 0xFFFF)
+                    rep_cmps_frame[a] = ((REP_CMPS_FLAGS >> (8 * k)) & 0xFF,
+                                         (rep_cmps_fault_flags >> (8 * k)) & 0xFF)
+
     # An AAM #DE frame holds FLAGS as the faulting AAM left them.
     if (cpu_mode == '486' and nbytes and 'esp' in final_regs and
             is_aam_fault(nbytes, init_regs, final_regs)):
@@ -927,6 +814,10 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
             if addr == ac_addr:
                 expected_val = ((expected_val & ~0x04) |
                                 ((init_regs.get('eflags', 0) >> 16) & 0x04))
+
+        if addr in rep_cmps_frame:
+            m, v = rep_cmps_frame[addr]
+            expected_val = (expected_val & ~m & 0xFF) | v
 
         if got_val is not None and addr in frame_flags_mask:
             expected_val &= frame_flags_mask[addr]

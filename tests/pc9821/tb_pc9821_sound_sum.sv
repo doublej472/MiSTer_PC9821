@@ -201,8 +201,8 @@ module tb_pc9821_sound_sum;
       io_din  = 8'h00;
       // The board's WRQ delivers a stretched FM register write one every 216 cen
       // (216 * 100/7.9872 clk ~= 2704 clk at 100 MHz). A host burst faster than that
-      // fills the 64-deep queue and SILENTLY DROPS the overflow, so the spacing here
-      // is part of the stimulus: 3200 clk keeps the queue near empty.
+      // fills the 128-deep queue and a bare board (no io_wr_wait) DROPS the overflow, so
+      // the spacing here is part of the stimulus: 3200 clk keeps the queue near empty.
       repeat (3200) @(posedge clk);
     end
   endtask

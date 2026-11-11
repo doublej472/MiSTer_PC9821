@@ -54,11 +54,14 @@ start:
     jne .fail_4
 
     ; DR6/DR7 use dedicated microcode destinations and readback paths.
-    ; DR6 bits 31-16 and 11-4 read as one and bit 12 as zero (486).
+    ; DR6 bits 31-16 and 11-4 read as one and bit 12 keeps the written value
+    ; (Intel SDM vol. 3, "Differences in Debug Register DR6": "it is possible
+    ; to write a 1 in this bit on the Intel486 processor"; CPUSUITE-XE10-
+    ; triage tri_dr6dr7 data=FFFFFFFFh).
     mov eax, 0x13579BDF
     mov dr6, eax
     mov ecx, dr6
-    cmp ecx, 0xFFFF8FFF
+    cmp ecx, 0xFFFF9FFF
     jne .fail_5
 
     ; Keep breakpoint enables and GD clear; bit 10 is the inert fixed-one bit.

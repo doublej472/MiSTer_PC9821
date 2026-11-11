@@ -5,21 +5,21 @@
 //
 // D4 is one two-way priority mux, and it is a rule SELECT rather than hard-wired because
 // NP2kai's rule is a model and not a measurement; the arms are named at the
-// mux. Palette frame coherence is upstream, in pc9821_gfx_palette's live-to-displayed
-// copy. The raster is fixed at 848x440 / 640x400 for every GDC clock.
+// mux. A palette write, analogue or digital, reaches the next dot (pc9821_gfx_palette: a
+// raster split shows); the mode arrives as pc9821_crtc's frame snapshot. The
+// raster is fixed at 848x440 / 640x400 for every GDC clock.
 //
-// The palette's analogue lookup is an ASYNCHRONOUS-read RAM, so it stays combinational and
-// NOTHING in this datapath moves: the fold's
-// column and dot are the current dot's, and the compositor needs no delay. The palette's
-// only clocked part is its frame-boundary copy, which takes the same clk_sys the CPU
-// write port runs on.
+// The palette's analogue lookup is an ASYNCHRONOUS read of a flop table, so it stays
+// combinational and NOTHING in this datapath moves: the fold's column and dot are the
+// current dot's, and the compositor needs no delay. The 16-colour table's CPU write port
+// runs on the same clk_sys.
 
 `default_nettype none
 
 module pc9821_video_mixer (
-    // The palette's copy clock. clk_sys and clk_vid are the same net at the top level.
+    // The palette's write clock and the PEGC arm's delay. clk_sys and clk_vid are the same
+    // net at the top level.
     input  wire        clk,
-    input  wire        rst_n,
 
     input  wire [9:0]  dot_x,        // hdot: 0..847 within the line
     input  wire        h_active,     // dot_x < 640
@@ -38,7 +38,7 @@ module pc9821_video_mixer (
     output wire [6:0]  line_rd_addr, // column 0..79 being read
     output wire        line_rd_sel,
 
-    // Graphics palette: the mode and the digital bytes' frame-coherent snapshot from
+    // Graphics palette: the mode's frame-coherent snapshot and the live digital bytes from
     // pc9821_gdc_text, and the analogue table's CPU write port, which that module owns
     // (0xA8 selects the entry there; 0xAA/0xAC/0xAE arrive here as channel 0/1/2).
     input  wire        pal_mode16,   // 1 = 16-colour analogue, 0 = 8-colour digital
@@ -47,7 +47,6 @@ module pc9821_video_mixer (
     input  wire [3:0]  pal_wr_idx,
     input  wire [1:0]  pal_wr_chan,  // 0 = G, 1 = R, 2 = B
     input  wire [3:0]  pal_wr_data,
-    input  wire        pal_commit,   // the frame boundary: the table's banks swap
 
     // PEGC 256-colour: the fold is bypassed; packed_idx is already a
     // palette index for the 256-entry table. `pegc_256` is the 0x6A dat 0x21
@@ -105,12 +104,11 @@ module pc9821_video_mixer (
   wire [11:0] grph_colour;
   wire [23:0] grph_colour256;
   pc9821_gfx_palette u_palette (
-      .clk(clk), .rst_n(rst_n),
+      .clk(clk),
       .idx(pal_idx),
       .mode16(pal_mode16),
       .dig(pal_dig),
       .we(pal_wr_en), .widx(pal_wr_idx), .wchan(pal_wr_chan), .wdata(pal_wr_data),
-      .commit(pal_commit),
       .colour(grph_colour),
       .p256_we(pal256_wr_en), .p256_widx(pal256_wr_idx),
       .p256_wchan(pal256_wr_chan), .p256_wdata(pal256_wr_data),

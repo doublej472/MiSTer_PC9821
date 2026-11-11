@@ -85,7 +85,7 @@ module tb_pc9821_system_reset_seed;
       .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0),
       .trace_trig(),
       .ram_size(3'd5), .ram_size_max(3'd7),
-      .bios_setup(1'b0), .bios_set(4'd0)
+      .bios_set(4'd0)
   );
 
   integer i;

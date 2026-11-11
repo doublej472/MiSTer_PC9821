@@ -24,8 +24,9 @@
 //
 // EXPECTED VISIBLE ANSWERS, from the references:
 //   * READ DATA's seven-byte result {ST0,ST1,ST2,C,H,R,N} with ST0 = us|hd<<2
-//     (fdcsend_success7, io/fdc.c:120-158), R forced to 1 by the DMA's terminal count
-//     (fdc_dataread :925-932).
+//     (fdcsend_success7, io/fdc.c:120-158); a one-sector read with EOT = R ended by the DMA's
+//     terminal count answers C+1 and R = 1, the real Xe10's answer
+//     (docs/probes/XE10T-XE10-FDC.TXT READ1), where NP2kai keeps C (fdc_dataread :1016-1026).
 //   * a drive with no medium: no result phase (MSR & 0xC0 == 0x80) and ST0 = IC0|NR|us =
 //     0x49 for unit 1 through SENSE INTERRUPT STATUS, which is the probe subset's deferred
 //     answer and why `media_present` is part of the controller's contract (:175-193).
@@ -246,7 +247,7 @@ module tb_pc9821_fdd_two_units;
   );
 
   // The two drives' image slots, wired as pc9821_system wires them: `img_size` is ONE
-  // hps_io register feeding BOTH slots (sys/hps_io.sv:130 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
+  // hps_io register feeding BOTH slots (sys/hps_io.sv:145 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
   // size register and two mount pulses - and why the mount tasks set it before each pulse.
   reg        mnt0 = 0, mnt1 = 0;
   reg [63:0] img_size = 0;
@@ -314,6 +315,7 @@ module tb_pc9821_fdd_two_units;
   reg c_is_raw = 0;
 
   reg [12:0] widx, wtotal;
+  reg [15:0] hword_q;   // the word the host model is about to present (see its use)
   reg [31:0] hlba;
   reg        hbusy, hlast;
   reg  [1:0] hwhich;
@@ -353,7 +355,14 @@ module tb_pc9821_fdd_two_units;
     end else begin
       sd_buff_wr   <= 1'b1;
       sd_buff_addr <= widx;
-      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], sd_buff_dout);
+      // The word is formed in a process-local variable and reaches the port through a
+      // NONBLOCKING assignment, like sd_buff_addr and sd_buff_wr beside it: hps_io drives
+      // all three from registers (sys/hps_io.sv:156 `output reg [DW:0] sd_buff_dout,`). A
+      // blocking write here is read by the adapter's own posedge process in the same time
+      // step, a race IEEE 1800-2017 4.7 leaves to the simulator's process order (Verilator
+      // 5.052 resolved it as the old word, 5.054 as the new one, one word early).
+      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], hword_q);
+      sd_buff_dout <= hword_q;
       if (hlast) begin
         hbusy      <= 1'b0;
         sd_ack_b   <= 1'b0;
@@ -400,7 +409,7 @@ module tb_pc9821_fdd_two_units;
   integer fails = 0;
   integer i, n;
   initial begin
-    #80_000_000;
+    #600_000_000;   // three READ IDs may each wait up to a revolution (RID_WAIT)
     $fatal(1, "TB_PC9821_FDD_TWO_UNITS: watchdog timeout (no verdict reached)");
   end
 
@@ -479,6 +488,10 @@ module tb_pc9821_fdd_two_units;
     end
   endtask
 
+  // A READ ID answers when its ID field has passed the head, one sector period of the track
+  // after the command (pc9821_fdc X_IDW; tb_pc9821_fdc_readid_wait pins it): a one-header track
+  // waits a whole revolution, up to 1/5 s of the module default's 50 MHz, plus slack.
+  localparam integer RID_WAIT = 50_000_000 / 5 + 100_000;
   task automatic wait_irq(input integer maxc);
     begin
       n = 0;
@@ -538,9 +551,11 @@ module tb_pc9821_fdd_two_units;
       expect8(g_rs[0], {5'd0, hd, us}, {what, ": ST0 = hd<<2|us"});
       expect8(g_rs[1], 8'h00, {what, ": ST1"});
       expect8(g_rs[2], 8'h00, {what, ": ST2"});
-      expect8(g_rs[3], c, {what, ": C"});
+      // The count ends on R = EOT: C+1, R = 1, H unchanged, the machine's answer
+      // (docs/probes/XE10T-XE10-FDC.TXT `X READ1 ... c=01 h=00 r=01` for C0 R1 EOT=1).
+      expect8(g_rs[3], c + 8'd1, {what, ": C+1 at EOT"});
       expect8(g_rs[4], h, {what, ": H"});
-      expect8(g_rs[5], 8'h01, {what, ": R forced to 1 by the terminal count"});
+      expect8(g_rs[5], 8'h01, {what, ": R = 1 at EOT"});
       expect8(g_rs[6], 8'h03, {what, ": N"});
       expecti(dm_n, 1024, {what, ": (N+1) bytes moved"});
     end
@@ -590,12 +605,15 @@ module tb_pc9821_fdd_two_units;
     arm_dma(1024);
     read_cmd(8'h46, 8'h01, 8'h00, 8'h00, 8'h01, 8'h03, 8'h01);   // unit 1
     wait_irq(200000);
-    rd8(3'd0);
-    expect8(rd_val & 8'hC0, 8'h80, "U1 no result phase for a drive with no medium");
+    // The not-ready answer is its own seven-byte result with the interrupt, and SENSE
+    // INTERRUPT STATUS then has nothing: the real Xe10's empty-drive READ DATA
+    // (docs/probes/XE10T-XE10-FDC2A.TXT `NRRD da=91 ... sis=80 dmacnt=03FF nres=7 st0=49`).
+    get_result;
+    expecti(g_rlen, 7, "U1 a drive with no medium answers a seven-byte result (NRRD nres=7)");
+    expect8(g_rs[0], 8'h49, "U1 ST0 = IC0|NR|unit 1 (NRRD st0=49)");
     wr8(3'd1, 8'h08);                                            // SENSE INTERRUPT STATUS
     get_result;
-    expecti(g_rlen, 2, "U1 SENSE INTERRUPT STATUS answers the deferred ST0");
-    expect8(g_rs[0], 8'h49, "U1 ST0 = IC0|NR|unit 1");
+    expect8(g_rs[0], 8'h80, "U1 SENSE INTERRUPT STATUS then answers 80 (NRRD sis=80)");
     expecti(dm_n, 0, "U1 no byte moves without media");
 
     // SENSE DRIVE STATUS answers its one byte in the RESULT PHASE and raises NO interrupt
@@ -654,7 +672,7 @@ module tb_pc9821_fdd_two_units;
     // track 1 has TWO headers (R1 then R3) and FDD0's has ONE, so the second READ ID's R=3
     // can only come from FDD1's own table (fdd_readid_d88 :494-552, crcn :513-518).
     wr8(3'd1, 8'h4A); wr8(3'd1, 8'h05);     // READ ID, unit 1, hd 1
-    wait_irq(40000);
+    wait_irq(RID_WAIT);
     get_result;
     expecti(g_rlen, 7, "U3 READ ID result length");
     expect8(g_rs[0], 8'h05, "U3 READ ID ST0 = hd<<2|us = 4|1");
@@ -663,12 +681,12 @@ module tb_pc9821_fdd_two_units;
     expect8(g_rs[5], 8'h01, "U3 READ ID R = header 1");
     expect8(g_rs[6], 8'h03, "U3 READ ID N");
     wr8(3'd1, 8'h4A); wr8(3'd1, 8'h05);     // READ ID again: crcn advances
-    wait_irq(40000);
+    wait_irq(RID_WAIT);
     get_result;
     expect8(g_rs[5], 8'h03, "U3 READ ID R = FDD1's second header (R3, which FDD0's track 1 does not have)");
     expect8(g_rs[6], 8'h03, "U3 READ ID N of the second header");
     wr8(3'd1, 8'h4A); wr8(3'd1, 8'h00);     // READ ID, unit 0, hd 0: crcn wrapped
-    wait_irq(40000);
+    wait_irq(RID_WAIT);
     get_result;
     expect8(g_rs[0], 8'h00, "U3 READ ID unit 0 ST0 = hd<<2|us");
     expect8(g_rs[4], 8'h00, "U3 READ ID unit 0 H = its own head");
@@ -713,12 +731,9 @@ module tb_pc9821_fdd_two_units;
     arm_dma(1024);
     read_cmd(8'h46, 8'h01, 8'h00, 8'h00, 8'h01, 8'h03, 8'h01);
     wait_irq(200000);
-    rd8(3'd0);
-    expect8(rd_val & 8'hC0, 8'h80, "U5 no result phase for the ejected drive");
-    wr8(3'd1, 8'h08);
     get_result;
-    expecti(g_rlen, 2, "U5 SENSE INTERRUPT STATUS for the ejected drive");
-    expect8(g_rs[0], 8'h49, "U5 ST0 = IC0|NR|unit 1 after the eject");
+    expecti(g_rlen, 7, "U5 the ejected drive answers a seven-byte result (NRRD nres=7)");
+    expect8(g_rs[0], 8'h49, "U5 ST0 = IC0|NR|unit 1 after the eject (NRRD st0=49)");
     expecti(dm_n, 0, "U5 no byte moves from an ejected drive");
     read_one(2'd0, 1'b0, 8'h00, 8'h00, 8'h01, "U5 drive 0 unaffected by the eject");
     check_sector(0, 8'h01, 8'h00, 1024, 1024);

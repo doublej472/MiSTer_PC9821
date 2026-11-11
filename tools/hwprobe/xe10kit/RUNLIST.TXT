@@ -1,0 +1,101 @@
+XE10 KIT - one session at the real PC-9821Xe10
+==============================================
+Optional steps are marked (OPTIONAL). Every probe puts back what it writes,
+except the two memory-switch steps, which say how they are undone.
+
+BEFORE THE SESSION
+ 1. Write XE10KIT.img to a CF card (raw, whole card) and connect it as the
+    machine's boot disk. It is plain MS-DOS 6.20 (no EMM386, no SMARTDRV, no
+    MIDI or CD driver); it boots into A:\KIT and prints the step list.
+    (Without the image: copy folder A to the boot disk as \KIT and boot a
+    plain DOS.)
+ 2. Make the 720 KB disk (next section) with the W95 files on it. Have one
+    more blank 1.44 MB disk for step 11b.
+ 3. Connect the MPU card's MIDI OUT to the SC-88 Pro's MIDI IN. SC-88 Pro on,
+    moderate volume. (OPTIONAL: a USB MIDI interface on a Linux PC on the
+    card's MIDI OUT instead, for step 2b: amidi -p hw:N,0,0 -a -c -r xe10wire.bin)
+ 4. (Own disk only) boot plain DOS: no EMM386, no SMARTDRV, no MIDI driver.
+ 5. Have a camera for the SETUP pages.
+
+MAKING THE 720 KB DISK FROM AN HD (1.44 MB) DISK
+  Booted from XE10KIT.img, the first floppy drive is B:. Put an HD disk in it:
+        FORMAT B: /9              (then any key; answer N to "another disk")
+        COPY A:\W95\*.* B:
+        DIR B:                    TEST720.TXT 163, PATTERN.BIN 300,000 bytes
+  /9 is NEC FORMAT's 2DD 9-sector type (its menu calls it "2DD(640KB 9 sectors)";
+  it reports "640KB FD" and 730,112 bytes total: that is the 720 KB format).
+  Checked in NP2kai, whose drive does not sense the HD hole. Many 3.5-inch
+  drives pick the density from the HD hole: if FORMAT refuses, or the disk
+  reads unreliably, cover the HD hole (the hole opposite the write-protect
+  tab) with opaque tape and format again. The tape trick is common practice,
+  not verified on this machine.
+
+STEP 1  Switch the machine on (a real power-on). At the DOS prompt:
+        CD \KIT
+        RUN0                      (about 1 minute)
+STEP 2  MPU card (checklist below):
+        RUNMPU                    (about 80 s: watch and listen)
+        RUNMPU BYTES              (2b; a GS reset and two notes)
+STEP 3  Software reboot:
+        RUNRB1                    the machine reboots by itself
+        If it is not back at DOS within 60 s: switch off and on, write
+        "RBOOT HUNG" in your notes, and continue.
+        CD \KIT
+        RUNRB2
+STEP 4  Switch off. Hold HELP and switch on: SETUP opens.
+        Photograph EVERY SETUP page as it is (the as-found settings).
+        Change: メモリスイッチ (memory switch) = keep
+                ＧＤＣクロック (GDC clock) = 5 MHz
+                テキスト画面行数 (text lines) = 20
+        Save and leave SETUP. At the DOS prompt (20 lines is expected):
+        CD \KIT
+        RUNP6A                    then press the RESET button
+        CD \KIT
+        RUNP6B
+        If the machine does not boot after RESET: enter SETUP, set the
+        memory switch to initialise, leave; then CD \KIT and RUNP6B anyway.
+STEP 5  SETUP: put memory switch, GDC clock and text lines back as in the
+        photos. Change フロッピィディスクモード (floppy disk mode) = auto (1M).
+        DOS:  CD \KIT   then   RUNS F3
+STEP 6  (OPTIONAL) SETUP: floppy disk mode = auto (640K). DOS: RUNS F1
+STEP 7  (OPTIONAL) SETUP: floppy disk mode = 640K.        DOS: RUNS F0
+STEP 8  SETUP: floppy disk mode back as in the photo. Change
+        サウンド (sound) = used. DOS: CD \KIT, then RUNSND (about 2 minutes).
+        LISTEN: do the sound board's beeps and tones play? Write it down.
+STEP 9  (OPTIONAL, case open) Switch off, remove the -86 sound board,
+        switch on (sound still = used). DOS: RUNS SNX. Switch off and put
+        the board back.
+STEP 10 SETUP: every item back exactly as in the photos. DOS: RUNS END
+
+STEP 11 Windows 95 (boot your own Windows 95 disk as usual):
+  a. Put the 720 KB disk (folder W95) in drive B:. Start > Run, type  b:\
+     and press Enter. Does a window list TEST720.TXT and PATTERN.BIN? How
+     long did it take? Close it, then open B: in Explorer and open
+     TEST720.TXT. Copy PATTERN.BIN to the desktop: is its size 300,000
+     bytes, with no error? Note any hang (and for how long) or message.
+  b. Put the blank 1.44 MB disk in a drive. Explorer: right-click the
+     drive > Format..., capacity 1.44 MB, type Full, Start. Does it finish?
+     What does the summary say (bytes free, bad sectors)? Copy TEST720.TXT
+     onto it, take the disk out, put it back, open TEST720.TXT.
+
+MPU CHECKLIST (step 2): watch the screen labels and listen for
+  - the GS reset (parts reset, no pop);
+  - the SC-88 display showing "PC-9821 MPUTEST MIDI probe", scrolling;
+  - the C scale on piano;
+  - four chords on four instruments (piano, strings, trumpet, nylon guitar);
+  - 16 fast notes, none wrong or missing, none stuck;
+  - drums on channel 10;
+  - after the long SysEx, one note (the synth still answers);
+  - a smooth pitch bend up, down and back;
+  - silence after all-notes-off;
+  - one intelligent-mode note that stops;
+  - the display showing "MPUTEST done";
+  - during RAW: nothing audible; does the SC-88 show a MIDI error?
+  Write down anything wrong, with its label.
+
+BRING BACK
+  - every .TXT file in \KIT (CFG*, FDM*, MEMSW0, P6*, RBOOT, MPUTEST,
+    MPUBYTES, SNDTEST), and xe10wire.bin if captured;
+  - the SETUP photos;
+  - your notes: the MPU checklist, step 3 (did it come back by itself?),
+    step 4 (did RESET boot?), step 8 (sound heard?), step 11 a and b.

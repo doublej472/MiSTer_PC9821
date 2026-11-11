@@ -14,7 +14,7 @@
 # says so per tier), and tests/pc9821/run_*.sh --compile-only for one of them.
 #
 # The integrated disk acceptance needs a firmware pack and a disk image, so it is
-# not part of this tier; run tests/pc9821/run_userdisk.sh directly (README.md has
+# not part of this tier; run tests/pc9821/run_userdisk.sh directly (docs/testing.md has
 # the command).
 set -euo pipefail
 cd "$(dirname "$0")/../.."

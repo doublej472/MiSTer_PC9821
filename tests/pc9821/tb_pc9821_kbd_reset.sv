@@ -74,8 +74,7 @@ module tb_pc9821_kbd_reset;
       .din(din),
       .dout(dout),
       .irq(irq),
-      .ps2_key(ps2_key),
-      .bios_setup(1'b0)
+      .ps2_key(ps2_key)
   );
 
   integer errors = 0;

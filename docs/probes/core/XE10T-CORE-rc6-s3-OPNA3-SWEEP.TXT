@@ -1,0 +1,89 @@
+XE10T v1 sha=1c721ef1de268c80 crc=94949382 imgcrc=94949382 size=35636 build=gas-xe10t args= /OPNA3 /SWEEP /O OPNA3S.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0030 cr0=00000030 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=00 bda0458=02 bda045C=40 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=00 bda0595=00
+I ID dos=6.20 bufseg=183C bufparas=4000 sel=00080000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=860E
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6143 pit=49145
+P CAL PITWIN i=1 art=6146 pit=49168
+P CAL PITWIN i=2 art=6143 pit=49145
+P CAL PITWIN i=3 art=6143 pit=49144
+P CAL PITWIN i=4 art=6143 pit=49144
+P CAL PITWIN i=5 art=6146 pit=49168
+P CAL PITWIN i=6 art=6147 pit=49176
+P CAL PITWIN i=7 art=6146 pit=49168
+P CAL PITEDGE edges=19 art=155648 vmax=65533 vmin=0
+P CAL VSYNC edges=60 art=326672 pit=2589083 tsc=-
+I CAL pit_mod=65536 ratio_x1000=8000 vsync_x10=54445 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=6C01
+BEGIN:OPNA3
+STATE OPNA3 a460=40 st=03 listen=0 sweep=1 vec60=00603673
+I OPNA3 SWEEP_PLAN ratio_x1000=8000 from=1 to=20 gaps_us=0,4,6,8,10,12,14,16,18,20,22,24,27,30,35,40,50,60,80,100
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=1 gap_us=0 tgt=0 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=95 pa=98 pa_pit=59 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=2 gap_us=4 tgt=10 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=96 pa=101 pa_pit=61 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=3 gap_us=6 tgt=15 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=95 pa=101 pa_pit=61 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=4 gap_us=8 tgt=20 pit=59 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=94 pa=99 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=5 gap_us=10 tgt=25 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=94 pa=98 pa_pit=59 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=6 gap_us=12 tgt=30 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=95 pa=101 pa_pit=61 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=7 gap_us=14 tgt=35 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=95 pa=101 pa_pit=61 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=8 gap_us=16 tgt=40 pit=61 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=96 pa=101 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=9 gap_us=18 tgt=45 pit=59 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=94 pa=98 pa_pit=59 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=10 gap_us=20 tgt=50 pit=61 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=96 pa=101 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=11 gap_us=22 tgt=55 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=95 pa=101 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=12 gap_us=24 tgt=59 pit=60 n5f=0 tries=4 busy_tries=4 fit=2 p18=1 p19=95 pa=101 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=13 gap_us=27 tgt=67 pit=67 n5f=15 tries=6 busy_tries=0 fit=1 p18=1 p19=1 pa=101 pa_pit=61 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=14 gap_us=30 tgt=74 pit=76 n5f=17 tries=5 busy_tries=0 fit=1 p18=1 p19=1 pa=101 pa_pit=61 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=15 gap_us=35 tgt=87 pit=89 n5f=20 tries=3 busy_tries=0 fit=1 p18=1 p19=1 pa=99 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=16 gap_us=40 tgt=99 pit=102 n5f=23 tries=5 busy_tries=0 fit=1 p18=1 p19=1 pa=99 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=17 gap_us=50 tgt=123 pit=123 n5f=28 tries=6 busy_tries=0 fit=1 p18=1 p19=1 pa=100 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=18 gap_us=60 tgt=148 pit=149 n5f=34 tries=7 busy_tries=0 fit=1 p18=1 p19=1 pa=100 pa_pit=60 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=19 gap_us=80 tgt=197 pit=197 n5f=45 tries=7 busy_tries=0 fit=1 p18=1 p19=1 pa=99 pa_pit=59 keys=4
+ROW OPNA3 SWEEP port=0188
+X OPNA3 SWEEP step=20 gap_us=100 tgt=246 pit=247 n5f=57 tries=7 busy_tries=0 fit=1 p18=1 p19=1 pa=101 pa_pit=61 keys=4
+RESTORE OPNA3 PA460 was=40 now=40 kind=readback OK
+RESTORE OPNA3 OPNA3_REGS was=- now=00 kind=default OK
+END:OPNA3 rows=20 sum=6BFD
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD802369 now=FD802369 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=3E7D
+XE10T DONE sections=4 sum=B5206743

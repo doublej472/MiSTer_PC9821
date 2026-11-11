@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (a text-plane cell holding a two-byte code still draws nothing) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the 20 configuration cells - the 14 software-DIP record bytes at CG store 0x810..0x81D and the six CPU/size cells - are a STATIC READ-ONLY VIEW of the OSD settings with a WRITE-THROUGH READ ECHO: a guest store through port 0xA9 or the 0xA4000 window commits NOTHING to the stored configuration, but the read echoes the byte the guest just wrote until the ITF's out 0xF0 re-POST (cfg_seed_reload) clears the echo, because the machine's own battery-backed record cells survive the ITF's stage-1A KANJI CG-RAM wipe (the Xa7C9W runtime capture holds the record intact at code 0x2056 rows 0..0xD, qemu-pc98 roms/pc98bios/memsw.inc) and the EMM386 fix's read fallback is structural. The record IMAGE is the OSD Machine field's own model table - Xe10 = the ITF's factory table BANK4@0x4924, Xe = bios/xe/BANK4.BIN@0x48E8 - and its SUM-CHECK byte is COMPUTED as row 0x81A = -(sum of rows 0x811..0x819) mod 256, so the ITF's marker/sum check (BANK4@0xFC677-0xFC6B5) passes for either model with the dumps' own 0x67/0x68. FAIL-FIRST: on the static-no-echo design the guest's write read back as the seed (the KANJI CG RAM ERROR defect), and on a constant-image design the Xe selection still answers the Xe10 rows.
+// The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (a text-plane cell holding a two-byte code still draws nothing) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the 20 configuration cells - the 14 software-DIP record bytes at CG store 0x810..0x81D and the six CPU/size cells - are a STATIC READ-ONLY VIEW of the OSD settings with a WRITE-THROUGH READ ECHO: a guest store through port 0xA9 or the 0xA4000 window commits NOTHING to the stored configuration, but the read echoes the byte the guest just wrote until the ITF's out 0xF0 re-POST (cfg_seed_reload) clears the echo, because the machine's own battery-backed record cells survive the ITF's stage-1A KANJI CG-RAM wipe (the Xa7C9W runtime capture holds the record intact at code 0x2056 rows 0..0xD, qemu-pc98 roms/pc98bios/memsw.inc) and the EMM386 fix's read fallback is structural. The record IMAGE is the OSD Machine field's own model table - Xe10 = the ITF's factory table BANK4@0x4924, Xe = bios/xe/BANK4.BIN@0x48E8 - with row 4 bit 1 SET (SETUP's Sound item stored 1 = "not used", the owner's Xe10 as found: docs/bios-setup.md "The Xe10 as found", 0x881E 0x7C in docs/probes/XE10CFG-XE10-CFG0.TXT; the ITF's sound POST reads that bit at BANK4@0x2967), so row 4 is 0xCF where the factory tables carry 0xCD, and its SUM-CHECK byte is COMPUTED as row 0x81A = -(sum of rows 0x811..0x819) mod 256, so the ITF's marker/sum check (BANK4@0xFC677-0xFC6B5) passes for either model: at this bench's OSD configuration (GDC 2.5 MHz, 1M) 0xE5 for the Xe10 and 0xE6 for the Xe, the dumps' own 0x67/0x68 less the two row 4 adds and plus the 0x80 that row 2 drops at 2.5 MHz (row 2 bit 7 is SETUP's GDC clock, stored inverted: 0x0C where the factory 5 MHz row is 0x8C). FAIL-FIRST: on the static-no-echo design the guest's write read back as the seed (the KANJI CG RAM ERROR defect), and on a constant-image design the Xe selection still answers the Xe10 rows.
 //
-// The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (that is tb_pc9821_gdc_text's job) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the read-back splits: port 0xA9's ver0.78 test is the FULL low byte (io/cgrom.c:197), so low byte 0x89-0x8B takes the JIS branch with the half offset when two-byte (io/cgrom.c:208-217) or the ANK table when one-byte (:219-227); one-byte 0x09-0x0B returns 0x00 with NO fetch and no read stall (the slot NP2kai names is ZeroMemory'd, font/font.c:145-151); and the window's unused page is the machine's class-independent dummy 0x8F for every class (docs/probes/VRAM.TXT; NP2kai has one dummy page shared by all of them, io/cgrom.c:18,43-48). FAIL-FIRST: on the masked pre-fix class one-byte 0x09-0x0B returns the grid block's bytes and stalls the read for its burst, the half-set read of two-byte 0x418B answers 0 instead of the slot's right half, one-byte 0x89 reads the grid block instead of the ANK table, and the dummy pages answer 0x00 instead of 0x8F.
+// The character generator's read path: the four code classes NP2kai's cgrom_ia9 decides, driven through port 0xA9 and through the memory-mapped 0xA4000 window, with every byte the classes return coming from the machine's own FONT.ROM rows loaded into the read path's two sources here -- the ANK class from the pack's 8x16 slice, the JIS classes from the pack's FONT.ROM copy at pack_base + 0x80000 -- so the assertion is the dump's bytes (FONT.ROM[0x800+0x41*16], FONT.ROM[0x7C20], FONT.ROM[0xCC20]) and not a model of them. It does NOT drive the scanout (that is tb_pc9821_gdc_text's job) and it does not test the pack layout itself: it supplies the font region through the SDRAM's second port exactly as a real pack would. Plus the read-back splits: port 0xA9's ver0.78 test is the FULL low byte (io/cgrom.c:197), so low byte 0x89-0x8B takes the JIS branch with the half offset when two-byte (io/cgrom.c:208-217) or the ANK table when one-byte (:219-227); one-byte 0x09-0x0B returns 0x00 with NO fetch and no read stall (the slot NP2kai names is ZeroMemory'd, font/font.c:145-151); and the window's unused page is the dummy 0x8F (docs/probes/VRAM.TXT, the user-CG class; NP2kai has one dummy page shared by all of them, io/cgrom.c:18,43-48) except for a one-byte code and a row 0x09 code, whose even pages read 0xFF on the Xe10 (docs/probes/KIT1-XE10-CG0-USERCG.TXT CGX 0001; docs/probes/KIT2-XE10-CG2-USERCG.TXT CGX 2109). FAIL-FIRST: on the masked pre-fix class one-byte 0x09-0x0B returns the grid block's bytes and stalls the read for its burst, the half-set read of two-byte 0x418B answers 0 instead of the slot's right half, one-byte 0x89 reads the grid block instead of the ANK table, and the dummy pages answer 0x00 instead of 0x8F.
 
 // The defect this bench exists for, and the shape of the fix.
 //
@@ -207,8 +207,12 @@ module tb_pc9821_cg_read_path;
   wire [31:0] line_data;
   wire        line_sel;
   wire        line_ready;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem dut_mem (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk_sys), .reset(reset),
       .top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(1'b1),
@@ -306,11 +310,24 @@ module tb_pc9821_cg_read_path;
 
   // The 14 software-DIP record bytes, store 0x810..0x81D, byte 0 first. Sourced from
   // the ITF's own factory table (BANK4@0x4924 carries the ten sum-checked bytes
-  // C1 8C 81 CD FF 00 00 AA 55 67) plus the record's first/marker/tail bytes; the same
-  // Xe10-model image pc9821_cg.sv's CG_RECORD_INIT seeds at power-up (the Xe model's
-  // rows are section 0d's).
-  localparam [7:0] RECORD_BYTES [0:13] = '{8'h04, 8'hC1, 8'h8C, 8'h81, 8'hCD, 8'hFF,
-                                           8'h00, 8'h00, 8'hAA, 8'h55, 8'h67, 8'h86,
+  // C1 8C 81 CD FF 00 00 AA 55 67) plus the record's first/marker/tail bytes, with the
+  // one item the owner's Xe10 as found differs in from the factory table: Sound "not used"
+  // (docs/bios-setup.md "The Xe10 as found", photographed; its 0x881E reads 0x7C with
+  // bit 5 = off in docs/probes/XE10CFG-XE10-CFG0.TXT `SDIPA0 7C 02 76 3E 7C`, against
+  // 0xDC with Sound "used" in XE10CFG-XE10-CFGSND.TXT). SETUP stores the item in row 4
+  // bit 1, 1 = not used (rows 1-4 are stored inverted; the ITF's sound POST reads the bit
+  // at BANK4@0x2967 `in al,0xA9 / and al,0x2 / test al,0x2 / jnz` and skips the codec's
+  // IRQ select and `out 0xA460,0x73` when it is set), so row 4 is 0xCD | 0x02 = 0xCF and
+  // the completing sum byte is 0x67 - 2 = 0x65. Row 2 is ~port 0x31 (DIP switch 2 stored
+  // inverted), and its bit 7 is SETUP's GDC clock (the getter BANK3@0x37A3 `call 0x20db /
+  // shr al,0x7`, value 1 = 2.5 MHz): this bench's OSD configuration (pc9821_gdc_text_dut's
+  // setup_cfg 0x763EF3) is the Xe10 as found, GDC 2.5 MHz, so row 2 is 0x0C rather than the
+  // factory 5 MHz 0x8C, and the sum byte 0x65 + 0x80 = 0xE5. The record itself does not read
+  // through 0xA9 on the machine (the capture's `CG 2056` rows are all 00, a probe limitation),
+  // so the rows are the factory rows with the as-found items applied. The same Xe10-model image
+  // pc9821_cg.sv's CG_RECORD_INIT seeds at power-up (the Xe model's rows are section 0d's).
+  localparam [7:0] RECORD_BYTES [0:13] = '{8'h04, 8'hC1, 8'h0C, 8'h81, 8'hCF, 8'hFF,
+                                           8'h00, 8'h00, 8'hAA, 8'h55, 8'hE5, 8'h86,
                                            8'h8A, 8'hFF};
 
   // ==== STIMULUS ====
@@ -641,14 +658,19 @@ module tb_pc9821_cg_read_path;
                  r, value, want);
         errors = errors + 1;
       end
+      // The even page of a ONE-BYTE code reads 0xFF on the Xe10, not the user-CG class's 0x8F
+      // (docs/probes/KIT1-XE10-CG0-USERCG.TXT:533 `CGX 0001 P20=A97D P00=A97D W20E=6A4B`,
+      // CRC 6A4B = 16 x 0xFF).
       mem_read_byte(32'h000A_4000 + (r * 2), value);
-      if (value !== 8'h8F)
-        fail("window ANK low page is not the machine's class-independent dummy 0x8F");
+      if (value !== 8'hFF)
+        fail("window ANK low page is not the machine's 0xFF (KIT1-XE10-CG0-USERCG.TXT CGX 0001)");
     end
 
-    // ver0.78: the odd page is the glyph, the even page the dummy. The half
-    // select must be driven here (0xA5 bit 5 SET -> the left half, cgrom.c:199):
-    // with the half clear the whole ver0.78 window goes to the dummy.
+    // ver0.78: the odd page is the glyph. The half select must be driven here (0xA5 bit 5
+    // SET -> the left half, cgrom.c:199). Row 0x09's even page reads 0xFF on the Xe10 in
+    // every column kit 2 walked, 0xA1 = 0x01..0x2F, both halves
+    // (docs/probes/KIT2-XE10-CG2-USERCG.TXT:758 `CGX 2109 P20=2195 P00=6A0A W20E=6A4B`); this
+    // code's column 0x41 is past the walked ones and takes the row's answer.
     select_glyph(8'h41, 8'h09);
     for (r = 0; r < 16; r = r + 1) begin
       write_io(8'hA5, 8'h20 | r[4:0]);
@@ -660,8 +682,8 @@ module tb_pc9821_cg_read_path;
         errors = errors + 1;
       end
       mem_read_byte(32'h000A_4000 + (r * 2), value);
-      if (value !== 8'h8F)
-        fail("window ver0.78 low page is not the machine's class-independent dummy 0x8F");
+      if (value !== 8'hFF)
+        fail("window ver0.78 row 0x09 low page is not the machine's 0xFF (KIT2-XE10-CG2-USERCG.TXT CGX xx09 W20E=6A4B)");
     end
 
     // kanji: the even page is the left half and the odd page the right half.
@@ -812,8 +834,12 @@ module tb_pc9821_cg_read_path;
     // 0d. the record IMAGE is the OSD Machine field's own model table with the
     //     SUM-CHECK BYTE COMPUTED: row A = -(sum of rows 1..9)
     //     mod 256, so the ITF's marker/sum check (BANK4@0xFC677-0xFC6B5) passes for
-    //     either model with the DUMPS' own bytes - 0x67 at the Xe10 table
-    //     (BANK4@0x4924) and 0x68 at the Xe's (bios/xe/BANK4.BIN@0x48E8). The field
+    //     either model - the DUMPS' own bytes 0x67 at the Xe10 table (BANK4@0x4924) and
+    //     0x68 at the Xe's (bios/xe/BANK4.BIN@0x48E8), each less the 2 that row 4's
+    //     Sound "not used" bit adds (the Xe10 as found; RECORD_BYTES above): 0x65 / 0x66,
+    //     plus the 0x80 row 2 drops at this bench's GDC 2.5 MHz: 0xE5 / 0xE6.
+    //     Both ITFs carry the same sound POST (the Xe's at bios/xe/BANK4.BIN@0x4B78, the
+    //     Xe10's at BANK4@0x293B), and this core models no codec for either. The field
     //     is sampled at machine reset only, like every DIP value. FAIL-FIRST: with
     //     the record a constant image the Xe selection still answers the Xe10 rows.
     // ---------------------------------------------------------------
@@ -829,9 +855,12 @@ module tb_pc9821_cg_read_path;
         $display("FAIL: the Xe10 record's ten bytes sum to %04x, want 0 mod 256 (BANK4@0xFC689)", sum);
         errors = errors + 1;
       end
+      read_record(4'd4, value);
+      if (value !== 8'hCF)
+        fail("the Xe10 record's row 4 is not 0xCF (factory 0xCD + Sound not used, as found)");
       read_record(4'd10, value);
-      if (value !== 8'h67)
-        fail("the Xe10 record's COMPUTED sum-check byte is not 0x67 (BANK4@0x4924's own byte)");
+      if (value !== 8'hE5)
+        fail("the Xe10 record's computed sum byte is not 0xE5 (BANK4@0x4924's 0x67 - 2 + 0x80)");
       read_record(4'd8, value);
       if (value !== 8'hAA) fail("the record's marker high byte moved off 0xAA");
 
@@ -841,11 +870,12 @@ module tb_pc9821_cg_read_path;
       read_record(4'd3, value);
       if (value !== 8'h81) fail("a mid-run Machine flip moved the record under the running guest");
       read_record(4'd10, value);
-      if (value !== 8'h67) fail("a mid-run Machine flip moved the record's checksum byte");
+      if (value !== 8'hE5) fail("a mid-run Machine flip moved the record's checksum byte");
 
       // ... and the next machine reset applies the XE's own table: rows 3/0xC = 80/82
       // (bios/xe/BANK4.BIN@0x48E8's factory image and its 0x4858 code store) with the
-      // checksum still COMPUTED - 0x68 there, which is the dump's own byte too.
+      // checksum still COMPUTED - 0xE6 there, the dump's own 0x68 less row 4's Sound bit
+      // plus row 2's 0x80 at GDC 2.5 MHz.
       reset = 1;
       repeat (3) @(posedge clk_sys);
       @(negedge clk_sys);
@@ -855,9 +885,11 @@ module tb_pc9821_cg_read_path;
       if (value !== 8'h80) fail("the Xe record's row 3 is not the Xe ITF table's 0x80");
       read_record(4'd12, value);
       if (value !== 8'h82) fail("the Xe record's row 0xC is not the Xe dump's 0x82");
+      read_record(4'd4, value);
+      if (value !== 8'hCF) fail("the Xe record's row 4 is not 0xCF (Sound not used, as the Xe10's)");
       read_record(4'd10, value);
-      if (value !== 8'h68)
-        fail("the Xe record's COMPUTED sum-check byte is not 0x68 (the Xe dump's own byte)");
+      if (value !== 8'hE6)
+        fail("the Xe record's computed sum byte is not 0xE6 (the Xe dump's 0x68 - 2 + 0x80)");
       read_record(4'd8, value);
       if (value !== 8'hAA) fail("the Xe record lost the AA55 marker (rows 8/9 are model-independent)");
       sum = 0;

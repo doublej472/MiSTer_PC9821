@@ -44,7 +44,6 @@ module data_unit
     input  logic        interrupt_entry,
     input  logic        any_fault,
     input  logic        clear_rf,
-    input  logic        set_rf,           // instruction-breakpoint #DB: the pushed image carries RF=1
     input  logic        fault_set_rf,     // fault delivery: the pushed FLAGS image carries RF=1
     input  logic        gate_detect,
     output logic        flags_backup_active,
@@ -1796,8 +1795,6 @@ always_ff @(posedge clk) begin
 
         if (clear_rf)
             eflags[16] <= 1'b0;
-        if (set_rf)
-            eflags[16] <= 1'b1;
     end
 end
 
@@ -1845,14 +1842,14 @@ always_ff @(posedge clk) begin
         flags_backup_active <= 1'b1;
         // The issue edge also clears RF for the instruction that just
         // completed (clear_rf); the new instruction's backup must see it.
+        // A REPE/REPNE CMPS/SCAS keeps this image across its elements: a
+        // fault on a later element pushes the flags from before the
+        // instruction (Intel SDM vol. 2, REP/REPE/REPZ/REPNE/REPNZ: "the
+        // EFLAGS value is restored to the state prior to the execution of
+        // the instruction"; a real Am486DX4 does so, CPUSUITE-XE10-triage
+        // tri_rep_flags), while ECX and the index registers stay committed.
         flags_backup <= {eflags_fwd[31:17], eflags_fwd[16] && !clear_rf,
                          eflags_fwd[15:0]};
-    end else if (exec && aluop == ALUJMP_LOOPnE && dest == DEST_eCX) begin
-        // REPE/REPNE CMPS/SCAS retire an element when its count reaches eCX
-        // (21E/227/23B/243).  A fault on a later element restarts at that
-        // element, so the pushed FLAGS must carry this element's comparison,
-        // not the instruction-start image.
-        flags_backup <= eflags_fwd;
     end else if (flags_backup_refresh) begin
         flags_backup <= eflags_fwd;
     end else if (flag2_older_p && flags_backup_active) begin
@@ -1879,6 +1876,8 @@ always_ff @(posedge clk) begin
         // Fault-class delivery: the CROM sets EFLAGS.RF (MASK16 + 1) before
         // it pushes the FLAGSB image; a 486 pushes RF=1 for every fault so
         // the restarted instruction does not re-trigger its code breakpoint.
+        // A debug exception is the exception: it pushes RF=0 (see z486.sv,
+        // fault_set_rf), and its handler sets RF in the frame itself.
         flags_backup[16] <= 1'b1;
     end
 end

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_FDC_READY_CHANGE: a floppy media change raises NP2kai's ready-change interrupt (fdd/diskdrv.c): every mount event of an equipped drive - an eject, an insert, an eject of an empty drive - leaves ST0 = AI|NR|drv (0xC8|u) for SENSE INTERRUPT STATUS and raises the interrupt at once, ungated; an insert keeps the drive NOT READY (ST3 RDY clear, a READ DATA answering the IC0|NR class) for DISK_DELAY = 20 guest frames and then, only when the 0xBE register's bit 2 is clear or the DOR's motor bit 0x08 is set, leaves ST0 = AI|drv (0xC0|u) and raises the interrupt again, with the drive READY, while a ready held back by that gate is announced (AI|drv) when the DOR's motor bit later rises with 0xBE bit 2 set (NP2kai io/fdc.c fdc_o94); a medium that parses after the delay is announced when it parses; and a mount event while the controller is held in reset raises nothing (fdc_reset zeroes fdc.stat). FAIL-FIRST: the base controller had no ready-change interrupt at all (no media_chg/frame_tick seam).
+// TB_PC9821_FDC_READY_CHANGE: a floppy media change raises NP2kai's ready-change interrupt (fdd/diskdrv.c): every mount event of an equipped drive - an eject, an insert, an eject of an empty drive - leaves ST0 = AI|NR|drv (0xC8|u) for SENSE INTERRUPT STATUS and raises the interrupt at once, ungated; an insert keeps the drive NOT READY (ST3 RDY clear, a READ DATA answering the IC0|NR class in its own seven-byte result with the interrupt, SENSE INTERRUPT STATUS then empty, the real Xe10's not-ready shape) for DISK_DELAY = 20 guest frames and then, only when the 0xBE register's bit 2 is clear or the DOR's motor bit 0x08 is set, leaves ST0 = AI|drv (0xC0|u) and raises the interrupt again, with the drive READY, while a ready held back by that gate is announced (AI|drv) when the DOR's motor bit later rises with 0xBE bit 2 set (NP2kai io/fdc.c fdc_o94); a medium that parses after the delay is announced when it parses; and a mount event while the controller is held in reset raises nothing (fdc_reset zeroes fdc.stat). FAIL-FIRST: the base controller had no ready-change interrupt at all (no media_chg/frame_tick seam).
 //
 // THE EXPECTED VALUES ARE NP2kai's (commit 5939e0c6):
 //   eject/insert:  diskdrv_setfddex, fdd/diskdrv.c:256-284 -
@@ -241,7 +241,10 @@ module tb_pc9821_fdc_ready_change;
     sense_is(8'hC1, "R6 late parse: AI|drv");
 
     // R7: a READ DATA during the insert delay answers the not-ready class (FDC_DriveCheck,
-    // io/fdc.c:175-186: IC0|NR|hd<<2|us), here through the deferred completion.
+    // io/fdc.c:175-186: IC0|NR|hd<<2|us) in its own seven-byte result with the interrupt, and
+    // SENSE INTERRUPT STATUS then has nothing: the shape of NP2kai's fdcsend_error7 and of the
+    // real Xe10's not-ready READ DATA (docs/probes/XE10T-XE10-FDC2C.TXT:59, `NRRD da=90 ...
+    // msr0=10 msr_end=D0 ... sis=80 dmacnt=03FF nres=7 st0=48`).
     @(negedge clk); chg[0] = ~chg[0];
     sense_is(8'hC8, "R7 insert drive 0: AI|NR|drv");
     wr8(3'd1, 8'h46);
@@ -249,7 +252,16 @@ module tb_pc9821_fdc_ready_change;
     wr8(3'd1, 8'h03); wr8(3'd1, 8'h01); wr8(3'd1, 8'h1B); wr8(3'd1, 8'hFF);
     n = 0;
     while (!irq && n < 20000) begin @(negedge clk); n = n + 1; end
-    sense_is(8'h48, "R7 READ during the delay: IC0|NR|us");
+    check_irq(1'b1, "R7 READ during the delay interrupts");
+    get_result;
+    if (rlen !== 7) begin
+      $display("  FAIL: R7 READ during the delay: result length %0d, expected 7 (NRRD nres=7)", rlen);
+      fails = fails + 1;
+    end
+    check8(rs[0], 8'h48, "R7 READ during the delay: ST0 IC0|NR|us (NRRD st0=48)");
+    check8(rs[1], 8'h00, "R7 READ during the delay: ST1 (NRRD st1=00)");
+    check_irq(1'b0, "R7 the line falls with the result");
+    sense_is(8'h80, "R7 nothing left for SENSE INTERRUPT STATUS (NRRD sis=80)");
     frames(20);
     repeat (3) @(negedge clk);
     sense_is(8'hC0, "R7 ready after the delay");

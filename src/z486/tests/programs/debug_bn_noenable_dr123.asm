@@ -2,9 +2,18 @@
 ; breakpoint is enabled in DR7 (debug_bn_noenable covers DR0 only)
 ;
 ; Intel486 PRM 11.2.3: B bits are set for every breakpoint whose DR/LEN/RW
-; condition matches when a #DB is generated, enabled or not.  For n = 1, 2, 3:
-; DRn = 0x9000, RWn=01 (write), LENn=11, DR0 = 0 / RW0 = 00, no L/G bits.  A
-; single-step (TF) #DB after a write to 0x9000 must report DR6 = BS | Bn.
+; condition matches when a #DB is generated, enabled or not.
+; DR6.Bn for a match that DR7 does not enable is vendor-variant: the
+; Intel486 PRM 11.2.3 sets it; Intel SDM vol. 3 (DR6): "They may or may not
+; be set if the breakpoint is not enabled by the Ln or the Gn flags in
+; register DR7"; AMD APM 24593 13.1.1.3 sets a B bit only if its register
+; "detects an enabled breakpoint condition", and a real Am486DX4 leaves it
+; clear (CPUSUITE-XE10-triage: debug_bn_noenable data=00004000h,
+; debug_bn_noenable_dr123 data=00004000h).  Either value passes; z486 leaves
+; it clear (debug_bn_disabled_clear holds that).
+; For n = 1, 2, 3: DRn = 0x9000, RWn=01 (write), LENn=11, DR0 = 0 / RW0 = 00,
+; no L/G bits.  A single-step (TF) #DB after a write to 0x9000 must report
+; DR6 = BS | Bn or BS alone.
 ; Port 0xE4: case number n, then the DR6 seen.
 BITS 32
 ORG 0
@@ -83,8 +92,11 @@ run:
     mov dr7, eax
     mov eax, [0x5000]
     and eax, 0x0000f00f
-    cmp eax, ecx
+    cmp eax, 0x00004000               ; BS alone (AMD APM, Am486DX4, z486)
+    je .ok
+    cmp eax, ecx                      ; BS | Bn (Intel486 PRM 11.2.3)
     jne fail
+.ok:
     ret
 fail:
     xchg eax, ebx

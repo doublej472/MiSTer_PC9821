@@ -4,8 +4,14 @@
 ; reaches them through an internal-register-file index (0x70) that this core
 ; aliased onto general register 0, so MOV DRn,ECX overwrote EAX and DRn read
 ; back as an unrelated descriptor base.  DR4/DR5 are reserved encodings that
-; alias DR6/DR7 on the 486.  DR6 bits 31-16 and 11-4 read as one and bit 12 as
-; zero; DR7 bit 10 reads as one and bits 15-14 and 12-11 as zero.
+; alias DR6/DR7 on the 486.  DR6 bits 31-16 and 11-4 read as one and bit 12
+; keeps what was written: Intel SDM vol. 3, Architecture Compatibility,
+; "Differences in Debug Register DR6": "it is possible to write a 1 in this
+; bit on the Intel486 processor"; Bochs
+; cpu/crregs.cc MOV_DdRd, BX_CPU_LEVEL <= 4, "On 386/486 bit12 is settable";
+; a real Am486DX4 reads FFFFFFFFh back after writing FFFFFFFFh
+; (CPUSUITE-XE10-triage: tri_dr6dr7 data=FFFFFFFFh).  DR7 bit 10 reads as one
+; and bits 15-14 and 12-11 as zero.
 ;
 ; Results: port 0xE0 status (0x01 pass / 0xFF fail), port 0xE4 fail code.
 BITS 32
@@ -56,8 +62,8 @@ start:
     mov eax, 0xFFFFFFFF
     mov dr6, eax
     mov ebx, dr6
-    EXPECT ebx, 0xFFFFEFFF, 10
-    mov eax, 0x0000400F                ; BS and B3-B0
+    EXPECT ebx, 0xFFFFFFFF, 10         ; bit 12 written as one reads as one
+    mov eax, 0x0000400F                ; BS and B3-B0; bit 12 written as zero
     mov dr6, eax
     mov ebx, dr6
     EXPECT ebx, 0xFFFF4FFF, 11

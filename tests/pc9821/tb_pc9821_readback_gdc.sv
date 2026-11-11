@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC block's parameter read-back and mode read-back against NP2kai (and the palette row): 0x62 pops the text GDC's parameter queue (CSRR 0xE0 answers {CSRW0, CSRW1, CSRW2&3, 0, 0} and LPEN 0xC0 the three never-written LPEN slot bytes 00 00 00, one byte per read, 0xFF when empty), 0xA2 does the same for the graphics GDC, whose CSRR answer is the Xe10's {EAD[7:0], EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]} (docs/probes/gdc-conformance/xe10-2.5MHz/GDCCURS.CSV raw_curd; GDCWG's WG row reads F8 in byte 2) instead of returning a second status byte (the machine's own `GDC status 60 A0 A2: 05 04 ff` pins the empty answer at 0xFF) and 0xA0 status bit 0 flags that queue nonempty (read-back data available), 0x6A echoes MODE FF2 bit 1 (the FF2 num-1 latch round-trips instead of reading 0), and the 16-colour analogue palette data ports answer the LOW NIBBLE of the byte the guest wrote with the upper four bits 0 (the probed Xe10, docs/probes/PEGCRD-XE10.TXT: wrote R=FF G=00 B=7F read 0F 00 0F; wrote 12 34 56 read 02 04 06; entries 5A and A5 index the 16-entry table as 0A and 05), the 0xA8 index register round-trips the FULL byte (`out 0xA8,0xAB / in 0xA8` reads 0xAB, not 0x0B: NP2kai io/gdc.c:841 stores `gdc.palnum = dat` unmasked and :913-919 returns it verbatim), the 16-colour palette read mirror is 16 entries indexed palnum & 15 (the Xe10's 16-colour palette), and the PEGC 256-colour mirror is 256 entries at the UNMASKED 8-bit index with full-byte channels read back verbatim (NP2kai anareg[16*3 + palnum*4 + c], io/gdc.c:852-953; MAME returns 0 in 256-colour mode - the recorded divergence, capture-pending), with the 16-entry mirror unchanged after the mode round trip. FAIL-FIRST: on the pre-fix tree the index reads 0x0B, the 0x15 write aliases onto entry 5 (masked), and the 16-colour channels read the full byte instead of the capture's nibble. Plus the CG block's three register ports: 0xA1/0xA3/0xA5 READ BACK their latches (docs/probes/PORTS.TXT reads 00A1=2F 00A3=57 00A5=0F with the open ports 0xA7/0xAB/0xAD/0xAF beside them all FF, and six more read-only captures repeat those bytes), where NP2kai's cgromia1 (a read handler only at index 4) and the old open-0xFF arm are both wrong. The slave's 0xA0 status bit 2 (FIFO empty) is the queue's complement - 0x04 empty, 0x01 once a read-back is armed (Xe10 capture docs/probes/RDBACK.TXT:172-173) - and the six CRTC render registers 0x70..0x7A read back as found (00 0F 10 00 00 00, RDBACK.TXT:82-87) and store five bits each (NP2kai crtc_o70 `dat &= 0x1f`). The graphics display/access page latches 0xA4/0xA6 read back their own bit (as found 0, RDBACK.TXT:100-101).
+// The GDC block's parameter read-back and mode read-back against NP2kai (and the palette row): 0x62 pops the text GDC's parameter queue (CSRR 0xE0 answers {CSRW0, CSRW1, CSRW2&3, 0, 0} and LPEN 0xC0 the three never-written LPEN slot bytes 00 00 00, one byte per read, 0xFF when empty), 0xA2 does the same for the graphics GDC, whose CSRR answer is the Xe10's {EAD[7:0], EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]} (docs/probes/gdc-conformance/xe10-2.5MHz/GDCCURS.CSV raw_curd; GDCWG's WG row reads F8 in byte 2) instead of returning a second status byte (the machine's own `GDC status 60 A0 A2: 05 04 ff` pins the empty answer at 0xFF) and 0xA0 status bit 0 flags that queue nonempty (read-back data available), 0x6A reads 00 whatever MODE FF2 holds (the Xe10, docs/probes/KIT1-XE10-PEGCRD.TXT `MODE 6A=00` in the 16- and 256-colour states, where NP2kai gdc_i6a returns its mode2), and the 16-colour analogue palette data ports answer the LOW NIBBLE of the byte the guest wrote with the upper four bits 0 (the probed Xe10, docs/probes/PEGCRD-XE10.TXT: wrote R=FF G=00 B=7F read 0F 00 0F; wrote 12 34 56 read 02 04 06; entries 5A and A5 index the 16-entry table as 0A and 05), the 0xA8 index register round-trips the FULL byte (`out 0xA8,0xAB / in 0xA8` reads 0xAB, not 0x0B: NP2kai io/gdc.c:841 stores `gdc.palnum = dat` unmasked and :913-919 returns it verbatim), the 16-colour palette read mirror is 16 entries indexed palnum & 15 (the Xe10's 16-colour palette), and the PEGC 256-colour mirror is 256 entries at the UNMASKED 8-bit index with full-byte channels read back verbatim (NP2kai anareg[16*3 + palnum*4 + c], io/gdc.c:852-953; MAME returns 0 in 256-colour mode - the recorded divergence, capture-pending), with the 16-entry mirror unchanged after the mode round trip. FAIL-FIRST: on the pre-fix tree the index reads 0x0B, the 0x15 write aliases onto entry 5 (masked), and the 16-colour channels read the full byte instead of the capture's nibble. Plus the CG block's three register ports: 0xA1/0xA3/0xA5 READ BACK their latches (docs/probes/PORTS.TXT reads 00A1=2F 00A3=57 00A5=0F with the open ports 0xA7/0xAB/0xAD/0xAF beside them all FF, and six more read-only captures repeat those bytes), where NP2kai's cgromia1 (a read handler only at index 4) and the old open-0xFF arm are both wrong. The slave's 0xA0 status bit 2 (FIFO empty) is the queue's complement - 0x04 empty, 0x01 once a read-back is armed (Xe10 capture docs/probes/RDBACK.TXT:172-173) - and the six CRTC render registers 0x70..0x7A read back as found (00 0F 10 00 00 00, RDBACK.TXT:82-87) and store five bits each (NP2kai crtc_o70 `dat &= 0x1f`). The graphics display/access page latches 0xA4/0xA6 read back their own bit (as found 0, RDBACK.TXT:100-101).
 //
 // The GDC block's parameter read-back and mode read-back against NP2kai
 // (P2/P3/P6 and the palette row): 0x62 pops the text GDC's parameter
@@ -12,8 +12,8 @@
 // 0x62 shape has no capture and stays NP2kai's) instead of returning a second status
 // byte (the machine's own `GDC status 60 A0 A2: 05 04 ff` pins the empty answer
 // at 0xFF) and 0xA0 status bit 0 flags that queue nonempty (read-back data
-// available), 0x6A echoes MODE FF2 bit 1 (the FF2 num-1 latch round-trips
-// instead of reading 0), and the
+// available), 0x6A reads 00 whatever MODE FF2 holds (the Xe10's
+// KIT1-XE10-PEGCRD.TXT, against NP2kai's mode2 echo), and the
 // 16-colour palette data ports answer the FULL byte the guest wrote (write 0xFF,
 // read 0xFF - the old nibble shape answered 0x0F), the 0xA8 index register
 // round-trips the FULL byte (`out 0xA8,0xAB / in 0xA8` reads 0xAB, not 0x0B:
@@ -63,10 +63,11 @@
 //     "hardwired 0" is indistinguishable from "empty" - NP2kai is the authority.
 //     [source: NP2kai io/gdc.c, the primary reference]
 //
-//  4. THE 0x6A BIT-1 ROUND-TRIP. NP2kai gdc_i6a returns the live gdc.mode2
-//     (io/gdc.c:700-704), whose bit 1 its FF2 dat-2/3 form toggles
-//     (io/gdc.c:501-530); the RTL hardwired the bit to 0, so a guest RMW of 0x6A
-//     lost it.
+//  4. THE 0x6A READ. NP2kai gdc_i6a returns the live gdc.mode2 (io/gdc.c:700-704),
+//     but the machine reads 0x6A as 00 in the 16-colour and the 256-colour state:
+//     docs/probes/KIT1-XE10-PEGCRD.TXT:3 `MODE 6A=00 9A0_04=01` and
+//     KIT1-XE10-PEGCRD.TXT:14 `MODE 6A=00 9A0_04=00 9A0_07=00 9A0_08=01 9A0_0A=01`
+//     (docs/probes/PEGCRD-XE10.TXT:3 reads the same). The capture outranks NP2kai.
 //
 //  5. THE PALETTE SHAPE (CORRECTED by docs/probes/PEGCRD-XE10.TXT: the measured Xe10 reads the
 //     16-colour analogue palette back as the LOW NIBBLE only, `WROTE_R=FF G=00 B=7F READ_R=0F
@@ -119,8 +120,9 @@
 // NP2kai slot value 00 and the a0_status_bit0_* checks to the queue-nonempty
 // flag; the pre-fix RTL answers the CSRFORM bytes instead (0F C0 7B master,
 // 01 11 22 slave) and holds 0xA0 bit 0 at 0 with five bytes queued. The earlier
-// cases this bench's first pass fixed (queue mechanics, 0x6A bit 1, the palette
-// shape) pin their post-fix values and still pass; the three CG read-back cases
+// cases this bench's first pass fixed (queue mechanics, the palette
+// shape) pin their post-fix values; the P6 0x6A rows fail on the tree that echoed
+// mode2 (01 / 03 there) and pass on the one that reads 00 and still pass; the three CG read-back cases
 // fail on the tree that answered 0xFF (the P7 revision) and pass here.
 
 module tb_pc9821_readback_gdc;
@@ -183,7 +185,6 @@ module tb_pc9821_readback_gdc;
   wire [3:0] pal_wr_idx;
   wire [1:0] pal_wr_chan;
   wire [3:0] pal_wr_data;
-  wire pal_commit;
   wire hs_out, vs_out, de_out;
 
   // Parked: the 200-line interleave's odd-line output (pc9821_crtc's seam; this bench
@@ -406,15 +407,20 @@ module tb_pc9821_readback_gdc;
     read_io(8'hA0, value); check("a0_status_bit0_drained", {15'h0, value[0]}, 16'h0000);
     check("a0_status_bit2_drained_set", {15'h0, value[2]}, 16'h0001);
 
-    // ==== P6: MODE FF2 bit 1 round-trips through 0x6A =====================
+    // ==== P6: 0x6A reads 00 whatever MODE FF2 holds (KIT1-XE10-PEGCRD.TXT) ====
     write_io(8'h6A, 8'h02);       // FF2 num 1 OFF
-    read_io(8'h6A, value); check("mode2_bit1_clear", {8'h00, value}, 16'h0000);
+    read_io(8'h6A, value); check("mode2_6a_reads_00", {8'h00, value}, 16'h0000);
     write_io(8'h6A, 8'h03);       // FF2 num 1 ON (dat 2/3 form)
-    read_io(8'h6A, value); check("mode2_bit1_set", {8'h00, value}, 16'h0002);
-    write_io(8'h6A, 8'h01);       // num 0 ON: 16-colour, with bit 1 still set
-    read_io(8'h6A, value); check("mode2_bit1_survives_other_writes", {8'h00, value}, 16'h0003);
+    read_io(8'h6A, value); check("mode2_6a_00_after_num1_on", {8'h00, value}, 16'h0000);
+    write_io(8'h6A, 8'h01);       // num 0 ON: 16 colours (the capture's `9A0_04=01` row)
+    read_io(8'h6A, value); check("mode2_6a_00_in_16_colours", {8'h00, value}, 16'h0000);
+    write_io(8'h6A, 8'h07);       // EGC/PEGC write enable ON (num 3)
+    write_io(8'h6A, 8'h21);       // num 0x10 ON: 256 colours (the capture's `9A0_0A=01` row)
+    read_io(8'h6A, value); check("mode2_6a_00_in_256_colours", {8'h00, value}, 16'h0000);
+    write_io(8'h6A, 8'h20);       // 256 colours OFF
+    write_io(8'h6A, 8'h06);       // write enable OFF
     write_io(8'h6A, 8'h02);       // num 1 OFF again
-    read_io(8'h6A, value); check("mode2_bit1_clears_again", {8'h00, value}, 16'h0001);
+    read_io(8'h6A, value); check("mode2_6a_00_after_num1_off", {8'h00, value}, 16'h0000);
     // ==== the 16-colour analogue palette reads back the LOW NIBBLE ==========
     // docs/probes/PEGCRD-XE10.TXT (the measured Xe10, 16-colour analogue mode, 0x9A0 index 0x04
     // read 1): `16  ENTRY=02 WROTE_R=FF G=00 B=7F READ_R=0F G=00 B=0F` - the upper four bits of
@@ -523,8 +529,8 @@ module tb_pc9821_readback_gdc;
     // gives 0xFF when modereg holds 0xFF" reading of one as-found byte. Both
     // probe values are exercised here, with the register deliberately holding a
     // value that is NOT 0xFF so a live read cannot pass by accident.
-    // The 16-bit `in ax,7Ch` form is NOT touched by this fix and is not
-    // exercised here: the machine never probed it (TODO item 42).
+    // The 16-bit `in ax,7Ch` form is not exercised here: the Xe10 reads it
+    // FFFF (docs/probes/XE10T-XE10-AUDIT.TXT W007C), pinned by tb_pc9821_iobus.
     // [source: docs/probes/RDBACK.TXT:152, a real PC-9821Xe10]
     read_io(8'h7C, value); check("grcg_7c_byte_read_is_ff", {8'h00, value}, 16'h00ff);
 

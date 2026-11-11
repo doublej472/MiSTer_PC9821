@@ -1,0 +1,648 @@
+XE10T v1 sha=7006c6b05fe52c18 crc=8647B89F imgcrc=8647B89F size=30330 build=gas-xe10t args= /OPNA2 tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0030 cr0=00000030 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=00 bda0458=02 bda045C=C0 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=00 bda0595=00
+I ID dos=6.20 bufseg=183C bufparas=4000 sel=00020000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=F000
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6144 pit=49152
+P CAL PITWIN i=1 art=6144 pit=49152
+P CAL PITWIN i=2 art=6144 pit=49153
+P CAL PITWIN i=3 art=6144 pit=49152
+P CAL PITWIN i=4 art=6144 pit=49153
+P CAL PITWIN i=5 art=6144 pit=49152
+P CAL PITWIN i=6 art=6144 pit=49152
+P CAL PITWIN i=7 art=6146 pit=49167
+P CAL PITEDGE edges=19 art=155648 vmax=65535 vmin=0
+P CAL VSYNC edges=60 art=326675 pit=2583887 tsc=-
+I CAL pit_mod=65536 ratio_x1000=8000 vsync_x10=54445 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=2329
+BEGIN:OPNA2
+STATE OPNA2 a460=40 imr_s=75 imr_m=7D vec60=00603673 builtin=see-run-notes
+ROW OPNA2 ID port=0188
+X OPNA2 ID b=0188 st=00 st2=00 d=00 e=FF f=FF
+X OPNA2 IDC b=0188 ext=0 a460=40 id=01 id2=01 r0e=FF r0f=FF r10=10 r20=20 w5a=5A wa5=A5 st=00 s4=FF s6=FF x00=FF xff=FF
+X OPNA2 IDC b=0188 ext=1 a460=41 id=01 id2=01 r0e=FF r0f=FF r10=10 r20=20 w5a=5A wa5=A5 st=00 s4=00 s6=00 x00=00 xff=FF
+ROW OPNA2 ID port=0288
+X OPNA2 ID b=0288 st=FF st2=FF d=FF e=FF f=FF
+ROW OPNA2 ID port=0088
+X OPNA2 ID b=0088 st=FF st2=FF d=FF e=FF f=FF
+ROW OPNA2 BUSY_ADDR port=0188
+X OPNA2 BUSY_ADDR i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=1 dly=37 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=4 dly=20 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=6 dly=94 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=9 dly=77 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=13 dly=97 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=17 dly=117 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=18 dly=26 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=19 dly=63 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=20 dly=100 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=21 dly=9 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=22 dly=46 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=23 dly=83 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=24 dly=120 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=27 dly=103 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=28 dly=12 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=29 dly=49 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=30 dly=86 polls=1 pit=4
+X OPNA2 BUSY_ADDR i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_ADDR i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_ADDR trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_FM30 port=0188
+X OPNA2 BUSY_FM30 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=1 dly=37 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=3 dly=111 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=4 dly=20 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=6 dly=94 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=7 dly=3 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=8 dly=40 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=11 dly=23 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=12 dly=60 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=13 dly=97 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=16 dly=80 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=17 dly=117 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=18 dly=26 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=19 dly=63 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=22 dly=46 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_FM30 i=24 dly=120 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=30 dly=86 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=31 dly=123 polls=1 pit=4
+X OPNA2 BUSY_FM30 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_FM30 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_FM40 port=0188
+X OPNA2 BUSY_FM40 i=0 dly=0 polls=1 pit=6
+X OPNA2 BUSY_FM40 i=1 dly=37 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=3 dly=111 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=4 dly=20 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=6 dly=94 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=7 dly=3 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=8 dly=40 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=11 dly=23 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=13 dly=97 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=17 dly=117 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=19 dly=63 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=24 dly=120 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=28 dly=12 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_FM40 i=30 dly=86 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_FM40 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_FM40 trials=128 busy_pit=4/4/6 polls=1/1/1
+ROW OPNA2 BUSY_FMA0 port=0188
+X OPNA2 BUSY_FMA0 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=1 dly=37 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=2 dly=74 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=4 dly=20 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=6 dly=94 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=12 dly=60 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=13 dly=97 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=16 dly=80 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=17 dly=117 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=19 dly=63 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=24 dly=120 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=25 dly=29 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_FMA0 i=30 dly=86 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_FMA0 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_FMA0 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_FMB0 port=0188
+X OPNA2 BUSY_FMB0 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=1 dly=37 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=3 dly=111 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=4 dly=20 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=6 dly=94 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=9 dly=77 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=10 dly=114 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=11 dly=23 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=12 dly=60 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=13 dly=97 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=15 dly=43 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=17 dly=117 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=19 dly=63 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=21 dly=9 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=24 dly=120 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=25 dly=29 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=29 dly=49 polls=1 pit=5
+X OPNA2 BUSY_FMB0 i=30 dly=86 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=31 dly=123 polls=1 pit=4
+X OPNA2 BUSY_FMB0 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_FMB0 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_KEY28 port=0188
+X OPNA2 BUSY_KEY28 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=1 dly=37 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=4 dly=20 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=5 dly=57 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=6 dly=94 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=10 dly=114 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=13 dly=97 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=14 dly=6 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=15 dly=43 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=17 dly=117 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=19 dly=63 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=24 dly=120 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_KEY28 i=30 dly=86 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_KEY28 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_KEY28 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_SSG08 port=0188
+X OPNA2 BUSY_SSG08 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=1 dly=37 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=4 dly=20 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=5 dly=57 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=6 dly=94 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=10 dly=114 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=12 dly=60 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=13 dly=97 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=14 dly=6 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=17 dly=117 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=19 dly=63 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=20 dly=100 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=23 dly=83 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=24 dly=120 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=26 dly=66 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=27 dly=103 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=30 dly=86 polls=1 pit=5
+X OPNA2 BUSY_SSG08 i=31 dly=123 polls=1 pit=4
+X OPNA2 BUSY_SSG08 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_SSG08 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_RHY10 port=0188
+X OPNA2 BUSY_RHY10 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=1 dly=37 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=4 dly=20 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=6 dly=94 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=9 dly=77 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=11 dly=23 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=13 dly=97 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=14 dly=6 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=15 dly=43 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=17 dly=117 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=19 dly=63 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=20 dly=100 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=21 dly=9 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=22 dly=46 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=23 dly=83 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=24 dly=120 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=26 dly=66 polls=1 pit=5
+X OPNA2 BUSY_RHY10 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=30 dly=86 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=31 dly=123 polls=1 pit=4
+X OPNA2 BUSY_RHY10 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_RHY10 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 BUSY_RHY11 port=0188
+X OPNA2 BUSY_RHY11 i=0 dly=0 polls=1 pit=6
+X OPNA2 BUSY_RHY11 i=1 dly=37 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=2 dly=74 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=4 dly=20 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=5 dly=57 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=6 dly=94 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=13 dly=97 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=14 dly=6 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=17 dly=117 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=18 dly=26 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=19 dly=63 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=20 dly=100 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=22 dly=46 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=23 dly=83 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=24 dly=120 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=27 dly=103 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=28 dly=12 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_RHY11 i=30 dly=86 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_RHY11 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_RHY11 trials=128 busy_pit=4/4/6 polls=1/1/1
+ROW OPNA2 BUSY_ADB100 port=018C
+X OPNA2 BUSY_ADB100 i=0 dly=0 polls=1 pit=6
+X OPNA2 BUSY_ADB100 i=1 dly=37 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=2 dly=74 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=3 dly=111 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=4 dly=20 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=5 dly=57 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=6 dly=94 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=7 dly=3 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=8 dly=40 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=9 dly=77 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=10 dly=114 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=13 dly=97 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=15 dly=43 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=16 dly=80 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=17 dly=117 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=18 dly=26 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=19 dly=63 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=21 dly=9 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=24 dly=120 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=25 dly=29 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=27 dly=103 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=29 dly=49 polls=1 pit=4
+X OPNA2 BUSY_ADB100 i=30 dly=86 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_ADB100 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_ADB100 trials=128 busy_pit=4/5/6 polls=1/1/1
+ROW OPNA2 BUSY_EXT130 port=018C
+X OPNA2 BUSY_EXT130 i=0 dly=0 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=1 dly=37 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=2 dly=74 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=3 dly=111 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=4 dly=20 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=5 dly=57 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=6 dly=94 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=7 dly=3 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=8 dly=40 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=9 dly=77 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=10 dly=114 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=11 dly=23 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=12 dly=60 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=13 dly=97 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=14 dly=6 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=15 dly=43 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=16 dly=80 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=17 dly=117 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=18 dly=26 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=19 dly=63 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=20 dly=100 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=21 dly=9 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=22 dly=46 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=23 dly=83 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=24 dly=120 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=25 dly=29 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=26 dly=66 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=27 dly=103 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=28 dly=12 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=29 dly=49 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=30 dly=86 polls=1 pit=4
+X OPNA2 BUSY_EXT130 i=31 dly=123 polls=1 pit=5
+X OPNA2 BUSY_EXT130 i=H polls_h=128,0,0,0,0,0,0,0,0 pit_h=128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+T OPNA2 BUSY_EXT130 trials=128 busy_pit=4/4/5 polls=1/1/1
+ROW OPNA2 B2B_SSG port=0188
+X OPNA2 B2B_SSG i=0 v1=11 v2=22 st=00 r0b=11 r0c=22
+X OPNA2 B2B_SSG i=1 v1=12 v2=23 st=00 r0b=12 r0c=23
+X OPNA2 B2B_SSG i=2 v1=13 v2=24 st=00 r0b=13 r0c=24
+X OPNA2 B2B_SSG i=3 v1=14 v2=25 st=00 r0b=14 r0c=25
+X OPNA2 B2B_SSG i=4 v1=15 v2=26 st=00 r0b=15 r0c=26
+X OPNA2 B2B_SSG i=5 v1=16 v2=27 st=00 r0b=16 r0c=27
+X OPNA2 B2B_SSG i=6 v1=17 v2=28 st=00 r0b=17 r0c=28
+X OPNA2 B2B_SSG i=7 v1=18 v2=29 st=00 r0b=18 r0c=29
+ROW OPNA2 B2B_TMR port=0188
+X OPNA2 B2B_TMR i=0 reads=353 pit=244 art=31 st=01
+X OPNA2 B2B_TMR i=1 reads=384 pit=260 art=33 st=01
+X OPNA2 B2B_TMR i=2 reads=355 pit=241 art=30 st=01
+X OPNA2 B2B_TMR i=3 reads=352 pit=239 art=30 st=01
+X OPNA2 B2B_TMR i=4 reads=354 pit=241 art=30 st=01
+X OPNA2 B2B_TMR i=5 reads=350 pit=238 art=30 st=01
+X OPNA2 B2B_TMR i=6 reads=354 pit=240 art=30 st=01
+X OPNA2 B2B_TMR i=7 reads=355 pit=241 art=30 st=01
+ROW OPNA2 B2B_TMR3 port=0188
+X OPNA2 B2B_TMR3 i=0 reads=412 pit=277 art=35 st=01
+X OPNA2 B2B_TMR3 i=1 reads=412 pit=274 art=34 st=01
+X OPNA2 B2B_TMR3 i=2 reads=414 pit=274 art=34 st=01
+X OPNA2 B2B_TMR3 i=3 reads=412 pit=273 art=35 st=01
+X OPNA2 B2B_TMR3 i=4 reads=413 pit=274 art=35 st=01
+X OPNA2 B2B_TMR3 i=5 reads=414 pit=275 art=34 st=01
+X OPNA2 B2B_TMR3 i=6 reads=412 pit=273 art=35 st=01
+X OPNA2 B2B_TMR3 i=7 reads=413 pit=274 art=35 st=01
+ROW OPNA2 FR_TMRA port=0188
+X OPNA2 FR_TMRA i=0 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5393
+X OPNA2 FR_TMRA i=1 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=2 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=3 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=4 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=5 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=6 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=7 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=8 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=9 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=10 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=11 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=12 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=13 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=14 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=15 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=16 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=17 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=18 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=19 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=20 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=21 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=22 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=23 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=24 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=25 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=26 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=27 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=28 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=29 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRA i=30 st0=01 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRA i=31 st0=01 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+T OPNA2 FR_TMRA trials=32 reads=1/1/1 busy_pit=4/5/5 irr_reads=4096/4096/4096 irr_pit=5391/5391/5393
+ROW OPNA2 FR_TMRB port=0188
+X OPNA2 FR_TMRB i=0 st0=02 st1=00 stl=00 reads=1 pit=6 irr0=10 irr1=10 irrn=4096 irrpit=5394
+X OPNA2 FR_TMRB i=1 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=2 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=3 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=4 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=5 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=6 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=7 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5393
+X OPNA2 FR_TMRB i=8 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=9 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=10 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=11 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=12 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=13 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=14 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=15 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=16 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=17 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=18 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=19 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=20 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=21 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=22 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=23 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=24 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=25 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=26 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=27 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=28 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5392
+X OPNA2 FR_TMRB i=29 st0=02 st1=00 stl=00 reads=1 pit=5 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=30 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+X OPNA2 FR_TMRB i=31 st0=02 st1=00 stl=00 reads=1 pit=4 irr0=10 irr1=10 irrn=4096 irrpit=5391
+T OPNA2 FR_TMRB trials=32 reads=1/1/1 busy_pit=4/5/6 irr_reads=4096/4096/4096 irr_pit=5391/5391/5394
+ROW OPNA2 TMRA_3FF port=0188
+X OPNA2 TMRA_3FF i=0 reads=5 pit=8
+X OPNA2 TMRA_3FF i=1 reads=9 pit=10
+X OPNA2 TMRA_3FF i=2 reads=27 pit=21
+X OPNA2 TMRA_3FF i=3 reads=7 pit=8
+X OPNA2 TMRA_3FF i=4 reads=47 pit=33
+X OPNA2 TMRA_3FF i=5 reads=8 pit=9
+X OPNA2 TMRA_3FF i=6 reads=47 pit=34
+X OPNA2 TMRA_3FF i=7 reads=8 pit=9
+T OPNA2 TMRA_3FF trials=8 start_pit=8/10/34 reads=5/9/47
+ROW OPNA2 TMRA_3FC port=0188
+X OPNA2 TMRA_3FC i=0 reads=248 pit=161
+X OPNA2 TMRA_3FC i=1 reads=217 pit=140
+X OPNA2 TMRA_3FC i=2 reads=249 pit=160
+X OPNA2 TMRA_3FC i=3 reads=251 pit=162
+X OPNA2 TMRA_3FC i=4 reads=251 pit=162
+X OPNA2 TMRA_3FC i=5 reads=249 pit=160
+X OPNA2 TMRA_3FC i=6 reads=250 pit=161
+X OPNA2 TMRA_3FC i=7 reads=248 pit=159
+T OPNA2 TMRA_3FC trials=8 start_pit=140/161/162 reads=217/249/251
+ROW OPNA2 TMRA_3F0 port=0188
+X OPNA2 TMRA_3F0 i=0 reads=1108 pit=701
+X OPNA2 TMRA_3F0 i=1 reads=1114 pit=704
+X OPNA2 TMRA_3F0 i=2 reads=1079 pit=681
+X OPNA2 TMRA_3F0 i=3 reads=1078 pit=681
+X OPNA2 TMRA_3F0 i=4 reads=1078 pit=681
+X OPNA2 TMRA_3F0 i=5 reads=1078 pit=681
+X OPNA2 TMRA_3F0 i=6 reads=1077 pit=680
+X OPNA2 TMRA_3F0 i=7 reads=1077 pit=680
+T OPNA2 TMRA_3F0 trials=8 start_pit=680/681/704 reads=1077/1078/1114
+ROW OPNA2 TMRA_3C0 port=0188
+X OPNA2 TMRA_3C0 i=0 reads=4464 pit=2809
+X OPNA2 TMRA_3C0 i=1 reads=4481 pit=2818
+X OPNA2 TMRA_3C0 i=2 reads=4514 pit=2839
+X OPNA2 TMRA_3C0 i=3 reads=4446 pit=2796
+X OPNA2 TMRA_3C0 i=4 reads=4497 pit=2829
+X OPNA2 TMRA_3C0 i=5 reads=4446 pit=2796
+X OPNA2 TMRA_3C0 i=6 reads=4446 pit=2797
+X OPNA2 TMRA_3C0 i=7 reads=4447 pit=2797
+T OPNA2 TMRA_3C0 trials=8 start_pit=2796/2809/2839 reads=4446/4464/4514
+ROW OPNA2 TMRB_FF port=0188
+X OPNA2 TMRB_FF i=0 reads=840 pit=533
+X OPNA2 TMRB_FF i=1 reads=315 pit=202
+X OPNA2 TMRB_FF i=2 reads=348 pit=223
+X OPNA2 TMRB_FF i=3 reads=345 pit=221
+X OPNA2 TMRB_FF i=4 reads=347 pit=222
+X OPNA2 TMRB_FF i=5 reads=346 pit=222
+X OPNA2 TMRB_FF i=6 reads=347 pit=222
+X OPNA2 TMRB_FF i=7 reads=344 pit=220
+T OPNA2 TMRB_FF trials=8 start_pit=202/222/533 reads=315/347/840
+ROW OPNA2 TMRB_FC port=0188
+X OPNA2 TMRB_FC i=0 reads=3578 pit=2252
+X OPNA2 TMRB_FC i=1 reads=3661 pit=2303
+X OPNA2 TMRB_FC i=2 reads=3695 pit=2325
+X OPNA2 TMRB_FC i=3 reads=3693 pit=2323
+X OPNA2 TMRB_FC i=4 reads=3694 pit=2324
+X OPNA2 TMRB_FC i=5 reads=3694 pit=2323
+X OPNA2 TMRB_FC i=6 reads=3696 pit=2325
+X OPNA2 TMRB_FC i=7 reads=3694 pit=2324
+T OPNA2 TMRB_FC trials=8 start_pit=2252/2324/2325 reads=3578/3694/3696
+ROW OPNA2 ADB_SETUP port=018C
+X OPNA2 ADB_SETUP st0=00 s_rst=08 sb=08 st1=08 stl=08 reads=4096 pit=2802 s_set=08
+X OPNA2 ADB_W i=0 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=1 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=2 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=3 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=4 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=5 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=6 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=7 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=8 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=9 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=10 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=11 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=12 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=13 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=14 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=15 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=16 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=17 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=18 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=19 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=20 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=21 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=22 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=23 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=24 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=25 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=26 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=27 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=28 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=29 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=30 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=31 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=32 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=33 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=34 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=35 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=36 reads=1 pit=5 st=08
+X OPNA2 ADB_W i=37 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=38 reads=1 pit=4 st=08
+X OPNA2 ADB_W i=39 reads=1 pit=5 st=08
+X OPNA2 ADB_END st=08 s6=00
+X OPNA2 FR_ADB i=0 sb=08 st1=08 stl=08 reads=4096 pit=2801
+X OPNA2 FR_ADB i=1 sb=08 st1=00 stl=00 reads=1 pit=5
+X OPNA2 FR_ADB i=2 sb=08 st1=08 stl=08 reads=4096 pit=2800
+X OPNA2 FR_ADB i=3 sb=08 st1=00 stl=00 reads=1 pit=5
+X OPNA2 FR_ADB i=4 sb=08 st1=00 stl=00 reads=1 pit=5
+X OPNA2 FR_ADB i=5 sb=08 st1=00 stl=00 reads=1 pit=6
+X OPNA2 FR_ADB i=6 sb=08 st1=08 stl=08 reads=4096 pit=2800
+X OPNA2 FR_ADB i=7 sb=08 st1=00 stl=00 reads=1 pit=5
+RESTORE OPNA2 PA460 was=40 now=40 kind=readback OK
+RESTORE OPNA2 IMR_S was=75 now=75 kind=readback OK
+RESTORE OPNA2 OPNA2_REGS was=- now=00 kind=default OK
+END:OPNA2 rows=573 sum=A2BB
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD802369 now=FD802369 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=3E7D
+XE10T DONE sections=4 sum=0D102FAE

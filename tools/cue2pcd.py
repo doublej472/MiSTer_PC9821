@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a CUE sheet and its BIN file(s) into ONE .PCD image for the core's CD-ROM drive.
+"""Convert a CUE sheet and its BIN file(s), or a CloneCD set, into ONE .PCD image for the core's CD-ROM drive.
 
 WHY ONE FILE. hps_io mounts one file per OSD slot, so the track layout a CUE keeps in a separate
 text file has to travel inside the image. A PCD is a 2352-byte header followed by the disc as raw
@@ -42,14 +42,31 @@ default (the drive never reads it - it has no READ CD) and correct with --ecc, w
 the ECMA-130 EDC (CRC-32, polynomial 0x8001801B) and the RSPC P/Q parity, so the image is also a
 valid raw disc for other tools.
 
+CLONECD (.ccd + .img [+ .sub]). The .img is the whole disc as raw 2352-byte sectors from LBA
+0, every track in one file, so it is already a PCD's body; only the track list comes from the
+.ccd, an INI file. Read the way NP2kai reads it (NP2kai diskimage/cd/cdd_ccd.c openccd: the
+image is the .ccd's name with ".img", the sector size is "2352byte固定", "MODE=1" makes the
+track data (0x14) and "MODE=0" audio (0x10), "INDEX 1=" is the track's start LBA in the image
+and "INDEX 0=" its pregap's): each [TRACK n] section gives a track, whose sectors run from its
+INDEX 0 (else INDEX 1; track 1 from LBA 0) to the next track's start. The disc ends where the
+.img ends. The [Entry] sections are the TOC the drive read from the disc's lead-in (Point
+1..99 a track, PLBA its address, Control bit 2 a data track; 0xA2 the lead-out), which is what
+a guest's READ TOC sees on the real disc, so where a track has an entry its PLBA is the PCD's
+TOC address (a stronger source than NP2kai's INDEX 1, which it uses only without one; a
+difference is reported). A data/audio disagreement between the two, or a lead-out that is not
+the image's end, is refused. MODE=2 is a MODE2 track (the PCD's MODE2 flag). Refused: more than one session (the drive has a
+one-session TOC) and DataTracksScrambled=1. The .sub (96 subchannel bytes per sector) is not
+read: the drive serves no subchannel.
+
 Usage:
   tools/cue2pcd.py GAME.cue [GAME.pcd] [--ecc] [--force]
+  tools/cue2pcd.py GAME.ccd [GAME.pcd] [--force]   # CloneCD: the .img beside it, raw
   tools/cue2pcd.py GAME.cue --info          # the parsed layout and the TOC, no output
-  tools/cue2pcd.py --batch DIR              # every CUE under DIR without an up-to-date PCD
+  tools/cue2pcd.py --batch DIR              # every CUE/CCD under DIR without an up-to-date PCD
   tools/cue2pcd.py --selftest               # synthetic CUEs (mixed sizes, PREGAP) round-trip
 
-The batch mode is what the MiSTer Scripts-menu entry tools/mister/pc9821_cue2pcd.sh runs on the
-card (Python 3.9 there), so this file must stay within Python 3.9.
+It runs on a computer (Python 3.9 or later); the PCD it writes is then copied to the SD card.
+The batch mode converts a whole folder of images at once, and is safe to re-run.
 """
 
 from __future__ import annotations
@@ -119,6 +136,7 @@ class Track:
 class Disc:
     tracks: list[Track] = field(default_factory=list)
     leadout: int = 0
+    notes: list[str] = field(default_factory=list)
 
 
 def resolve(base: str, name: str) -> str:
@@ -225,6 +243,109 @@ def layout(disc: Disc) -> None:
     disc.leadout = lba
     if disc.leadout >= 1 << 20:
         raise ValueError("disc too long for the drive's 20-bit LBA")
+
+
+def parse_ccd(path: str) -> Disc:
+    """A CloneCD set (see CLONECD above): the [TRACK n] list, checked against [Entry] TOC."""
+    base = os.path.dirname(os.path.abspath(path))
+    sections: list[tuple[str, dict[str, str]]] = []
+    with open(path, encoding="latin-1") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith(";"):
+                continue
+            m = re.fullmatch(r"\[(.+)\]", line)
+            if m:
+                sections.append((m.group(1).strip().upper(), {}))
+                continue
+            if "=" not in line or not sections:
+                raise ValueError(f"unrecognised CCD line: {line!r}")
+            k, v = line.split("=", 1)
+            sections[-1][1][k.strip().upper()] = v.strip()
+    if not sections or sections[0][0] != "CLONECD":
+        raise ValueError("not a CloneCD control file (no [CloneCD] section)")
+
+    def num(sec: dict[str, str], key: str, where: str) -> int:
+        try:
+            return int(sec[key], 0)
+        except (KeyError, ValueError):
+            raise ValueError(f"[{where}] has no valid {key}=") from None
+    disc_sec = dict(next((d for n, d in sections if n == "DISC"), {}))
+    if int(disc_sec.get("SESSIONS", "1"), 0) != 1:
+        raise ValueError(f"{disc_sec['SESSIONS']} sessions: only a one-session disc can be "
+                         f"converted (the drive's TOC is one session)")
+    if int(disc_sec.get("DATATRACKSSCRAMBLED", "0"), 0):
+        raise ValueError("DataTracksScrambled=1: the data sectors are stored scrambled")
+    img = os.path.splitext(path)[0] + ".img"
+    img = resolve(base, os.path.basename(img))
+    if not os.path.exists(img):
+        raise ValueError(f"the image {os.path.basename(img)} is not beside the .ccd")
+    size = os.path.getsize(img)
+    if size % RAW:
+        raise ValueError(f"{os.path.basename(img)} is {size} bytes, not whole 2352-byte sectors")
+    # the TOC the drive read, where the CCD carries it
+    toc = {}
+    for name, sec in sections:
+        if re.fullmatch(r"ENTRY\s+\d+", name):
+            if int(sec.get("SESSION", "1"), 0) != 1:
+                continue
+            toc[num(sec, "POINT", name)] = (num(sec, "CONTROL", name), num(sec, "PLBA", name))
+    disc = Disc()
+    modes = {0: "AUDIO", 1: "MODE1/2352", 2: "MODE2/2352"}
+    starts: list[int] = []
+    for name, sec in sections:
+        m = re.fullmatch(r"TRACK\s+(\d+)", name)
+        if not m:
+            continue
+        where = f"TRACK {m.group(1)}"
+        mode = num(sec, "MODE", where)
+        if mode not in modes:
+            raise ValueError(f"[{where}] MODE={mode} is not 0, 1 or 2")
+        t = Track(int(m.group(1)), modes[mode], img, False)
+        t.index1 = num(sec, "INDEX 1", where)
+        t.index0 = num(sec, "INDEX 0", where) if "INDEX 0" in sec else None
+        if t.index0 is not None and t.index0 > t.index1:
+            raise ValueError(f"[{where}] INDEX 0 after INDEX 1")
+        t.disc_lba = t.index1
+        if t.number in toc:
+            ctrl, plba = toc[t.number]
+            if bool(ctrl & 4) == t.audio:
+                raise ValueError(f"track {t.number}: [TRACK] MODE={mode} but the TOC entry's "
+                                 f"control 0x{ctrl:X} says {'data' if ctrl & 4 else 'audio'}")
+            if plba != t.index1:
+                disc.notes.append(f"track {t.number}: the TOC entry's LBA {plba} is used, not "
+                                  f"[TRACK] INDEX 1={t.index1}")
+            t.disc_lba = plba
+        elif toc:
+            raise ValueError(f"track {t.number} is not in the [Entry] TOC")
+        disc.tracks.append(t)
+        first = t.index0 if t.index0 is not None else t.index1
+        starts.append(0 if not starts else min(first, t.disc_lba))
+    if not 1 <= len(disc.tracks) <= 99:
+        raise ValueError("a disc has 1..99 tracks ([TRACK n] sections)")
+    for a, b in zip(disc.tracks, disc.tracks[1:]):
+        if b.number != a.number + 1:
+            raise ValueError(f"track {b.number} does not follow track {a.number}")
+    disc.leadout = size // RAW
+    starts.append(disc.leadout)
+    for t, first, nxt in zip(disc.tracks, starts, starts[1:]):
+        if not first <= t.disc_lba < nxt or not first <= t.index1 < nxt:
+            raise ValueError(f"track {t.number}: LBA {t.disc_lba} (INDEX 1={t.index1}) is "
+                             f"outside its extent {first}..{nxt - 1} of the "
+                             f"{disc.leadout}-sector image")
+        t.disc_first = first
+        t.file_offset, t.file_sectors = first * RAW, nxt - first
+    if 0xA2 in toc and toc[0xA2][1] != disc.leadout:
+        raise ValueError(f"the TOC lead-out is LBA {toc[0xA2][1]}, the image holds "
+                         f"{disc.leadout} sectors")
+    if disc.leadout >= 1 << 20:
+        raise ValueError("disc too long for the drive's 20-bit LBA")
+    return disc
+
+
+def parse_image(path: str) -> Disc:
+    """A CUE sheet, or a CloneCD .ccd (by its extension)."""
+    return parse_ccd(path) if path.lower().endswith(".ccd") else parse_cue(path)
 
 
 # ---- ECMA-130 EDC/ECC (--ecc) ----
@@ -371,13 +492,14 @@ def describe(disc: Disc) -> str:
                    f"x{t.file_sectors} @{t.size}  pregap {t.pregap} postgap {t.postgap}")
     m, s, f = msf(disc.leadout + 150)
     out.append(f"lead-out LBA {disc.leadout} {m:02d}:{s:02d}:{f:02d}")
+    out += ["note: " + x for x in disc.notes]
     return "\n".join(out)
 
 
 def convert(cue: str, out: str, with_ecc: bool, progress=None, disc: Disc | None = None) -> Disc:
     """Write OUT through OUT.part and rename it into place, so an interrupted run never leaves
     a truncated image under the real name. PROGRESS(done, total) is called every 1% or so."""
-    disc = disc or parse_cue(cue)
+    disc = disc or parse_image(cue)
     tmp = out + ".part"
     step = max(1, disc.leadout // 100)
     try:
@@ -397,7 +519,7 @@ def convert(cue: str, out: str, with_ecc: bool, progress=None, disc: Disc | None
     return disc
 
 
-# ---- batch mode (--batch DIR): the MiSTer Scripts-menu entry (tools/mister/pc9821_cue2pcd.sh) ----
+# ---- batch mode (--batch DIR): a whole folder of CD images in one run ----
 # Every CUE under DIR gets a PCD beside it (same stem) unless an up-to-date one is already
 # there. The sources are only ever opened for reading. A PCD is up to date when it is a PCD of
 # exactly the size the CUE's layout gives, its header sector is the one this tool would write, and
@@ -428,11 +550,16 @@ def pcd_up_to_date(cue: str, out: str, disc: Disc) -> bool:
 
 
 def find_cues(root: str) -> list[str]:
+    """Every CUE and CCD under ROOT (hidden names skipped). A CCD whose stem also has a CUE in
+    the same folder is left out: both would write the same .pcd, and the CUE is converted."""
     found = []
     for d, dirs, files in os.walk(root):
         dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        cue_stems = {os.path.splitext(f)[0].lower() for f in files if f.lower().endswith(".cue")}
         found += [os.path.join(d, f) for f in sorted(files)
-                  if f.lower().endswith(".cue") and not f.startswith(".")]
+                  if not f.startswith(".") and (f.lower().endswith(".cue") or (
+                      f.lower().endswith(".ccd")
+                      and os.path.splitext(f)[0].lower() not in cue_stems))]
     return found
 
 
@@ -441,7 +568,7 @@ def _human(n: int) -> str:
 
 
 def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
-    """Convert every CUE under ROOT. Returns the number of CUEs that failed (0 = all done or
+    """Convert every CUE/CCD under ROOT. Returns the number of them that failed (0 = all done or
     already up to date). FREE_BYTES(path) is injectable for the self-test."""
     import shutil
     free_bytes = free_bytes or (lambda path: shutil.disk_usage(path).free)
@@ -449,21 +576,21 @@ def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
         log(f"cue2pcd: {root} is not a directory")
         return 1
     cues = find_cues(root)
-    log(f"cue2pcd: {len(cues)} CUE sheet(s) under {root}, {_human(free_bytes(root))} free")
+    log(f"cue2pcd: {len(cues)} CUE/CCD file(s) under {root}, {_human(free_bytes(root))} free")
     made = skipped = failed = 0
     for i, cue in enumerate(cues, 1):
         rel = os.path.relpath(cue, root)
         out = os.path.splitext(cue)[0] + ".pcd"
         log(f"[{i}/{len(cues)}] {rel}")
         try:
-            disc = parse_cue(cue)
+            disc = parse_image(cue)
         except (ValueError, OSError) as e:
-            log(f"  SKIP: cannot use this CUE: {e}")
+            log(f"  SKIP: cannot use this file: {e}")
             failed += 1
             continue
         srcs = [os.path.realpath(s) for s in _sources(cue, disc)]
         if os.path.realpath(out) in srcs or os.path.realpath(out + ".part") in srcs:
-            log(f"  SKIP: the output name {os.path.basename(out)} is one of the CUE's own files")
+            log(f"  SKIP: the output name {os.path.basename(out)} is one of its own source files")
             failed += 1
             continue
         if os.path.exists(out):
@@ -487,6 +614,8 @@ def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
                 f"{_human(free)} free")
             failed += 1
             continue
+        for note in disc.notes:
+            log(f"  note: {note}")
         log(f"  {len(disc.tracks)} track(s), {disc.leadout} sectors -> "
             f"{os.path.basename(out)} ({_human(need)})")
         last = [-1]
@@ -597,9 +726,142 @@ def selftest() -> int:
             check(False, "a size that is not whole sectors must be rejected")
         except ValueError:
             pass
+        fails += _selftest_ccd(d)
         fails += _selftest_batch(d, os.path.join(d, "x0.pcd"))
     print("cue2pcd selftest:", "PASS" if fails == 0 else f"FAIL ({fails})")
     return 0 if fails == 0 else 1
+
+
+CCD_HEAD = "[CloneCD]\nVersion=3\n[Disc]\nTocEntries={n}\nSessions={sessions}\n" \
+           "DataTracksScrambled={scr}\nCDTextLength=0\n[Session 1]\nPreGapMode=1\n"
+CCD_ENTRY = "[Entry {i}]\nSession=1\nPoint=0x{point:02x}\nADR=0x01\nControl=0x{ctrl:02x}\n" \
+            "TrackNo=0\nAMin=0\nASec=0\nAFrame=0\nALBA=-150\nZero=0\nPMin={pm}\n" \
+            "PSec={ps}\nPFrame={pf}\nPLBA={plba}\n"
+
+
+def write_ccd(path: str, tracks, leadout: int, sessions: int = 1, scrambled: int = 0,
+              toc_override=None, ctrl_override=None) -> None:
+    """A CloneCD control file in CloneCD's own layout (Version=3, as a real one reads):
+    TRACKS = [(number, mode 0/1/2, index1, index0 or None)]; TOC_OVERRIDE {point: plba},
+    CTRL_OVERRIDE {point: control}."""
+    toc = [(0xA0, 4 if tracks[0][1] else 0, tracks[0][0] * 4500 - 150),
+           (0xA1, 4 if tracks[-1][1] else 0, tracks[-1][0] * 4500 - 150),
+           (0xA2, 4 if tracks[-1][1] else 0, leadout)]
+    toc += [(n, 4 if mode else 0, i1) for n, mode, i1, _ in tracks]
+    text = CCD_HEAD.format(n=len(toc), sessions=sessions, scr=scrambled)
+    for i, (point, ctrl, plba) in enumerate(toc):
+        plba = (toc_override or {}).get(point, plba)
+        ctrl = (ctrl_override or {}).get(point, ctrl)
+        m, s_, f = msf(plba + 150)
+        text += CCD_ENTRY.format(i=i, point=point, ctrl=ctrl, pm=m, ps=s_, pf=f, plba=plba)
+    for n, mode, i1, i0 in tracks:
+        text += f"[TRACK {n}]\nMODE={mode}\n" + (f"INDEX 0={i0}\n" if i0 is not None else "") \
+            + f"INDEX 1={i1}\n"
+    with open(path, "w", newline="\r\n") as f:
+        f.write(text)
+
+
+def _selftest_ccd(d: str) -> int:
+    """A CloneCD set gives the PCD the equivalent raw CUE gives; a disagreeing TOC, two
+    sessions, scrambled data and an image that does not end at the lead-out are refused."""
+    import shutil
+    fails = 0
+
+    def check(cond, what):
+        nonlocal fails
+        if not cond:
+            fails += 1
+            print("SELFTEST FAIL (ccd):", what)
+    cd = os.path.join(d, "ccd")
+    os.makedirs(cd)
+    # 6 raw MODE1 sectors, then an audio track with a 2-sector INDEX 0 run and 4 more, then a
+    # MODE2 track of 3 sectors
+    body = bytes((i * 11 + 3) & 0xFF for i in range(15 * RAW))
+    with open(os.path.join(cd, "c.img"), "wb") as f:
+        f.write(body)
+    with open(os.path.join(cd, "c.cue"), "w") as f:
+        f.write('FILE "c.img" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n'
+                '  TRACK 02 AUDIO\n    INDEX 00 00:00:06\n    INDEX 01 00:00:08\n'
+                '  TRACK 03 MODE2/2352\n    INDEX 01 00:00:12\n')
+    tracks = [(1, 1, 0, None), (2, 0, 8, 6), (3, 2, 12, None)]
+    write_ccd(os.path.join(cd, "c.ccd"), tracks, 15)
+    ref, got = os.path.join(cd, "ref.pcd"), os.path.join(cd, "got.pcd")
+    convert(os.path.join(cd, "c.cue"), ref, False)
+    disc = convert(os.path.join(cd, "c.ccd"), got, False)
+    img = open(got, "rb").read()
+    check(img == open(ref, "rb").read(), "the CCD's PCD equals the equivalent CUE's")
+    check(img[RAW:] == body, "the .img is the PCD body byte for byte")
+    check([t.disc_lba for t in disc.tracks] == [0, 8, 12] and disc.leadout == 15, "TOC")
+    check(struct.unpack_from("<I", img, 16 + 8)[0] == 0x14 | (12 << 8) | 0x80000000,
+          "MODE2 track: data control and the MODE2 flag")
+    check(struct.unpack_from("<I", img, 16 + 4)[0] == 0x10 | (8 << 8), "audio track word")
+    # without [Entry] sections (NP2kai reads only [TRACK n]) the result is the same
+    text = open(os.path.join(cd, "c.ccd")).read()
+    with open(os.path.join(cd, "n.ccd"), "w") as f:
+        f.write(re.sub(r"\[Entry \d+\][^[]*", "", text))
+    os.symlink("c.img", os.path.join(cd, "n.img"))
+    check(header(parse_ccd(os.path.join(cd, "n.ccd"))) == img[:RAW], "a CCD without [Entry] TOC")
+    # a TOC entry whose PLBA differs from INDEX 1 (a disc whose lead-in TOC points 1 sector
+    # before INDEX 1): the TOC's address is the one the guest sees, and the difference is noted
+    write_ccd(os.path.join(cd, "t.ccd"), tracks, 15, toc_override={2: 7})
+    os.symlink("c.img", os.path.join(cd, "t.img"))
+    td = parse_ccd(os.path.join(cd, "t.ccd"))
+    check([t.disc_lba for t in td.tracks] == [0, 7, 12] and len(td.notes) == 1,
+          "the TOC entry's PLBA is the TOC address, noted")
+    check(struct.unpack_from(">I", header(td), 512 + 4)[0] == 7, "header LBA from the TOC")
+    bad = {
+        "TOC control disagrees": dict(ctrl_override={2: 4}),
+        "lead-out disagrees": dict(toc_override={0xA2: 16}),
+        "two sessions": dict(sessions=2),
+        "scrambled": dict(scrambled=1),
+    }
+    for label, kw in bad.items():
+        write_ccd(os.path.join(cd, "b.ccd"), tracks, 15, **kw)
+        if not os.path.exists(os.path.join(cd, "b.img")):
+            os.symlink("c.img", os.path.join(cd, "b.img"))
+        try:
+            parse_ccd(os.path.join(cd, "b.ccd"))
+            check(False, f"{label}: must be refused")
+        except ValueError:
+            pass
+    write_ccd(os.path.join(cd, "b.ccd"), [(1, 1, 0, None), (2, 0, 16, None)], 15)
+    try:
+        parse_ccd(os.path.join(cd, "b.ccd"))
+        check(False, "a track past the end of the image must be refused")
+    except ValueError:
+        pass
+    # the CLI refuses an output that is the input's own image, even with --force
+    import contextlib
+    import io
+    before = open(os.path.join(cd, "c.img"), "rb").read()
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            main([os.path.join(cd, "c.ccd"), os.path.join(cd, "c.img"), "--force"])
+            check(False, "output == input must be refused")
+        except SystemExit as e:
+            check(e.code != 0, "output == input exits non-zero")
+    check(open(os.path.join(cd, "c.img"), "rb").read() == before, "the input image is untouched")
+    # --batch picks up a CCD, and leaves out a CCD that has a CUE of the same name beside it
+    root = os.path.join(cd, "games")
+    for sub in ("a", "b"):
+        os.makedirs(os.path.join(root, sub))
+        shutil.copy(os.path.join(cd, "c.img"), os.path.join(root, sub, "C.IMG"))
+        shutil.copy(os.path.join(cd, "c.ccd"), os.path.join(root, sub, "C.ccd"))
+    shutil.copy(os.path.join(cd, "c.cue"), os.path.join(root, "b", "c.cue"))
+    with open(os.path.join(root, "b", "c.cue")) as f:
+        cue_text = f.read().replace('"c.img"', '"C.IMG"')
+    with open(os.path.join(root, "b", "c.cue"), "w") as f:
+        f.write(cue_text)
+    found = [os.path.relpath(x, root) for x in find_cues(root)]
+    check(found == [os.path.join("a", "C.ccd"), os.path.join("b", "c.cue")],
+          f"batch finds the CCD and prefers a same-name CUE: {found}")
+    logs: list[str] = []
+    check(batch(root, free_bytes=lambda path: 1 << 40, log=logs.append) == 0, "CCD batch run")
+    check(open(os.path.join(root, "a", "C.pcd"), "rb").read() == img, "the batch CCD's PCD")
+    logs.clear()
+    batch(root, free_bytes=lambda path: 1 << 40, log=logs.append)
+    check(sum(x.startswith("  up to date") for x in logs) == 2, "a CCD's PCD is up to date")
+    return fails
 
 
 def _selftest_batch(d: str, x_ref: str) -> int:
@@ -669,7 +931,7 @@ def _selftest_batch(d: str, x_ref: str) -> int:
     check(struct.unpack_from(">I", m, 512 + 4)[0] == 4, "multi-FILE track 2 LBA (INDEX 01 = 3 + 1)")
     check(open(os.path.join(g2, "n.pcd"), "rb").read() == b"not a pcd", "a foreign .pcd is kept")
     check(not os.path.exists(os.path.join(hid, "h.pcd")), "hidden directories are not walked")
-    check(any("one of the CUE's own files" in x for x in logs), "the collision is reported")
+    check(any("one of its own source files" in x for x in logs), "the collision is reported")
 
     t_x, t_m = os.stat(xp).st_mtime_ns, os.stat(mp).st_mtime_ns
     logs.clear()
@@ -712,13 +974,13 @@ def _selftest_batch(d: str, x_ref: str) -> int:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("cue", nargs="?")
+    ap.add_argument("cue", nargs="?", help="the .cue (or CloneCD .ccd)")
     ap.add_argument("out", nargs="?")
     ap.add_argument("--ecc", action="store_true", help="compute EDC/ECC for wrapped data sectors")
     ap.add_argument("--info", action="store_true", help="print the layout; write nothing")
     ap.add_argument("--force", action="store_true", help="overwrite an existing output")
     ap.add_argument("--batch", metavar="DIR",
-                    help="convert every CUE under DIR that has no up-to-date PCD beside it")
+                    help="convert every CUE/CCD under DIR that has no up-to-date PCD beside it")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args(argv)
     if a.selftest:
@@ -726,14 +988,18 @@ def main(argv: list[str]) -> int:
     if a.batch:
         return 1 if batch(a.batch, a.ecc, log=lambda m: print(m, flush=True)) else 0
     if not a.cue:
-        ap.error("a CUE sheet is required")
+        ap.error("a CUE sheet or CloneCD .ccd is required")
     if a.info:
-        print(describe(parse_cue(a.cue)))
+        print(describe(parse_image(a.cue)))
         return 0
     out = a.out or os.path.splitext(a.cue)[0] + ".pcd"
+    disc = parse_image(a.cue)
+    srcs = [os.path.realpath(x) for x in _sources(a.cue, disc)]
+    if os.path.realpath(out) in srcs or os.path.realpath(out + ".part") in srcs:
+        ap.error(f"{out} is one of the input's own files: refusing (even with --force)")
     if os.path.exists(out) and not a.force:
         ap.error(f"refusing to overwrite {out} (--force)")
-    disc = convert(a.cue, out, a.ecc)
+    disc = convert(a.cue, out, a.ecc, disc=disc)
     print(describe(disc))
     print(f"wrote {out} ({os.path.getsize(out)} bytes)")
     return 0

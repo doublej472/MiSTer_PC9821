@@ -1,11 +1,16 @@
 ; int_newstack_ss - INT n from CPL3 through a DPL3 interrupt gate whose
-; ring-0 stack (TSS.ESP0 = 10h) cannot hold the 20-byte frame raises #SS(0)
-; with EXT=0 (software interrupt).  486 PRM INT pseudocode
-; (INTERRUPT-TO-INNER-PRIVILEGE): "New stack must have room for 20 bytes
-; else #SS(0)".  #SS is a task gate so its delivery does not need ESP0.
+; ring-0 stack (TSS.ESP0 = 10h) cannot hold the 20-byte frame raises
+; #SS(new SS selector) with EXT=0 (software interrupt): error code 38h.
+; A real Am486DX4 reports 38h (CPUSUITE-XE10 run 1: this program's FAIL
+; data 55000038h); Intel SDM INT n Operation, "IF new stack does not have
+; room for 24 bytes (error code pushed) or 20 bytes (no error code pushed)
+; THEN #SS(error_code(NewSS,0,EXT))".  (The 486 PRM pseudocode's
+; "#SS(0)" is not what the part does.)  #SS is a task gate so its delivery
+; does not need ESP0.
 ; (derived from callgate_newstack_ss)
 ; Fail (port E4): 0x5500xxxx = #SS with a wrong error code (low word = error
-; code), 0x66xxxxxx = wrong vector/EIP, 0x77 = the call completed.
+; code; only the low word is compared), 0x66xxxxxx = wrong vector/EIP,
+; 0x77 = the call completed.
 BITS 16
 org 0
 STATUS_PORT equ 0xE0
@@ -65,8 +70,11 @@ gate_target:
     jmp report_fail
 
 ss_handler:                     ; runs as a task: [esp] = error code
-    mov eax, [esp]
-    cmp eax, 0
+    movzx eax, word [esp]       ; low word only: the error code's upper 16 bits are
+                                ; reserved (Intel SDM vol. 3 6.13, "Error Code") and an
+                                ; Am486DX4 pushes them nonzero (CPUSUITE-XE10-triage:
+                                ; callgate_newstack_ss data=55000038h, low word right)
+    cmp eax, SEL_SMALLSS        ; #SS(new SS selector), EXT=0
     jne .bad_err
     cmp dword [tss+0x10000+0x20], call_site ; the interrupted task's saved EIP
     jne .bad_eip

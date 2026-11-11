@@ -1,13 +1,14 @@
 // WHICH image slot's mount may request a platform reset, separated from z486_mister.sv so
 // that it can be TESTED (the same reason pc9821_cpu_reset_gate is a module).
 //
-// THE HDD SLOT'S MOUNT RESETS, AND THE FLOPPY SLOT'S DOES NOT. hps_io pulses img_mounted for
+// THE HDD SLOTS' MOUNTS RESET (slot 0, and slot 3 - the second hard disk), AND SO DOES A CHANGE
+// OF THE OSD'S IDE BANK 1 FIELD; THE FLOPPY SLOT'S MOUNT DOES NOT. hps_io pulses img_mounted for
 // a few cycles when the host mounts an image in a slot. Slot 0 is the ATA/HDD image
 // (`CONF_STR` "S0,..."), and a mount there while the firmware pack is loaded means the guest
 // is running against a disk it has not re-probed, so the core asks for the same platform
 // reset as the OSD Reset action and POST re-probes it -- the behaviour this core has always
 // had, and not this module's to change. Slot 1 is the FDC0 floppy
-// (z486_mister.sv's CONF_STR "S1,D88FDDHDM,Mount FDD1;").
+// (z486_mister.sv's CONF_STR "S1,D88FDDHDMFDI,Mount FDD1;").
 //
 // The floppy must NOT reset the machine: changing a floppy disk does not reset the whole
 // machine. On real hardware -- and in NP2kai, the primary
@@ -27,6 +28,12 @@
 // readiness, the AI status class) that this model does not have yet; the DOR is read-only here
 // (pc9821_fdc.sv's A_DOR answers NP2kai's fdc_i94 byte). It belongs with the FDC's drive
 // mechanics, the floppy's ready-change path.
+//
+// THE SECOND HARD DISK AND THE BANK-1 FIELD reset for the slot-0 reason: the IDE BIOS sizes and
+// registers its drives at POST (the Xe10 IDE ROM's IDENTIFY loop, BANK3@0x0789-0x07B7), so a disk
+// that appears on, or a drive that changes on, a cable under a running guest is one it has not
+// probed. A change of the field in either direction swaps the CD drive and the second disk on
+// bank 1, so both edges reset.
 `default_nettype none
 
 module pc9821_disk_change_reset (
@@ -45,20 +52,35 @@ module pc9821_disk_change_reset (
     // still low. rom_ready survives a platform reset, which is what keeps it a valid "pack
     // present" marker across the reset the HDD slot requests.
     input  wire       pack_loaded,
+    // hps_io slot 3's mount pulse: the second hard disk.
+    input  wire       hdd1_mounted,
+    // The OSD's IDE bank 1 field (1 = the second hard disk is bank 1's master), a level.
+    input  wire       ide_bank1_hdd,
     output wire       reset_req
 );
 
-  // Slot 0's previous level: a MOUNT is its rising edge.
-  reg hdd_mounted_d;
+  // The hard-disk slots' previous levels (a MOUNT is the rising edge) and the field's (a CHANGE
+  // is either edge).
+  reg hdd_mounted_d, hdd1_mounted_d, ide_bank1_hdd_d;
 
   always @(posedge clk or posedge reset_async) begin
-    if (reset_async) hdd_mounted_d <= 1'b0;
-    else             hdd_mounted_d <= img_mounted[0];
+    if (reset_async) begin
+      hdd_mounted_d   <= 1'b0;
+      hdd1_mounted_d  <= 1'b0;
+      ide_bank1_hdd_d <= 1'b0;
+    end else begin
+      hdd_mounted_d   <= img_mounted[0];
+      hdd1_mounted_d  <= hdd1_mounted;
+      ide_bank1_hdd_d <= ide_bank1_hdd;
+    end
   end
 
-  // ONE cycle, and only for slot 0. A level is enough: reset_req feeds the top level's reset
-  // synchroniser, which holds the core in reset until its shift releases.
-  assign reset_req = img_mounted[0] & ~hdd_mounted_d & pack_loaded;
+  // ONE cycle per event, and only for the hard-disk slots and the field. A level is enough:
+  // reset_req feeds the top level's reset synchroniser, which holds the core in reset until its
+  // shift releases. Before the pack is loaded nothing resets: the field is sampled at the
+  // platform reset / reload strobe that the pack load itself ends (pc9821_system).
+  assign reset_req = ((img_mounted[0] & ~hdd_mounted_d) | (hdd1_mounted & ~hdd1_mounted_d) |
+                      (ide_bank1_hdd ^ ide_bank1_hdd_d)) & pack_loaded;
 
 endmodule
 

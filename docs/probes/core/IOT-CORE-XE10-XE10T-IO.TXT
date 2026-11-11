@@ -1,0 +1,183 @@
+XE10T v1 sha=5c94f34129e02155 crc=0B64D463 imgcrc=0B64D463 size=45520 build=gas-xe10t args= /IO /O A:\XE10T.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0030 cr0=00000030 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=70 bda0458=02 bda045C=C0 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=10 bda0595=00
+I ID dos=6.20 bufseg=2774 bufparas=4000 sel=00000100 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=FA1F
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6146 pit=49176
+P CAL PITWIN i=1 art=6146 pit=49169
+P CAL PITWIN i=2 art=6147 pit=49169
+P CAL PITWIN i=3 art=6147 pit=49169
+P CAL PITWIN i=4 art=6145 pit=49166
+P CAL PITWIN i=5 art=6147 pit=49170
+P CAL PITWIN i=6 art=6145 pit=49166
+P CAL PITWIN i=7 art=6147 pit=49169
+P CAL PITEDGE edges=19 art=155649 vmax=65535 vmin=1
+P CAL VSYNC edges=60 art=326678 pit=2598655 tsc=-
+I CAL pit_mod=65536 ratio_x1000=7999 vsync_x10=54446 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=4445
+BEGIN:IO
+STATE IO egc=off grcg=off a6=0 n=1024/row
+ROW IO R8_005F port=005F
+R IO R8_005F unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_005C port=005C
+R IO R8_005C unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0000 port=0000
+R IO R8_0000 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/6/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0002 port=0002
+R IO R8_0002 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=33/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0008 port=0008
+R IO R8_0008 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_000A port=000A
+R IO R8_000A unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0071 port=0071
+R IO R8_0071 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0073 port=0073
+R IO R8_0073 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2066/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0020 port=0020
+R IO R8_0020 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0022 port=0022
+R IO R8_0022 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/6/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0043 port=0043
+R IO R8_0043 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/37 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0060 port=0060
+R IO R8_0060 unit=io n=1024 nop=0 rep=5 art=145/146/146 pit=1144/1145/1146 ctl_art=6/7/7 ctl_pit=32/32/35 shell=5AF1 bshell=5AF1 if1=146
+ROW IO R8_0062 port=0062
+R IO R8_0062 unit=io n=1024 nop=0 rep=5 art=145/146/146 pit=1144/1144/1146 ctl_art=6/7/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=146
+ROW IO R8_00A0 port=00A0
+R IO R8_00A0 unit=io n=1024 nop=0 rep=5 art=215/215/216 pit=1703/1703/1705 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=215
+ROW IO R8_00A2 port=00A2
+R IO R8_00A2 unit=io n=1024 nop=0 rep=5 art=215/215/216 pit=1703/1704/1705 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=216
+ROW IO R8_006A port=006A
+R IO R8_006A unit=io n=1024 nop=0 rep=5 art=124/124/125 pit=976/976/978 ctl_art=6/6/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=124
+ROW IO R8_007C port=007C
+R IO R8_007C unit=io n=1024 nop=0 rep=5 art=264/264/265 pit=2094/2095/2097 ctl_art=6/6/7 ctl_pit=32/32/35 shell=5AF1 bshell=5AF1 if1=264
+ROW IO R8_00A6 port=00A6
+R IO R8_00A6 unit=io n=1024 nop=0 rep=5 art=124/124/125 pit=976/977/978 ctl_art=6/6/6 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=124
+ROW IO R8_04A0 port=04A0
+R IO R8_04A0 unit=io n=1024 nop=0 rep=5 art=1896/1897/1897 pit=15153/15153/15155 ctl_art=6/6/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=1897
+ROW IO R8_04A1 port=04A1
+R IO R8_04A1 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_04A2 port=04A2
+R IO R8_04A2 unit=io n=1024 nop=0 rep=5 art=1896/1896/1897 pit=15153/15153/15155 ctl_art=6/6/7 ctl_pit=33/33/36 shell=5AF1 bshell=5AF1 if1=1897
+ROW IO R8_0188 port=0188
+R IO R8_0188 unit=io n=1024 nop=0 rep=5 art=264/264/265 pit=2095/2095/2097 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=264
+ROW IO R8_018A port=018A
+R IO R8_018A unit=io n=1024 nop=0 rep=5 art=264/264/265 pit=2094/2095/2096 ctl_art=6/7/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=264
+ROW IO R8_018C port=018C
+R IO R8_018C unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_018E port=018E
+R IO R8_018E unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_A460 port=A460
+R IO R8_A460 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2068 ctl_art=6/7/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0430 port=0430
+R IO R8_0430 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2066/2067/2069 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0432 port=0432
+R IO R8_0432 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0433 port=0433
+R IO R8_0433 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_0435 port=0435
+R IO R8_0435 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0642 port=0642
+R IO R8_0642 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2066/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_064C port=064C
+R IO R8_064C unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/6/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_064E port=064E
+R IO R8_064E unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/7/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_074C port=074C
+R IO R8_074C unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_074E port=074E
+R IO R8_074E unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0090 port=0090
+R IO R8_0090 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0094 port=0094
+R IO R8_0094 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=33/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_00BE port=00BE
+R IO R8_00BE unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0021 port=0021
+R IO R8_0021 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_043B port=043B
+R IO R8_043B unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_043F port=043F
+R IO R8_043F unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0461 port=0461
+R IO R8_0461 unit=io n=1024 nop=0 rep=5 art=260/261/261 pit=2067/2067/2069 ctl_art=6/7/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=260
+ROW IO R8_0463 port=0463
+R IO R8_0463 unit=io n=1024 nop=0 rep=5 art=260/260/261 pit=2067/2067/2068 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=261
+ROW IO R8_09A0 port=09A0
+R IO R8_09A0 unit=io n=1024 nop=0 rep=5 art=120/121/121 pit=948/948/950 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=120
+ROW IO R8_09A8 port=09A8
+R IO R8_09A8 unit=io n=1024 nop=0 rep=5 art=120/121/121 pit=948/949/950 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=120
+ROW IO R8_0FAA port=0FAA
+R IO R8_0FAA unit=io n=1024 nop=0 rep=5 art=89/90/90 pit=696/697/699 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=92
+ROW IO R16_005C port=005C
+R IO R16_005C unit=io n=1024 nop=0 rep=5 art=264/264/264 pit=2095/2095/2097 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=264
+ROW IO R16_0188 port=0188
+R IO R16_0188 unit=io n=1024 nop=0 rep=5 art=267/267/268 pit=2123/2123/2125 ctl_art=6/7/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=268
+ROW IO W8_005F port=005F
+R IO W8_005F unit=io n=1024 nop=0 rep=5 art=551/552/552 pit=4397/4398/4399 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=551
+R IO W8_005F unit=io n=1024 nop=2 rep=5 art=551/552/553 pit=4398/4398/4400 ctl_art=13/13/14 ctl_pit=88/89/90 shell=2E04 bshell=2E04 if1=552
+R IO W8_005F unit=io n=1024 nop=4 rep=5 art=551/552/553 pit=4398/4398/4400 ctl_art=20/21/21 ctl_pit=145/145/147 shell=DF2B bshell=DF2B if1=552
+R IO W8_005F unit=io n=1024 nop=8 rep=5 art=551/552/552 pit=4398/4399/4400 ctl_art=34/34/35 ctl_pit=256/256/259 shell=597F bshell=597F if1=552
+R IO W8_005F unit=io n=1024 nop=16 rep=5 art=552/552/552 pit=4399/4399/4401 ctl_art=62/63/63 ctl_pit=480/480/483 shell=B369 bshell=B369 if1=554
+R IO W8_005F unit=io n=1024 nop=32 rep=5 art=552/552/552 pit=4399/4399/4400 ctl_art=118/118/119 ctl_pit=927/928/932 shell=FCB0 bshell=FCB0 if1=552
+ROW IO W8_007E port=007E
+R IO W8_007E unit=io n=1024 nop=0 rep=5 art=106/106/107 pit=836/836/838 ctl_art=6/6/6 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=107
+R IO W8_007E unit=io n=1024 nop=2 rep=5 art=117/117/118 pit=924/924/926 ctl_art=13/14/14 ctl_pit=88/88/91 shell=2E04 bshell=2E04 if1=121
+R IO W8_007E unit=io n=1024 nop=4 rep=5 art=124/124/125 pit=980/980/982 ctl_art=20/20/21 ctl_pit=144/145/147 shell=DF2B bshell=DF2B if1=124
+R IO W8_007E unit=io n=1024 nop=8 rep=5 art=138/138/139 pit=1092/1092/1095 ctl_art=34/34/35 ctl_pit=256/256/258 shell=597F bshell=597F if1=139
+R IO W8_007E unit=io n=1024 nop=16 rep=5 art=166/167/167 pit=1315/1316/1320 ctl_art=62/62/63 ctl_pit=480/480/484 shell=B369 bshell=B369 if1=167
+R IO W8_007E unit=io n=1024 nop=32 rep=5 art=222/223/224 pit=1763/1763/1768 ctl_art=118/118/119 ctl_pit=927/927/932 shell=FCB0 bshell=FCB0 if1=222
+ROW IO W8_007C port=007C
+R IO W8_007C unit=io n=1024 nop=0 rep=5 art=106/106/107 pit=836/836/839 ctl_art=6/6/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=107
+ROW IO W8_00A4 port=00A4
+R IO W8_00A4 unit=io n=1024 nop=0 rep=5 art=106/106/107 pit=837/837/839 ctl_art=6/6/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=106
+ROW IO W8_00A6 port=00A6
+R IO W8_00A6 unit=io n=1024 nop=0 rep=5 art=106/107/107 pit=836/837/838 ctl_art=6/7/7 ctl_pit=32/32/36 shell=5AF1 bshell=5AF1 if1=107
+ROW IO W8_0000 port=0000
+R IO W8_0000 unit=io n=1024 nop=0 rep=5 art=267/267/268 pit=2123/2123/2125 ctl_art=6/7/7 ctl_pit=32/32/35 shell=5AF1 bshell=5AF1 if1=267
+ROW IO W8_0008 port=0008
+R IO W8_0008 unit=io n=1024 nop=0 rep=5 art=267/267/268 pit=2122/2123/2125 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=267
+ROW IO W8_0064 port=0064
+R IO W8_0064 unit=io n=1024 nop=0 rep=5 art=106/107/107 pit=836/837/838 ctl_art=6/6/7 ctl_pit=32/33/35 shell=5AF1 bshell=5AF1 if1=106
+ROW IO W8_006A port=006A
+R IO W8_006A unit=io n=1024 nop=0 rep=5 art=106/106/107 pit=837/837/838 ctl_art=6/6/6 ctl_pit=33/33/35 shell=5AF1 bshell=5AF1 if1=107
+ROW IO W8_0188 port=0188
+R IO W8_0188 unit=io n=1024 nop=0 rep=5 art=267/267/268 pit=2123/2123/2124 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=268
+ROW IO W16_04A8 port=04A8
+R IO W16_04A8 unit=io n=1024 nop=0 rep=5 art=110/110/111 pit=864/865/867 ctl_art=6/7/7 ctl_pit=32/33/36 shell=5AF1 bshell=5AF1 if1=111
+ROW IO GDCWMASK_A0
+R IO GDCWMASK_A0 unit=cmd3 n=256 nop=0 rep=5 art=215/216/217 pit=1709/1709/1713 ctl_art=63/64/64 ctl_pit=490/491/494 shell=31AB bshell=31AB if1=216 to=0
+ROW IO GDCWMASK_60
+R IO GDCWMASK_60 unit=cmd3 n=256 nop=0 rep=5 art=145/146/147 pit=1149/1150/1154 ctl_art=46/46/47 ctl_pit=350/351/354 shell=F990 bshell=F990 if1=146 to=0
+RESTORE IO IOW_DEFAULTS was=- now=00 kind=default OK
+RESTORE IO GDC_MASK was=- now=FF kind=default OK
+RESTORE IO P7C_GRCG was=- now=00 kind=default OK
+RESTORE IO PA6_PAGE was=- now=00 kind=default OK
+RESTORE IO Q9A07_EGC was=00 now=00 kind=readback OK
+END:IO rows=71 sum=ECAE
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD802369 now=FD802369 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=3E7D
+XE10T DONE sections=4 sum=3797E03B

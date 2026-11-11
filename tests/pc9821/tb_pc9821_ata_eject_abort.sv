@@ -127,7 +127,7 @@ module tb_pc9821_ata_eject_abort;
   // ==== CHECKS ====
   // ---- what the guest would see. STATUS comes from the drive's own register through a
   //      hierarchical reference, as the tree's other ATA benches do, and NOT from a port read:
-  //      after an eject the drive's port answers 8'hFF (pc9821_ata.sv:555 "end else if (!device_present"),
+  //      after an eject the drive's port answers 8'hFF (pc9821_ata.sv:719 "end else if (!device_present"),
   //      so the verdict has to survive the very event under test. ----
   integer drq_cycles, bsy_cycles, err_cycles, irq_edges;
   reg     irq_q = 0;
@@ -187,7 +187,7 @@ module tb_pc9821_ata_eject_abort;
 
   // Read the sector out of the drive's buffer, which is what returns it to X_IDLE: a command
   // written while a transfer is still in flight is a takeover and is discarded
-  // (pc9821_ata.sv:420 "command_takeover"), so a second command cannot follow an undrained one.
+  // (pc9821_ata.sv:564 "command_takeover"), so a second command cannot follow an undrained one.
   task automatic drain_sector;
     begin
       while (status_r[3] && !status_r[7]) begin

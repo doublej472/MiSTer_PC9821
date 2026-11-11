@@ -83,7 +83,7 @@ module tb_pc9821_unk18f;
   wire       fdd_abort;
 
   pc9821_iobus dut (
-      .ide_unit0_present(1'b0),
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),
     .clk(clk), .reset(reset), .triple_fault_reset(triple_fault_reset),
     .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),
     .cpu_valid(cpu_valid), .cpu_write(cpu_write),

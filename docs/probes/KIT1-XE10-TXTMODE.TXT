@@ -1,0 +1,3 @@
+TXTMODE text row geometry states 1-7 (tools/hwprobe/txtmode)
+CRTC 70 72 74 76 78 7A as found: 00 0F 10 00 00 00 
+TXTMODE done: CRTC restored, 25 lines, one partition

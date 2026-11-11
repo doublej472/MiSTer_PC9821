@@ -20,10 +20,22 @@ module pc9821_ata (
     input wire readonly,
     input wire [31:0] capacity,
 
+    // BANK 1'S MASTER HARD DISK (the OSD's "IDE bank 1: HDD2", hps_io slot 3): pc9821_system
+    // drives `mounted1` only while the OSD puts a hard disk on bank 1 AND an image is mounted
+    // there, so with the default layout (bank 1 = the CD-ROM) it is constantly 0 and every path
+    // below is the one-drive logic. See `act_bank` for the second drive's context.
+    input wire mounted1,
+    input wire readonly1,
+    input wire [31:0] capacity1,
+
 
     output reg         block_read,
     output reg         block_write,
     output wire [31:0] block_lba,   // meaningful on the block_read/block_write pulse (see lba_plus1)
+    // Which drive a request is for: 0 = bank 0's disk (slot 0's image), 1 = bank 1's (slot 3's).
+    // It is `act_bank`, which moves only while the engine is idle, so it is constant across a
+    // transfer and its requests (the read-ahead's included).
+    output wire        block_unit,
     input  wire        block_done,
     input  wire        block_error,
     input  wire        block_buf_we,
@@ -36,6 +48,14 @@ module pc9821_ata (
     output wire [15:0] block_rd_data,
 
     output wire irq,
+
+    // THE DRIVES' DATA TRANSFERS (the front-panel access lamp, pc9821_disk_led): 1 while a
+    // block transfer with the image is in flight - a sector read or write the block adapter has
+    // been handed and has not finished answering (`block_in_flight`: the first sector's fetch,
+    // a read-ahead, a write-back, a drain). A command that moves no sector of the image
+    // (IDENTIFY, CHECK POWER MODE, a status poll) never raises it. A pure view; nothing here
+    // reads it.
+    output wire xfer,
 
     // Detection/busy snapshot for the stall watchdog:
     // {DP,MOUNT,CH0,state,BSY,DRQ}. tools/decode_telemetry.py decodes this byte
@@ -91,6 +111,7 @@ module pc9821_ata (
 
   reg [2:0] xfer_state;
   reg       mounted_seen;
+  reg       mounted1_seen;
   reg [7:0] error_reg;
   reg [7:0] sector_count;
   reg [7:0] sector_number;
@@ -98,22 +119,26 @@ module pc9821_ata (
   reg [7:0] cylinder_high;
   reg [7:0] drive_head;
   reg [7:0] status_reg;
+  /* verilator lint_off UNUSEDSIGNAL */   // bits 3 and 7 are stored whole and read nowhere (see below)
   reg [7:0] channel_reg;
+  /* verilator lint_on UNUSEDSIGNAL */
   // 0x0432 is the IDE *bank* select: latched, readable, a window on the
-  // interface at the selected bank. One drive is modelled, bank 0's master (IDE unit 0).
+  // interface at the selected bank. Bank 0's master (IDE unit 0) is modelled, and bank 1's when
+  // the OSD puts the second hard disk there (see act_bank).
   // WHICH bank is connected is decided by BIT 0, the channel select, not by byte
   // equality: QEMU selects with `cur_bus = &bus[val & 1]`, NP2kai's task file
   // follows `(bank & 0x7f) < 2`. Equality was too narrow AND too wide - a DWORD
   // PIO driver's `bank|0x08` (0x09) dropped the whole task file, while 0x03, the
   // same channel with other bits set, floated.
-  // The stored byte is NOT masked, deliberately: NP2kai masks 0x71 and QEMU 0x39
-  // and they disagree about bits 3 and 6, whose read-back is unmeasured; with
-  // the test on bit 0 the mask is not load-bearing, so the guest reads back what
-  // it wrote - which the ROM's save/restore brackets depend on.
+  // The stored byte is NOT masked: every write effect (the bank on bit 0, the bit-7 no-op)
+  // reads the written value, so the window behaves for every driver as it always has. The
+  // READ-BACK is masked at the read port (`c432_rd` below), as the machine reads it.
   // Getting this wrong costs the whole boot: a bit-7 gate answered a floating
   // bank, the pre-command DRDY poll read the float, the dispatcher skipped the
   // handler, and ZERO commands reached the drive (cmds=0, reached IPL=0). Banks
-  // 0x02/0x03 are unmeasured. Evidence
+  // 0x02/0x03 read a different task file on the machine (status 00 / 04,
+  // docs/probes/KIT1-XE10-IDE1.TXT:8,10), which is not modelled: only the status rows of
+  // that state are captured. Bit 2's state is modelled as measured (`tf_b2_echo`). Evidence
   //
   // Declared here, with the register block, because the window is not only about the
   // bytes a register ANSWERS with: the task file's SIDE EFFECTS below (the 0x064E
@@ -131,8 +156,76 @@ module pc9821_ata (
   // the stock CD-equipped Xe10's layout and NP2kai's default (HDD at unit 0, CD at unit 2). The
   // probed Xe10 answers at bank 1 and floats bank 0 (docs/probes/IDE.TXT, ATA.TXT) only because
   // its CF card sits in the CD connector; the float VALUES below are that machine's empty-bank
-  // measurement, applied to the empty bank. There is no second hard disk.
-  wire bank_has_interface = !channel_reg[0];
+  // measurement, applied to the empty bank.
+  // THE ONE EXCEPTION IS BANK 1'S MASTER: the OSD can put a second hard disk there instead of the
+  // CD-ROM (`mounted1`, see the port). The Xe10 IDE ROM registers an ATA disk at any master its
+  // bitmap holds (BANK3@0x0A96 `or [0x5ba],1<<slot` after IDENTIFY), so the disk on bank 1 is
+  // DA/UA 0x81 behind bank 0's, or 0x80 alone (BANK3@0x0DC0-0x0DFB numbers them in slot order).
+  // With no image there bank 1 stays the empty connector it is without the CD.
+  wire bank_has_interface = !channel_reg[0] || mounted1;
+  // TWO BANKS, TWO DEVICES, ONE TRANSFER ENGINE. Each bank is its own cable with its own device and
+  // so its own task file, device control (nIEN, SRST) and INTRQ (NP2kai cbus/ideio.c keeps one
+  // IDEDEV per bank, `ideio.dev + bank` in getidedev). The engine below (the transfer FSM, the
+  // sector buffers, the PIO pointers, the read-ahead) is shared: the 0x0640-0x074E window reaches
+  // one bank at a time through 0x0432, and the guest serializes its commands across the two banks -
+  // the Xe10 IDE ROM's INT 1Bh runs one command to completion before it returns, and NP2kai itself
+  // completes a command on whatever bank is selected WHEN the completion fires (ideioint/ideioint2
+  // call getidedev() at event time), i.e. it models no overlap either.
+  // So the registers the guest sees for a drive - STATUS, ERROR, the interrupt-pending state,
+  // nIEN/SRST, the task file (sector count .. drive/head), the IDP geometry and the SET MULTIPLE
+  // length - exist twice: the LIVE copy (the names the logic below uses) belongs to `act_bank`,
+  // and the idle_* copy to the other bank. While the engine is idle the live context follows the
+  // selection: the two copies are exchanged in the same edge as the 0x0432 write that selects the
+  // other bank (`swap_now`). A selection made while a transfer runs waits for the engine to go
+  // idle; until then the selected (not live) bank reads STATUS = BSY - its device waits for the
+  // engine - and its other registers from the idle copy, and a write there is not taken, as ATA
+  // forbids a write while BSY is set (a trade: an overlapped second-bank command waits for the first
+  // bank's transfer, docs/trade-candidates.md T76). With no disk on bank 1 the selection never
+  // reaches bank 1 (`bank_eff_next` is 0), act_bank stays 0 and nothing is ever exchanged.
+  reg  act_bank;
+  wire sel_live = (channel_reg[0] == act_bank);
+  wire live_if  = bank_has_interface && sel_live;
+  wire c432_wr  = io_wr && (io_addr == 16'h0432) && !io_din[7];
+  // The 0x0432 read-back (see its read arm). Bit 6 set reads FF: docs/probes/KIT2-XE10-IDE2.TXT:18
+  // `IDE2B w=40 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 FF 00 00 04 05 00 A1 50 50 00 00` (40 is
+  // the only bit-6 value measured; the task file behind it is still bank 0's).
+  wire [7:0] c432_rd = channel_reg[6] ? 8'hFF :
+                       {2'b00, channel_reg[5:4], 2'b00, channel_reg[1] & channel_reg[5], channel_reg[0]};
+  // WITH BIT 2 SET THE TASK FILE READS THE 0x0432 READ-BACK. docs/probes/KIT2-XE10-IDE2.TXT:4-8
+  // read 0x0432 and then 0x0642-0x064E, 0x074C and 0x074E back to back (XE10CFG /IDE2):
+  //   `IDE2B w=04 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 00 00 00 00 00 00 00 00 00 00 00`
+  //   `IDE2B w=06 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 00 00 00 00 00 00 00 00 00 00 00`
+  //   `IDE2B w=07 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 01 01 01 01 01 01 01 01 01 01 00`
+  // so every one of those nine registers answers the byte 0x0432 reads back (00, 00, 01), at
+  // either bank, while 0x0433 stays the interface's own 00. Only those reads are modelled: the
+  // data port 0x0640/0x0641 and 0x0740-0x074A were not read, and whether a write or the 0x064E
+  // acknowledge reaches the device in this state was not measured (the row's CHECK POWER MODE did
+  // not run: `IDE2C w=07 n=0 ran=0`, KIT2-XE10-IDE2.TXT:22), so they keep the bank-0/1 window.
+  // NECCDD.SYS's bank presence test writes 07 and reads 0x0432 only, then writes 01 before its
+  // first task-file access (file offsets 0x2007-0x201A: `out dx,al` with 07, `in al,dx`, `inc
+  // al`, `cmp al,2`, then `mov al,1`, `out dx,al`, `mov dx,0x64e`), so it never meets this state.
+  // pc9821_atapi steps aside in the same state (its `io_own`), so the answer is this module's at
+  // bank 1 too.
+  wire tf_b2_echo = channel_reg[2] &&
+                    ((io_addr[15:4] == 12'h064 && !io_addr[0] && io_addr[3:0] != 4'h0) ||
+                     io_addr == 16'h074C || io_addr == 16'h074E);
+  wire bank_eff_next = (c432_wr ? io_din[0] : channel_reg[0]) && mounted1;
+  // The exchange cannot meet another writer of the context: the engine is idle (no completion arm
+  // fires), and the only I/O in its cycle is the 0x0432 write that asks for it or an access at the
+  // bank that is not live yet, which `live_if` drops. The mount latches are deferred out of it
+  // (R7). Asserted below.
+  wire swap_now = (xfer_state == X_IDLE) && (act_bank != bank_eff_next);
+  assign block_unit = act_bank;
+  reg  [7:0] idle_status, idle_error;
+  reg  [7:0] idle_sector_count, idle_sector_number, idle_cylinder_low, idle_cylinder_high;
+  reg  [7:0] idle_drive_head;
+  reg        idle_irq, idle_nien, idle_srst;
+  reg  [3:0] idle_idp_head_max;
+  reg  [7:0] idle_idp_sectors, idle_set_multiple;
+  wire        act_mounted  = act_bank ? mounted1  : mounted;
+  wire        idle_mounted = act_bank ? mounted   : mounted1;
+  wire [31:0] act_capacity = act_bank ? capacity1 : capacity;
+  wire        act_readonly = act_bank ? readonly1 : readonly;
   // DEVICE 1 (0x064C bit 4) IS ABSENT: the disk is its bank's master (the Xe10
   // firmware never probes a slave, BANK3@0x0789-0x07B7). An absent device 1 follows ATA-3 r6
   // s.9.5.1: STATUS and ALTERNATE STATUS read 0x00, and a command
@@ -154,7 +247,15 @@ module pc9821_ata (
   // state"), so it cannot hide the other bank's edge on the ORed IRQ9 (pc9821_system; MAME
   // pc9801.cpp ideirq INPUT_MERGER_ANY_HIGH). tb_pc9821_atapi C18.
   reg irq_pend;
-  assign irq = irq_pend && !irq_disable;
+  // One IDE interrupt line for both banks (NP2kai setintr: `pic_setirq(IDE_IRQ)` for any drive),
+  // each bank's INTRQ gated by its own nIEN: the idle bank's pending request stays on the line
+  // while the other bank is selected, as a device on its own cable would hold it.
+  assign irq = (irq_pend && !irq_disable) || (idle_irq && !idle_nien);
+  // Each bank's INTRQ on its own, for 0x0433 (see its read arm): the live context is act_bank's.
+  wire live_intrq  = irq_pend && !irq_disable;
+  wire idle_intrq  = idle_irq && !idle_nien;
+  wire bank0_intrq = act_bank ? idle_intrq : live_intrq;
+  wire bank1_intrq = act_bank ? live_intrq : idle_intrq;
   reg soft_reset;
   reg [8:0] pio_byte;
   reg [8:0] sectors_left;
@@ -247,7 +348,7 @@ module pc9821_ata (
   // task-file access, and it only runs under the transfer state above.
   wire       buf_wr_en    = buf_wr_guest
                           ? (io_wr && io_addr == 16'h0641 && status_reg[3] &&
-                             bank_has_interface)
+                             live_if)
                           : buf_wr_fetch;
   wire [8:0]  buf_wr_addr = buf_wr_guest ? {active_buf, pio_byte[8:1]}
                                          : {fill_buf, block_buf_addr};
@@ -312,7 +413,9 @@ module pc9821_ata (
   // bank value: they select and report the interface, not the task file behind it.
   wire aux_port = (io_addr == 16'h0430) || (io_addr == 16'h0432) ||
                   (io_addr == 16'h0433) || (io_addr == 16'h0435);
-  wire device_present = mounted && bank_has_interface;
+  // The LIVE drive is present and its bank is the selected one (the read window and every
+  // command and completion arm below). With no disk on bank 1 this is `mounted && bank 0`.
+  wire device_present = act_mounted && live_if;
   // Within a connected bank the data port keeps the ATA rule (0xFF while DRQ is
   // clear); the window above decides whether the port is connected at all, and
   // it applies to reads and writes alike.
@@ -339,6 +442,24 @@ module pc9821_ata (
   wire        div_ge    = (div_trial >= div_divisor);
   wire [12:0] div_remainder_next = div_ge ? (div_trial - div_divisor) : div_trial;
   wire [31:0] div_quotient_next = {div_sq[30:0], div_ge};
+  // THE GEOMETRY WORDS FOLLOW THE LIVE DRIVE. The one free-running divider above serves both
+  // drives, so after an exchange its words describe the other drive for up to three pass
+  // boundaries (the pass in progress, then one clean pass of each divisor). IDENTIFY is held BSY
+  // for that long (at most ~100 clocks) instead of answering the other drive's cylinders. Only an
+  // exchange sets it, so with no disk on bank 1 IDENTIFY's timing is exactly what it always was.
+  reg        act_bank_q;
+  reg [1:0]  geo_laps;
+  wire       geo_busy = (geo_laps != 2'd0) || (act_bank != act_bank_q);
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      act_bank_q <= 1'b0;
+      geo_laps   <= 2'd0;
+    end else begin
+      act_bank_q <= act_bank;
+      if (act_bank != act_bank_q) geo_laps <= 2'd3;
+      else if ((div_count == 5'd31) && (geo_laps != 2'd0)) geo_laps <= geo_laps - 2'd1;
+    end
+  end
   reg        chs_sec_ok, chs_head_ok;
   reg [27:0] chs_lba_q;
   always @(posedge clk) begin
@@ -364,7 +485,7 @@ module pc9821_ata (
   // capacity-1 is rejected. Registered like chs_lba_q: a task-file write costs at least two
   // clk_sys, so the one-cycle-old view a command sees is never stale.
   reg [32:0] lba_room_q;
-  always @(posedge clk) lba_room_q <= {1'b0, capacity} - {5'd0, requested_lba};
+  always @(posedge clk) lba_room_q <= {1'b0, act_capacity} - {5'd0, requested_lba};
   // lba_room_q[32] (the borrow) is "requested_lba > capacity"; room 0 is "== capacity" and fails
   // the count compare (count >= 1), which also covers capacity == 0. So this one test is
   // `requested_lba >= capacity || capacity == 0 || !range_ok`.
@@ -404,20 +525,43 @@ module pc9821_ata (
                         (xfer_state == X_PIO_READ) && (pio_byte == 9'd510) &&
                         (sectors_left > 9'd1) && prefetch_retire;
 
+  // A command written while a PIO data phase is pending (DRQ set, BSY clear) is executed,
+  // not ignored: NP2kai ideio_o64e has no BSY/DRQ test before `drv->cmd = dat;` and its
+  // `switch (dat)` (cbus/ideio.c), and every data-phase command there restarts the buffer
+  // (`drv->bufpos = 0`). NOP is the exception: NP2kai's `case 0x00:` is an empty break that
+  // leaves the data phase standing, so it does not take the drive over here either.
+  // tb_pc9821_ata_drq_takeover.
+  wire pio_phase = (xfer_state == X_PIO_READ) || (xfer_state == X_PIO_WRITE) ||
+                   (xfer_state == X_PIO_IDENT);
+  // A command that takes over a READ whose read-ahead is still at the block adapter cannot
+  // issue its own request yet: pc9821_block_io serves one request and does not queue a second
+  // (see X_DRAIN). It is DEFERRED - BSY, the byte in `cmd_pend_byte` - and the drain
+  // completion dispatches it (R7). An SRST in the meantime cancels it.
+  reg       cmd_pend;
+  reg [7:0] cmd_pend_byte;
+  wire      takeover_defer = (xfer_state == X_PIO_READ) && prefetch_busy && !block_done;
+  // An SRST edge written this clk (the set, or the release of a held SRST): the drain
+  // completion stands down from dispatching a deferred command, which the reset cancels.
+  wire      srst_wr_now = io_wr && live_if && (io_addr == 16'h074C) &&
+                          (io_din[2] || soft_reset);
+
   // Every completion handler below consumes the pulse it retires (H7), so a
   // task-file COMMAND write landing in the same clk sees the POST-retire device,
   // not the pre-consumption state the 0x64E guard reads (pulses.md H8: a command
   // presented against a stale transfer state was silently dropped). With the
   // completion retired this cycle the dispatch takes over exactly as it would
-  // had the completion been observed one cycle earlier.
+  // had the completion been observed one cycle earlier. A drain that carries a deferred
+  // command (`cmd_pend`) is not retired for the guest: its completion dispatches that
+  // command, so the guest's write meets a drive busy with it and is ignored like any write
+  // under BSY - one dispatch per completion.
   wire block_done_retire_now = block_done &&
-      ((xfer_state == X_DRAIN) || (xfer_state == X_WAIT_WRITE) ||
+      ((xfer_state == X_DRAIN && !cmd_pend) || (xfer_state == X_WAIT_WRITE) ||
        (xfer_state == X_WAIT_BLOCK) || ((xfer_state == X_PIO_READ) && prefetch_busy));
   // The dispatch that supersedes a retiring transfer. Its begin_block_read /
   // begin_block_write own the block request from here: the retiring handler's
   // read-ahead re-issue must not also go out (the adapter serves one request,
   // and the orphan completion would then land on the new transfer's state).
-  wire command_takeover = io_wr && bank_has_interface && (io_addr == 16'h064E) &&
+  wire command_takeover = io_wr && live_if && (io_addr == 16'h064E) &&
       device_present && !slave_ignores(io_din) && block_done_retire_now &&
       (status_reg[7] || (xfer_state != X_IDLE));
 
@@ -490,8 +634,8 @@ module pc9821_ata (
         // NP2kai tmp[59] = 0x0100 | mulmode. Word 59's valid bit must agree with
         // word 47: with no multiple advertisement the current setting is not valid.
         8'd59: identify_word = 16'h0000;
-        8'd60: identify_word = capacity[15:0];
-        8'd61: identify_word = capacity[31:16];
+        8'd60: identify_word = act_capacity[15:0];
+        8'd61: identify_word = act_capacity[31:16];
         // NP2kai tmp[64] = 0x0003 (PIO mode 3, 4).
         8'd64: identify_word = 16'h0003;
         8'd80: identify_word = 16'h0000;  // the machine claims no ATA major level
@@ -526,7 +670,7 @@ module pc9821_ata (
   // and this one reports as the words were delivered. (Word 255 itself is 0 in the sum.)
   reg [ 7:0] chk_sum8;    // running byte sum, mod 256, of the words delivered since the command
   wire [15:0] identify_integrity = {8'h00 - chk_sum8 - 8'hA5, 8'hA5};
-  wire ident_step = io_rd && io_addr == 16'h0641 && status_reg[3] && bank_has_interface &&
+  wire ident_step = io_rd && io_addr == 16'h0641 && status_reg[3] && live_if &&
                     (xfer_state == X_PIO_IDENT) && (pio_byte[8:1] != 8'd255);
   always @(posedge clk) begin
     if (!rst_n || xfer_state != X_PIO_IDENT) chk_sum8 <= 8'd0;
@@ -535,7 +679,9 @@ module pc9821_ata (
 
   always @* begin
     io_dout = 8'hFF;
-    if (!aux_port && !bank_has_interface) begin
+    if (tf_b2_echo) begin
+      io_dout = c432_rd;   // see tf_b2_echo
+    end else if (!aux_port && !bank_has_interface) begin
       // A bank with no interface behind it floats, and the machine's float is
       // an exact value: the task-file registers 0x0642-0x064E at 0x0E, the data
       // register 0x0640 at 0xFF (confirmed twice), the second channel's
@@ -552,6 +698,24 @@ module pc9821_ata (
         16'h074C, 16'h074E: io_dout = 8'h0F;
         default: ;
       endcase
+    end else if (!aux_port && !sel_live) begin
+      // THE SELECTED BANK IS NOT THE LIVE ONE: its device waits for the shared engine (see
+      // act_bank), so it reads BSY - or 0x00 for its absent device 1 (ATA-3 r6 s.9.5.1) - and its
+      // other registers from the idle copy; a bank with no drive answers 0xFF as below.
+      if (!idle_mounted && io_addr >= 16'h0640 && io_addr <= 16'h064E) io_dout = 8'hFF;
+      else case (io_addr)
+        16'h0642: io_dout = idle_error;
+        16'h0644: io_dout = idle_sector_count;
+        16'h0646: io_dout = idle_sector_number;
+        16'h0648: io_dout = idle_cylinder_low;
+        16'h064A: io_dout = idle_cylinder_high;
+        16'h064C: io_dout = idle_drive_head;
+        16'h064E, 16'h074C: io_dout = idle_drive_head[4] ? 8'h00 : ATA_ST_BSY;
+        16'h0640, 16'h0641, 16'h0740, 16'h0742, 16'h0744, 16'h0746, 16'h0748, 16'h074A:
+          io_dout = 8'h00;
+        16'h074E: io_dout = idle_drive_head[4] ? 8'h0F : 8'h00;   // as the live arm below
+        default: ;
+      endcase
     end else if (!device_present && io_addr >= 16'h0640 && io_addr <= 16'h064E) begin
       // No drive on the selected channel: NP2kai getidedrv() returns NULL and every
       // task-file handler returns 0xff (ideio_i64e, ideio_i646); qemu
@@ -564,19 +728,25 @@ module pc9821_ata (
       // with the internal IDE present, so bit 6 is a STRAP bit here and the read
       // returns the measurement.
       16'h0430: io_dout = 8'h41;
-      16'h0432: io_dout = channel_reg;
-      // 0x0433 is the source-identification port, NOT an IRQ-pending flag.
-      // NP2kai's ideio_i433 answers bit 1 (0x02) = "the selected bank has a
-      // connected device": (bank[1] & 1) ? 0x02 : 0x00, forced clear when the
-      // selected unit has no drive at all (cbus/ideio.c:660-675). This model's
-      // "selected bank" is channel_reg[0] and its "connected device" is the
-      // mounted image, so bit 1 = device_present exactly. QEMU's
-      // irq_levels form (bit 0 = pending ch0 IRQ) has both the bit position and
-      // the meaning wrong, so a driver identifying the interface would read an IRQ
-      // sample as a connection answer. Measured 0x00 at
-      // the idle DOS prompt with bank 0x00 (probes/PROBE.TXT `0433=00`), which
-      // every model answers alike.
-      16'h0433: io_dout = device_present ? 8'h02 : 8'h00;
+      // 0x0432 READS BACK MASKED. docs/probes/KIT1-XE10-IDE1.TXT:4-14 writes 00 01 02 03 2A 80
+      // and reads `r432=00`, `01`, `00`, `01`, `22`, `00` (80 is the no-op write, the bank
+      // as it was; KIT1-XE10-IDEPROBE.TXT:15 `0432<-80 rb=01`): bit 0 and bit 5 read back,
+      // bit 3 never, and bit 1 only beside bit 5. Kit 2 (KIT2-XE10-IDE2.TXT:4-18) wrote 04 06 07
+      // 10 20 22 23 40 and read 00 00 01 10 20 22 23 FF: bit 2 never reads back, bit 4 does, and
+      // with bit 6 set the register reads FF (c432_rd).
+      16'h0432: io_dout = c432_rd;
+      // 0x0433 IS THE INTERRUPT-PENDING PORT, one bit per bank. The machine reads 00 with
+      // every bank written (KIT1-XE10-IDE1.TXT:4-14 `433=00`), and in the IRQ433 row
+      // (KIT1-XE10-IDE1.TXT:18, `pre433/.../433/irr/433b/ast/st/433ack` = `00 10 01 12 01 50
+      // 50 00`) a CHECK POWER MODE completion on bank 0 reads 01, twice, until the 0x064E
+      // status read acknowledges it, then 00 - so bit 0 is bank 0's pending interrupt and
+      // NP2kai's connect flag (bit 1 = a connected device, ideio_i433) is not the machine.
+      // Bit 1 as bank 1's comes from qemu-pc98 (`ret = s->irq_levels & 0x03;`,
+      // hw/ide/pc98-ide.c:203, one level per channel, independent of the selection, each
+      // gated by nIEN as `ide_bus_set_irq` gates it, hw/ide/core.c:2828); the capture never
+      // had bank 1's interrupt pending. The CD-ROM's bank-1 INTRQ is ORed in by
+      // pc9821_system, which owns that drive's read path.
+      16'h0433: io_dout = {6'd0, bank1_intrq, bank0_intrq};
       16'h0435: io_dout = 8'h00;
       // The data register answers only a READ transfer (direction gated above).
       16'h0640: io_dout = (status_reg[3] && data_dir_in) ? pio_word[7:0] : 8'h00;
@@ -594,7 +764,9 @@ module pc9821_ata (
       // they differ - 0x74C reads the idle status 0x50, 0x74E reads 0x00
       // (docs/probes/ATA.TXT). The drive-address form this core used
       // to synthesise is the AT convention; the measurement wins.
-              16'h074E: io_dout = 8'h00;
+      // With the slave (DEV 1, absent here) selected it reads 0x0F:
+      // docs/probes/KIT1-XE10-IDE1.TXT:16 `IDES dh=A3 da=0F` (0x064C <- B0 on bank 0).
+      16'h074E: io_dout = slave_sel ? 8'h0F : 8'h00;
       // THE SECOND CHANNEL'S TASK FILE AT THE LIVE BANK reads 0x00 at every even
       // register and 0xFF at its odd partner. The machine says so three times
       // (docs/probes/IDE.TXT, "task file with 0432=01 (live bank)":
@@ -735,6 +907,207 @@ module pc9821_ata (
   endtask
   /* verilator lint_on UNUSEDSIGNAL */
 
+  // The command dispatch: one command byte executed against the drive. Called by the 0x064E
+  // write (the guest's command) and by the drain completion (a command deferred behind an
+  // abandoned read-ahead, `cmd_pend`). Its default retires whatever transfer the drive was in;
+  // the arms below override it for every command that starts a transfer of its own.
+  task automatic dispatch_command(input [7:0] cmd);
+    begin
+      xfer_state <= X_IDLE;
+      case (cmd)
+        8'h20, 8'h21: begin  // READ SECTORS (with/without retry)
+          // 0x21 is the without-retry twin of 0x20 and transfers exactly the
+          // same data: NP2kai `case 0x20: case 0x21:` share one readsec
+          // (cbus/ideio.c:902-912). The machine's own IDE option ROM reaches
+          // both: its command byte is `(flags & 0xF7) | table[class]`
+          // (BANK3 file 0x1085-0x10A9), and flags bit 0 is set from the INT
+          // 1Bh caller's fn bit 5 (BANK3 file 0x03B0-0x03B8 `test
+          // [bp+0x1],0x20`), so a without-retry read arrives as 0x21.
+          // Aborting it (a default arm) routes the ROM into its error
+          // recovery - SRST, RECALIBRATE and the 0x01F3 settle of
+          // 121*(0x28-[es:0x2060]) ARTIC units, up to 4.03 s of emulated time
+          // per trigger (tb_pc9821_ata_th5load fail-firsts this). Retry is a
+          // drive-internal policy the model has none of, so the pair is one
+          // command here exactly as in the reference.
+          if ((!drive_head[6] && !chs_valid) ||
+              !range_ok)
+            abort_command(4'd2);
+          else
+            begin_block_read(requested_lba, data_count, 8'd1);
+        end
+        8'h91: begin  // INITIALIZE DEVICE PARAMETERS
+          // Adopt what the host asks for, as both references do: NP2kai
+          // stores surfaces/sectors from the command and QEMU runs
+          // cmd_init_drive_params, whose purpose is to narrow the power-on
+          // geometry to what the platform uses. The head nibble is the
+          // highest head NUMBER, i.e. heads - 1.
+          if (sector_count == 8'd0)
+            abort_command(4'd3);
+          else begin
+            idp_head_max <= drive_head[3:0];
+            idp_sectors  <= sector_count;
+            error_reg <= 8'd0;
+            status_reg <= ATA_READY;
+            irq_pend <= irq_pend || !irq_disable;
+          end
+        end
+        8'hC4: begin  // READ MULTIPLE
+          // Same transfer as READ SECTORS; only the interrupt cadence
+          // differs (one per block). See `set_multiple` above.
+          if ((!drive_head[6] && !chs_valid) ||
+              !range_ok)
+            abort_command(4'd2);
+          else
+            begin_block_read(requested_lba, data_count, set_multiple);
+        end
+        8'hC6: begin  // SET MULTIPLE MODE
+          // NP2kai accepts exactly 2, 4, 8, 16, 32, 64 and 128 and aborts
+          // anything else. Storing the negotiated block length is what the
+          // IDENTIFY words 47 and 59 already promise.
+          if (sector_count == 8'd2 || sector_count == 8'd4 ||
+              sector_count == 8'd8 || sector_count == 8'd16 ||
+              sector_count == 8'd32 || sector_count == 8'd64 ||
+              sector_count == 8'd128) begin
+            set_multiple <= sector_count;
+            error_reg    <= 8'd0;
+            status_reg   <= ATA_READY;
+            irq_pend      <= irq_pend || !irq_disable;
+          end else abort_command(4'd5);
+        end
+        8'hEC: begin  // IDENTIFY DEVICE
+          // BSY (no DRQ, no interrupt yet) while the geometry words still describe the
+          // other bank's drive (geo_busy); the release above presents the page.
+          error_reg <= 8'd0;
+          xfer_state <= X_PIO_IDENT;
+          pio_byte <= 9'd0;
+          sectors_left <= 9'd1;
+          if (geo_busy) status_reg <= ATA_ST_BSY;
+          else begin
+            status_reg <= ATA_READY | ATA_ST_DRQ;
+            irq_pend <= irq_pend || !irq_disable;
+          end
+        end
+        // Power and idle commands. The PC-98 IDE BIOS polls the status register
+        // for *exactly* READY|DSC (0x50) after IDLE IMMEDIATE; aborting here (0x51
+        // with ERR set) made it spin until it timed out, leaving the drive class
+        // and geometry unset. NP2kai and QEMU both complete these successfully.
+        8'hE0, 8'hE1: begin
+          // STANDBY IMMEDIATE / IDLE IMMEDIATE
+          error_reg  <= 8'd0;
+          status_reg <= ATA_READY;
+          irq_pend    <= irq_pend || !irq_disable;
+        end
+        8'hF8: begin  // READ NATIVE MAX ADDRESS
+          // NP2kai ideio.c:1162-1173 loads the capacity-derived address into the task
+          // file before interrupting (sn = totals & 0xff, cy = (totals >> 8) & 0xffff,
+          // hd low nibble = (totals >> 24) & 0xf), leaving the high drive/head bits.
+          // finding 4: this once shared the power arm, so a caller read its
+          // OLD address back instead of the drive's native maximum.
+          sector_number <= act_capacity[7:0];
+          cylinder_low  <= act_capacity[15:8];
+          cylinder_high <= act_capacity[23:16];
+          drive_head    <= {drive_head[7:4], act_capacity[27:24]};
+          error_reg  <= 8'd0;
+          status_reg <= ATA_READY;
+          irq_pend    <= irq_pend || !irq_disable;
+        end
+        8'h00: ;  // NOP: NP2kai's `case 0x00:` is an empty break (cbus/ideio.c),
+                  // so it changes neither status nor error and raises no interrupt.
+        8'h40, 8'h41: begin  // READ VERIFY (with/without retry)
+          // NP2kai clears BSY and raises the interrupt with no error; qemu routes
+          // it to cmd_verify. Aborting made a driver that verifies before a read
+          // see an error neither reference produces.
+          status_reg <= ATA_READY;
+          irq_pend    <= irq_pend || !irq_disable;
+        end
+        8'hE5: begin  // CHECK POWER MODE: active, reported in the count
+          sector_count <= 8'hFF;
+          error_reg    <= 8'd0;
+          status_reg   <= ATA_READY;
+          irq_pend      <= irq_pend || !irq_disable;
+        end
+        8'h08: begin  // DEVICE RESET: re-establish the signature
+          // A DEVICE RESET is an ABORT, and this model answers it the way the
+          // machine does: the probe's own DIAG section polls 0x064E for !BSY and
+          // then reads 0x0642 -- "after 0x08 status = 51 ; after 0x08
+          // ERROR(0642) = 04" (docs/probes/IDE.TXT:343,
+          // tools/hwprobe/ideprobe/ideprobe.s:826 (`/* DEVICE RESET */`)). The ATA definition agrees
+          // (ABRT = 0x04, with STATUS.ERR set on an abort), so the machine and the
+          // spec outrank 0x01 (AMNF): that is another drive's post-diagnostic
+          // presence signature, and a guest classifying the reset by STATUS.ERR (the
+          // ATA contract) would read a failed reset as success.
+          // ERROR 0x01 remains the *SRST* (0x74C bit 2) and EXECUTE DEVICE
+          // DIAGNOSTIC signature, which is what the PC-98 disk BIOS's presence test
+          // after SRST reads (see the 0x74C handler).
+          error_reg     <= ATA_ERR_ABRT;
+          sector_count  <= 8'd1;
+          sector_number <= 8'd1;
+          cylinder_low  <= 8'd0;
+          cylinder_high <= 8'd0;
+          status_reg    <= (device_present ? ATA_READY : 8'd0) | ATA_ST_ERR;
+          xfer_state    <= X_IDLE;
+          irq_pend       <= irq_pend || !irq_disable;
+        end
+        8'h90: begin  // EXECUTE DEVICE DIAGNOSTIC: pass, signature
+          error_reg     <= 8'h01;
+          sector_count  <= 8'd1;
+          sector_number <= 8'd1;
+          cylinder_low  <= 8'd0;
+          cylinder_high <= 8'd0;
+          status_reg    <= ATA_READY;
+          irq_pend       <= irq_pend || !irq_disable;
+        end
+        8'h10, 8'h11, 8'h12, 8'h13, 8'h14, 8'h15, 8'h16, 8'h17,
+        8'h18, 8'h19, 8'h1A, 8'h1B, 8'h1C, 8'h1D, 8'h1E, 8'h1F: begin
+          // RECALIBRATE: seek to cylinder 0 and clear any error.
+          cylinder_low  <= 8'd0;
+          cylinder_high <= 8'd0;
+          error_reg     <= 8'd0;
+          status_reg    <= ATA_READY;
+          irq_pend       <= irq_pend || !irq_disable;
+        end
+        8'hEF: begin  // SET FEATURES
+          // Accept every subcommand: the machine's ROM issues 0xEF as an
+          // immediate and we cannot tell which. Nothing in this model
+          // depends on the setting, so success is honest about the effect
+          // (none) and non-blocking.
+          error_reg  <= 8'd0;
+          status_reg <= ATA_READY;
+          irq_pend    <= irq_pend || !irq_disable;
+        end
+        8'hE7: begin  // FLUSH CACHE: no write cache in this model
+          error_reg <= 8'd0;
+          status_reg <= ATA_READY;
+          irq_pend <= irq_pend || !irq_disable;
+        end
+        8'h30, 8'h31: begin  // WRITE SECTORS (with/without retry)
+          // 0x31 is 0x30's without-retry twin: NP2kai `case 0x30: case 0x31:`
+          // share one writeinit (cbus/ideio.c:914-923), and the ROM's command
+          // byte computation (see 0x21 above) reaches it the same way.
+          // Rejected when the image is read-only or mounted read-only, so
+          // the guest sees a clean abort rather than a half-completed
+          // block. The same geometry and range checks as the read path.
+          if (act_readonly || (!drive_head[6] && !chs_valid) ||
+              !range_ok)
+            abort_command(4'd7);
+          else
+            begin_block_write(requested_lba, data_count, 8'd1);
+        end
+        8'hC5: begin  // WRITE MULTIPLE
+          // The write sibling of READ MULTIPLE: same transfer and range
+          // checks as WRITE SECTORS, with the negotiated block length and
+          // one interrupt per block (NP2kai `0xc5` -> `writeinit`).
+          if (act_readonly || (!drive_head[6] && !chs_valid) ||
+              !range_ok)
+            abort_command(4'd7);
+          else
+            begin_block_write(requested_lba, data_count, set_multiple);
+        end
+        default: abort_command(4'd8);
+      endcase
+    end
+  endtask
+
   always @(posedge clk) begin
     if (!rst_n) begin
       xfer_state     <= X_IDLE;
@@ -784,11 +1157,29 @@ module pc9821_ata (
       prefetch_busy  <= 1'b0;
       prefetch_valid <= 1'b0;
       prefetch_error <= 1'b0;
+      cmd_pend       <= 1'b0;
+      cmd_pend_byte  <= 8'd0;
       irq_pend       <= 1'b0;
       dbg_cmd_cnt    <= 8'd0;
       dbg_last_cmd   <= 8'd0;
       dbg_abort_cnt  <= 8'd0;
       mounted_seen   <= mounted;
+      mounted1_seen  <= mounted1;
+      // The idle bank's context resets with the live one (the same power-on values).
+      act_bank           <= 1'b0;
+      idle_status        <= ATA_READY;
+      idle_error         <= 8'h01;
+      idle_sector_count  <= 8'd1;
+      idle_sector_number <= 8'd1;
+      idle_cylinder_low  <= 8'd0;
+      idle_cylinder_high <= 8'd0;
+      idle_drive_head    <= 8'hA0;
+      idle_irq           <= 1'b0;
+      idle_nien          <= 1'b0;
+      idle_srst          <= 1'b0;
+      idle_idp_head_max  <= 4'd7;
+      idle_idp_sectors   <= 8'd17;
+      idle_set_multiple  <= 8'd128;
       // sector_buf is intentionally not reset: it is a RAM, and every path
       // that reads it runs only after a block transfer has filled it.
     end else begin
@@ -809,7 +1200,8 @@ module pc9821_ata (
       // with a bank select, can lose an interrupt it has not been served for yet.
       // ... and only with nIEN clear: NP2kai ideio_i64e resets the request under
       // `if (!(drv->ctrl & IDECTRL_NIEN))`, so a polled status read leaves it pending.
-      if (io_rd && io_addr == 16'h064E && bank_has_interface && !irq_disable) irq_pend <= 1'b0;
+      // (At the live bank only: the bank that is not live reads BSY, which acknowledges nothing.)
+      if (io_rd && io_addr == 16'h064E && live_if && !irq_disable) irq_pend <= 1'b0;
       // A read of ERROR does NOT clear STATUS.ERR. The machine keeps it: its DEVICE RESET
       // reads "after 0x08 status = 51 ; after 0x08 ERROR(0642) = 04" and the next status read
       // (after only a 0x064C write) is still 51 ("pre/final status = 51 58",
@@ -823,16 +1215,42 @@ module pc9821_ata (
       // without this a drive that appears after the first probe would report
       // not-ready forever. Latch READY (or not-present) whenever the mounted
       // state changes, as long as no transfer is in flight.
-      mounted_seen <= mounted;
-      if (mounted != mounted_seen && xfer_state == X_IDLE) begin
-        status_reg <= mounted ? ATA_READY : 8'd0;
-        // A drive that has run its power-on diagnostic reports ERROR = 0x01
-        // (AMNF), and that byte *is* the PC-98 disk BIOS's presence test: after
-        // SRST it accepts the unit only if 0x0642 reads 0x01 (BANK3@0xF9170-
-        // 0xF9176, and the same test in the pre-SRST probe at
-        // BANK3@0xF8D76-0xF8D7D). Clearing it on a mount made an image inserted
-        // after cpu_run permanently undetectable.
-        error_reg  <= mounted ? 8'h01 : 8'd0;
+      // A drive that has run its power-on diagnostic reports ERROR = 0x01
+      // (AMNF), and that byte *is* the PC-98 disk BIOS's presence test: after
+      // SRST it accepts the unit only if 0x0642 reads 0x01 (BANK3@0xF9170-
+      // 0xF9176, and the same test in the pre-SRST probe at
+      // BANK3@0xF8D76-0xF8D7D). Clearing it on a mount made an image inserted
+      // after cpu_run permanently undetectable.
+      // Each drive's latch writes the copy that holds ITS context: the live registers while its
+      // bank is act_bank (and, as always, only while the engine is idle), the idle copy otherwise.
+      // In an exchange cycle (swap_now) both copies are being written, so the latches are
+      // deferred - their `seen` copies hold - and fire on the next cycle (R7). With no disk on
+      // bank 1 swap_now never rises and act_bank is 0: bank 0's latch is the one-drive rule.
+      if (!swap_now) begin
+        mounted_seen <= mounted;
+        if (mounted != mounted_seen) begin
+          if (!act_bank) begin
+            if (xfer_state == X_IDLE) begin
+              status_reg <= mounted ? ATA_READY : 8'd0;
+              error_reg  <= mounted ? 8'h01 : 8'd0;
+            end
+          end else begin
+            idle_status <= mounted ? ATA_READY : 8'd0;
+            idle_error  <= mounted ? 8'h01 : 8'd0;
+          end
+        end
+        mounted1_seen <= mounted1;
+        if (mounted1 != mounted1_seen) begin
+          if (act_bank) begin
+            if (xfer_state == X_IDLE) begin
+              status_reg <= mounted1 ? ATA_READY : 8'd0;
+              error_reg  <= mounted1 ? 8'h01 : 8'd0;
+            end
+          end else begin
+            idle_status <= mounted1 ? ATA_READY : 8'd0;
+            idle_error  <= mounted1 ? 8'h01 : 8'd0;
+          end
+        end
       end
 
       // The geometry divider runs FREE: pass 0 (the adopted stride, words 54/57/58) then pass 1
@@ -845,13 +1263,13 @@ module pc9821_ata (
       div_remainder <= div_remainder_next;
       if (div_count == 5'd31) begin
         div_pass      <= ~div_pass;
-        div_sq        <= capacity;
+        div_sq        <= act_capacity;
         div_remainder <= 13'd0;
         if (div_pass)
           default_cylinders <= (|div_quotient_next[31:16]) ? 16'hFFFF : div_quotient_next[15:0];
         else begin
           current_cylinders <= (|div_quotient_next[31:16]) ? 16'hFFFF : div_quotient_next[15:0];
-          current_capacity  <= capacity - {19'd0, div_remainder_next};
+          current_capacity  <= act_capacity - {19'd0, div_remainder_next};
         end
       end
       div_count <= div_count + 5'd1;
@@ -866,13 +1284,20 @@ module pc9821_ata (
       // latched nor queued. Leaving X_IDLE here would let the next command issue a
       // request the adapter never sees.
       if (xfer_state == X_DRAIN && block_done) begin
-        xfer_state <= X_IDLE;
-        status_reg <= device_present ? ATA_READY : 8'd0;
         // The drain's block_done is the abandoned read-ahead's, if one was in
         // flight; both buffers are discarded.
         prefetch_busy  <= 1'b0;
         prefetch_valid <= 1'b0;
         prefetch_error <= 1'b0;
+        cmd_pend       <= 1'b0;
+        // A command deferred behind the read-ahead runs now, against the free adapter
+        // (its transfer arms re-arm the prefetch state above). An SRST written in this
+        // clk cancels it instead (`srst_wr_now`; the 0x074C handler owns the state).
+        if (cmd_pend && !srst_wr_now) dispatch_command(cmd_pend_byte);
+        else begin
+          xfer_state <= X_IDLE;
+          status_reg <= device_present ? ATA_READY : 8'd0;
+        end
       end
 
       // Read-ahead completion: sector N+1's data lands in fill_buf while the
@@ -921,9 +1346,18 @@ module pc9821_ata (
       // it to the sector buffer on the high byte. The buffer store itself is the
       // muxed write port above. Both halves are task-file accesses and follow the
       // bank window (see buf_wr_en): at a floating bank the pair reaches nothing.
-      if (io_wr && io_addr == 16'h0640 && bank_has_interface) pio_lo <= io_din;
+      // An IDENTIFY held BSY for the geometry words (the 0xEC arm) goes to DRQ, with its
+      // interrupt, once they describe the live drive. An SRST written in this cycle supersedes
+      // it (the reset leaves X_PIO_IDENT), so the release stands down for it.
+      if (xfer_state == X_PIO_IDENT && status_reg[7] && !geo_busy &&
+          !(io_wr && live_if && (io_addr == 16'h074C))) begin
+        status_reg <= ATA_READY | ATA_ST_DRQ;
+        irq_pend   <= irq_pend || !irq_disable;
+      end
 
-      if (io_wr && io_addr == 16'h0641 && status_reg[3] && bank_has_interface &&
+      if (io_wr && io_addr == 16'h0640 && live_if) pio_lo <= io_din;
+
+      if (io_wr && io_addr == 16'h0641 && status_reg[3] && live_if &&
           xfer_state == X_PIO_WRITE) begin
         if (pio_byte == 9'd510) begin
           // Sector complete: hand the buffer to the block adapter. DRQ drops
@@ -978,7 +1412,7 @@ module pc9821_ata (
       // 0xff WITHOUT advancing bufpos when getidedrv() is NULL (cbus/ideio.c:1584-1595),
       // so a stray 16-bit `in` at a floating bank must not step the pointer and leave the
       // next honest word answering half of the previous one.
-      if (io_rd && io_addr == 16'h0641 && status_reg[3] && bank_has_interface &&
+      if (io_rd && io_addr == 16'h0641 && status_reg[3] && live_if &&
           ((xfer_state == X_PIO_READ) || (xfer_state == X_PIO_IDENT))) begin
         if (pio_byte == 9'd510) begin
           pio_byte <= 9'd0;
@@ -1043,7 +1477,7 @@ module pc9821_ata (
         // the measured float. 0x0430/0x0432/0x0433 are the interface's own
         // registers rather than the task file and stay live at every bank --
         // 0x0432 is the window itself and must latch what the guest writes.
-        if (!bank_has_interface &&
+        if (!live_if &&
             !(io_addr == 16'h0430 || io_addr == 16'h0432 ||
               io_addr == 16'h0433)) begin
           ;
@@ -1103,7 +1537,11 @@ module pc9821_ata (
             // completion is retired in this same clk (`block_done_retire_now`)
             // the dispatch takes over against the post-retire device, exactly
             // as if the completion had been observed one cycle earlier.
-            if ((status_reg[7] || xfer_state != X_IDLE) && !block_done_retire_now) begin
+            // A PIO data phase with BSY clear is NOT a reason to ignore it (`pio_phase`,
+            // above): only NOP leaves such a phase standing.
+            if ((status_reg[7] ||
+                 (xfer_state != X_IDLE && !(pio_phase && io_din != 8'h00))) &&
+                !block_done_retire_now) begin
               ;
             end else if (!device_present) begin
               status_reg <= 8'd0;
@@ -1120,198 +1558,20 @@ module pc9821_ata (
               // case below overrides it for every command that starts a transfer.
               // NP2kai ideio_o64e dispatches a command against the drive whatever it was
               // doing (cbus/ideio.c). tb_pc9821_ata_takeover_idle.
-              if (block_done_retire_now) xfer_state <= X_IDLE;
-              case (io_din)
-                8'h20, 8'h21: begin  // READ SECTORS (with/without retry)
-                  // 0x21 is the without-retry twin of 0x20 and transfers exactly the
-                  // same data: NP2kai `case 0x20: case 0x21:` share one readsec
-                  // (cbus/ideio.c:902-912). The machine's own IDE option ROM reaches
-                  // both: its command byte is `(flags & 0xF7) | table[class]`
-                  // (BANK3 file 0x1085-0x10A9), and flags bit 0 is set from the INT
-                  // 1Bh caller's fn bit 5 (BANK3 file 0x03B0-0x03B8 `test
-                  // [bp+0x1],0x20`), so a without-retry read arrives as 0x21.
-                  // Aborting it (a default arm) routes the ROM into its error
-                  // recovery - SRST, RECALIBRATE and the 0x01F3 settle of
-                  // 121*(0x28-[es:0x2060]) ARTIC units, up to 4.03 s of emulated time
-                  // per trigger (tb_pc9821_ata_th5load fail-firsts this). Retry is a
-                  // drive-internal policy the model has none of, so the pair is one
-                  // command here exactly as in the reference.
-                  if ((!drive_head[6] && !chs_valid) ||
-                      !range_ok)
-                    abort_command(4'd2);
-                  else
-                    begin_block_read(requested_lba, data_count, 8'd1);
-                end
-                8'h91: begin  // INITIALIZE DEVICE PARAMETERS
-                  // Adopt what the host asks for, as both references do: NP2kai
-                  // stores surfaces/sectors from the command and QEMU runs
-                  // cmd_init_drive_params, whose purpose is to narrow the power-on
-                  // geometry to what the platform uses. The head nibble is the
-                  // highest head NUMBER, i.e. heads - 1.
-                  if (sector_count == 8'd0)
-                    abort_command(4'd3);
-                  else begin
-                    idp_head_max <= drive_head[3:0];
-                    idp_sectors  <= sector_count;
-                    error_reg <= 8'd0;
-                    status_reg <= ATA_READY;
-                    irq_pend <= irq_pend || !irq_disable;
-                  end
-                end
-                8'hC4: begin  // READ MULTIPLE
-                  // Same transfer as READ SECTORS; only the interrupt cadence
-                  // differs (one per block). See `set_multiple` above.
-                  if ((!drive_head[6] && !chs_valid) ||
-                      !range_ok)
-                    abort_command(4'd2);
-                  else
-                    begin_block_read(requested_lba, data_count, set_multiple);
-                end
-                8'hC6: begin  // SET MULTIPLE MODE
-                  // NP2kai accepts exactly 2, 4, 8, 16, 32, 64 and 128 and aborts
-                  // anything else. Storing the negotiated block length is what the
-                  // IDENTIFY words 47 and 59 already promise.
-                  if (sector_count == 8'd2 || sector_count == 8'd4 ||
-                      sector_count == 8'd8 || sector_count == 8'd16 ||
-                      sector_count == 8'd32 || sector_count == 8'd64 ||
-                      sector_count == 8'd128) begin
-                    set_multiple <= sector_count;
-                    error_reg    <= 8'd0;
-                    status_reg   <= ATA_READY;
-                    irq_pend      <= irq_pend || !irq_disable;
-                  end else abort_command(4'd5);
-                end
-                8'hEC: begin  // IDENTIFY DEVICE
-                  error_reg <= 8'd0;
-                  status_reg <= ATA_READY | ATA_ST_DRQ;
-                  xfer_state <= X_PIO_IDENT;
-                  pio_byte <= 9'd0;
-                  sectors_left <= 9'd1;
-                  irq_pend <= irq_pend || !irq_disable;
-                end
-                // Power and idle commands. The PC-98 IDE BIOS polls the status register
-                // for *exactly* READY|DSC (0x50) after IDLE IMMEDIATE; aborting here (0x51
-                // with ERR set) made it spin until it timed out, leaving the drive class
-                // and geometry unset. NP2kai and QEMU both complete these successfully.
-                8'hE0, 8'hE1: begin
-                  // STANDBY IMMEDIATE / IDLE IMMEDIATE
-                  error_reg  <= 8'd0;
-                  status_reg <= ATA_READY;
-                  irq_pend    <= irq_pend || !irq_disable;
-                end
-                8'hF8: begin  // READ NATIVE MAX ADDRESS
-                  // NP2kai ideio.c:1162-1173 loads the capacity-derived address into the task
-                  // file before interrupting (sn = totals & 0xff, cy = (totals >> 8) & 0xffff,
-                  // hd low nibble = (totals >> 24) & 0xf), leaving the high drive/head bits.
-                  // finding 4: this once shared the power arm, so a caller read its
-                  // OLD address back instead of the drive's native maximum.
-                  sector_number <= capacity[7:0];
-                  cylinder_low  <= capacity[15:8];
-                  cylinder_high <= capacity[23:16];
-                  drive_head    <= {drive_head[7:4], capacity[27:24]};
-                  error_reg  <= 8'd0;
-                  status_reg <= ATA_READY;
-                  irq_pend    <= irq_pend || !irq_disable;
-                end
-                8'h00: ;  // NOP: NP2kai's `case 0x00:` is an empty break (cbus/ideio.c),
-                          // so it changes neither status nor error and raises no interrupt.
-                8'h40, 8'h41: begin  // READ VERIFY (with/without retry)
-                  // NP2kai clears BSY and raises the interrupt with no error; qemu routes
-                  // it to cmd_verify. Aborting made a driver that verifies before a read
-                  // see an error neither reference produces.
-                  status_reg <= ATA_READY;
-                  irq_pend    <= irq_pend || !irq_disable;
-                end
-                8'hE5: begin  // CHECK POWER MODE: active, reported in the count
-                  sector_count <= 8'hFF;
-                  error_reg    <= 8'd0;
-                  status_reg   <= ATA_READY;
-                  irq_pend      <= irq_pend || !irq_disable;
-                end
-                8'h08: begin  // DEVICE RESET: re-establish the signature
-                  // A DEVICE RESET is an ABORT, and this model answers it the way the
-                  // machine does: the probe's own DIAG section polls 0x064E for !BSY and
-                  // then reads 0x0642 -- "after 0x08 status = 51 ; after 0x08
-                  // ERROR(0642) = 04" (docs/probes/IDE.TXT:343,
-                  // tools/hwprobe/ideprobe/ideprobe.s:826 (`/* DEVICE RESET */`)). The ATA definition agrees
-                  // (ABRT = 0x04, with STATUS.ERR set on an abort), so the machine and the
-                  // spec outrank 0x01 (AMNF): that is another drive's post-diagnostic
-                  // presence signature, and a guest classifying the reset by STATUS.ERR (the
-                  // ATA contract) would read a failed reset as success.
-                  // ERROR 0x01 remains the *SRST* (0x74C bit 2) and EXECUTE DEVICE
-                  // DIAGNOSTIC signature, which is what the PC-98 disk BIOS's presence test
-                  // after SRST reads (see the 0x74C handler).
-                  error_reg     <= ATA_ERR_ABRT;
-                  sector_count  <= 8'd1;
-                  sector_number <= 8'd1;
-                  cylinder_low  <= 8'd0;
-                  cylinder_high <= 8'd0;
-                  status_reg    <= (device_present ? ATA_READY : 8'd0) | ATA_ST_ERR;
-                  xfer_state    <= X_IDLE;
-                  irq_pend       <= irq_pend || !irq_disable;
-                end
-                8'h90: begin  // EXECUTE DEVICE DIAGNOSTIC: pass, signature
-                  error_reg     <= 8'h01;
-                  sector_count  <= 8'd1;
-                  sector_number <= 8'd1;
-                  cylinder_low  <= 8'd0;
-                  cylinder_high <= 8'd0;
-                  status_reg    <= ATA_READY;
-                  irq_pend       <= irq_pend || !irq_disable;
-                end
-                8'h10, 8'h11, 8'h12, 8'h13, 8'h14, 8'h15, 8'h16, 8'h17,
-                8'h18, 8'h19, 8'h1A, 8'h1B, 8'h1C, 8'h1D, 8'h1E, 8'h1F: begin
-                  // RECALIBRATE: seek to cylinder 0 and clear any error.
-                  cylinder_low  <= 8'd0;
-                  cylinder_high <= 8'd0;
-                  error_reg     <= 8'd0;
-                  status_reg    <= ATA_READY;
-                  irq_pend       <= irq_pend || !irq_disable;
-                end
-                8'hEF: begin  // SET FEATURES
-                  // Accept every subcommand: the machine's ROM issues 0xEF as an
-                  // immediate and we cannot tell which. Nothing in this model
-                  // depends on the setting, so success is honest about the effect
-                  // (none) and non-blocking.
-                  error_reg  <= 8'd0;
-                  status_reg <= ATA_READY;
-                  irq_pend    <= irq_pend || !irq_disable;
-                end
-                8'hE7: begin  // FLUSH CACHE: no write cache in this model
-                  error_reg <= 8'd0;
-                  status_reg <= ATA_READY;
-                  irq_pend <= irq_pend || !irq_disable;
-                end
-                8'h30, 8'h31: begin  // WRITE SECTORS (with/without retry)
-                  // 0x31 is 0x30's without-retry twin: NP2kai `case 0x30: case 0x31:`
-                  // share one writeinit (cbus/ideio.c:914-923), and the ROM's command
-                  // byte computation (see 0x21 above) reaches it the same way.
-                  // Rejected when the image is read-only or mounted read-only, so
-                  // the guest sees a clean abort rather than a half-completed
-                  // block. The same geometry and range checks as the read path.
-                  if (readonly || (!drive_head[6] && !chs_valid) ||
-                      !range_ok)
-                    abort_command(4'd7);
-                  else
-                    begin_block_write(requested_lba, data_count, 8'd1);
-                end
-                8'hC5: begin  // WRITE MULTIPLE
-                  // The write sibling of READ MULTIPLE: same transfer and range
-                  // checks as WRITE SECTORS, with the negotiated block length and
-                  // one interrupt per block (NP2kai `0xc5` -> `writeinit`).
-                  if (readonly || (!drive_head[6] && !chs_valid) ||
-                      !range_ok)
-                    abort_command(4'd7);
-                  else
-                    begin_block_write(requested_lba, data_count, set_multiple);
-                end
-                default: abort_command(4'd8);
-              endcase
+              // A read-ahead still owed by the adapter defers the command to the drain.
+              if (takeover_defer) begin
+                status_reg    <= ATA_ST_BSY;
+                xfer_state    <= X_DRAIN;
+                cmd_pend      <= 1'b1;
+                cmd_pend_byte <= io_din;
+              end else dispatch_command(io_din);
             end
           end
           16'h074C: begin
             irq_disable <= io_din[1];
             soft_reset  <= io_din[2];
+            // A soft reset cancels a command deferred behind a drain (`cmd_pend`).
+            if (srst_wr_now) cmd_pend <= 1'b0;
             if (io_din[2]) begin
               // SRST asserted: NP2kai ideio_o74c clears status and error for both
               // drives on the set edge (cbus/ideio.c); qemu ide_ctrl_write resets the
@@ -1355,8 +1615,48 @@ module pc9821_ata (
           default:  ;
         endcase
       end
+
+      // THE EXCHANGE (see act_bank and swap_now): the live context and the idle copy trade
+      // places, and act_bank follows the selection. Its cycle has no other writer of these
+      // registers (asserted below).
+      if (swap_now) begin
+        act_bank           <= bank_eff_next;
+        status_reg         <= idle_status;         idle_status        <= status_reg;
+        error_reg          <= idle_error;          idle_error         <= error_reg;
+        sector_count       <= idle_sector_count;   idle_sector_count  <= sector_count;
+        sector_number      <= idle_sector_number;  idle_sector_number <= sector_number;
+        cylinder_low       <= idle_cylinder_low;   idle_cylinder_low  <= cylinder_low;
+        cylinder_high      <= idle_cylinder_high;  idle_cylinder_high <= cylinder_high;
+        drive_head         <= idle_drive_head;     idle_drive_head    <= drive_head;
+        irq_pend           <= idle_irq;            idle_irq           <= irq_pend;
+        irq_disable        <= idle_nien;           idle_nien          <= irq_disable;
+        soft_reset         <= idle_srst;           idle_srst          <= soft_reset;
+        idp_head_max       <= idle_idp_head_max;   idle_idp_head_max  <= idp_head_max;
+        idp_sectors        <= idle_idp_sectors;    idle_idp_sectors   <= idp_sectors;
+        set_multiple       <= idle_set_multiple;   idle_set_multiple  <= set_multiple;
+      end
     end
   end
+
+  // synthesis translate_off
+  // SIM-ONLY (R8): the exchange is the one writer of the context in its cycle. The engine is idle,
+  // so the only I/O that can share the cycle is the 0x0432 write that asks for it or an access at
+  // a bank that is not live (dropped by live_if): a task-file write or a STATUS acknowledge that
+  // reached the live context in an exchange cycle would be overwritten by the exchange.
+  // tb_pc9821_ide_bank1_hdd fires the selection change against a running transfer (the deferred
+  // exchange) and right after a completion.
+  always @(posedge clk)
+    if (rst_n && swap_now && live_if && (io_rd || io_wr) && !aux_port)
+      $error("pc9821_ata: a task-file access reached the live context in an exchange cycle");
+  // SIM-ONLY (R8): a deferred command exists only while the drain it waits behind runs; the
+  // drain completion is its one consumer. tb_pc9821_ata_drq_takeover P4/P5.
+  always @(posedge clk)
+    if (rst_n && cmd_pend && (xfer_state != X_DRAIN))
+      $error("pc9821_ata: a deferred command outside X_DRAIN");
+  // synthesis translate_on
+
+  // The data-transfer view (see the port).
+  assign xfer = block_in_flight;
 
   // Detection snapshot for the stall watchdog (declared here so it follows the
   // register declarations; iverilog rejects the reference before them).

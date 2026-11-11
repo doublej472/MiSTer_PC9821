@@ -1,0 +1,119 @@
+CPUSUITE BEGIN V1 PROGRAMS=266 PASSES=1 FROM=loadall_tr3_486
+CPUSUITE CPU ac=1 cpuid=none bda486=0432 detail=dma resetdx=00000432
+loadall_tr3_486 SKIP
+loadall_ud FAIL reset without a verdict data=none
+lock_fault PASS
+lock_fault_run PASS
+lock_forms PASS
+lock_rep_ud PASS
+lock_ud PASS
+mcb_walk_real PASS
+merge_collision PASS
+min_cmp PASS
+min_xadd PASS
+moffs_pf_restart PASS
+mov_dr03_gpr PASS
+mov_dr_cr3_preserve FAIL verdict=FF data=00000005 eax=000000FF
+neg_size_carry PASS
+null_gdt_write PASS
+null_seg_read PASS
+nw_lock FAIL verdict=FF data=0000000B eax=000000FF
+of_stack_vs_ds PASS
+opcode_sweep_486 FAIL verdict=FF data=20000001 eax=200000FF
+outer_ret_segs PASS
+paging_grace FAIL reset without a verdict data=none
+partial_load_shift_base PASS
+partial_reg PASS
+pe_cpl0 PASS
+pe_cs_visible PASS
+pe_entry_iret PASS
+pe_entry_retf PASS
+pe_llldt_cpl_cache PASS
+pe_toggle_redecode PASS
+pf_store_held PASS
+pf_store_jcc PASS
+pm_init PASS
+prefetch_flush_loops PASS
+probe_arpl PASS
+probe_bcd PASS
+probe_bsf_bsr PASS
+probe_invd PASS
+probe_xchg PASS
+pte_cache_coherence PASS
+push_pf_stack_restart PASS
+ras_same_line_retf PASS
+rcl_count PASS
+real_mode_smoke PASS
+rep_stos_decode PASS
+rep_stos_pf_precise PASS
+rep_stosd_16k PASS
+rep_stosd_4k PASS
+rep_stosd_64k PASS
+rep_string_fault_progress FAIL verdict=FF data=00000503 eax=FFFF00FF
+restart_cpl3_pf PASS
+rf_clear_after_insn PASS
+rf_clear_more PASS
+rf_clear_x87 PASS
+rm_pe_transition PASS
+rmw_read_forms PASS
+rmw_reads PASS
+rom_pop_vipt_alu PASS
+seg_fault_vectors PASS
+seg_limit_back_to_back PASS
+seg_limit_dcache_miss PASS
+seg_limit_edge PASS
+seg_limit_older_commit PASS
+seg_limit_stall_d2 PASS
+seg_limit_vipt_boundary PASS
+seg_load_cpl3 PASS
+seg_load_np_keeps_segreg PASS
+seg_paging PASS
+seg_stack_wrap_rm PASS
+seg_verdict_real PASS
+sgdt_after_dr PASS
+sgdt_sidt_store PASS
+shift_dead_slot PASS
+shift_overflow_sticky PASS
+shifter_stack_flags PASS
+shl1_overflow PASS
+shld_overflow PASS
+shxd16_wide PASS
+sidecar_epoch_wrap PASS
+smc_basic PASS
+smc_icache_patch_race PASS
+smc_same_line PASS
+smc_spec_buffer PASS
+smc_spec_buffer_rm PASS
+smc_spec_demote_rm PASS
+smc_spec_victim PASS
+smc_store_patch_stress PASS
+spec_fetch_cpl_buffer PASS
+spec_fetch_cpl_leak PASS
+split_ea_rni_commit PASS
+split_rmw_fault PASS
+split_rmw_fault_lock PASS
+split_write_fault_np PASS
+sreg_absent_gdt_load PASS triple fault
+stale_modrm PASS
+store_fwd_word PASS
+store_fwd_word_rm PASS
+store_pf_jcc_successor PASS
+store_pf_precise PASS
+store_pf_reg_successor PASS
+store_pf_store_successor PASS
+string_successor_width PASS
+task_switch_jmp386 PASS
+task_switch_nested386 PASS
+tf_single_step_rm PASS
+tlb_pwt PASS
+tlb_test2 PASS
+triple_fault_reset PASS triple fault
+ts_286_min_limit PASS
+ts_commit_fault_eflags FAIL verdict=FF data=00000034 eax=000000FF
+ts_commit_fault_rf FAIL verdict=FF data=00000034 eax=000000FF
+ts_large_limit PASS
+ts_null_sel_gdt0 PASS
+ts_short_limit FAIL verdict=FF data=480D0021 eax=480D00FF
+tss286_stack_switch FAIL verdict=FF data=00000022 eax=000000FF
+tss_t_bit PASS
+ud_realmode 

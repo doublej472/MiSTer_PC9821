@@ -112,8 +112,19 @@ module pc9821_interrupts #(
   // Xe10's IRR follows OUT0 (docs/probes/IRQWD.TXT; the IMR sits after the IRR).
   // Without it Might and Magic III's timer re-arm looped on a phantom IRQ0
   // (tb_pc9821_pit_irq_reprogram).
-  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'h03),
-               .WD_UNMASKED(8'h03)) master (
+  // WD_UNMASKED bit 7: the CASCADE. The master's IR7 is the slave's INT output, and the Xe10
+  // withdraws it when the slave's request goes away, unmasked and with IF clear, before any
+  // acknowledge: docs/probes/XE10T-XE10-AUDIT.TXT, the CASC rows (an OPNA timer flag on
+  // IRQ12, IR7 open on the master): masking IRQ12 at the slave (CASC `m_on=80 m_off=00
+  // m_off2=00`) or resetting the flag at the chip (CASC_DEV `m_on=80 m_off=00`) leaves the
+  // master IRR bit 7 clear at once, and STI then delivers nothing (`n14=0 n17=0 n0f=0`).
+  // Holding the latch here took a spurious INT 17h (the core's CASC capture, rc6).
+  // WD_MASK bit 6: IR6 (INT2, the MPU-PC98's line) is withdrawn while masked when its line
+  // falls: MPUTEST on the Xe10 with an MPU-PC98 reads master IRR 01 -> 41 when the card's ACK
+  // arrives with IR6 masked and back to 01 once the ACK is read
+  // (docs/probes/MPUTEST-XE10.TXT `IRQ imr=757D before=1001 pend=9841 after=9801 ack=FE`).
+  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'hC3),
+               .WD_UNMASKED(8'h83)) master (
       .clk(clk), .rst_n(reset_n), .cs(master_cs), .wr(io_wr), .rd(io_rd),
       .a0(io_addr[1]), .din(io_din), .dout(master_dout),
       .ir_in({slave_int, master_aux_irq, vsync_irq, keyboard_irq, pit_out0}),
@@ -123,7 +134,26 @@ module pc9821_interrupts #(
       .dbg_imr(dbg_imr), .dbg_irr(dbg_irr), .dbg_isr(dbg_isr)
   );
 
-  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h02)) slave (
+  // The slave's masked withdraw lines: bit 1 = IRQ9, the IDE (docs/probes/IRQWD.TXT
+  // `IRQ9  IDE 0x64E ack trig=01 latch_irr=12 postack_irr=10`), and bit 3 = IRQ11, the 1 MB
+  // FDC: the Xe10's XE10T /FDC run holds IR11 masked through RECALIBRATE/SEEK completions,
+  // READ IDs and READ DATAs, drains them with SENSE INTERRUPT STATUS, and takes no interrupt
+  // when it restores the IMR (docs/probes/XE10T-XE10-FDC.TXT `I FDC irq11_taken=0`), so the
+  // request the FDC line raised and lowered while masked is gone. IRQ10 (the 640 KB window's
+  // interrupt) is not measured and keeps the edge latch (the /FDC2 /M640 run's RST640 row would show it). Bit 4 = IRQ12, the
+  // 86 board's OPNA timer line: the Xe10's XE10T /OPNA2 run raises a timer flag with IR4 masked
+  // in the slave IMR (0x75), resets it through 0x27, and finds the slave IRR bit 4 set before
+  // the reset and CLEAR at the first IRR read after it, 32/32 trials for each timer
+  // (docs/probes/XE10T-XE10-OPNA2.TXT FR_TMRA/FR_TMRB `irr0=10 irr1=00 irrn=1`, 12.21 us median
+  // from the reset write). IRQWD.TXT's IRQ12 row (`latch_irr=10 postack_irr=10`) read the IRR
+  // straight after its 0x27 write with IR4 unmasked under cli, before the machine's ~12 us drop.
+  // IRQ12 is withdrawn UNMASKED too (WD_UNMASKED bit 4): CASC_DEV resets the timer flag at
+  // the chip with IRQ12 open in the slave IMR and IF clear, and the slave IRR bit 4 is clear
+  // after it (docs/probes/XE10T-XE10-AUDIT.TXT CASC_DEV `s_irr=90 ... s_irr1=80`, INT 14h
+  // never taken: `n14=0`). Bit 7 = IRQ15, the calendar: the masked slave IRR follows its line
+  // (the CASC rows read IRQ15's bit set and then clear with IR7 masked, CASC_CTL `s_irr=90
+  // ... s_irr1=00`).
+  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (
       .clk(clk), .rst_n(reset_n), .cs(slave_cs), .wr(io_wr), .rd(io_rd),
       .a0(io_addr[1]), .din(io_din), .dout(slave_dout), .ir_in(slave_irq),
       .int_out(slave_int), .int_vec(slave_vec), .int_irq(slave_irq_num),

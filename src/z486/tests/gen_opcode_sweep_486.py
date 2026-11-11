@@ -57,8 +57,13 @@ E("LSL", [0x0f,0x03,0xc0], OK, ["mov eax, 0x10"])
 E("CLTS", [0x0f,0x06], OK)
 E("INVD", [0x0f,0x08], OK, ["wbinvd"])
 E("WBINVD", [0x0f,0x09], OK)
+# UMOV (0F 10-13) executes on the 486, no #UD: R. Collins, "Undocumented
+# OpCodes: UMOV" (rcollins.org/secrets/opcodes/UMOV.html): "Available on all
+# 80386/80486 processors" and "If UMOV is executed by a user program, it will
+# appear it is a alias for MOV"; a real Am486DX4 raises no #UD for any form
+# (CPUSUITE-XE10-triage: tri_umov).
 for op in (0x10,0x11,0x12,0x13):
-    E("UMOV 0F %02X C0" % op, [0x0f,op,0xc0], OK, info=True)
+    E("UMOV 0F %02X C0" % op, [0x0f,op,0xc0], OK)
 # MOV CR/DR/TR
 for n in range(8):
     E("MOV eax,CR%d" % n, [0x0f,0x20,0xc0|(n<<3)], OK if n in (0,2,3) else UD)

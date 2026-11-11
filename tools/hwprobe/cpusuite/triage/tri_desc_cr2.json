@@ -1,0 +1,75 @@
+{
+  "asm": "tri_desc_cr2.asm",
+  "start_mode": "protected",
+  "cr0": "0x80010001",
+  "cr3": 0,
+  "eip": 0,
+  "seg_cache": {
+    "CS": {
+      "base": "0x10000",
+      "limit": "0xfffff",
+      "flags": "0xa9e0"
+    },
+    "DS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "SS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "ES": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "FS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "GS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    }
+  },
+  "page_tables": [
+    [
+      65536,
+      65536,
+      16,
+      "RW"
+    ],
+    [
+      0,
+      0,
+      9,
+      "RW"
+    ],
+    [
+      36864,
+      36864,
+      1,
+      "RO"
+    ],
+    [
+      40960,
+      40960,
+      16,
+      "RW"
+    ],
+    [
+      131072,
+      36864,
+      1,
+      "RW"
+    ]
+  ],
+  "cycles": 30000,
+  "sim_plusargs": [
+    "trace_io"
+  ]
+}

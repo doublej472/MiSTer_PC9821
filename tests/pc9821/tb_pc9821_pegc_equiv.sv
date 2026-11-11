@@ -26,7 +26,7 @@ module tb_pc9821_pegc_equiv;
 
   pc9821_pegc dut (.clk(clk), .reset(reset), .cpu_valid(cpu_valid), .cpu_write(cpu_write),
       .cpu_line_read(cpu_line_read), .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),
-      .cpu_dout(d_dout), .cpu_ready(d_rdy), .cpu_resp_valid(d_rv), .bank_a(d_ba), .bank_b(d_bb), .plane_mode(d_pm), .vram_en(d_ve));
+      .cpu_dout(d_dout), .cpu_ready(d_rdy), .cpu_resp_valid(d_rv), .bank_a(d_ba), .bank_b(d_bb), .plane_mode(d_pm), .vram_en(d_ve), .idle());
   pc9821_pegc_ref ref0 (.clk(clk), .reset(reset), .cpu_valid(cpu_valid), .cpu_write(cpu_write),
       .cpu_line_read(cpu_line_read), .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),
       .cpu_dout(r_dout), .cpu_line_dout(r_line), .cpu_ready(r_rdy), .cpu_resp_valid(r_rv),

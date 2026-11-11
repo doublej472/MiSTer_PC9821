@@ -1,0 +1,28 @@
+XE10CFG configuration stores (tools/hwprobe/xe10cfg)
+IDE STATE 432=00 64C=A3 simr=75
+ROW IDE2 BANK 04
+IDE2B w=04 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 04 00 00 06 05 00 A1 50 50 00 02
+ROW IDE2 BANK 06
+IDE2B w=06 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 06 00 00 06 05 00 A1 50 50 00 02
+ROW IDE2 BANK 07
+IDE2B w=07 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 07 00 03 01 02 00 A0 50 50 0F 02
+ROW IDE2 BANK 10
+IDE2B w=10 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 10 00 00 06 05 00 A1 50 50 00 02
+ROW IDE2 BANK 20
+IDE2B w=20 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 20 00 00 06 05 00 A1 50 50 00 02
+ROW IDE2 BANK 22
+IDE2B w=22 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 22 00 00 06 05 00 A1 50 50 00 02
+ROW IDE2 BANK 23
+IDE2B w=23 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 23 00 03 01 02 00 A0 50 50 0F 02
+ROW IDE2 BANK 40
+IDE2B w=40 432/err/cnt/sec/cyl/cyh/dh/st/ast/da/433 40 00 00 06 05 00 A1 50 50 00 02
+ROW IDE2 CPM 02 00
+IDE2C w=02 n=0 ran=1 pre433/preirr/433/433@00/irr/ast/st/433ack/irrack/count/err 02 00 02 02 02 50 50 02 00 FF 00 dt=00000002
+ROW IDE2 CPM 07 00
+IDE2C w=07 n=0 ran=1 pre433/preirr/433/433@00/irr/ast/st/433ack/irrack/count/err 02 00 02 02 02 50 50 02 00 FF 00 dt=00000001
+ROW IDE2 CPM 01 00
+IDE2C w=01 n=0 ran=1 pre433/preirr/433/433@00/irr/ast/st/433ack/irrack/count/err 02 00 02 02 02 50 50 02 00 FF 00 dt=00000001
+ROW IDE2 CPM 00 01
+IDE2C w=00 n=1 ran=1 pre433/preirr/433/433@00/irr/ast/st/433ack/irrack/count/err 02 00 02 02 00 50 50 02 00 FF 00 dt=00000001
+IDE RESTORE 432=00 64C=A3 simr=75
+XE10CFG DONE

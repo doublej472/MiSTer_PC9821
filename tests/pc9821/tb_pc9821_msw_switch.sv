@@ -9,7 +9,7 @@
 // THE CELLS AND WHY THE FDD NIBBLE IS A SWITCH AND THE BASE MEMORY IS NOT. The eight
 // memory-switch cells at 0xA3FE2 + i*4 are the board's physical switch bank mirrored into the
 // text-VRAM tail (NP2kai bios/biosmem.h MEMB_MSW1..8). The authentic firmware reads the two
-// fields this bench drives and writes neither of them:
+// fields this bench drives:
 //
 //   0xA3FF2 bits 7:4  the boot/FDD nibble, read by the BIOS's own boot helper and handed
 //                     to port 0x00BE (the FDC's channel-group register):
@@ -38,10 +38,12 @@
 //                     HARDCODES it (pc9821_crtc's MSW_BASEM_CODE = 4) and this bench asserts
 //                     the cell stays 0x0C at every reset, whatever the FDD field does.
 //
-// NO WRITER EXISTS IN THE ROM SET: the only writes to those two cells are the ITF's
-// `or byte es:[0x3FEA],8` marker (BANK4@0x1D15) and the dormant PCI bank's
-// `and byte [es:0x3FF2],0x0F` (BANK0@0x1205), both OUTSIDE the fields above. A switch the
-// guest cannot set is a switch the core has to set at reset, which is what this bench pins.
+// THE ONE FIRMWARE WRITER is the ITF's memory-switch init (BANK4@0x5B9A-0x5BD7, MSW5 = 0x01),
+// which runs only while port 0x31 bit 4 is set; pc9821_iobus holds that switch at HOLD when
+// the field is not Auto (tb_pc9821_msw_hold), so the seed this bench pins is what the BIOS
+// bootstrap (BANK7@0x7F7B) reads. The other writes, the ITF's `or byte [bx],0x8` FPU marker on
+// 0xA3FEA (BANK4@0x1D21, under the same bit) and the dormant PCI bank's
+// `and byte [es:0x3FF2],0x0F` (BANK0@0x1208), are OUTSIDE the fields above.
 //
 // THE CONTRACT, step by step:
 //   (a) entry 0 - the FDD nibble 0, which is exactly what a card with no config file passes -
@@ -66,13 +68,11 @@
 //       cells' own write enable, pc9821_text_mem's tram_msw_cell gate) a guest write still lands
 //       and reads back.
 //
-// THE BOOT-DEVICE CODES ARE NP2kai's, AND THE MACHINE DIVERGES - STATED, NOT IMPLIED. The
-// real Xe10 firmware does not select a boot device from this nibble: its boot helper compares
-// only 0x20/0x40 and keeps the FDC's own reported mode otherwise (BANK7@0x599B-0x59A3), and
-// NP2kai's own switch comment (bios1b.c:883 `うぐぅ…本当はALレジスタの値から`) says the value
-// should really arrive in the AL register - on real hardware the caller passes the boot device
-// in AL/AH (bios1b.c:843-875). The bench pins the SEED - the switch position and the byte the
-// firmware finds in the cell - not a claim that a captured Xe10 boots MO/SASI/SCSI from it.
+// THE BOOT-DEVICE CODES ARE NP2kai's, AND THE MACHINE USES THEM TOO: its bootstrap
+// (BANK7@0x7F7B-0x7FBA) takes the nibble as the boot device it passes in AL to the FDD boot
+// (BIOS.ROM@0xF700C-0xF7046: 2 = 640 KB, 1/4 = 1 MB) and the IDE ROM's boot entry
+// (BANK3@0x07E5-0x0841: 0x0A, 0x0B, 0x06). The bench pins the SEED - the switch position and
+// the byte the firmware finds in the cell.
 //
 // FAIL-FIRST: on the wiring before this change the cell is the fixed INIT_BYTES snapshot and
 // the port reaches nothing, so step (b) reads 0x01 instead of 0x21 and the bench fails there

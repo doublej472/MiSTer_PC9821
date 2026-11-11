@@ -37,7 +37,7 @@ module tb_pc9821_tram_bridge;
   wire        byte_we;
 
   // The DMA byte port, idle here (tb_pc9821_dma_tram drives it through the memory subsystem).
-  reg         dma_valid = 0, dma_write = 0;
+  reg         dma_valid = 0, dma_write = 0, dma_route_cg = 0;
   reg  [13:0] dma_addr = 14'd0;
   reg   [7:0] dma_din = 8'h00;
   wire        dma_ready, dma_resp_valid;

@@ -16,7 +16,8 @@ THE ROW SET, and what each one is evidence for:
   BASE / POST   the 8-byte PEGC state before the hooks and again after the child
                 returned. `A0A` is 0x9A0 index 0x0A = the analog-256 / PEGC mode
                 bit, the machine's OWN 256-colour probe; `P6A` is port 0x6A read
-                back (NP2kai gdc_i6a returns gdc.mode2); `W54D` is the BIOS/GDC
+                back (NP2kai gdc_i6a returns gdc.mode2; the Xe10 reads 00 in every
+                mode, docs/probes/KIT1-XE10-PEGCRD.TXT); `W54D` is the BIOS/GDC
                 graphics work byte, whose bit 7 the firmware's own PEGC select
                 sets; A04/A08/A0D/A03/M68 are the surrounding mode bits.
   MODE n T=...  one row per OBSERVED change of (P6A, A0A, A04, W54D), stamped with

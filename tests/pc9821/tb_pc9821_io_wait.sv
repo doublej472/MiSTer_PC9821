@@ -6,7 +6,10 @@ module tb_pc9821_io_wait;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   // instantiates pc9821_iobus with (.*), which needs every port named -
   // tools/check_wiring.py enforces that, and it caught exactly this when the
   // port was added. tb_pc9821_beeper covers the behaviour.
@@ -57,6 +60,7 @@ module tb_pc9821_io_wait;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -81,7 +85,7 @@ module tb_pc9821_io_wait;
   integer     egc_shift_pulses = 0;
 
 // ==== WHAT THIS PROVES ====
-// Counts actual clk_sys cycles from request to cpu_ready for one port per class (0x005F wait, the 8253 0x0071 in BOTH directions, 0x0043 chipset, 0x0060 text GDC, 0x00A0 graphics GDC, the GRCG pair 0x007C/0x007E, an unmapped port) after a change lowered every class but the two the firmware measures to the FSM minimum: an 8253 WRITE still carries the one-2.4576-MHz-tick floor (21) while an 8253 READ is the FSM floor, which is the direction the floor is FOR (the ITF's own self-test programs a count and reads it straight back, and the capture reads 8253 count registers at the default class), the I/O-wait port is still the LONGEST (30), and every other class -- the chipset default, both GDC idle polls, the GRCG pair and an unmapped port -- is now the 4-cycle FSM floor, so the machine's measured ladder (default 15 > graphics GDC 13 > text GDC 8 > EGC 7, with the GRCG pair at the EGC class) is no longer modelled. Also checks the responder contract on every access: the response must arrive on a later cycle than the accept, never in it.
+// Counts actual clk_sys cycles from request to cpu_ready for one port per class (0x005F wait, the 8253 0x0071 in BOTH directions, 0x0043 chipset, 0x0060 text GDC, 0x00A0 graphics GDC, the GRCG pair 0x007C/0x007E, an unmapped port) after a change lowered every class but the two the firmware measures to the FSM minimum: an 8253 WRITE still carries the one-2.4576-MHz-tick floor (21) while an 8253 READ is the FSM floor, which is the direction the floor is FOR (the ITF's own self-test programs a count and reads it straight back, and the capture reads 8253 count registers at the default class), the I/O-wait port 0x005F is the FSM floor on its own access in both directions (a read is the default class; a write is posted) while a write plus the access behind it is still the LONGEST wait (the posted write's bus time), and every other class -- the chipset default, both GDC idle polls, the GRCG pair and an unmapped port -- is now the 4-cycle FSM floor, so the machine's measured ladder (default 15 > graphics GDC 13 > text GDC 8 > EGC 7, with the GRCG pair at the EGC class) is no longer modelled. Also checks the responder contract on every access: the response must arrive on a later cycle than the accept, never in it.
 //
 // ---- the bench's own account of where each expectation comes from ----
 //
@@ -99,7 +103,8 @@ module tb_pc9821_io_wait;
 //   1. the 8253 WRITE costs at least one PIT tick (21 >= 20.34) - the ITF's own
 //      requirement, and the floor that was being violated; its READ costs the default
 //      class, which is what the capture prices (F7);
-//   2. the I/O-wait port 0x005F is still the LONGEST (30): the firmware's own
+//   2. the I/O-wait port 0x005F (a posted write plus the access behind it) is still the
+//      LONGEST: the firmware's own
 //      delay loops measure it, so it is a floor rather than a timing choice;
 //   3. every other class measures the 4-cycle FSM floor: the chipset default, the
 //      text/graphics GDC, the GRCG pair 0x007C/0x007E and an unmapped port alike.
@@ -113,6 +118,7 @@ module tb_pc9821_io_wait;
   // 0x043F EMS page register / window select (pc9821_iobus outputs).
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
   // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
@@ -147,7 +153,8 @@ module tb_pc9821_io_wait;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -168,8 +175,10 @@ module tb_pc9821_io_wait;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // ==== CHECKS ====
 
@@ -177,7 +186,7 @@ module tb_pc9821_io_wait;
   integer errors = 0;
   integer measured_cycles = 0;
   integer c_wait = 0, c_pit_w = 0, c_pit_r = 0, c_chipset = 0, c_gdc1 = 0, c_gdc2 = 0;
-  integer c_grcg_mode = 0, c_grcg_tile = 0, c_unmapped = 0;
+  integer c_grcg_mode = 0, c_grcg_tile = 0, c_unmapped = 0, c_5f_r = 0, c_5f_w = 0;
   reg [15:0] probe_port = 16'h0000;
   // The direction of the next timed access. The 8253 is the ONE port whose class depends on it
   //: its floor is the ITF self-test's WRITE requirement, so the read measures
@@ -233,7 +242,14 @@ module tb_pc9821_io_wait;
     reset = 1'b0;
     repeat (2) @(posedge clk);
 
-    probe_port = 16'h005F; measure_port; c_wait    = measured_cycles;
+    // 0x005F: its READ is the default class (the floor) and its WRITE is posted - the write's
+    // own access is the floor and its bus time lands on the access right behind it, so the
+    // wait is timed as the write plus that access.
+    probe_port = 16'h005F; measure_port; c_5f_r    = measured_cycles;
+    probe_write = 1'b1;
+    probe_port = 16'h005F; measure_port; c_5f_w    = measured_cycles;
+    probe_write = 1'b0;
+    probe_port = 16'h0123; measure_port; c_wait    = c_5f_w + measured_cycles;
     // The 8253 in BOTH directions: its write keeps the ITF self-test floor and its read is the
     // default class the capture prices (F7). FAIL-FIRST on the read: it measured 21 before.
     probe_write = 1'b1;
@@ -271,6 +287,14 @@ module tb_pc9821_io_wait;
     end
     if (c_wait < 1) begin
       $display("FAIL the I/O-wait port read %0d cycles", c_wait);
+      errors = errors + 1;
+    end
+    // 1c. 0x005F: the read is the default class and the write releases the CPU at the floor
+    //     (posted: docs/probes/XE10T-XE10.TXT /IO R8_005F is the default read class, and
+    //     W8_005F's period holds with 340 ns of work overlapping each write).
+    if (c_5f_r - 1 != IO_MIN_HOLD || c_5f_w - 1 != IO_MIN_HOLD) begin
+      $display("FAIL 0x005F is not the floor on its own access: read %0d, write %0d clk_sys (the write is posted)",
+               c_5f_r - 1, c_5f_w - 1);
       errors = errors + 1;
     end
 

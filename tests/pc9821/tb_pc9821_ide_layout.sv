@@ -3,7 +3,7 @@
 // tb_pc9821_ide_layout - the IDE layout is FIXED in both builds.
 //
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_IDE_LAYOUT: The built-in IDE layout is fixed in pc9821_system whatever the build and the media: in the build WITHOUT the CD (CDROM_EN 0) and in the build WITH it (CDROM_EN 1), the one hard disk (hps_io slot 0) answers as bank 0's master - 0x0432 = 0x00, 0x064C = 0xA0: STATUS 0x50, ERROR 0x01, cylinder 0x00/0x00 (an ATA, not a packet, signature) and 0x0433 = 0x02 - and the CD-ROM, when built, as bank 1's master - STATUS 0x00, 0x0642 = 0x01 and the 0x14/0xEB ATAPI signature the Xe10 IDE ROM's presence test reads - with bank 1 an empty connector without it (the measured empty-bank float: 0x064E = 0x064C = 0x0E, 0x074E = 0x0F); port 0xF0 reports exactly that, bit 5 = the hard disk (clear once it is mounted) and bit 6 = the CD drive (clear only in the CD build), so the Xe10 strap reads 0xE9 then 0xC9 without the CD and 0xA9 then 0x89 with it, the stock CD-equipped Xe10's 0x89; and in the CD build a disc mount and an eject move none of it.
+// TB_PC9821_IDE_LAYOUT: At the OSD IDE bank 1 field's default (the CD-ROM; tb_pc9821_ide_bank1_hdd covers the second hard disk) the built-in IDE layout is fixed in pc9821_system whatever the build and the media: in the build WITHOUT the CD (CDROM_EN 0) and in the build WITH it (CDROM_EN 1), the one hard disk (hps_io slot 0) answers as bank 0's master - 0x0432 = 0x00, 0x064C = 0xA0: STATUS 0x50, ERROR 0x01, cylinder 0x00/0x00 (an ATA, not a packet, signature) and 0x0433 = 0x00 with nothing pending - and the CD-ROM, when built, as bank 1's master - STATUS 0x00, 0x0642 = 0x01 and the 0x14/0xEB ATAPI signature the Xe10 IDE ROM's presence test reads - with bank 1 an empty connector without it (the measured empty-bank float: 0x064E = 0x064C = 0x0E, 0x074E = 0x0F); port 0xF0 reports exactly that, bit 5 = the hard disk (clear once it is mounted) and bit 6 = the CD drive (clear only in the CD build), so the Xe10 strap reads 0xE9 then 0xC9 without the CD and 0xA9 then 0x89 with it, the stock CD-equipped Xe10's 0x89; and in the CD build a disc mount and an eject move none of it. And a SOFTWARE REBOOT resets the drives in both builds: after INITIALIZE DEVICE PARAMETERS has left ERROR at 0x00, the SHUT0/SHUT1 BSR bytes and the BIOS reset entry's 0x534 toggle (BANK7@0xFD81F) bring back bank 0's post-reset signature (STATUS 0x50, ERROR 0x01) that the Xe10 IDE ROM's presence check requires, as NP2kai's ideio_basereset on its CPU reset (devinit `drv->error = IDEERR_AMNF`) and QEMU's armed-0x534 machine reset do; FAIL-FIRST, because the task file kept ERROR 0x00 and the re-POST after a Windows 95 restart found no disk.
 //
 // The reference for the layout is the stock CD-equipped PC-9821Xe10 (its hard disk on the first
 // IDE connector, bank 0; its CD-ROM on the second, bank 1) and NP2kai's default (the hard disk at
@@ -18,7 +18,9 @@
 //   * an ATA hard disk's idle STATUS at its live bank is 0x50 (docs/probes/ATA.TXT: 0x064E = 0x50),
 //     its ERROR after the power-on diagnostic 0x01 (the Xe10 IDE ROM accepts the unit only so),
 //     its cylinder registers 0x00/0x00 (ATA-3: the packet signature 0x14/0xEB is a CD's), and
-//     0x0433 = 0x02 at a bank with a device on it (NP2kai cbus/ideio.c ideio_i433).
+//     0x0433 = 0x00 there with nothing pending: it is the per-bank interrupt-pending port,
+//     00 at every bank on the machine (docs/probes/KIT1-XE10-IDE1.TXT:4-14 `433=00`), not
+//     NP2kai ideio_i433's connect flag.
 //   * an ATAPI master at power-on: STATUS 0x00, ERROR 0x01, 0x0648/0x064A = 0x14/0xEB - the Xe10
 //     IDE ROM's pre-reset presence test (BANK3@0x0D39), NP2kai's signature.
 //   * an empty bank floats 0x0E across 0x0642-0x064E and 0x0F at 0x074C/0x074E (the probed Xe10
@@ -81,7 +83,7 @@ module tb_pc9821_ide_layout;
       .cd_mounted(1'b0), .cd_size(64'd0), .cd_ack(1'b0), .cdda_req(1'b0), .cdda_req4(1'b0), .cdda_played(1'b0), .cdda_flush(),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
       .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
-      .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0));
+      .ram_size(3'd5), .ram_size_max(3'd7), .bios_set(4'd0));
 
   // the build WITH the CD-ROM and its CD-DA player (every preset since 2026-10-10)
   wire        cd_rd;
@@ -107,7 +109,7 @@ module tb_pc9821_ide_layout;
       .cd_rd(cd_rd), .cd_lba(cd_lba), .cd_blk_cnt(cd_blk_cnt),
       .ps2_kbclk_in(1'b1), .ps2_kbdat_in(1'b1), .ps2_key(11'd0),
       .dbg_uart_byte(), .dbg_uart_we(), .dbg_uart_accept(1'b1), .sdph_step_req(), .sdph_step_up(), .sdph_step_ack(1'b0), .sdph_fault(1'b0), .trace_trig(),
-      .ram_size(3'd5), .ram_size_max(3'd7), .bios_setup(1'b0), .bios_set(4'd0));
+      .ram_size(3'd5), .ram_size_max(3'd7), .bios_set(4'd0));
 
   // hps_io's side of slot 0: serve each mount probe (first, then last sector) with 256 zero
   // words, one slot at a time. The no-CD instance has only the disk.
@@ -159,7 +161,13 @@ module tb_pc9821_ide_layout;
 
   // ==== THE CPU SIDE ====
   initial begin
-    force dut_hd.cpu_run = 1'b1;  force dut_cd.cpu_run = 1'b1;
+    // cpu_run is forced at its DRIVER, the loader's register, not on pc9821_system's net: that
+    // net reaches pc9821_memory_subsystem through an output port, and IEEE 1800-2017 23.3.3.7
+    // makes both sides one net, but Verilator keeps them apart unless it inlines the module,
+    // so a force on the outer net left the subsystem's own copy at 0 (its open bus, windows
+    // and PEGC held in reset) under 5.054, which inlines after scoping. A force on the
+    // variable reaches every reader through the port assigns under any inlining.
+    force dut_hd.memory.loader.cpu_run = 1'b1;  force dut_cd.memory.loader.cpu_run = 1'b1;
     force dut_hd.z_inta = 1'b0;   force dut_cd.z_inta = 1'b0;
     force dut_hd.z_io = 1'b1;     force dut_cd.z_io = 1'b1;
     force dut_hd.z_valid = valid_hd;  force dut_cd.z_valid = valid_cd;
@@ -226,7 +234,7 @@ module tb_pc9821_ide_layout;
       expect8(cd, 16'h0642, 8'h01, {when, ": bank 0's master ERROR (post-diagnostic)"});
       expect8(cd, 16'h0648, 8'h00, {when, ": bank 0's master cylinder low (ATA, not ATAPI)"});
       expect8(cd, 16'h064A, 8'h00, {when, ": bank 0's master cylinder high (ATA, not ATAPI)"});
-      expect8(cd, 16'h0433, 8'h02, {when, ": 0x0433 at bank 0 (a device on the bank)"});
+      expect8(cd, 16'h0433, 8'h00, {when, ": 0x0433 at bank 0 with nothing pending"});
     end
   endtask
 
@@ -290,6 +298,25 @@ module tb_pc9821_ide_layout;
     wr(1, 16'h0432, 8'h01); wr(1, 16'h064C, 8'hA0);
     expect8(1, 16'h0648, 8'h14, "(c) ejected: bank 1's master signature low (ATAPI)");
     expect8(1, 16'h064A, 8'hEB, "(c) ejected: bank 1's master signature high (ATAPI)");
+
+    // (d) a SOFTWARE REBOOT resets the drives (both builds). A session's last command leaves
+    // ERROR at 0x00 (here INITIALIZE DEVICE PARAMETERS, 8 heads x 17 sectors); the reboot -
+    // SHUT0/SHUT1 set by the 0x37 BSR bytes, then the main BIOS's 0x534 toggle (BANK7@0xFD81F)
+    // - must bring back the post-reset signature, ERROR 0x01, which the Xe10 IDE ROM's
+    // presence check requires (BANK3 D800:0D7B reads 0x0642 and wants 0x01). References:
+    // NP2kai resets the IDE devices on its CPU reset (pccore.c `ideio_basereset(); // XXX:
+    // Win9x...`; cbus/ideio.c devinit `drv->error = IDEERR_AMNF;`) and QEMU's armed 0x534 is
+    // a machine reset. FAIL-FIRST: the task file kept ERROR 0x00 and the re-POST found no disk.
+    for (int b = 0; b < 2; b++) begin
+      wr(b, 16'h0432, 8'h00); wr(b, 16'h064C, 8'hA7); wr(b, 16'h0644, 8'h11);
+      wr(b, 16'h064E, 8'h91);
+      repeat (200) @(negedge clk_sys);
+      expect8(b, 16'h0642, 8'h00, "(d) ERROR after INITIALIZE DEVICE PARAMETERS (the precondition)");
+      wr(b, 16'h0037, 8'h0B); wr(b, 16'h0037, 8'h0F);
+      wr(b, 16'h0534, 8'h7F);   // the Xe10's 0x7E with bit 0 flipped
+      repeat (200) @(negedge clk_sys);
+      expect_hdd_on_bank0(b, "(d) after the 0x534 software reboot");
+    end
 
     // ==== VERDICT ====
     if (errors != 0) $fatal(1, "TB_PC9821_IDE_LAYOUT: FAIL - %0d check(s) failed", errors);

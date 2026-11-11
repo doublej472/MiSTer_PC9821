@@ -14,10 +14,10 @@ each row. Template citations quote the line, since the generated file is rendere
 | Clock | Source | Rate | What runs on it |
 |---|---|---|---|
 | `clk_sys` | main PLL output 0, `z486_mister.sv` (`.outclk_0 (clk_sys)`) | 90 MHz (`base`) | the platform, the CPU (through the gate below), the SDRAM controller and PHY, `pc9821_system`, `hps_io`, the debug UART, the SDRAM pin clock's launch registers |
-| `cpu_clk` (gated `clk_sys`) | `pc9821_cpu_clk`, a `cyclonev_clkena` with `ena_register_mode("falling edge")` (`src/pc9821/core/pc9821_cpu_clk.sv:41-43`, `.ena_register_mode("falling edge")`) | clk_sys, enabled by `cpu_ce` | z486 and `pc9821_cpu_bus_bridge` only |
+| `cpu_clk` (gated `clk_sys`) | `pc9821_cpu_clk`, a `cyclonev_clkena` with `ena_register_mode("falling edge")` (`src/pc9821/core/pc9821_cpu_clk.sv:81-85`, `.ena_register_mode("falling edge")`) | clk_sys, enabled by `cpu_ce` | z486 and `pc9821_cpu_bus_bridge` only |
 | `CLK_50M` = `FPGA_CLK2_50` | the framework's 50 MHz pin | 50 MHz | the main PLL's `refclk`, the video PLL's `refclk`, `pc9821_vpll_ctl`, `pll_cfg_hdmi` |
-| `CLK_VIDEO` = `clk_vid` | video PLL `vpll` output 0, `z486_mister.sv` (`.outclk_0(clk_vid)`) | 42.105263 MHz (24 kHz config) or 50.336015 MHz (31 kHz config) | `pc9821_video_out`'s read side and converters, `pc9821_video_cleaner`, `gamma_fast`, `video_freak`, `sys_top`'s analog/HDMI video path and `ascal` input |
-| `CLK_AUDIO` = `clk_audio` | `pll_audio` output 0 (`sys/sys_top.v:1572-1577`) | 24.576 MHz | `cdda`'s sample side, `pc9821_audio_volume`, `pc9821_audio_out`, the framework's `audio_out` |
+| `CLK_VIDEO` = `clk_vid` | video PLL `vpll` output 0, `z486_mister.sv` (`.outclk_0(clk_vid)`) | 42.105263 MHz (24 kHz config) or 50.336015 MHz (31 kHz config) | `pc9821_video_out`'s read side and converters, `pc9821_video_cleaner`, `gamma_fast`, `pc9821_aspect`, `video_freak`, `sys_top`'s analog/HDMI video path and `ascal` input |
+| `CLK_AUDIO` = `clk_audio` | `pll_audio` output 0 (`sys/sys_top.v:1569-1574`) | 24.576 MHz | `cdda`'s sample side, `pc9821_audio_mix` (with its `pc9821_audio_volume`), `pc9821_audio_out`, the framework's `audio_out` |
 | `PC9821_SDRAM_CLK` | generated clock on the `SDRAM_CLK` port, `z486_mister.sdc.in` (`create_generated_clock -name PC9821_SDRAM_CLK`) | clk_sys rate, phase-shifted (PLL output 1) or inverted (output DDIO at >= 100 MHz) | the SDRAM device only; no fabric register |
 | `pll_hdmi` | framework HDMI PLL | 148.54 MHz | `ascal`, HDMI OSD, shadowmask; frozen |
 | `spi_sck`, `hdmi_sck`, `h2f_user0_clk`, `FPGA_CLK1/3_50` | framework/HPS pins | 100/10/100/50 MHz | `hps_io`'s SPI side, HDMI I2C, the HPS bridge; frozen |
@@ -53,7 +53,7 @@ period is 23.750 ns, so the bound is conservative. The values are `VPLL_PERIOD_N
 | V1 | `clk_sys` -> `clk_vid` | the 27-bit dot word `{vs,hs,de,r,g,b}` | 16-entry simple-dual-port M10K, written on `clk_sys`, read on `clk_vid` (`pc9821_video_out.sv:88-91`, `mem[wptr[AW-1:0]] <=`; `:139`). The read address is the Gray-decoded write pointer minus `PRIME`=8, so the entry being read was written at least 8 dots earlier | no path from a `clk_sys` register to a `clk_vid` register through the RAM; the RAM ports are timed separately | sound |
 | V2 | `clk_sys` -> `clk_vid` | `wgray[4:0]` | registered Gray code (`wgray`, `:87`, `:93`) through `wg_s1`/`wg_s2` (`:98-106`). Only one bit changes per write, so a late or metastable bit resolves to the old or new *valid* pointer | the `set_max_delay`/hold pair above | sound |
 | V3 | `CLK_50M` / `clk_sys` -> `clk_vid` | `vclk_31`, `vid_rst` (from `CLK_50M`); `dbl_on` (from `clk_sys`, `video_dbl_on`) | three independent levels, each through `lv_s1`/`lv_s2` (`:98-110`). The vector is not a coherent word: each bit is a separate control | `vclk_31`/`vid_rst`: `set_clock_groups -asynchronous` puts the video clock against `FPGA_CLK1/2/3_50` (`z486_mister.sdc.in`, `set_clock_groups -asynchronous`). `dbl_on`: the `clk_sys -> clk_vid` max-delay | sound; the bits are independent, so a one-cycle mix is two valid settings |
-| V4 | `clk_sys` -> `clk_vid` | hps_io's `status` fields: `ar`, `scale` sampled on `clk_vid` (`z486_mister.sv`, `scale <= status[46:45];`; `arx_i`/`ary_i` follow from `ar` on `clk_vid`), and `VGA_SL` (`status[83:82]` gated by the `clk_vid` `dbl_active`). `dbl_active`, `VIDEO_ARX/ARY` and `fifo_ev` are `clk_vid` signals with `clk_vid` consumers | quasi-static OSD/aspect/scale/scanline levels. No coherent multi-bit word with an invalid state | the `set_max_delay`/hold pair above | sound; the worst case is one frame of a stale OSD setting while the OSD menu is open |
+| V4 | `clk_sys` -> `clk_vid` | hps_io's `status` fields: `ar`, `scale` sampled on `clk_vid` (`z486_mister.sv`, `scale <= status[46:45];`; `arx_i`/`ary_i` follow from `ar` on `clk_vid` in `pc9821_aspect`, with option 0's 16:10 or 4:3 chosen from the displayed line count, which `pc9821_aspect` measures on `clk_vid` from the `gamma_vs`/`gamma_de` picture and the `clk_vid` `dbl_active`, so that choice crosses no domain), and `VGA_SL` (`status[83:82]` gated by the `clk_vid` `dbl_active`). `dbl_active`, `VIDEO_ARX/ARY` and `fifo_ev` are `clk_vid` signals with `clk_vid` consumers | quasi-static OSD/aspect/scale/scanline levels. No coherent multi-bit word with an invalid state | the `set_max_delay`/hold pair above | sound; the worst case is one frame of a stale OSD setting while the OSD menu is open |
 | V5 | `clk_vid` -> `clk_sys` | `HDMI_TX_VS` (`hdmi_out_vs`, `sys/sys_top.v:1300-1335`) | `vs_d0 -> vs_d1 -> vs_d2` with a stability filter (`sys_top.v:544-548`) and `vsd -> vsd2` (`:1088-1093`) | named `set_false_path -from $pc9821_clk_hdmi -to $pc9821_vs_sync1` (`z486_mister.sdc.in`, `set_false_path -from $pc9821_clk_hdmi`) for the `pll_hdmi` leg; the `clk_vid` leg (direct-video mode) by the `clk_vid -> clk_sys` max-delay | sound |
 | V6 | `clk_sys` <-> `CLK_VIDEO` (frame timing) | the FIFO fill level | the write and read sides' dot enables are the *same rational rate* of the 50 MHz reference (`pc9821_dot_ce.sv`: 400/19 MHz or 25.168 MHz; the video PLL: 2 x those), so the fill only wobbles by the enable phase and the synchroniser latency, around `PRIME`; a PLL switch flushes and re-primes | the bench `tb_pc9821_video_clk` (100 frames, 0 FIFO events at each clk_sys it runs) | sound |
 
@@ -68,16 +68,16 @@ exceptions for the two seams whose coverage was otherwise implicit (`z486_mister
 |---|---|---|---|---|---|
 | A1 | `clk_sys` -> `CLK_AUDIO` | `{sample_86_l, sample_86_r}` (40 bits) | `cdc_vector_handshake_continuous`: the source latches the vector on a `clk_in` edge and raises `new_value`; 2FF to `clk_out`; the vector is held until the ack returns through a second 2FF (`src/common/cdc_vector_handshake_continuous.sv`). The value is stable for the whole round trip | async group (no timing required); `tb_pc9821_pcm86_cdc` (22/22 pairs in order, no half-mix, latency <= 321 ns) | sound |
 | A2 | `clk_sys` -> `CLK_AUDIO` | `speaker_out` | `synchronizer` 2FF (`z486_mister.sv`, `synchronizer speaker_out_sync (`) | async group | sound |
-| A3 | `clk_sys` -> `CLK_AUDIO` | `beep_vol[1:0]` (guest register 0x871E [3:2]) | **raw**, quasi-static | async group | benign: all four codes are legal amplitudes, the value changes only when the guest writes the software DIP, and the worst case is one sample at a neighbouring step (a click), never a corrupted or out-of-range value. See "Quasi-static levels" |
-| A4 | `CLK_AUDIO` -> `clk_sys` | `clk_44100` toggle | `clk_d1 -> clk_d2` 2FF, then accept only when both stages agree, then edge-detect (`src/soc/cdda.v:162-163`, `if(clk_d2 == clk_d1) old_clk <= clk_d2;`) | named `set_false_path -from $pc9821_clk_audio -to $pc9821_cdda_sync1` (`z486_mister.sdc.in`, guarded on `cdda_inst|clk_d1`); async group | sound |
-| A5 | `clk_sys` -> `CLK_AUDIO` (CD samples) | `{audio_l, audio_r}` | the same held-vector handshake (`audio_cdc`, `src/soc/cdda.v:102-108`, `) audio_cdc (`) | async group | sound |
-| A6 | `CLK_AUDIO` -> framework | `core_audio_l/r` | the framework's `audio_out` runs on the *same* `clk_audio` net (`sys/sys_top.v:1572-1583`); this is not a crossing | none needed; the framework false-paths the `AUDIO_L/R` output pins (`sys_top.sdc:30-31`) | sound |
-| A7 | `clk_sys` -> `CLK_AUDIO` | `vol_cd_l/r[4:0]` (the OSD CD audio volume's gain code; the other `vol_*` inputs are constants) | **raw** from the `clk_sys` register `vol_cd_q` (`pc9821_system.sv`, `always @(posedge clk_sys) vol_cd_q <= cd_volume_code;`), quasi-static | async group | benign: every code is a legal gain step and the value changes only while the OSD is open; the worst case is one CD sample at a neighbouring step. See "Quasi-static levels" |
+| A3 | `clk_sys` -> `CLK_AUDIO` | `beep_vol[1:0]` (guest register 0x871E [3:2]) | **raw**, quasi-static, into `pc9821_audio_mix`'s beeper stage | async group | benign: all four codes are legal amplitudes, the value changes only when the guest writes the software DIP, and the worst case is one sample at a neighbouring step (a click), never a corrupted or out-of-range value. See "Quasi-static levels" |
+| A4 | `CLK_AUDIO` -> `clk_sys` | `clk_44100` toggle | `clk_d1 -> clk_d2` 2FF, then accept only when both stages agree, then edge-detect (`src/soc/cdda.v:164-165`, `if(clk_d2 == clk_d1) old_clk <= clk_d2;`) | named `set_false_path -from $pc9821_clk_audio -to $pc9821_cdda_sync1` (`z486_mister.sdc.in`, guarded on `cdda_inst|clk_d1`); async group | sound |
+| A5 | `clk_sys` -> `CLK_AUDIO` (CD samples) | `{audio_l, audio_r}` | the same held-vector handshake (`audio_cdc`, `src/soc/cdda.v:104-110`, `) audio_cdc (`) | async group | sound |
+| A6 | `CLK_AUDIO` -> framework | `core_audio_l/r` | the framework's `audio_out` runs on the *same* `clk_audio` net (`sys/sys_top.v:1569-1580`); this is not a crossing | none needed; the framework false-paths the `AUDIO_L/R` output pins (`sys_top.sdc:30-31`) | sound |
+| A7 | `clk_sys` -> `CLK_AUDIO` | the OSD Audio page's levels, one 20-bit word `{~snd86_level, vol_cd_l, vol_cd_r, ~beep_level}`: the PC-9801-86 and Beeper 5-bit gain codes (from `pc9821_osd`) and the CD audio code on both channels (`pc9821_system`'s `vol_cd_l/r`); the other `vol_*` inputs are constants | the same held-vector handshake (`level_cdc` inside `pc9821_audio_mix`, `src/pc9821/audio/pc9821_audio_mix.sv`, `cdc_vector_handshake_continuous #(.DATA_WIDTH(20)) level_cdc (`). The codes are words, not independent levels: neighbouring OSD steps flip several bits (28 -> 27 is `11100` -> `11011`), so a raw capture could assemble a code never selected (31, 0 dB); the handshake's `clk_sys` hold register captures all three whole and holds them for the destination's capture. The -86 and Beeper codes cross inverted, so the handshake's all-zero power-up output reads 0 dB on them (their level before the page) and Off on the CD (as its own crossing powered up) | async group; `tb_pc9821_audio_level_cdc` (each field and all three together stepped through every neighbouring pair of the eight codes with 0.3-8.3 ns per-bit skew: no intermediate code, no move in a field that did not step, every code arrives, power-up codes, latency printed; the raw-crossing mutations of the handshake fail it) | sound |
 
 The CD-DA ring itself is entirely on `clk_sys`: its banks `g_bank[*].mem` with their read
 registers `g_bank[*].q`, the bank select `read_bank_q`, `write_addr`, `read_addr`, `filled_cnt`
 and the read-ahead's `CDDA_REQ4`/`CDDA_PLAYED`/`CDDA_FLUSH` (to and from `pc9821_atapi`, also on
-`clk_sys`) are all in `always @(posedge CLK)` blocks (`src/soc/cdda.v:148-207`,
+`clk_sys`) are all in `always @(posedge CLK)` blocks (`src/soc/cdda.v:150-209`,
 `always @(posedge CLK) begin`, and the bank generate after it); only the 44.1 kHz toggle and the
 resampled samples leave the domain.
 
@@ -136,6 +136,22 @@ back-pressured on both the presentation and the accept, and `tools/check_cpu_dom
 instantiation set and the wiring. A future module clocked by `cpu_clk` or
 consuming `cpu_ce` without the bridge is a check failure, not something a bench would see.
 
+**The enable into the clock-control block.** The block registers `ena` on the FALLING edge of
+clk_sys, but TimeQuest (Quartus 17.0) times the path into it, `u_clkena~FF_0`, as a rising-edge
+capture: a full 11.111 ns period at 90 MHz where the silicon has half of it. With `ena` fed
+straight from cpu_throttle's rising-edge `cpu_ce` the fitter was therefore free to route it 6.3 ns
+to the global-clock site (fit rs-fix seed 3: `IC 6.327`, reported slack +0.964 against the
+11.111 ns latch; a booting placement of the RC had `IC 2.428`). Such a placement latches the
+previous cycle's enable, so the CPU's edges miss the cycles the bridge holds its handshakes for
+and the CPU stalls at once at every CPU Speed below Full, while Full (cpu_ce constant 1) is
+untouched: 2 of 6 seeds of e961ee3c and the 2026-11-01 release core did not boot below Full.
+`pc9821_cpu_clk` now stages the throttle's enable in a fabric falling-edge register (`ce_fall`)
+one cycle ahead and the platform's `cpu_ce` is that enable registered once on the rising edge:
+the silicon path into the block is then falling to falling, a full period, and the one TimeQuest
+times (falling to its modelled rising edge) is half a period, conservative instead of optimistic.
+`tools/check_cpu_domain.py` rule 4 pins the structure; `tb_pc9821_cpu_clk` shows the CPU's edges
+stay on the `cpu_ce` cycles for any enable route up to 10.5 ns (the unstaged enable fails at 6 ns).
+
 ### The framework and the HPS/SPI side (frozen)
 
 The core's own `hps_io` (`z486_mister.sv`, `) hps_io`) runs on `clk_sys`; its `HPS_BUS` comes from
@@ -164,13 +180,13 @@ convention, and none of them is a coherence path:
   They change only while the OSD is open, and a one-cycle mix can at worst select a neighbouring
   aspect/scale/scanline setting for one frame. `dbl_on` is *not* in this class: it is the
   synchronised `lv_s1/lv_s2` level (V3), because it changes the pixel stream itself.
-  `status[66:64]` (CD audio volume) is decoded by `pc9821_osd` and registered on `clk_sys` in
-  `pc9821_system` (`always @(posedge clk_sys) vol_cd_q <= cd_volume_code;`), and
-  `pc9821_audio_volume` reads that `vol_cd_l/r` code on `CLK_AUDIO`, like every other `vol_*`
-  input. Every 5-bit value is a legal gain step, so a change landing mid-sample at worst scales
-  one CD sample by a neighbouring code (a click while the OSD is open).
+  The Audio page's fields - `status[75:73]` (PC-9801-86), `status[78:76]` (Beeper) and
+  `status[66:64]` (CD audio) - are *not* in this class: `pc9821_osd` decodes each to a 5-bit
+  gain code whose neighbouring steps flip several bits at once, so the three cross together on
+  the held handshake (A7), not raw. One crossing serves the set: the levels change only while
+  the OSD is open, so a shared handshake costs nothing in responsiveness (latency <= 0.31 us).
 - **`beep_vol[1:0]`.** The 2-bit BEEPER VOLUME from port `0x871E` bits [3:2] (`pc9821_iobus`)
-  is a guest register, sampled on `CLK_AUDIO` in `spk` (`z486_mister.sv`, `spk <= speaker_out_audio ?`). It is not
+  is a guest register, sampled on `CLK_AUDIO` in `spk` (`src/pc9821/audio/pc9821_audio_mix.sv`, `spk <= speaker ? beep_amp`). It is not
   synchronised. Unlike the OSD fields it can change while the machine runs, but like them it is a
   *code*, not a word with an invalid state: all four values are legal amplitudes, the beeper's
   own `speaker_out` tone is the synchronised signal (A2), and the value changes only when ITF
@@ -180,7 +196,7 @@ convention, and none of them is a coherence path:
   that is static in normal use.
 - **The gamma lookup table (`gamma_fast`, framework).** `hps_io` drives the framework's
   `gamma_bus` with `{clk_sys, gamma_en, gamma_wr, gamma_wr_addr, gamma_value}`
-  (`sys/hps_io.sv:252`, `gamma_bus[20:0] = ...`); `gamma_fast` writes its three
+  (`sys/hps_io.sv:267`, `gamma_bus[20:0] = ...`); `gamma_fast` writes its three
   `gamma_curve_{r,g,b}` arrays on that `clk_sys` and reads them on `clk_vid`
   (`sys/gamma_corr.sv:75-100`), so the arrays are a dual-clock LUT. The core only releases the
   bus (`z486_mister.sv`, `assign gamma_bus = 'z;`); `hps_io` owns it. The OSD writes one
@@ -204,7 +220,8 @@ What holds the map together:
   HS), `video_reprogram` (mid-frame GDC SYNC writes and a RESET), `vpll_ctl` (the N/M/K/start
   sequence, busy released only after continuous lock), `pll_cfg_lockstep` (the cut-down
   `pll_cfg_hdmi` against the full `pll_cfg`), `crt31k_video` (the switch to 2 x 25.168 MHz and
-  back), `pcm86_cdc` (the held handshake: order, no half-mix, latency), `audio_out_*` and
+  back), `pcm86_cdc` (the held handshake: order, no half-mix, latency), `audio_level_cdc` (the
+  Audio page's level codes: no intermediate code under per-bit skew), `audio_out_*` and
   `cdda_*`.
 - `python3 tools/check_cpu_domain.py`: every gated-CPU pulse input held or documented, the snoop
   hold back-pressured on both sides.

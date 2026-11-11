@@ -32,6 +32,10 @@
 // and duplicates the CPU's - and the run fails by name.
 
 module tb_pc9821_dma_accept_steal;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -46,6 +50,7 @@ module tb_pc9821_dma_accept_steal;
   // 0x043F's 0x8 nibble, latched in pc9821_iobus. Held off here: this bench is about
   // load/arbitration, and the shadow's routing has its own bench (tb_pc9821_shadow_romsum).
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   wire       win0_sel_moved = (win0_sel != 8'h08);   // pc9821_iobus's registered compare
   // 0x043B bit 2, the 15-16 MiB system-space window. The machine's reset value is ON,
@@ -152,6 +157,8 @@ module tb_pc9821_dma_accept_steal;
   wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
 
   reg        scan_enable = 0;
+
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg [14:0] scan_line_base = 0;
@@ -183,11 +190,12 @@ module tb_pc9821_dma_accept_steal;
   wire gfx_odd_line = 1'b0;
   // ---- pc9821_memory_subsystem's DMA bus-master port, driven by the cases ----
   reg  [31:0] dma_addr = 32'd0;
-  // The DMAC presents its address's plane-window class registered with the address
-  // (pc9821_dmac mem_gvwin); this bench drives the address, so it forms the class the same way.
-  wire [1:0]  dma_gvwin = { (dma_addr[31:16] == 16'h000B),
-                            (dma_addr[31:20] == 12'd0) && ((dma_addr[19:15] == 5'b10101) ||
-                             (dma_addr[19:16] == 4'hB) || (dma_addr[19:15] == 5'b11100)) };
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  // The DMAC's address load (pc9821_dmac mem_addr_nx/mem_load): the subsystem registers the
+  // byte's route as the address loads, so the bench loads the address while no request is up
+  // and presents it at least one cycle later, as the DMAC's S_FIRST/S_DEV -> S_MEM edge does.
+  wire [31:0] dma_addr_nx = dma_addr;
+  wire        dma_load    = !dma_valid;
   reg  [31:0] dma_din  = 32'd0;
   reg   [3:0] dma_be   = 4'd0;
   reg         dma_valid = 1'b0;
@@ -244,6 +252,9 @@ module tb_pc9821_dma_accept_steal;
   // 0x063C bank select into the 0xD8000 window: 0 = the IDE option ROM, the reset bank.
 
   reg  [1:0] d8_bank = 2'b00;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
   // ==== THE BACKEND: the bridge's launch/ack contract, minus the hiding $fatal ====
@@ -388,6 +399,9 @@ module tb_pc9821_dma_accept_steal;
       cpu_burstcount = 8'd1;
       cpu_line_read = 1'b0;
       cpu_write = is_write;
+      // The DMA byte's address is loaded before either request is up (the DMAC loads its
+      // address a cycle before it presents, pc9821_dmac mem_load); the presentation is below.
+      if (use_dma) dma_addr = 32'h0000_2001;
       cpu_valid = 1'b1;
 
       g = 0;
@@ -399,7 +413,6 @@ module tb_pc9821_dma_accept_steal;
 
       if (use_dma) begin
         repeat (k) @(negedge clk);
-        dma_addr  = 32'h0000_2001;
         dma_din   = 32'h5C5C_5C5C;
         dma_be    = 4'b0010;
         dma_write = 1'b1;
@@ -497,6 +510,8 @@ module tb_pc9821_dma_accept_steal;
       b_mem[32'h0000_2000 >> 2] = 32'hD4D3_D2D1;
       cpu_resps = 0; dma_resps = 0;
       cpu_seen = with_cpu ? 0 : 1;
+      dma_addr = 32'h0000_2002;   // loaded before the presentation below (pc9821_dmac mem_load)
+      @(negedge clk);
       if (with_cpu) begin
         cpu_addr = 32'h0000_1000; cpu_be = 4'hF; cpu_burstcount = 8'd1;
         cpu_line_read = 1'b0; cpu_write = 1'b0; cpu_valid = 1'b1;
@@ -504,7 +519,7 @@ module tb_pc9821_dma_accept_steal;
         while (!dut.buf_mem_valid && g < 200) begin @(negedge clk); g = g + 1; end
         repeat (k) @(negedge clk);
       end
-      dma_addr = 32'h0000_2002; dma_be = 4'b0100; dma_din = 32'd0;
+      dma_be = 4'b0100; dma_din = 32'd0;
       dma_write = 1'b0; dma_valid = 1'b1;
       dma_seen = 0; cpu_hold = 0; dma_hold = 0;
       g = 0;

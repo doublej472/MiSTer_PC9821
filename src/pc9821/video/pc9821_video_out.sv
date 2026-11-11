@@ -111,7 +111,7 @@ wire v_rst    = lv_s2[0];
 wire v_31     = lv_s2[2];
 // THE FRAMEWORK'S MODE NOTICE. hps_io re-reports the video mode (and re-takes its frame-clock count)
 // when the measured active area changes or its new_vmode input differs from the value it latched at
-// the previous frame (sys/hps_io.sv:957 `old_vmode != new_vmode`), compared on clk_vid at VSYNC. The
+// the previous frame (sys/hps_io.sv:986 `old_vmode != new_vmode`), compared on clk_vid at VSYNC. The
 // 24 kHz and 31 kHz rasters are both 640 x 400 active, so on the native path only this level tells
 // it the frame rate moved (56.4 Hz to 70.1 Hz). It is v_31 itself: on clk_vid, the domain hps_io's
 // video_calc compares in, and it moves together with v_rst (the FIFO flush for the relock), so the

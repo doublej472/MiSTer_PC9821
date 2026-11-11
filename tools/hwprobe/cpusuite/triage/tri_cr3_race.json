@@ -1,0 +1,112 @@
+{
+  "asm": "tri_cr3_race.asm",
+  "start_mode": "protected",
+  "cr0": "0x80000001",
+  "cr3": 0,
+  "eip": 0,
+  "seg_cache": {
+    "CS": {
+      "base": "0x10000",
+      "limit": "0xfffff",
+      "flags": "0xa9e0"
+    },
+    "DS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "SS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "ES": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "FS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    },
+    "GS": {
+      "base": 0,
+      "limit": "0xfffff",
+      "flags": "0x29e0"
+    }
+  },
+  "page_tables": [
+    [
+      0,
+      0,
+      6,
+      "RW"
+    ],
+    [
+      65536,
+      65536,
+      1,
+      "RW"
+    ],
+    [
+      69632,
+      69632,
+      1,
+      "RW"
+    ],
+    [
+      77824,
+      77824,
+      1,
+      "RW"
+    ],
+    [
+      86016,
+      86016,
+      1,
+      "RW"
+    ],
+    [
+      94208,
+      94208,
+      1,
+      "RW"
+    ],
+    [
+      102400,
+      102400,
+      1,
+      "RW"
+    ],
+    [
+      110592,
+      110592,
+      1,
+      "RW"
+    ],
+    [
+      118784,
+      118784,
+      1,
+      "RW"
+    ],
+    [
+      126976,
+      126976,
+      1,
+      "RW"
+    ],
+    [
+      258048,
+      258048,
+      1,
+      "RW"
+    ]
+  ],
+  "cycles": 200000,
+  "mem_latency": 20,
+  "sim_plusargs": [
+    "expect_stale_walk"
+  ]
+}

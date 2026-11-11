@@ -23,6 +23,10 @@
 // CPU read returned the plane's power-up zeroes.
 
 module tb_pc9821_dma_gvram;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -37,6 +41,7 @@ module tb_pc9821_dma_gvram;
   // 0x043F's 0x8 nibble, latched in pc9821_iobus. Held off here: this bench is about
   // load/arbitration, and the shadow's routing has its own bench (tb_pc9821_shadow_romsum).
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   wire       win0_sel_moved = (win0_sel != 8'h08);   // pc9821_iobus's registered compare
   // 0x043B bit 2, the 15-16 MiB system-space window. The machine's reset value is ON,
@@ -143,6 +148,8 @@ module tb_pc9821_dma_gvram;
   wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
 
   reg        scan_enable = 0;
+
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg [14:0] scan_line_base = 0;
@@ -175,11 +182,12 @@ module tb_pc9821_dma_gvram;
   wire gfx_odd_line = 1'b0;
   // ---- pc9821_memory_subsystem's DMA bus-master port, driven by the cases ----
   reg  [31:0] dma_addr = 32'd0;
-  // The DMAC presents its address's plane-window class registered with the address
-  // (pc9821_dmac mem_gvwin); this bench drives the address, so it forms the class the same way.
-  wire [1:0]  dma_gvwin = { (dma_addr[31:16] == 16'h000B),
-                            (dma_addr[31:20] == 12'd0) && ((dma_addr[19:15] == 5'b10101) ||
-                             (dma_addr[19:16] == 4'hB) || (dma_addr[19:15] == 5'b11100)) };
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  // The DMAC's address load (pc9821_dmac mem_addr_nx/mem_load): the subsystem registers the
+  // byte's route as the address loads, so the bench loads the address while no request is up
+  // and presents it at least one cycle later, as the DMAC's S_FIRST/S_DEV -> S_MEM edge does.
+  wire [31:0] dma_addr_nx = dma_addr;
+  wire        dma_load    = !dma_valid;
   reg  [31:0] dma_din  = 32'd0;
   reg   [3:0] dma_be   = 4'd0;
   reg         dma_valid = 1'b0;
@@ -237,6 +245,9 @@ module tb_pc9821_dma_gvram;
   // 0x063C bank select into the 0xD8000 window: 0 = the IDE option ROM, the reset bank.
 
   reg  [1:0] d8_bank = 2'b00;
+  // The 16-colour mode (the guest's OUT 0x6A,0x01, FF2 num 0): this bench reaches the E plane at
+  // 0xE0000-0xE7FFF, which the machine maps only in that mode (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b1;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
   // ==== THE BACKEND: the bridge's launch/ack contract, minus the hiding $fatal ====
@@ -367,6 +378,7 @@ module tb_pc9821_dma_gvram;
       dma_din   = {4{b}};
       dma_be    = 4'b0001 << addr[1:0];
       dma_write = is_write;
+      @(negedge clk);   // the DMAC's address load: one cycle before the request
       dma_valid = 1'b1;
       seen = 0; hold = 0; resps = 0; rd = 32'hXXXX_XXXX;
       g = 0;
@@ -421,6 +433,7 @@ module tb_pc9821_dma_gvram;
       dma_din   = {4{b}};
       dma_be    = 4'b0001 << addr[1:0];
       dma_write = is_write;
+      @(negedge clk);   // the DMAC's address load: one cycle before the request
       dma_valid = 1'b1;
       seen = 0; hold = 0; resps = 0; rd = 32'hXXXX_XXXX;
       g = 0;
@@ -621,7 +634,10 @@ module tb_pc9821_dma_gvram;
     repeat (2) @(negedge clk);
     commits_before = b_commits;
     dma_byte_flip(32'h000B_0060, 1'b1, 8'hD4, 2, 1, 2'd0, rd, readies);
-    if (b_commits != commits_before + 1 || b_c_addr[commits_before[2:0]] !== 32'h000B_0060) begin
+    // The backend address is the EMS page's, not the window's physical 0xB0060 (the page sits at
+    // ems_page_base, whose low 20 bits are 0x48000 - pc9821_memory_map lo_ems_page; the full
+    // placement is tb_pc9821_dma_route's).
+    if (b_commits != commits_before + 1 || b_c_addr[commits_before[2:0]][19:0] !== 20'h4_8060) begin
       $display("FAIL an EMS-window byte with the planes reselected in flight did not commit to the backend once (commits %0d -> %0d)",
                commits_before, b_commits);
       errors = errors + 1;

@@ -57,8 +57,7 @@ module tb_pc9821_kbd_single_service;
       .din(din),
       .dout(dout),
       .irq(irq),
-      .ps2_key(ps2_key),
-      .bios_setup(1'b0)
+      .ps2_key(ps2_key)
   );
 
   // The consumer's request latch - pc9821_pic.sv's edge latch in shape (set on a

@@ -15,8 +15,8 @@
 #   PC9821Z486.mgl                  - the MGL descriptor (menu entry "PC9821")
 #   games/PC9821/pc98pack-xe10.bin  - firmware pack, from your dumps (F0,BIN)
 #   games/PC9821/hdd.img            - your PC-98 HDD image (S0,IMG)
-#   Scripts/pc9821_cue2pcd.sh       - Scripts-menu entry: CUE/BIN -> PCD on the card
-#   Scripts/.pc9821/cue2pcd.py      - the converter it runs (tools/cue2pcd.py)
+# Nothing is staged under Scripts/: no script is installed on the MiSTer, and the image
+# converters (tools/cue2pcd.py, tools/fdconv.py, tools/pc98_hdd_convert.py) run on a computer.
 #
 # setname PC9821 makes MiSTer resolve file paths relative to the PC9821/
 # games folder, so the pack and image live there.
@@ -43,16 +43,12 @@ if [ ! -f "$rbf" ]; then
 fi
 if [ ! -f "$pack" ]; then
     echo "error: $pack not found. Build it from your own dumps with" >&2
-    echo "       PC98_ITF=... PC98_BIOS=... PC98_FONT=... PC98_IDE=... make pack" >&2
+    echo "       make pack PC98_DUMPS=/path/to/your/dumps" >&2
     exit 1
 fi
 
 cp -f "$rbf"  "$deploy/_Computer/PC9821Z486.rbf"
 cp -f "$pack" "$games/pc98pack-xe10.bin"
-# The Scripts-menu CUE/BIN converter (tools/mister/pc9821_cue2pcd.sh runs .pc9821/cue2pcd.py).
-mkdir -p "$deploy/Scripts/.pc9821"
-cp -f tools/mister/pc9821_cue2pcd.sh "$deploy/Scripts/pc9821_cue2pcd.sh"
-cp -f tools/cue2pcd.py "$deploy/Scripts/.pc9821/cue2pcd.py"
 
 # CONF_STR: "F0,BIN,Load BIOS ROM;" and "S0,IMG,Mount HDD;".
 # F0 -> file type f at index 0; S0 -> mount type s at index 0.
@@ -83,7 +79,7 @@ cp -f tools/cue2pcd.py "$deploy/Scripts/.pc9821/cue2pcd.py"
 # freezes with a blank screen, the exact defect the rotation removed. The file is inert only
 # while its name is the WRONG one: MiSTer keys the config on the MGL's <setname> = PC9821, so
 # PC9821Z486.CFG is ignored. Rename it to the correct PC9821.CFG and it becomes live, and
-# anyone following the README's "offline alternative: stage mister_deploy/" would copy a 1 MB
+# anyone copying a staged mister_deploy/ tree to a card by hand would copy a 1 MB
 # RAM selection onto a card and freeze it.
 #
 # So the staged tree is swept AND THEN CHECKED. A printed assurance that nothing verifies is

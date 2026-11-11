@@ -35,7 +35,10 @@ module tb_pc9821_gameport;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   // pc9821_iobus's ports, named because it is instantiated with (.*).
   reg [31:0] cpu_addr = 0, cpu_din = 0;
   reg [3:0] cpu_be = 0;
@@ -80,6 +83,7 @@ module tb_pc9821_gameport;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -90,6 +94,7 @@ module tb_pc9821_gameport;
   wire [1:0]  beep_vol;   // 0x871E bits [3:2], the beeper volume (see pc9821_iobus)
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
   // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
@@ -124,7 +129,8 @@ module tb_pc9821_gameport;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -140,8 +146,10 @@ module tb_pc9821_gameport;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
-  pc9821_iobus #(.SDIP_WRITES_ENABLED(0)) dut (
-      .ide_unit0_present(1'b0),.*);
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
+  pc9821_iobus #(.SDIP_WRITES_ENABLED(0), .GAMEPORT_118(1)) dut (
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // pc9821_system's device glue: the card's select (P5 made the ONE pc9821_device_select
   // instance live inside pc9821_iobus, so `.*` above binds gameport_cs to it), the game port

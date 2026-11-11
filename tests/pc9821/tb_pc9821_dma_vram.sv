@@ -78,7 +78,7 @@ module tb_pc9821_dma_vram;
     .sel(sel), .write(write), .idx(idx), .din(din), .dout(dout),
     .dev_drq(drq), .dev_dack(dack), .dev_we(dev_we), .dev_stb(dev_stb),
     .dev_tc(dev_tc), .dev_ch(dev_ch), .dev_dout(dev_dout), .dev_din(dev_din),
-.mem_addr(mem_addr), .mem_gvwin(mem_gvwin), .mem_we(mem_we), .mem_be(mem_be), .mem_din(mem_din),
+.mem_addr(mem_addr), .mem_we(mem_we), .mem_be(mem_be), .mem_din(mem_din),
     .mem_dout(mem_dout), .mem_req(mem_req),
     .mem_ready(mem_ready), .mem_resp_valid(mem_resp_valid)
   );
@@ -123,17 +123,6 @@ module tb_pc9821_dma_vram;
   end
   assign mem_ready = acc_now;
   always @(*) mem_dout = produced;
-
-  // THE PLANE-WINDOW CLASS travels registered with the address (pc9821_dmac mem_gvwin) and
-  // must name the windows NP2kai's CPU handler table gives the planes (i386c/cpumem.c memfn0:
-  // the 0xA8000-0xBFFFF and 0xE0000-0xE7FFF 32 KiB slots of the first MiB), [1] the B block or
-  // the text RAM 0xA0000-0xA3FFF (memtram_wr8's slot; 2'b10 is the text RAM alone).
-  wire [1:0] mem_gvwin;
-  always @(posedge clk)
-    if (mem_req && (mem_gvwin !== {(mem_addr[31:16] == 16'h000B) || (mem_addr[31:14] == 18'h00028),
-                                    (mem_addr[31:20] == 12'd0) && ((mem_addr[19:15] == 5'b10101) ||
-                                     (mem_addr[19:16] == 4'hB) || (mem_addr[19:15] == 5'b11100))}))
-      $fatal(1, "the DMA's plane-window class %b does not describe its address %08x", mem_gvwin, mem_addr);
 
   // A byte transfer drives exactly one lane, and the lane is the address's low bits.
   always @(posedge clk)

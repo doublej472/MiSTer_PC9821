@@ -1,0 +1,3 @@
+XE10 KIT 720 KB TEST DISK
+If you can read this line in Windows 95, the 720 KB disk was read.
+PATTERN.BIN is 300000 bytes: the byte at offset n is n modulo 251.

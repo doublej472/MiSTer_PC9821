@@ -1,0 +1,108 @@
+IDEPROBE - PC-9821 real-machine IDE/ATA probe (tools/hwprobe/ideprobe.s)
+Ports: 0430/0432/0433/0435 interface, 0640-064E task file, 074C/074E alt;
+005C-005F are the ARTIC counter, not IDE. Sections are BEGIN:/END: bracketed.
+BEGIN:PORTMAP
+  interface registers as found (0430 0432 0433 0435 1E8E):
+0430=40 0432=00 0433=00 0435=00 1E8E=FE 
+  task file as found BEFORE any 0432 write (0640-064E, 0740-074E):
+0640=06 0641=FF 0642=00 0644=00 0646=0B 0648=0B 064A=00 064C=A6 
+064E=50 0740=00 0741=FF 0742=00 0744=00 0746=00 0748=00 074A=00 
+074C=50 074E=00 
+  legacy 005C-005F (the ARTIC counter, not IDE):
+005C=FB 005D=A6 005E=A6 005F=67 
+  BANK 0432 as found = 00
+  BANK 0432<-01 rb=01 st=50
+  BANK 0432<-80 rb=01 st=50
+  BANK 0432<-81 status=50
+  BANK 0432 restored rb=00
+END:PORTMAP
+BEGIN:REG
+  task file with 0432=01 (live bank):
+0640=50 0641=FF 0642=00 0644=03 0646=01 0648=02 064A=00 064C=A0 
+064E=50 0740=0F 0741=FF 0742=0F 0744=0F 0746=0F 0748=0F 074A=0F 
+074C=50 074E=02 
+END:REG
+BEGIN:DRVSEL
+  0x64C drive/head write read-back (io-audit F3): re-write the as-found
+  byte, then read ERROR/STATUS back, to see whether the write clears a
+  pending ERR bit at idle.
+  064C as-found = A0
+  0642 ERROR as-found -> after = 00 -> 00
+  064E STATUS as-found -> after = 50 -> 50
+  064C restored = A0
+END:DRVSEL
+BEGIN:TIME
+  I/O access time, TM_N=1024 back-to-back accesses per class in a cli window.
+  pit is the mode-3 oscillator counts (byte order measured); artic is the 005C/005F
+  counter delta for diagnosis. base is the interleaved control measured BESIDE the
+  class, so (pit-base)/(WAIT5F pit-base) is the class's ratio to the machine's own
+  0x5F 600 ns wait = 30 clk_sys. That ratio x30 is the value the core's class table
+  for this port should carry (the IDE data port is currently 42, the old value 30).
+  PIT channel-0 measured divisor = FFF6
+  class    port mode pit  base artic
+BASE     port=0000 mode=B pit=0085 base=0085 artic=00000024
+WAIT5F   port=005F mode=W pit=0892 base=0085 artic=00000227
+BASE     port=0000 mode=B pit=0084 base=0084 artic=00000023
+IDEDAT0  port=0640 mode=R pit=0480 base=0084 artic=00000122
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+IDEDAT1  port=0641 mode=R pit=0481 base=0082 artic=00000122
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATASTAT  port=064E mode=R pit=0481 base=0082 artic=00000123
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATAERR   port=0642 mode=R pit=047C base=0082 artic=00000123
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000022
+ATACNT   port=0644 mode=R pit=0480 base=0082 artic=00000122
+BASE     port=0000 mode=B pit=0083 base=0083 artic=00000023
+ATASEC   port=0646 mode=R pit=0481 base=0083 artic=00000123
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATACYL   port=0648 mode=R pit=0480 base=0082 artic=00000123
+BASE     port=0000 mode=B pit=0083 base=0083 artic=00000023
+ATACYH   port=064A mode=R pit=0481 base=0083 artic=00000123
+BASE     port=0000 mode=B pit=0083 base=0083 artic=00000023
+ATADH    port=064C mode=R pit=0482 base=0083 artic=00000124
+BASE     port=0000 mode=B pit=0083 base=0083 artic=00000024
+ATAALT   port=074C mode=R pit=0480 base=0083 artic=00000123
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATA74E   port=074E mode=R pit=047F base=0082 artic=00000122
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATA430   port=0430 mode=R pit=0480 base=0082 artic=00000122
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATA432   port=0432 mode=R pit=0480 base=0082 artic=00000123
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000023
+ATA1E8E  port=1E8E mode=R pit=0480 base=0082 artic=00000123
+BASE     port=0000 mode=B pit=0082 base=0082 artic=00000022
+END:TIME
+BEGIN:IDENTIFY
+  IDENTIFY status before/after = 50 D1 wait_ok= 01
+  task file with 0432=01 (live bank):
+0640=51 0641=FF 0642=04 0644=01 0646=01 0648=14 064A=EB 064C=00 
+064E=51 0740=0F 0741=FF 0742=0F 0744=0F 0746=0F 0748=0F 074A=0F 
+074C=51 074E=02 
+END:IDENTIFY
+BEGIN:RECAL
+  RECALIBRATE 0x10 status before/after = 51 51 polls = 138
+  status transitions (poll count, raw byte, decoded bits):
+    RECAL poll 1 D0 BSY=1 DRDY=1 DSC=1 DRQ=0 ERR=0
+    RECAL poll 107 D1 BSY=1 DRDY=1 DSC=1 DRQ=0 ERR=1
+    RECAL poll 138 51 BSY=0 DRDY=1 DSC=1 DRQ=0 ERR=1
+  task file with 0432=01 (live bank):
+0640=51 0641=FF 0642=04 0644=01 0646=01 0648=14 064A=EB 064C=A0 
+064E=51 0740=0F 0741=FF 0742=0F 0744=0F 0746=0F 0748=0F 074A=0F 
+074C=51 074E=02 
+END:RECAL
+BEGIN:DIAG
+  DIAG status before = 51 ; after 0x90 status = 00 ; after 0x90 ERROR(0642) = 01 ; odd partners 0641/0643 = FF FF
+  after 0x08 status = 80 ; after 0x08 ERROR(0642) = 80
+END:DIAG
+BEGIN:IRQ
+  vector 0x11 (IRQ9) as found = D800:19BC
+  PIC as found m_imr s_imr m_irr m_isr s_irr s_isr = 7D 75 01 00 10 00
+  during IDENTIFY s_irr s_isr m_irr m_isr = 98 00 00 00
+  ISR status = 00 count = 0 pre/final status = 80 00
+END:IRQ
+  note: slave bit1 is IRQ9 (master cascade bit7); IRQ9 vector is 0x11.
+  count>0 with s_isr bit1 set = the drive asserts IRQ9 and it reached the CPU.
+BEGIN:RESTORE
+  0432 was 00 -> now 00
+END:RESTORE
+IDEPROBE DONE

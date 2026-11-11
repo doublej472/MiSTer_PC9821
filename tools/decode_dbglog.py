@@ -16,6 +16,10 @@ the guest resets mid-record and is removed first, and line noise - are skipped a
   0x30 / 0x31   memory snoop (--dbg-snoop)  a CPU write / a read response beat in the window;
                                             0x32 LOST events
   0x43 / 0x44   instruction trace (--dbg-trig)  one entry of the frozen ring / the trigger record
+                                            (stage byte {tag, 0, last, stage}: tag 4 = an io:
+                                            trigger, last = --dbg-last-ms)
+  0x50-0x56     floppy log (--dbg-fdc)      FDC data write/read, MSR change, IRQ edge, control
+                                            register, DMA write/read; 0x5E LOST, 0x5F ALIVE
 
 Usage:
   decode_dbglog.py CAPTURE                 the records in order (samples condensed to one line)
@@ -30,6 +34,8 @@ Usage:
   decode_dbglog.py CAPTURE --gdcw OUT      the display writes as `GDCW cyc=<ms> port=.. val=..` lines
   decode_dbglog.py CAPTURE --attrmap MS    the text attribute map the runs imply at MS
   decode_dbglog.py CAPTURE --json          one JSON object per record
+  decode_dbglog.py CAPTURE --fdc           the floppy log alone, with each command's bytes, its
+                                           result and the controller's last state at the end
   decode_dbglog.py --selftest              encode every record type, decode it, compare
 
   --from S / --to S select a time range (seconds from the first record of the capture).
@@ -54,6 +60,7 @@ LEN = {
     0x20: 34, 0x21: 34,
     0x30: 15, 0x31: 15, 0x32: 8,
     0x43: 15, 0x44: 13,
+    **{t: 7 for t in range(0x50, 0x57)}, 0x5E: 7, 0x5F: 7,
 }
 # Types whose last byte is 0x5A (a framing check the decoder applies).
 TAIL5A = {0x20, 0x21, 0x43, 0x44}
@@ -80,6 +87,8 @@ def source_of(t: int) -> str:
         return "cpu"
     if t in (0x30, 0x31, 0x32):
         return "snoop"
+    if 0x50 <= t <= 0x5F:
+        return "fdc"
     return "trace"
 
 
@@ -121,7 +130,8 @@ def parse(data: bytes, clk_mhz: float = 80.0) -> Capture:
     banners = data.count(BANNER)
     data = data.replace(BANNER, b"")
     recs, skipped, i, n = [], 0, 0, len(data)
-    uw = {"ms_cd": Unwrap(16), "ms_gdc": Unwrap(16), "ms_cpu": Unwrap(16), "cyc": Unwrap(32)}
+    uw = {"ms_cd": Unwrap(16), "ms_gdc": Unwrap(16), "ms_cpu": Unwrap(16), "cyc": Unwrap(32),
+          "t_fdc": Unwrap(24)}
     clk_hz = clk_mhz * 1e6
     while i < n:
         t = data[i + 1] if i + 1 < n else -1
@@ -143,6 +153,9 @@ def parse(data: bytes, clk_mhz: float = 80.0) -> Capture:
                 r.f = dict(line=((p[4] & 3) << 8) | p[5], val=p[6])
             else:
                 r.f = dict(port=GDC_PORTS[t - 0x10], line=((p[4] & 3) << 8) | p[5], val=p[6])
+        elif src == "fdc":
+            r.t = uw["t_fdc"](int.from_bytes(p[2:5], "big")) / 100000.0
+            r.f = dict(a=p[5], b=p[6])
         elif src == "cpu":
             r.t = uw["ms_cpu"]((p[2] << 8) | p[3]) / 1000.0
             r.f = dict(cs=(p[4] << 8) | p[5], ip=(p[6] << 8) | p[7], lost=(t == 0x21),
@@ -163,7 +176,9 @@ def parse(data: bytes, clk_mhz: float = 80.0) -> Capture:
                            eip=int.from_bytes(p[6:10], "big"), sp=int.from_bytes(p[10:12], "big"),
                            flags=int.from_bytes(p[12:14], "big"))
             else:
-                r.f = dict(stage=p[2], addr=int.from_bytes(p[3:7], "big"), data=int.from_bytes(p[7:11], "big"),
+                # stage byte {tag[3:0], 0, last, stage[1:0]} (pc9821_dbg_cpu rec_g)
+                r.f = dict(stage=p[2] & 3, last=(p[2] >> 2) & 1, tag=p[2] >> 4,
+                           addr=int.from_bytes(p[3:7], "big"), data=int.from_bytes(p[7:11], "big"),
                            be=p[11] & 0xF)
         recs.append(r)
         i += ln
@@ -171,6 +186,15 @@ def parse(data: bytes, clk_mhz: float = 80.0) -> Capture:
     # time bases of different sources are each from power-up; the capture's own zero is the first
     # record of any kind, which is the only common reference the stream carries
     return cap
+
+
+def trigger_text(f: dict) -> str:
+    """One line for a 0x44 record: an io: trigger names the port, the byte and the match count."""
+    last = " (last occurrence)" if f.get("last") else ""
+    if f.get("tag") == 4:
+        return (f"stage {f['stage']}{last} OUT port={f['addr'] & 0xFFFF:04X} val={f['data'] & 0xFF:02X} "
+                f"match #{f['data'] >> 8} since arming")
+    return f"stage {f['stage']}{last} addr={f['addr']:08X} data={f['data']:08X} be={f['be']:X}"
 
 
 def trace_of(cap: Capture):
@@ -218,8 +242,60 @@ def cd_line(r: Rec) -> str:
     return f"{r.t:9.3f}s  CD {s}"
 
 
+FDC_CMDS = {0x02: "READ DIAGNOSTIC", 0x03: "SPECIFY", 0x04: "SENSE DRIVE STATUS", 0x05: "WRITE DATA",
+            0x06: "READ DATA", 0x07: "RECALIBRATE", 0x08: "SENSE INT STATUS", 0x09: "WRITE DELETED",
+            0x0A: "READ ID", 0x0C: "READ DELETED", 0x0D: "FORMAT", 0x0F: "SEEK", 0x11: "SCAN EQUAL",
+            0x13: "CONFIGURE", 0x19: "SCAN LOW/EQ", 0x1D: "SCAN HIGH/EQ"}
+FDC_CTL = {0: "0094", 1: "00CC", 2: "00BE", 3: "04BE", 4: "00BF"}
+FDC_DMA = {0x09: "ch2 addr", 0x0B: "ch2 count", 0x11: "cmd/status", 0x13: "request", 0x15: "single mask",
+           0x17: "mode", 0x19: "clear FF", 0x1B: "master clear", 0x1D: "clear mask", 0x1F: "all mask",
+           0x23: "ch2 bank", 0x29: "bank mode", 0x39: "0439"}
+
+
+def fdc_state(b: int) -> str:
+    """pc9821_fdc dbg_state {IRQ, DRQ, st[2:0], x_st[2:0]}."""
+    st = ["IDLE", "PARAM", "EXEC", "RESULT"][(b >> 3) & 3] if (b >> 3) & 7 < 4 else f"st{(b >> 3) & 7}"
+    xs = ["-", "REQ", "XFER", "WEND", "NDW", "IDW"][b & 7] if b & 7 < 6 else f"x{b & 7}"
+    return f"[{'I' if b & 0x80 else '.'}{'D' if b & 0x40 else '.'} {st}/{xs}]"
+
+
+def fdc_line(r: Rec) -> str:
+    t, a, b = r.type, r.f["a"], r.f["b"]
+    if t == 0x50:
+        s = f"WR 92 <- {a:02x}  {fdc_state(b)}"
+        if (b >> 3) & 7 == 0:
+            s += f"  ({FDC_CMDS.get(a & 0x1F, 'invalid')})"
+    elif t == 0x51:
+        s = f"RD 92 -> {a:02x}  {fdc_state(b)}"
+    elif t == 0x52:
+        s = f"MSR    -> {a:02x}  (after {b}{'+' if b == 255 else ''} read(s) of the previous value)"
+    elif t == 0x53:
+        s = f"IRQ {'RISE' if a else 'FALL'}   {fdc_state(b)}"
+    elif t == 0x54:
+        s = f"{'RD' if b & 0x80 else 'WR'} {FDC_CTL.get(b & 7, '?')} {'->' if b & 0x80 else '<-'} {a:02x}"
+    elif t in (0x55, 0x56):
+        s = f"DMA {'WR' if t == 0x55 else 'RD'} {(0x400 | a) if a == 0x39 else a:04x} ({FDC_DMA.get(a, '?')}) {'<-' if t == 0x55 else '->'} {b:02x}"
+    elif t == 0x5E:
+        s = f"LOST {a} record(s)"
+    else:
+        s = f"ALIVE {a:02x}"
+    return f"{r.t:11.5f}s  FDC {s}"
+
+
+def cmd_fdc(cap: Capture, t0, t1) -> None:
+    rs = [r for r in cap.recs if r.src == "fdc" and in_range(r, t0, t1, {})]
+    for r in rs:
+        print(fdc_line(r))
+    last = [r for r in rs if r.type in (0x50, 0x51, 0x53)]
+    if last:
+        print(f"# {len(rs)} floppy records; the controller's last reported state {fdc_state(last[-1].f['b'])}, "
+              f"last MSR {next((r.f['a'] for r in reversed(rs) if r.type == 0x52), 0):02x}")
+
+
 def line_of(r: Rec, vtotal: int = 440, vactive: int = 400) -> str:
     t, f = r.type, r.f
+    if r.src == "fdc":
+        return fdc_line(r)
     if r.src == "cpu":
         return sample_line(r)
     if r.src == "cd":
@@ -242,7 +318,7 @@ def line_of(r: Rec, vtotal: int = 440, vactive: int = 400) -> str:
         return f"{r.t:9.6f}s  SNOOP {'R' if f['read'] else 'W'} {f['addr']:08X} {f['data']:08X}{extra}  cyc={f['cyc']}"
     if t == 0x43:
         return (f"TRACE  #{f['idx']:4d} {f['cs']:04X}:{f['eip']:08X} sp={f['sp']:04X} fl={f['flags']:04X}")
-    return (f"TRIGGER stage {f['stage']} addr={f['addr']:08X} data={f['data']:08X} be={f['be']:X}")
+    return "TRIGGER " + trigger_text(f)
 
 
 def in_range(r: Rec, t0, t1, base) -> bool:
@@ -259,13 +335,14 @@ def cmd_summary(cap: Capture) -> None:
     lost_g = sum(r.f["val"] for r in cap.recs if r.type == 0x1E)
     lost_s = sum(r.f["lost"] for r in cap.recs if r.type == 0x32)
     lost_c = sum(r.p[4] for r in cap.recs if r.type == 0x09)
+    lost_f = sum(r.f["a"] for r in cap.recs if r.type == 0x5E)
     smp = [r for r in cap.recs if r.src == "cpu"]
     skipped_samples = 0
     for a, b in zip(smp, smp[1:]):
         skipped_samples += (b.f["seq"] - a.f["seq"] - 1) & 255
-    print(f"  records LOST: display {lost_g}, CD {lost_c}; snoop events lost {lost_s}; "
+    print(f"  records LOST: display {lost_g}, CD {lost_c}, floppy {lost_f}; snoop events lost {lost_s}; "
           f"samples skipped (sequence gaps) {skipped_samples}")
-    for src in ("cd", "gdc", "cpu", "snoop"):
+    for src in ("cd", "gdc", "fdc", "cpu", "snoop"):
         rs = [r for r in cap.recs if r.src == src]
         if rs:
             print(f"  {src}: {rs[0].t:.3f} .. {rs[-1].t:.3f} s on its own clock")
@@ -311,7 +388,7 @@ def cmd_trace(cap: Capture) -> None:
     for e in ent:
         print(f"#{e['idx']:4d} {e['cs']:04X}:{e['eip']:08X} sp={e['sp']:04X} fl={e['flags']:04X}")
     if trg:
-        print(f"trigger: stage {trg['stage']} addr={trg['addr']:08X} data={trg['data']:08X} be={trg['be']:X}")
+        print("trigger: " + trigger_text(trg))
     else:
         print("no trigger record")
     print(f"# {len(ent)} trace entries")
@@ -424,8 +501,18 @@ def _encode_all() -> tuple[bytes, list]:
     add(bytes([SYNC, 0x32]) + (cyc + 9).to_bytes(4, "big") + (3).to_bytes(2, "big"), lost=3, cyc=cyc + 9)
     add(bytes([SYNC, 0x43]) + (5).to_bytes(2, "big") + (0x1234).to_bytes(2, "big") + (0x5678).to_bytes(4, "big")
         + (0xFFFE).to_bytes(2, "big") + (0x0202).to_bytes(2, "big") + bytes([0x5A]), idx=5, cs=0x1234, eip=0x5678, sp=0xFFFE, flags=0x202)
+    # the last entry of a 2^12 ring (--dbg-trace-aw 12): the index is 16 bits, here a V86 segment
+    add(bytes([SYNC, 0x43]) + (4095).to_bytes(2, "big") + (0xFD80).to_bytes(2, "big") + (0x1A82).to_bytes(4, "big")
+        + (0x0FFE).to_bytes(2, "big") + (0x0246).to_bytes(2, "big") + bytes([0x5A]), idx=4095, cs=0xFD80, eip=0x1A82, sp=0x0FFE, flags=0x246)
+    t10 = lambda v: v.to_bytes(3, "big")                     # the floppy log's 10 us time
+    for n, t in enumerate(list(range(0x50, 0x57)) + [0x5E, 0x5F]):
+        add(bytes([SYNC, t]) + t10(0x123400 + n) + bytes([0x40 + n, 0x80 + n]),
+            t=(0x123400 + n) / 100000.0, a=0x40 + n, b=0x80 + n)
     add(bytes([SYNC, 0x44, 2]) + (0x3D950).to_bytes(4, "big") + (0xDEADBEEF).to_bytes(4, "big") + bytes([0xF, 0x5A]),
-        stage=2, addr=0x3D950, data=0xDEADBEEF, be=0xF)
+        stage=2, addr=0x3D950, data=0xDEADBEEF, be=0xF, last=0, tag=0)
+    # an io: trigger in the last-occurrence mode: OUT 0x0F to port 0x92, the 7th match
+    add(bytes([SYNC, 0x44, 0x45]) + (0x92).to_bytes(4, "big") + (0x70F).to_bytes(4, "big") + bytes([0x0, 0x5A]),
+        stage=1, addr=0x92, data=0x70F, be=0, last=1, tag=4)
     return bytes(out), want
 
 
@@ -491,6 +578,7 @@ def main() -> int:
     ap.add_argument("--gdcw", metavar="OUT")
     ap.add_argument("--attrmap", type=int, metavar="MS")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--fdc", action="store_true")
     ap.add_argument("--bin", type=float, default=1.0)
     ap.add_argument("--top", type=int, default=4)
     ap.add_argument("--from", dest="t0", type=float)
@@ -520,6 +608,8 @@ def main() -> int:
         cmd_gdcw(cap, a.gdcw)
     elif a.attrmap is not None:
         cmd_attrmap(cap, a.attrmap)
+    elif a.fdc:
+        cmd_fdc(cap, a.t0, a.t1)
     elif a.json:
         for r in cap.recs:
             print(json.dumps(dict(off=r.off, type=r.type, src=r.src, t=r.t, f=r.f)))

@@ -14,6 +14,9 @@ module pc9821_memory_subsystem #(
 ) (
     input wire clk,
     input wire reset,
+    // The OSD Reset level (hps_io status[0], raw), which `reset` also carries. Read only by the
+    // pack-download hold beside the loader (pack_load_hold, below).
+    input wire hps_apply_reset,
     input wire [3:0] top_bank,
     // 0x043F's 0x2 nibble: which of the machine's three measured states the 64 KiB EMS
     // window at 0xB0000-0xBFFFF is in. 0 = identity/VRAM, 1 = the RAM page, 2 = unmapped.
@@ -29,6 +32,9 @@ module pc9821_memory_subsystem #(
     // 0x043F's 0x8 nibble (pc9821_iobus top_shadow_en): the writable layer over the
     // 0xF8000-0xFFFFF window is enabled. See fw_shadow_dirty below.
     input wire top_shadow_en,
+    // pc9821_iobus's one-cycle reboot strobe (the 0x534 soft reset), a reset class: clears
+    // fw_shadow_dirty as the machine reset does.
+    input wire soft_reboot,
     // 0x0461 window-0 base (see pc9821_memory_map.sv).
     input wire [7:0] win0_sel,
     // pc9821_iobus's registered `win0_sel != 8'h08` (see pc9821_memory_map.sv).
@@ -51,6 +57,10 @@ module pc9821_memory_subsystem #(
     // 4-dot group boundary (pc9821_pegc_scan's byte-select header).
     input wire pegc_256,
     input wire pegc_256e,
+    // The 16-colour select (pc9821_crtc's mode2_16color, port 0x6A FF2 num 0): the E plane at
+    // 0xE0000-0xE7FFF exists only with it set; in the digital mode the slot is open bus
+    // (pc9821_memory_map's e_plane_nc).
+    input wire mode2_16color,
     input wire [2:0] scan_dot,
     input wire scan_dot_ce,
     input wire scan_dot_act,
@@ -122,12 +132,20 @@ module pc9821_memory_subsystem #(
     output wire        rom_ready,
     output wire        load_error,
     output wire        cpu_run,
+    // A firmware-pack download is being taken under the OSD Reset level (a boot ROM the HPS sends
+    // at core start). While it is high the loader and the SDRAM backend it writes through are
+    // kept out of the platform reset (z486_mister.sv gates the backend's reset with it).
+    output wire        pack_load_hold,
 
     // The scanout's read side. The GVRAM block owns the line fetch
     // the ping-pong line buffer and its pacing; these ports are the raster's
     // view of it: hand it the line tick and the line's origin and read the
     // assembled columns out of the buffer the display pipeline is pointing at.
     input  wire        scan_enable,
+    // OSD I/O timing = Xe10 (status[79]) and the graphics GDC's fetch window (pc9821_gdc2's
+    // gfx_grph_on): pc9821_gvram_arb's Xe10 store table reads them. Both 0 is Fast.
+    input  wire        gvram_timing_xe10,
+    input  wire        gvram_gfx_scan_on,
     input  wire        scan_line_tick,
     input  wire        scan_page,
     input  wire [14:0] scan_line_base,
@@ -230,18 +248,23 @@ module pc9821_memory_subsystem #(
     // so its accept is recorded in the response-route queue with a DMA tag and its beat is
     // delivered here (dma_resp_valid/dma_dout) instead of to the mapper.
     input  wire [31:0] dma_addr,
+    // The address dma_addr loads next and the cycle it loads (pc9821_dmac mem_addr_nx/mem_load):
+    // the byte's route is decoded from these and registered with dma_addr (see the DMA route
+    // block), so no address decode sits between the request and its accept.
+    input  wire [31:0] dma_addr_nx,
+    input  wire        dma_load,
     input  wire [31:0] dma_din,
     input  wire [3:0]  dma_be,
     input  wire        dma_valid,
     input  wire        dma_write,
-    // dma_addr's video-window class, registered with it by the DMAC (pc9821_dmac mem_gvwin):
-    // [0] in a plane window (first MiB, A8000-BFFFF or E0000-E7FFF), [1] in B0000-BFFFF (the
-    // part an EMS window can claim) OR in the text RAM A0000-A3FFF. Only the B block sets [0]
-    // too, so 2'b10 names the text RAM (dma_tvram) and 2'b11 the B block.
-    input  wire [1:0]  dma_gvwin,
     output wire        dma_ready,
     output wire [31:0] dma_dout,
     output wire        dma_resp_valid,
+    // The DMA byte's address after the map's window-0 move and the 15 MiB mirror (dma_d
+    // below): the name the CPU's caches hold for the byte the DMA touches, so the
+    // external snoop (pc9821_system's dma_snoop_valid) invalidates that line rather than
+    // the window's own (uncached) alias.
+    output wire [31:0] dma_snoop_addr,
 
     // The SDRAM module geometry (the controller's own sdram_size,1/2/3 =
     // 32/64/128 MB): the store buffer groups its gather sessions by the physical
@@ -411,19 +434,21 @@ module pc9821_memory_subsystem #(
   wire peg_window    = (sys16m_en || peg_high) &&
                        !(|route_addr[31:24]) && (route_addr[23:20] == 4'hF) &&
                        !route_addr[19];
-  // Window 0 = 0x0A aliases QEMU's 32 KiB tvram overlay, which swallows the CG offset too
-  // (0x84000 -> 0xA4000 is still the text VRAM there, M1); the direct address keeps
-  // the 16 KiB TRAM and the CG window, because the CG window has the higher priority.
-  // 0xA0000-0xA7FFF, and window 0 = 0x0A swallows only the 16 KiB TRAM half of it.
-  wire tram_window = !(|route_addr[31:20]) && (route_addr[19:16] == 4'hA) && !route_addr[15];
-  wire tram_select = tram_window && (win0_moved || !route_addr[14]);
+  // 0xA0000-0xA7FFF on the DIRECT address only: the text RAM (16 KiB), the CG window and the
+  // gap. Window 0 = 0x0A does NOT reach them - on the machine its page is RAM of its own
+  // (docs/probes/DMAROUTE-XE10.TXT cases W1/W2: a store through 0x81000 under 0x0461=0x0A reads
+  // back there while the text RAM at 0xA1000 keeps its prefill, `W2 CPU V1 NORMAL A000:1000 P1 ->
+  // P1`), which pc9821_memory_map's moved arm sends to the backend at d_addr; QEMU's 32 KiB tvram
+  // overlay at that value is not what the machine does.
+  wire tram_window = !win0_moved && !(|route_addr[31:20]) && (route_addr[19:16] == 4'hA) && !route_addr[15];
+  wire tram_select = tram_window && !route_addr[14];
   // The GVRAM route. The mapper owns the plane-window decode (window 0's bias
   // included) and emits a plane index and a plane offset; pc9821_gvram owns the
   // planes from there. Both are functions of cpu_addr alone, so gating the
   // mapper's cpu_valid with gvram_select cannot loop.
   wire map_gvram_window;
   wire gvram_select = map_gvram_window;
-  wire map_pegc_reg_win, map_pegc_nc, map_pegc_packed;
+  wire map_pegc_reg_win, map_pegc_nc, map_pegc_packed, map_e_plane_nc;
   wire map_addr_ge_ram;
   // The ONE window-0 bias: the mapper's post-window-0 address and the flag that made it,
   // consumed above as route_addr/win0_moved.
@@ -457,17 +482,17 @@ module pc9821_memory_subsystem #(
   // THE 12 KiB GAP BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF: the machine reads
   // 0xFF there and DISCARDS stores -- the absent-region shape, not RAM. Nothing decoded it, so
   // the mapper's default arm served it as live guest storage at d_addr. It is not an alias and
-  // not a window that is one bit too wide: `tram_window` deliberately spans the whole 32 KiB so
-  // window 0 = 0x0A can lay the 32 KiB text overlay over 0xA0000-0xA7FFF (see tram_select), and
-  // the DIRECT encoding's upper 12 KiB had no owner of its own. This is that owner.
+  // not a window that is one bit too wide: `tram_window` spans the whole 32 KiB (it once let
+  // window 0 = 0x0A lay a 32 KiB text overlay over 0xA0000-0xA7FFF, which the machine does not
+  // do - see tram_window), and the upper 12 KiB had no owner of its own. This is that owner.
   // Machine: docs/probes/VRAM.TXT:141-142 (`A600wrote= 00 FF 55 AA` / `got= FF FF FF FF`,
   // reproduced in VRAM2.TXT:153-154) with its neighbouring A000/A200 (TRAM) and A800/B000/B800
   // (planes) rows round-tripping in the SAME capture, so the probe was writing and reading
   // working storage either side of the hole; NP2kai drops the store there the same way
   // (mem/memtram.c:73-100 has no write arm past 0xA5000).
-  // `!tram_select` is what keeps the window-0 alias out of it: with win0_moved set,
-  // tram_select already claims the whole 32 KiB, so a 0x0461 = 0x0A overlay keeps the shape
-  // the same capture pins (`0461=0A ... a=5AA5`, the marker round-tripping at the window base).
+  // tram_window is off for a moved address, so window 0 = 0x0A's page at 0x85000-0x87FFF is the
+  // window's RAM, not this gap (the marker round-trips at the window base, WIN.TXT `0461=0A ...
+  // a=5AA5`).
   wire tram_gap = tram_window && !tram_select && !cg_win_select;
   // The C-Bus absent ROM area (0xC0000-0xD7FFF) is decoded by the mapper -- on
   // the translated address, so window 0 = 0x0C inherits it -- and routed here to
@@ -523,7 +548,7 @@ module pc9821_memory_subsystem #(
   // (BANK4@0x1434-0x144C, disassembled from the Xe10 firmware).
   wire peg_aperture_open = peg_window && !pegc_vram_en;
   wire open_select = !cg_win_select && !peg_window &&
-                     (map_absent_area || map_pegc_nc || map_ems_open_bus || sys16m_hole ||
+                     (map_absent_area || map_pegc_nc || map_e_plane_nc || map_ems_open_bus || sys16m_hole ||
                       tram_gap ||
                       (map_addr_ge_ram &&
                        !(&route_addr[31:15]))) ||
@@ -573,11 +598,39 @@ module pc9821_memory_subsystem #(
   wire rt_full;
   wire rt_empty;
 
+  // THE PACK-DOWNLOAD HOLD: a boot ROM arrives while the OSD Reset level is held.
+  // Main_MiSTer sends games/<core>/boot0.rom at core start with the same transfer as an OSD
+  // file load (release 20261010, commit 738cb7a: user_io.cpp:1684 `user_io_file_tx(mainpath,
+  // i << 6);`, index 0 for boot0, and menu.cpp:2752 `user_io_file_tx(selPath, idx, opensave,
+  // 0, 0, load_addr);` for the OSD's F0 entry), but with status[0] set before it
+  // (user_io.cpp:1613 `user_io_status_set("[0]", 1);`) and cleared only after it
+  // (user_io.cpp:1774 `if (!is_minimig() && !is_st()) user_io_status_set("[0]", 0);`).
+  // status[0] is a term of the platform reset (z486_mister.sv `reset_req = buttons[1] |
+  // status[0] | disk_change_reset`), and that reset drops every word the loader is handed and
+  // holds the SDRAM controller in reset, so a boot-ROM pack never landed.
+  //
+  // The hold SETS on a selected download while the OSD Reset level is up and CLEARS once the
+  // platform reset has gone low; set wins (R3), one next-state expression. Keeping it through
+  // the whole reset rather than dropping it with status[0] matters: `reset` falls three
+  // clk_sys after status[0] does (z486_mister.sv's reset_sync_r), and a hold that fell first
+  // would hand the SDRAM controller a two-cycle reset, which re-runs its JEDEC initialisation.
+  // Only the loader and the backend leave the reset; the CPU and the rest of the machine stay
+  // in it until status[0] falls, and pc9821_cpu_reset_gate also holds the CPU on
+  // hps_apply_reset and on cpu_run. With no download under status[0] (an OSD Reset) the hold
+  // stays low and the reset is the one it always was.
+  /* verilator lint_off PROCASSINIT */  // the power-up value, kept by Quartus on an internal register
+  reg pack_load_hold_r = 1'b0;
+  /* verilator lint_on PROCASSINIT */
+  wire pack_dl_selected = ioctl_download && (ioctl_index == IOCTL_INDEX);
+  always @(posedge clk)
+    pack_load_hold_r <= (hps_apply_reset && pack_dl_selected) || (pack_load_hold_r && reset);
+  assign pack_load_hold = pack_load_hold_r;
+
   pc9821_rom_loader #(
       .IOCTL_INDEX(IOCTL_INDEX),
       .PACK_BYTES(PACK_BYTES)
   ) loader (
-      .clk(clk), .reset(reset), .pack_base(pack_base),
+      .clk(clk), .reset(reset && !pack_load_hold_r), .pack_base(pack_base),
       .shadow_base(fw_shadow_base),
       .ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
       .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
@@ -613,11 +666,16 @@ module pc9821_memory_subsystem #(
   // THE TEXT RAM, 0xA0000-0xA3FFF, IS A DMA TARGET TOO (the plane windows' story, below):
   // NP2kai's memp_write8 sends a DMA byte at or above 0xA0000 through the CPU's handler table
   // (memtram_wr8), so a sector read to A000:xxxx lands where a CPU fetch of A000:xxxx reads (a
-  // floppy IPL that DMAs its next stage to A000:1000 and jumps there). The DMAC's registered
-  // class names it 2'b10 (pc9821_dmac gvwin); the byte joins this responder, the text RAM's
-  // only CPU-side port. NOT MODELLED, as for the planes: a 0x0461 window-0 move of a DMA address.
-  wire        dma_tvram     = dma_gvwin[1] && !dma_gvwin[0];
-  wire        dma_valid_tv  = dma_valid && dma_tvram;
+  // floppy IPL that DMAs its next stage to A000:1000 and jumps there). The DMA route block
+  // (below) classes it exactly as tram_select classes a CPU address (the direct address only:
+  // window 0 = 0x0A moves a DMA address to the window's RAM page, as it moves a CPU's); the
+  // byte joins this responder, the text RAM's only CPU-side port.
+  // THE CG WINDOW, 0xA4000-0xA4FFF, IS ONE TOO: on the machine a DMA byte there lands in the
+  // selected glyph exactly as a CPU store does (docs/probes/DMAROUTE-XE10.TXT case G1, DMA = CPU
+  // with both views D), so the class dma_cgw sends it to this responder's CG byte port.
+  wire        dma_tvram;
+  wire        dma_cgw;
+  wire        dma_valid_tv  = dma_valid && (dma_tvram || dma_cgw);
   wire       dma_tv_ready, dma_tv_resp;
   wire [7:0] dma_tv_dout;
   pc9821_window_responder u_window (
@@ -630,6 +688,7 @@ module pc9821_memory_subsystem #(
       .cpu_line_word(win_cpu_line_word), .cpu_ready(win_cpu_ready),
       .cpu_resp_valid(win_cpu_resp_valid),
       .cpu_line_word_valid(win_cpu_line_word_valid),
+      .dma_route_cg(dma_cgw),
       .dma_valid(dma_valid_tv), .dma_write(dma_write), .dma_addr(dma_addr[13:0]),
       .dma_din(dma_din[7:0]), .dma_ready(dma_tv_ready), .dma_resp_valid(dma_tv_resp),
       .dma_dout(dma_tv_dout),
@@ -639,6 +698,184 @@ module pc9821_memory_subsystem #(
       .byte_dout(cg_win_dout), .byte_din(cg_win_din), .byte_we(cg_win_we),
       .byte_hold(cg_win_byte_hold)
   );
+
+  // ==== A DMA BYTE GOES WHERE A CPU BYTE ACCESS AT ITS ADDRESS GOES ====
+  // The uPD71071 is a bus master on the CPU's own memory map: NP2kai's transfer engine moves
+  // each byte with MEMP_WRITE8/MEMP_READ8 (mem/dmax86.c `MEMP_WRITE8(ch->adrs.d, ...)` and
+  // `ch->proc.outproc(MEMP_READ8(ch->adrs.d))`), i.e. memp_write8/memp_read8, which for an
+  // address past CPU_MEMWRITEMAX/CPU_MEMREADMAX dispatch through the same handler table the
+  // CPU's own accesses use (i386c/cpumem.c `memfn0.wr8[address >> 15](address, value);`,
+  // `return(memfn0.rd8[address >> 15](address));`). Both directions are therefore routed: a
+  // floppy sector read to 0xA8000 lands in plane B, and in 256-colour mode the table's
+  // 0xA8000/0xB0000 slots are the packed banks (memvga0/memvga1), 0xB8000 is memnc (reads
+  // 0xFF, drops the store) and 0xE0000 is the PEGC register file (memvgaio) - i386c/cpumem.c's
+  // VOPBIT_VGA arm. MAME's PC-9801 does the same through the CPU's address space (pc9801.cpp
+  // dma_write_byte, `program.write_byte`). NP2kai has no 0x0461 window; qemu-pc98's DMA reads
+  // and writes the system address space (hw/dma/pc98-dma.c physical_memory_read/write), whose
+  // low MiB carries the window-0 alias (hw/i386/pc98-mem.c mem_apply_window), so a DMA
+  // address in 0x80000-0x9FFFF is moved by window 0 exactly as a CPU address is.
+  //
+  // THE TRANSLATION IS THE MAP ITSELF, A SECOND INSTANCE ON THE DMA ADDRESS. pc9821_memory_map
+  // is purely combinational and the CPU's instance carries the CPU's address on the design's
+  // worst cone (eff_addr -> win0_moved -> the region decode), so the DMA cannot share that
+  // instance without a mux in that cone. A second instance of the SAME module keeps one
+  // definition of every window (window 0, the EMS page and its unmapped state, the PEGC bank
+  // splice and its not-connected arms, the ROM windows and their dropped stores, the absent
+  // area, the RAM bound); only the subsystem-level routes (text RAM, CG window, the
+  // 0xA5000 gap, the 15-16 MiB window) are re-decoded here, on the DMA's post-map address
+  // (dma_d), with the same predicates the CPU's route selects use on route_addr.
+  // The 15 MiB mirror is eff_addr's first arm on the DMA address; the PEGC high alias and the
+  // top-of-4G BIOS arms need address bit 31, which the DMAC never sets (pc9821_dmac drives
+  // mem_addr = {1'b0, ch_addr}).
+  //
+  // THE DECODE RUNS ON THE ADDRESS BEING LOADED AND IS REGISTERED WITH IT. The DMAC loads
+  // dma_addr from dma_addr_nx on dma_load, the same edge that raises its request, so the route
+  // below is registered on that edge too and every acceptor sees a registered class from the
+  // request's first cycle. Decoding the held dma_addr instead put the map in series with
+  // dma_ready, which reaches z486's snoop input combinationally (pc9821_system
+  // dma_snoop_valid) - a fit's worst clk_sys path. No cycle is added.
+  wire        dma_mirror = sys16m_en && !(|dma_addr_nx[31:24]) && (dma_addr_nx[23:16] >= 8'hFA);
+  wire [31:0] dma_eff    = dma_mirror ? {12'd0, dma_addr_nx[19:0]} : dma_addr_nx;
+  wire [31:0] dma_d;
+  wire        dma_w0;
+  wire        dma_map_gvram, dma_map_absent, dma_map_ge_ram, dma_map_ems_ob;
+  wire        dma_map_pegc_reg, dma_map_pegc_nc, dma_map_mv, dma_map_fw_store, dma_map_e_nc;
+  wire  [1:0] dma_map_plane;
+  wire [31:0] dma_map_addr;
+  // The 0xF00000 PEGC aperture on the DMA's post-window-0 address (peg_window's predicate;
+  // the high-alias term cannot hold for a DMA address, see above).
+  wire        dma_peg_window = sys16m_en && !(|dma_d[31:24]) && (dma_d[23:20] == 4'hF) && !dma_d[19];
+  pc9821_memory_map dma_map (
+      .top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(d8_bank),
+      .ide_ram_gate(ide_ram_gate),
+      .ems_state(ems_state), .ems_page_base(ems_page_base),
+      .bios_ram_gate(bios_ram_gate),
+      .win0_sel(win0_sel), .win0_sel_moved(win0_sel_moved),   // the CPU's own window 0
+      .top_shadow_en(top_shadow_en), .fw_shadow_dirty(fw_shadow_dirty),
+      .fw_shadow_base(fw_shadow_base), .fw_shadow_store(dma_map_fw_store),
+      .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
+      .peg_window(dma_peg_window), .peg_base(peg_base),
+      .pegc_256(pegc_256), .pegc_plane(pegc_plane_mode),
+      .pegc_bank_a(pegc_bank_a), .pegc_bank_b(pegc_bank_b),
+      /* verilator lint_off PINCONNECTEMPTY */   // intentional: the DMA has no store buffer and no CPU-side response
+      .pegc_packed(),
+      .pegc_reg_win(dma_map_pegc_reg), .pegc_nc(dma_map_pegc_nc),
+      // The E plane only in the 16-colour mode, for a DMA byte as for a CPU access: the DMA
+      // goes through the CPU's handler table (the NP2kai citation above), whose 0xE0000 slot
+      // memm_vram makes memnc while VOPBIT_ANALOG is clear (i386c/cpumem.c). The digital-mode
+      // slot (e_plane_nc) joins dma_open_live below: a read answers 0xFF, a store is dropped.
+      .mode2_16color(mode2_16color), .e_plane_nc(dma_map_e_nc),
+      .gvram_window(dma_map_gvram), .gvram_win_plane(dma_map_plane), .gvram_win_offset(),
+      .cpu_addr(dma_eff), .cpu_din(dma_din),
+      .cpu_addr_raw(dma_addr_nx), .xl_low20(dma_mirror), .xl_peg(1'b0),
+      .cpu_dout(), .cpu_be(dma_be),
+      .cpu_burstcount(8'd1), .cpu_line_read(1'b0),
+      // Always presented: mem_valid is then the map's "a backend request is owed" decode
+      // (no out-of-range, absent, unmapped-EMS or discarded-ROM-store arm), qualified below.
+      .cpu_valid(1'b1),
+      .cpu_write(dma_write),
+      .cpu_ready(), .cpu_resp_valid(),
+      .absent_area(dma_map_absent), .addr_ge_ram(dma_map_ge_ram), .ems_open_bus(dma_map_ems_ob),
+      .d_addr(dma_d), .win0_moved(dma_w0),
+      .mem_addr(dma_map_addr), .mem_din(), .mem_dout(32'd0),
+      .mem_be(), .mem_burstcount(),
+      .mem_valid(dma_map_mv), .mem_write(), .mem_ready(1'b0),
+      /* verilator lint_on PINCONNECTEMPTY */
+      .mem_resp_valid(1'b0)
+  );
+  reg  [31:0] dma_snoop_q;
+  assign dma_snoop_addr = dma_snoop_q;
+
+  // The subsystem-level route selects on dma_d, each the CPU's own predicate on route_addr
+  // (tram_window/tram_select, cg_win_select, tram_gap, sys16m_hole, open_select).
+  wire dma_tram_win   = !dma_w0 && !(|dma_d[31:20]) && (dma_d[19:16] == 4'hA) && !dma_d[15];
+  wire dma_tvram_live = dma_tram_win && !dma_d[14];
+  wire dma_cg_live    = dma_tram_win && dma_d[14] && !dma_d[13] && !dma_d[12];
+  wire dma_gap_live   = dma_tram_win && !dma_tvram_live && !dma_cg_live;
+  wire dma_s16_hole   = sys16m_en && !(|dma_addr_nx[31:24]) && ((dma_addr_nx[23:16] & 8'hFE) == 8'hF8);
+  wire dma_open_live  = (!dma_cg_live && !dma_peg_window &&
+                         (dma_map_absent || dma_map_pegc_nc || dma_map_e_nc || dma_map_ems_ob || dma_s16_hole ||
+                          dma_gap_live || (dma_map_ge_ram && !(&dma_d[31:15])))) ||
+                        (dma_peg_window && !pegc_vram_en);
+  // A byte no route takes: the open-bus shape (a read answers 0xFF in every lane, a store is
+  // dropped) for the CPU's open_select classes, and a store the map discards (a ROM window, the
+  // shadow with 0x053D bit 1 clear - the map's fw_write_blocked, the only arm that leaves
+  // mem_valid low outside the open classes).
+  wire dma_null_live  = dma_open_live ||
+                        (!dma_tvram_live && !dma_map_gvram && !dma_map_pegc_reg && !dma_map_mv);
+  // NOT MODELLED (item 161): the PEGC store buffer. A CPU packed/aperture store is POSTED for up to its
+  // 1 us combining window (pc9821_pegc_storebuf), and the DMA's backend arm does not drain it,
+  // so a DMA byte to the same dword inside that window is ordered against the CPU's store by
+  // the backend, not by program order.
+
+  // THE ROUTE IS FROZEN FOR THE REQUEST'S LIFE. Every mode term above is a register the CPU
+  // writes (port 0x6A's 256-colour bit, the 0x043F EMS state, the PEGC banks and mode, 0x0461,
+  // 0x043B, the ROM-window gates), and the CPU keeps running while the uPD71071 holds a byte, so
+  // an OUT can land between the byte's presentation and its accept. Re-decoding then would move
+  // the byte between acceptors under a held request (the backend arm's mem_valid falling before
+  // its ack, the bridge's hold-until-ready contract; the share's granted visit losing its
+  // request, pc9821_gvram_share R7) or move the backend address under it (a bank write). The
+  // class, the backend address, the plane index and the snoop name are therefore the values
+  // decoded at the address load (above) and are held until the next load, which the DMAC makes
+  // only with no request outstanding. A mode write in the load cycle itself acts as one landing
+  // just after it. tb_pc9821_dma_gvram's in-flight mode-write cases and tb_pc9821_dma_route's
+  // in-flight bank write pin it.
+  // dma_cls: [5] the CG window, [4] the byte is a store into the 0xF8000 shadow, [3] no route takes it,
+  // [2] the PEGC register file, [1] the planes, [0] the text RAM.
+  wire  [5:0] dma_cls_live = {dma_cg_live, dma_map_fw_store, dma_null_live, dma_map_pegc_reg && !dma_null_live,
+                              dma_map_gvram, dma_tvram_live};
+  reg   [5:0] dma_cls;
+  reg  [31:0] dma_be_addr;
+  reg   [1:0] dma_gv_plane;
+  reg  [31:0] dma_addr_ld;   // the address the class describes (checked against dma_addr below)
+  always @(posedge clk) begin
+    if (reset) begin
+      dma_cls      <= 6'd0;
+      dma_be_addr  <= 32'd0;
+      dma_gv_plane <= 2'd0;
+      dma_snoop_q  <= 32'd0;
+      dma_addr_ld  <= 32'd0;
+    end else if (dma_load) begin
+      dma_cls      <= dma_cls_live;
+      dma_be_addr  <= dma_map_addr;
+      dma_gv_plane <= dma_map_plane;
+      dma_snoop_q  <= dma_d;
+      dma_addr_ld  <= dma_addr_nx;
+    end
+  end
+  // The plane index (registered above) is the one the map gives the address, and the plane
+  // offset is the dword-aligned offset whose byte lane dma_be picks - the operand shape a CPU
+  // byte store at that address presents (pc9821_gvram_arb: byte k of the dword sits at plane
+  // offset {win_offset[14:2], k}). The window-0 move never changes bits [16:0]
+  // (pc9821_memory_map's bias splice), so the offset is dma_addr's own.
+  wire [14:0] dma_gv_offset = {dma_addr[14:2], 2'b00};
+  wire        dma_gvram     = dma_cls[1];
+  wire        dma_pegr      = dma_cls[2];
+  wire        dma_null      = dma_cls[3];
+  wire        dma_fw_store  = dma_cls[4];
+  assign      dma_cgw       = dma_cls[5];
+  assign      dma_tvram     = dma_cls[0];
+  wire        dma_valid_gv  = dma_valid && dma_gvram;
+  wire        dma_valid_pr  = dma_valid && dma_pegr;
+  wire        dma_valid_nl  = dma_valid && dma_null;
+  wire        dma_valid_be  = dma_valid && !dma_gvram && !dma_tvram && !dma_cgw && !dma_pegr && !dma_null;
+`ifdef VERILATOR
+  // The registered route describes the presented address: the DMAC loads both on one edge.
+  always @(posedge clk)
+    if (!reset && dma_valid && (dma_addr_ld !== dma_addr))
+      $fatal(1, "PC9821 DMA route registered for %08x but the request is at %08x", dma_addr_ld, dma_addr);
+`endif
+
+  // THE OPEN-BUS SHAPE FOR A DMA BYTE: accepted in its presentation cycle (no state to wait
+  // on), and a read answered the cycle after with 0xFF in every lane (NP2kai memnc_rd8
+  // `return(0xff);`, the machine's unmapped-EMS and absent-area reads). The DMAC drops its
+  // request on the accept (pc9821_dmac S_MEM), so the response is one pulse per read.
+  wire dma_nl_ready = dma_valid_nl;
+  reg  dma_nl_resp_q;
+  always @(posedge clk) begin
+    if (reset) dma_nl_resp_q <= 1'b0;
+    else       dma_nl_resp_q <= dma_valid_nl && !dma_write;
+  end
 
   // The pack's FONT.ROM copy. FONT_PACK_OFFSET is where the 1 MiB pack carries the whole
   // FONT.ROM verbatim (0x46800 bytes, at the 512 KiB boundary; see
@@ -683,15 +920,41 @@ module pc9821_memory_subsystem #(
   // consume. Its responder is the open_bus shape: accept and response in separate
   // cycles (see pc9821_pegc's header for the register semantics and the recorded
   // divergences).
+  //
+  // THE PORT IS SHARED WITH THE uPD71071: in 256-colour mode a DMA byte at 0xE0000-0xE7FFF is a
+  // register access (NP2kai's memvgaio slot, the DMA route block below). `peg_dma_q` names the
+  // master that owns the port; it is a REGISTER, so the operand muxes below add a flop-selected
+  // 2:1 level and no decode to the CPU's path into the register file. It changes hands only
+  // while the responder is idle and the owner presents nothing (pc9821_pegc idle: the one cycle
+  // a request is sampled, with no transaction in flight), so a transaction's ready and response
+  // always belong to the master that owned the port when it was sampled. A fresh choice prefers
+  // the DMA, whose byte the FDC is waiting on; the CPU waits at most one register transaction.
+  reg         peg_dma_q;
+  wire        peg_idle;
+  wire        peg_rdy, peg_rv;
+  wire        peg_cpu_req = cpu_valid && cpu_run && peg_reg_select;
+  wire        peg_req     = peg_dma_q ? dma_valid_pr : peg_cpu_req;
+  always @(posedge clk) begin
+    if (reset || !cpu_run) peg_dma_q <= 1'b0;
+    else if (peg_idle && !peg_req) peg_dma_q <= dma_valid_pr;
+  end
+  assign peg_cpu_ready      = peg_rdy && !peg_dma_q;
+  assign peg_cpu_resp_valid = peg_rv && !peg_dma_q;
+  wire   dma_pr_ready       = peg_rdy && peg_dma_q;
+  wire   dma_pr_resp        = peg_rv && peg_dma_q;
   pc9821_pegc u_pegc (
       .clk(clk), .reset(reset || !cpu_run),
-      .cpu_valid(cpu_valid && cpu_run && peg_reg_select),
-      .cpu_write(cpu_write), .cpu_line_read(cpu_line_read),
-      .cpu_addr(eff_addr[14:0]), .cpu_din(cpu_din), .cpu_be(cpu_be),
+      .cpu_valid(peg_req),
+      .cpu_write(peg_dma_q ? dma_write : cpu_write),
+      .cpu_line_read(peg_dma_q ? 1'b0 : cpu_line_read),
+      .cpu_addr(peg_dma_q ? dma_addr[14:0] : eff_addr[14:0]),
+      .cpu_din(peg_dma_q ? dma_din : cpu_din),
+      .cpu_be(peg_dma_q ? dma_be : cpu_be),
       .cpu_dout(peg_cpu_dout),
-      .cpu_ready(peg_cpu_ready), .cpu_resp_valid(peg_cpu_resp_valid),
+      .cpu_ready(peg_rdy), .cpu_resp_valid(peg_rv),
       .bank_a(pegc_bank_a), .bank_b(pegc_bank_b),
-      .plane_mode(pegc_plane_mode), .vram_en(pegc_vram_en)
+      .plane_mode(pegc_plane_mode), .vram_en(pegc_vram_en),
+      .idle(peg_idle)
   );
 
   pc9821_memory_map mapper (
@@ -717,6 +980,9 @@ module pc9821_memory_subsystem #(
       .pegc_packed(map_pegc_packed),
       .pegc_reg_win(map_pegc_reg_win),
       .pegc_nc(map_pegc_nc),
+      // The E plane only in the 16-colour mode; the digital-mode slot is routed to the
+      // open-bus responder (open_select above).
+      .mode2_16color(mode2_16color), .e_plane_nc(map_e_plane_nc),
       // The map decodes the plane windows and nothing else: the planes
       // themselves are pc9821_gvram's (the instance below), which owns them in M10K.
       .gvram_window(map_gvram_window), .gvram_win_plane(map_gvram_plane),
@@ -840,64 +1106,6 @@ module pc9821_memory_subsystem #(
   // `egc_enable` arrives already in its post-AND form (the EGC's enable ANDed with the
   // GRCG's mode bit 7 - pc9821_system's gdc_egc_mem_gate, NP2kai VOPBIT_EGC &&
   // VOPBIT_GRCG), which is exactly the dispatch gate the arb reads.
-  // ==== A DMA BYTE INTO THE PLANE WINDOWS IS A GVRAM ACCESS, NOT AN SDRAM ONE ====
-  // The uPD71071 is a bus master on the CPU's own memory map: NP2kai's transfer engine moves
-  // each byte with MEMP_WRITE8/MEMP_READ8 (mem/dmax86.c `MEMP_WRITE8(ch->adrs.d, ...)`), which
-  // for a first-MiB address dispatches through the same handler table the CPU's stores use
-  // (i386c/cpumem.c `memfn0.wr8[address >> 15](address, value);`), so a floppy sector read
-  // to 0xA8000 lands in plane B exactly as a CPU store there would; MAME's PC-9801 does the
-  // same through the CPU's address space (pc9801.cpp dma_write_byte, `program.write_byte`).
-  // The planes live in M10K (u_gmem), so the backend arm below would put such a byte in the
-  // SDRAM hole under the window, where nothing reads it. This decode is the plane-window
-  // membership the map applies to a CPU address (pc9821_memory_map's gvram_window: the
-  // first MiB, A8000-BFFFF and E0000-E7FFF, B0000-BFFFF yielding to an active EMS window, and
-  // no planes in 256-colour mode), on the DMA's physical address - a DMA address is never
-  // translated by window 0 (NOT MODELLED: NP2kai's table would apply a moved 0x80000 window;
-  // a DMA into that window keeps going to the backend at its physical address; item 148).
-  // The address compare itself is the DMAC's, registered with the address (dma_gvwin), so only
-  // the two mode terms are live here.
-  //
-  // NOT MODELLED EITHER: a DMA byte into B0000-BFFFF with an EMS page selected, or into any plane
-  // window in 256-colour mode, goes to the backend at its physical address - the SDRAM under the
-  // window, which the CPU does not read there. NP2kai sends it where the CPU's handler table
-  // points (mem/dmax86.c MEMP_WRITE8 -> i386c/cpumem.c `memfn0.wr8[address >> 15]`): to the EMS
-  // page for an active 0x043F 0x2x state, and to the PEGC bank in 256-colour mode. No reference
-  // transfer targets either (item 148).
-  //
-  // THE CLASS IS FROZEN FOR THE REQUEST'S LIFE. The two mode terms are registers the CPU writes
-  // (port 0x6A's 256-colour bit, the 0x043F EMS state), and the CPU keeps running while the
-  // uPD71071 holds a byte, so an OUT can land between the byte's presentation and its accept.
-  // Re-decoding then would move the byte between acceptors under a held request: the backend
-  // arm's mem_valid would fall before its ack (the bridge's hold-until-ready contract) while the
-  // visitor port raised a second request for the same byte, or the share's granted visit would
-  // lose its request (pc9821_gvram_share R7) while the backend took the byte too. So the class
-  // the byte was presented with is latched at its first presented cycle and held until its
-  // accept (dma_ready) or until the request falls; the first cycle uses the live decode, so no
-  // cycle is added. tb_pc9821_dma_gvram's in-flight mode-write cases pin it.
-  wire        dma_gv_e0    = (dma_addr[19:15] == 5'b11100);
-  wire        dma_gvram_live = dma_gvwin[0] && !pegc_256 && !(dma_gvwin[1] && (ems_state != 2'd0));
-  reg         dma_cls_lock_q, dma_gvram_q;
-  wire        dma_gvram    = dma_cls_lock_q ? dma_gvram_q : dma_gvram_live;
-  // The plane index the map gives a CPU address (`a[16:15] - 1` for the contiguous windows,
-  // 3 for E0000), and the dword-aligned plane offset whose byte lane dma_be picks - the
-  // operand shape a CPU byte store at that address presents (pc9821_gvram_arb: byte k of the
-  // dword sits at plane offset {win_offset[14:2], k}).
-  wire  [1:0] dma_gv_plane  = dma_gv_e0 ? 2'd3 : (dma_addr[16:15] - 2'd1);
-  wire [14:0] dma_gv_offset = {dma_addr[14:2], 2'b00};
-  wire        dma_valid_gv  = dma_valid && dma_gvram;
-  wire        dma_valid_be  = dma_valid && !dma_gvram && !dma_tvram;
-  // The class latch (see above). One writer per register: the lock's next state is one
-  // expression of the request level and its accept.
-  always @(posedge clk) begin
-    if (reset) begin
-      dma_cls_lock_q <= 1'b0;
-      dma_gvram_q    <= 1'b0;
-    end else begin
-      dma_cls_lock_q <= dma_valid && !dma_ready;
-      if (!dma_cls_lock_q) dma_gvram_q <= dma_gvram_live;
-    end
-  end
-
   // THE SHARE'S VISITOR PORT CARRIES THE GDC DRAW ENGINE OR THE DMA, one request at a time.
   // pc9821_gvram_share already serves a non-CPU master (the GDC visit) with the grant, the
   // response tag and the hold-until-accept rule a DMA byte needs, so the DMA joins THAT port
@@ -1000,6 +1208,7 @@ module pc9821_memory_subsystem #(
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_gvram_arb (
       .clk(clk), .reset(reset || !cpu_run),
       .access_page(gvr_page),
+      .timing_xe10(gvram_timing_xe10), .gfx_scan_on(gvram_gfx_scan_on),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
       .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),
       .cpu_be(gvr_be), .cpu_line_read(gvr_line_read),
@@ -1330,14 +1539,17 @@ module pc9821_memory_subsystem #(
   wire dma_owns = owner_is_dma;
   // The backend's accept, or the plane window's (dma_gv_ready, the visitor port above), or the
   // text RAM's (dma_tv_ready, the window responder).
-  assign dma_ready = (mem_ready && dma_owns) || dma_gv_ready || dma_tv_ready;
+  // ... or the PEGC register file's (dma_pr_ready), or the open-bus shape's (dma_nl_ready).
+  assign dma_ready = (mem_ready && dma_owns) || dma_gv_ready || dma_tv_ready || dma_pr_ready ||
+                     dma_nl_ready;
   // A write completes at the ACCEPT (the backend returns nothing for it); a READ's beat is
   // the response whose queue head is tagged DMA (rt_dma, below).
   wire   rt_head_dma    = rt_dma[rt_rd[1:0]];
   assign dma_resp_valid = (mem_resp_valid && !loader_owns && !rt_empty && rt_head_dma) ||
-                          dma_gv_resp || dma_tv_resp;
+                          dma_gv_resp || dma_tv_resp || dma_pr_resp || dma_nl_resp_q;
   // The text RAM's byte is replicated across the lanes (the DMAC picks the lane mem_be names).
-  assign dma_dout       = dma_gv_resp ? vis_rdata : dma_tv_resp ? {4{dma_tv_dout}} : mem_dout;
+  assign dma_dout       = dma_gv_resp ? vis_rdata : dma_tv_resp ? {4{dma_tv_dout}} :
+                          dma_pr_resp ? peg_cpu_dout : dma_nl_resp_q ? 32'hFFFF_FFFF : mem_dout;
 
   // THE PEGC POSTED STORE BUFFER (trade-candidates T21). The mapper's backend arm feeds it; PEGC
   // packed/aperture STORES are posted here
@@ -1456,10 +1668,22 @@ module pc9821_memory_subsystem #(
 
   // A gated top-window store is accepted here: from then on the shadow is the window's read
   // source (pc9821_memory_map fw_shadow_read), because it holds content the pack does not.
+  // The reboot strobe (pc9821_iobus soft_reboot) empties it the way the machine reset
+  // does: QEMU's pc98_mem_reset restores the stored drive-bitmap byte (`s->f8e90_value =
+  // s->f8e90_reset`) on the armed 0x534 reset. Set vs clear (R3): CLEAR wins, and the two
+  // cannot meet - the strobe is the CPU's own `out 0x534` completing, so the CPU has no
+  // store in flight, and a DMA into the BIOS window in that one cycle is the assertion's.
+  wire fw_shadow_set = (fw_shadow_store && map_valid && map_ready) ||
+                       (dma_fw_store && dma_owns && backend_accept);
   always @(posedge clk) begin
-    if (reset) fw_shadow_dirty <= 1'b0;
-    else if (fw_shadow_store && map_valid && map_ready) fw_shadow_dirty <= 1'b1;
+    if (reset || soft_reboot) fw_shadow_dirty <= 1'b0;
+    else if (fw_shadow_set)       fw_shadow_dirty <= 1'b1;
   end
+`ifdef VERILATOR
+  always @(posedge clk)
+    if (!reset && soft_reboot && fw_shadow_set)
+      $error("pc9821_memory_subsystem: a top-window shadow store met the reboot's shadow reset");
+`endif
 
   assign map_accepted = !rt_empty && !rt_head_dma;
 
@@ -1468,7 +1692,8 @@ module pc9821_memory_subsystem #(
   // (pc9821_pegc_storebuf: the posted PEGC drains and the passthrough requests). They
   // are gated so no two owners drive the bus at once -- the route-isolation assertions
   // below check exactly that.
-  assign mem_addr = owner_is_load ? load_addr : (dma_owns ? dma_addr : buf_mem_addr);
+  // The DMA's backend address is the map's translation of its address (dma_be_addr, above).
+  assign mem_addr = owner_is_load ? load_addr : (dma_owns ? dma_be_addr : buf_mem_addr);
   assign mem_din = owner_is_load ? load_din : (dma_owns ? dma_din : buf_mem_din);
   // The pair's second dword: only the buffer's two-word drain writes it (port 0's
   // WRITE_BURST path, sdram.v's din0_hi); every other owner has no second word.
@@ -1607,12 +1832,18 @@ module pc9821_memory_subsystem #(
       $fatal(1, "PC9821 backend request without active DMA request");
     // The DMA byte's three acceptors (backend, plane windows, text RAM) are selected by the
     // byte's disjoint address classes, so one byte is accepted - and answered - by one of them.
-    if (((mem_ready && dma_owns) ? 2'd1 : 2'd0) + (dma_gv_ready ? 2'd1 : 2'd0) +
-        (dma_tv_ready ? 2'd1 : 2'd0) > 2'd1)
+    if (((mem_ready && dma_owns) ? 3'd1 : 3'd0) + (dma_gv_ready ? 3'd1 : 3'd0) +
+        (dma_tv_ready ? 3'd1 : 3'd0) + (dma_pr_ready ? 3'd1 : 3'd0) +
+        (dma_nl_ready ? 3'd1 : 3'd0) > 3'd1)
       $fatal(1, "PC9821 two DMA acceptors answered one byte");
-    if ((dma_gv_resp ? 2'd1 : 2'd0) + (dma_tv_resp ? 2'd1 : 2'd0) +
-        ((mem_resp_valid && !loader_owns && !rt_empty && rt_head_dma) ? 2'd1 : 2'd0) > 2'd1)
+    if ((dma_gv_resp ? 3'd1 : 3'd0) + (dma_tv_resp ? 3'd1 : 3'd0) +
+        (dma_pr_resp ? 3'd1 : 3'd0) + (dma_nl_resp_q ? 3'd1 : 3'd0) +
+        ((mem_resp_valid && !loader_owns && !rt_empty && rt_head_dma) ? 3'd1 : 3'd0) > 3'd1)
       $fatal(1, "PC9821 two DMA responses in one cycle");
+    // The DMA byte's route classes are one-hot (or none: the backend).
+    if (dma_valid && ((dma_tvram ? 3'd1 : 3'd0) + (dma_cgw ? 3'd1 : 3'd0) + (dma_gvram ? 3'd1 : 3'd0) +
+                      (dma_pegr ? 3'd1 : 3'd0) + (dma_null ? 3'd1 : 3'd0) > 3'd1))
+      $fatal(1, "PC9821 DMA route overlap");
     if (mem_valid && owner_is_map && !buf_mem_valid)
       $fatal(1, "PC9821 backend request without active CPU request");
   end

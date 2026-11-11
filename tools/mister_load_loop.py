@@ -50,12 +50,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-from mister_regress import (CORE, GAMES, LOCK, SETNAME, SHOT_TS, TAG, Mister,  # noqa: E402
+from mister_regress import (CORE, GAMES, LOCK, MENU, SETNAME, SHOT_TS, TAG, Mister,  # noqa: E402
                             frame_stats, is_black, own_shot, take_lock)
 
 SHOT_ROOT = "/media/fat/screenshots"
 INI_BAK = f"/media/fat/MiSTer.ini.{TAG}-bak"  # left by an earlier version's --debug-log: reported, never touched
-MENU = "/media/fat/menu.rbf"
 DBG = "/tmp/debug.txt"                       # Main_MiSTer cfg.cpp: debug=2 writes stdout here ("w")
 DBG_KEEP = f"/media/fat/{TAG}-dbg"           # rotated copies survive Main's restart on each load
 SCALER_BASE = 0x20000000                     # Main_MiSTer scaler.h MISTER_SCALER_BASEADDR

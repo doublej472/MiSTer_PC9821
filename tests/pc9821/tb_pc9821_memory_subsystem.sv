@@ -2,10 +2,14 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_MEMORY_SUBSYSTEM:
-// ROM loading and bus arbitration: the CPU is held until the ROM has loaded, and the load/arbitration handshake grants the bus correctly afterwards. The absent ROM area at 0xC0000-0xD7FFF is a route of its own: a read returns all ones in z486's accept-then-respond phases with no backend transaction, an instruction fetch returns four all-ones words, and a store is swallowed. THE 12 KiB HOLE BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF, is the same shape, because the machine reads 0xFF there and discards stores (docs/probes/VRAM.TXT:141-142): the direct address must not reach the backend, must answer all ones, and must swallow its stores, while 0xA4FFF stays the CG window's and 0xA8000 the B plane's, and the 0x0461 = 0x0A overlay keeps claiming the same 32 KiB. It also carries the JIS KU-BANK SWEEP: one JIS code from each bank of the FONT.ROM grid, driven through the real pack download, must land at the font store word the text scanout computes for that code and carry FONT.ROM's own bytes there, so a word offset that is a bit too narrow puts a whole ku bank at another bank's word and the log names the misplaced bank. THE 0x1E8E-GATED IDE WORK RAM AT 0xDA000-0xDBFFF IS THE MACHINE'S OWN GATE (docs/probes/SHADOWW.TXT:226-231: the 1E8E read-back runs FE FF FE through the 0x80/0x81/restore writes, the DA000 marker reads back FFFF under 0x80 and 5AA5 under 0x81, and the IDE ROM's work bytes reappear under 0x81): with the gate clear the window takes the absent route's own shape - all ones, stores swallowed, no backend transaction - and with it set the same address is ordinary RAM that takes the store at 0xDA000 and answers the read from it. THE TAIL ABOVE IT, 0xDC000-0xDFFFF, IS ABSENT IN BOTH GATE STATES (docs/probes/SHADOW.TXT:201-213 reads 0xFF over all 12 x 2 KiB blocks of the DA000..DFFFF region with the gate clear, ffblocks=000C; QEMU models the rest of the 0xD8000 window as rom_empty): all ones and swallowed stores whatever 0x1E8E holds, with the gate-ON state capture-pending (a marker write at 0xDC000 under 0x1E8E=0x81 settles it, probe2 /IDEGATE). THE DOWNLOAD GATE HAS NO LIVE ioctl TERM (docs/timing.md, the download gate): in the cycle the ioctl_download of a reload rises the CPU still runs and the loader does not own the backend, in the next cycle the CPU is held and the loader owns it, cpu_run rises in the second cycle after the download falls, a platform reset with the pack loaded keeps cpu_run high, and an out-of-range word keeps the CPU held after the download.
+// ROM loading and bus arbitration: the CPU is held until the ROM has loaded, and the load/arbitration handshake grants the bus correctly afterwards. The absent ROM area at 0xC0000-0xD7FFF is a route of its own: a read returns all ones in z486's accept-then-respond phases with no backend transaction, an instruction fetch returns four all-ones words, and a store is swallowed. THE 12 KiB HOLE BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF, is the same shape, because the machine reads 0xFF there and discards stores (docs/probes/VRAM.TXT:141-142): the direct address must not reach the backend, must answer all ones, and must swallow its stores, while 0xA4FFF stays the CG window's and 0xA8000 the B plane's, and window 0 at 0x0461 = 0x0A claims none of them, its page being RAM of its own on the machine (docs/probes/DMAROUTE-XE10.TXT W1/W2). It also carries the JIS KU-BANK SWEEP: one JIS code from each bank of the FONT.ROM grid, driven through the real pack download, must land at the font store word the text scanout computes for that code and carry FONT.ROM's own bytes there, so a word offset that is a bit too narrow puts a whole ku bank at another bank's word and the log names the misplaced bank. THE 0x1E8E-GATED IDE WORK RAM AT 0xDA000-0xDBFFF IS THE MACHINE'S OWN GATE (docs/probes/SHADOWW.TXT:226-231: the 1E8E read-back runs FE FF FE through the 0x80/0x81/restore writes, the DA000 marker reads back FFFF under 0x80 and 5AA5 under 0x81, and the IDE ROM's work bytes reappear under 0x81): with the gate clear the window takes the absent route's own shape - all ones, stores swallowed, no backend transaction - and with it set the same address is ordinary RAM that takes the store at 0xDA000 and answers the read from it. THE TAIL ABOVE IT, 0xDC000-0xDFFFF, IS ABSENT IN BOTH GATE STATES (docs/probes/SHADOW.TXT:201-213 reads 0xFF over all 12 x 2 KiB blocks of the DA000..DFFFF region with the gate clear, ffblocks=000C; QEMU models the rest of the 0xD8000 window as rom_empty): all ones and swallowed stores whatever 0x1E8E holds, the gate-ON state measured as well (docs/probes/XE10CFG-XE10-CFGWR.TXT:9-13: with 0x1E8E written 0x81 the sixteen bytes at 0xDC000 read FF as found, gated, after a marker write and restored). THE DOWNLOAD GATE HAS NO LIVE ioctl TERM (docs/timing.md, the download gate): in the cycle the ioctl_download of a reload rises the CPU still runs and the loader does not own the backend, in the next cycle the CPU is held and the loader owns it, cpu_run rises in the second cycle after the download falls, a platform reset with the pack loaded keeps cpu_run high, and an out-of-range word keeps the CPU held after the download.
 
 
 module tb_pc9821_memory_subsystem;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -20,6 +24,7 @@ module tb_pc9821_memory_subsystem;
   // 0x043F's 0x8 nibble, latched in pc9821_iobus. Held off here: this bench is about
   // load/arbitration, and the shadow's routing has its own bench (tb_pc9821_shadow_romsum).
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   wire       win0_sel_moved = (win0_sel != 8'h08);   // pc9821_iobus's registered compare
   // 0x043B bit 2, the 15-16 MiB system-space window. The machine's reset value is ON,
@@ -126,6 +131,8 @@ module tb_pc9821_memory_subsystem;
   wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
 
   reg        scan_enable = 0;
+
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -160,7 +167,9 @@ module tb_pc9821_memory_subsystem;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
-  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
+  wire        dma_load    = 1'b0;
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -217,6 +226,9 @@ module tb_pc9821_memory_subsystem;
   // 0x063C bank select into the 0xD8000 window: 0 = the IDE option ROM, the reset bank.
 
   reg  [1:0] d8_bank = 2'b00;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
 
@@ -251,6 +263,14 @@ module tb_pc9821_memory_subsystem;
     endcase
   end
 
+  // Window 0 = 0x0A's backend stores (the window-0 case below).
+  reg        w0_mon_on = 1'b0;
+  integer    w0_mon_hits = 0;
+  reg [31:0] w0_mon_addr = 32'd0;
+  always @(posedge clk) if (w0_mon_on && mem_valid && mem_ready && mem_write) begin
+    w0_mon_hits = w0_mon_hits + 1;
+    w0_mon_addr = mem_addr;
+  end
   integer errors = 0;
   integer gbeat = 0;
   // Coverage evidence for the decode sweep: a sweep that never sees a route
@@ -833,46 +853,41 @@ module tb_pc9821_memory_subsystem;
     cpu_write = 0;
     cpu_be = 4'hF;
 
-    // Window 0 DOES carry the TRAM/CG apertures: they are decoded on the
-    // post-window-0 address (route_addr here, the mapper's own d_addr next to it),
-    // so with 0x461 = 0x0A a store to 0x80001 lands on the text VRAM at 0xA0001
-    // and reaches the TRAM bridge rather than the backend. The machine agrees
-    // 0x80000 is not the RAM page under 0x0A (`0461=0A b=0800 a=5AA5 p=FF q=FF`,
-    // the marker at no 64 KiB-aligned address of the first MiB) and the 0x463
-    // sweep proves 0xA0000's word is the text RAM's own 0x0020, so the window's
-    // low 32 KiB is the text VRAM there (closing that open question). Reachable from no firmware
-    // (0x0461 is written only with 0x08/0x0C/0x0E), but the routing is the
-    // machine's now and a silent change back is caught here.
+    // Window 0 at 0x0A does NOT carry the TRAM/CG apertures: on the machine its page is RAM of
+    // its own. docs/probes/DMAROUTE-XE10.TXT case W2 stores through 0x81000 under 0x0461=0x0A and
+    // reads the bytes back there (`W2 CPU V0 W0A 8000:1000 P0 -> D`) while the text RAM at 0xA1000
+    // keeps its prefill (`V1 NORMAL A000:1000 P1 -> P1`), and the bytes found under the window are
+    // DRAM noise (`V0 ORIG=FFFFFFFFF5FFFFDF...`) where the text RAM reads 0x0020 - as WIN.TXT's
+    // `0461=0A b=0800` already showed. So a store to 0x80001 goes to the backend at the translated
+    // 0xA0001 and the text RAM's byte 1 is untouched. Reachable from no firmware (0x0461 is
+    // written only with 0x08/0x0C/0x0E).
     win0_sel = 8'h0A;
+    tram[14'h0001] = 8'h5A;
+    w0_mon_hits = 0;
+    w0_mon_on = 1'b1;
     cpu_addr = 32'h0008_0001;
     cpu_din = 32'h0000_3C00;
     cpu_be = 4'b0010;
     cpu_line_read = 0;
     cpu_write = 1;
     cpu_valid = 1;
-    // THE READY IS READ AFTER A DELTA, NOT IN ZERO TIME. This case changes the address, the window
-    // select AND cpu_valid in one time step and then reads the route's answer; without the settle it
-    // samples the value from the PREVIOUS evaluation, which is the GVRAM's ready for the access
-    // BEFORE this one -- and since a GVRAM store completes one clk_sys earlier, that stale
-    // value is 1 here and the loop below would take it for the TRAM route's answer. The route
-    // select is combinational from the address, so the settled read is the route's own
-    // answer for THIS request.
     #1;
     while (!cpu_ready) @(negedge clk);
-    #1;
-    if (mem_valid) begin
-      $display("FAIL window-0 0x0A store reached the backend at %08x", mem_addr);
-      errors = errors + 1;
-    end
-    if (tram[14'h0001] !== 8'h3C) begin
-      $display("FAIL window-0 0x0A store did not reach the TRAM bridge (%02x)",
-               tram[14'h0001]);
-      errors = errors + 1;
-    end
     @(negedge clk);
     cpu_valid = 0;
     cpu_write = 0;
     cpu_be = 4'hF;
+    repeat (20) @(negedge clk);
+    w0_mon_on = 1'b0;
+    if (w0_mon_hits != 1 || w0_mon_addr !== 32'h000A_0001) begin
+      $display("FAIL window-0 0x0A store: %0d backend store(s), last at %08x, want one at 000a0001 (the window's RAM page)",
+               w0_mon_hits, w0_mon_addr);
+      errors = errors + 1;
+    end
+    if (tram[14'h0001] !== 8'h5A) begin
+      $display("FAIL window-0 0x0A store reached the text RAM (%02x)", tram[14'h0001]);
+      errors = errors + 1;
+    end
     win0_sel = 8'h08;
 
     // ---- The absent ROM area: all ones in z486's phases, nothing stored ----
@@ -1114,9 +1129,9 @@ module tb_pc9821_memory_subsystem;
     // gated work RAM overlaid at 0xDA000 (hw/i386/pc98-mem.c d8000_rom;
     // NP2kai's 12 KiB gate mask is the outlier). So above the work RAM the
     // window answers all ones and swallows stores whatever 0x1E8E holds. The
-    // gate-ON state of this tail is capture-pending: one marker write at
-    // 0xDC000 under 0x1E8E=0x81 settles it (probe2 /IDEGATE, item 34), and the
-    // modelled choice is the QEMU one until that capture lands.
+    // gate-ON state of this tail is measured too (docs/probes/XE10CFG-XE10-CFGWR.TXT:9-13:
+    // FF x16 under 0x1E8E=0x81 before and after a 5A A5 store at 0xDC000), and
+    // the model follows it.
     ide_ram_gate = 0;
     cpu_addr = 32'h000D_C000;
     cpu_din = 32'h0000_5AA5;
@@ -1304,24 +1319,22 @@ module tb_pc9821_memory_subsystem;
                dut.open_select, dut.gvram_select);
       errors = errors + 1;
     end
-    // And the 0x0461 = 0x0A overlay's SHAPE is unchanged by the new term: that overlay claims the
-    // whole 0xA0000-0xA7FFF as the text/hole window's contents (the same capture's `0461=0A ...
-    // a=5AA5` shows a marker round-tripping at the overlay's base, so it is storage, not this
-    // hole). What the overlay's UPPER 12 KiB actually CONTAINS is capture-pending and is NOT
-    // modelled here.
+    // And window 0 at 0x0A takes none of the three: its page is RAM of its own on the machine
+    // (docs/probes/DMAROUTE-XE10.TXT W1/W2; the store case above), so 0x86000 (-> 0xA6000) is not
+    // the gap and 0x84000 (-> 0xA4000) neither the text RAM nor the CG window - the backend's.
     win0_sel = 8'h0A;
     cpu_addr = 32'h0008_6000;                    // -> route_addr 0xA6000
     #1;
-    if (dut.open_select || !dut.tram_select) begin
-      $display("FAIL 0x0461 = 0x0A overlay at 0x86000: open=%b tram=%b",
-               dut.open_select, dut.tram_select);
+    if (dut.open_select || dut.tram_select || dut.cg_win_select) begin
+      $display("FAIL 0x0461 = 0x0A page at 0x86000: open=%b tram=%b cg=%b, want the backend",
+               dut.open_select, dut.tram_select, dut.cg_win_select);
       errors = errors + 1;
     end
-    cpu_addr = 32'h0008_4000;                    // -> route_addr 0xA4000, the overlay's CG half
+    cpu_addr = 32'h0008_4000;                    // -> route_addr 0xA4000
     #1;
-    if (dut.open_select || !dut.tram_select) begin
-      $display("FAIL 0x0461 = 0x0A overlay at 0x84000: open=%b tram=%b",
-               dut.open_select, dut.tram_select);
+    if (dut.open_select || dut.tram_select || dut.cg_win_select) begin
+      $display("FAIL 0x0461 = 0x0A page at 0x84000: open=%b tram=%b cg=%b, want the backend",
+               dut.open_select, dut.tram_select, dut.cg_win_select);
       errors = errors + 1;
     end
     win0_sel = 8'h08;
@@ -1331,6 +1344,36 @@ module tb_pc9821_memory_subsystem;
     // pc9821_gvram, which owns the four planes in SDRAM, so one CPU byte
     // becomes ONE visit carrying the addressed window's plane lane (here plane 3,
     // the intensity plane).
+    // IN THE DIGITAL MODE (the reset state, mode2_16color clear) THERE IS NO PLANE THERE: the
+    // machine reads FF at 0xE0004 and keeps no store (docs/probes/DMAROUTE-XE10.TXT case P4 view
+    // V1), so the store goes to the open-bus responder and no plane visit happens.
+    g0 = gvram_writes;
+    cpu_addr = 32'h000E_0100;
+    cpu_be = 4'b0001;
+    cpu_write = 1;
+    cpu_valid = 1;
+    #1;
+    if (!dut.open_select || dut.gvram_select) begin
+      $display("FAIL digital-mode 0xE0100 store: open=%b gvram=%b, want the open-bus responder",
+               dut.open_select, dut.gvram_select);
+      errors = errors + 1;
+    end
+    begin : e_dig_wait
+      integer w;
+      w = 0;
+      while (!cpu_ready && w < 200) begin @(negedge clk); w = w + 1; end
+    end
+    @(negedge clk);
+    cpu_valid = 0;
+    cpu_write = 0;
+    cpu_be = 4'hF;
+    repeat (20) @(negedge clk);
+    if (gvram_writes != g0) begin
+      $display("FAIL digital-mode 0xE0100 store reached the planes (%0d visit(s))", gvram_writes - g0);
+      errors = errors + 1;
+    end
+    // The guest's OUT 0x6A,0x01 (FF2 num 0): the 16-colour mode maps the plane.
+    mode2_16color = 1'b1;
     g0 = gvram_writes;
     cpu_addr = 32'h000E_0100;
     cpu_be = 4'b0001;

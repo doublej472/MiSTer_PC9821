@@ -1,4 +1,8 @@
-// TEST REFERENCE: pc9821_fdd_media as of ad9ed84c (before the FD-a accept-time raw offset), renamed. Never edited; the lockstep bench tb_pc9821_fdd_media_equiv proves the shipped module against it.
+// TEST REFERENCE: pc9821_fdd_media as of ad9ed84c (before the FD-a accept-time raw offset), renamed. The lockstep bench tb_pc9821_fdd_media_equiv proves the shipped module against it.
+// ONE BEHAVIOURAL SYNC SINCE, marked `SYNC`: `writeprotect` left the reset domain in the shipped
+// module (it survives an OSD Reset / Load BIOS ROM with the medium, NP2kai fdd_d88.c:306;
+// tb_pc9821_fdd_mount_reset R1X/R5/R6). It is applied here too so the lockstep keeps comparing
+// writeprotect on every cycle; the FD-a restructure this reference proves does not touch it.
 // Floppy MEDIA for pc9821_fdc: a D88 or raw sector image served over a byte seam.
 //
 // The controller half (pc9821_fdc) owns the 765 command engine, this module owns the
@@ -132,7 +136,7 @@ module pc9821_fdd_media_ref (
     input  wire        img1_mounted,
     input  wire [63:0] img1_size,
     // THE MOUNT'S READ-ONLY FLAG. It is ONE bit for both slots because hps_io holds one
-    // register, "valid only for active bit in img_mounted" (sys/hps_io.sv:129), so it is
+    // register, "valid only for active bit in img_mounted" (sys/hps_io.sv:144), so it is
     // latched PER DRIVE at that drive's own mount pulse - exactly as img_size is, and for the
     // same reason. It is the MiSTer stand-in for the first term of NP2kai's protect condition,
     // `(attr & 1) || (fdd->inf.d88.head.protect & 0x10) || (ro)` (diskimage/fd/fdd_d88.c:306):
@@ -238,6 +242,7 @@ module pc9821_fdd_media_ref (
 );
 
   initial present = 2'b00;
+  initial writeprotect = 2'b00;   // SYNC (see the header)
   initial chg = 2'b00;
 
   // ---------------------------------------------------------------- the HPS side
@@ -355,7 +360,7 @@ module pc9821_fdd_media_ref (
 
   // ---------------------------------------------------------------- the mount EVENT [u]
   // hps_io's img_mounted is not one cycle wide: it is set by the `'h1c` image-selection
-  // transaction's data strobe and cleared only when that transaction ends (sys/hps_io.sv:318
+  // transaction's data strobe and cleared only when that transaction ends (sys/hps_io.sv:334
   // "img_mounted <= 0;" under `~io_enable`, :461 the set), so it is a LEVEL for as many clk_sys
   // cycles as the HPS takes to finish the command. A mount is therefore its RISING EDGE (the
   // same reading pc9821_disk_change_reset takes of the HDD slots), so a held level is one
@@ -523,7 +528,7 @@ module pc9821_fdd_media_ref (
   // it - and only then - on the first cycle after the release.
   //
   // THE SIZE IS LATCHED WITH IT, because hps_io holds ONE img_size for whichever slot mounted
-  // LAST (sys/hps_io.sv:130 "size of image in bytes") and EVERY slot reads it (z486_mister
+  // LAST (sys/hps_io.sv:145 "size of image in bytes") and EVERY slot reads it (z486_mister
   // wires it into the disk's .img_size and into BOTH floppy slots). Deferring the pulse and
   // then sampling the LIVE size would parse this medium with another slot's size;
   // pc9821_block_share - the adapter these fetches go through - latches each slot's size at
@@ -550,7 +555,7 @@ module pc9821_fdd_media_ref (
   // entry at the walk's START, so an OSD Reset mid-walk (mount an image,
   // then select Reset) used to abort the walk with its pulse already spent - and nothing
   // would ever re-announce the image, because hps_io pulses img_mounted from the HPS's
-  // image-selection transaction alone (sys/hps_io.sv:461, the `'h1c` handler) and an OSD
+  // image-selection transaction alone (sys/hps_io.sv:490, the `'h1c` handler) and an OSD
   // Reset is a STATUS bit write, not a mount. The latch block below therefore RE-ARMS the
   // drive whose walk the reset is aborting (`walking` names the two states a walk lives in),
   // so the walk re-runs after the release. That is idempotent by construction: a walk re-reads
@@ -884,11 +889,7 @@ module pc9821_fdd_media_ref (
       // with no img_mounted pulse ever coming again, `ready` (st == ST_READY) never rose and
       // the mounted image was dead to the guest (tb_pc9821_fdd_mount_reset's R1 arm).
       st           <= (|present) ? ST_READY : ST_NONE;
-      // NO MEDIUM, NO PROTECT: the flag is the MOUNTED MEDIUM's state, so a drive that has never
-      // been walked (or whose medium was ejected) reports 0, not "protected". That matters because
-      // SENSE DRIVE STATUS reads the bit directly: a drive with no diskette has nothing to write
-      // to, so claiming WP would be inventing a property of a medium that is not there.
-      writeprotect <= 2'b00;
+      // SYNC (see the header): writeprotect is not reset here, as in the shipped module.
       bready       <= 1'b0;
       bwant        <= 1'b0;
       rbusy        <= 1'b0;
@@ -947,7 +948,7 @@ module pc9821_fdd_media_ref (
       // they belong to before any request that drive serves. `present` - and with it the
       // parsed container/geometry above - is the guest's "a disk is in this drive"
       // (pc9821_fdc's media_present) and must SURVIVE a core reset: hps_io pulses img_mounted
-      // only when the HPS selects an image (sys/hps_io.sv:461) and never re-announces one
+      // only when the HPS selects an image (sys/hps_io.sv:490) and never re-announces one
       // across an OSD Reset, so clearing `present` here is what unmounted a floppy the user
       // had mounted the moment they hit Reset (tb_pc9821_fdd_mount_reset). mnt_req/mnt_size
       // are deliberately NOT reset either: a mount landing while the module is held is

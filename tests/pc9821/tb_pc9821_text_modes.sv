@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_TEXT_MODES: the text plane's ROW GEOMETRY follows the master GDC and the CRTC the way NP2kai's maketext() does (vram/maketext.c:162-435, transcribed in this bench as a whole-frame loop over ints): for every active raster line of a frame, the TRAM word the scanout fetches for column 1 is that line's character-row address plus one, the pixel drawn there is the glyph line only while 0 <= nowline < min(CL,16), the underline lights the row's last line (nowline + 1 == lines) and the cursor the lines nowline in [CSRFORM top, bottom], and on each row's first line the kanji row-cache walk asks for exactly the row that is drawn next (its address and a bank that differs from the one on screen and is the one that row is then drawn from) - over the 25-line default, NP2kai's BIOS 400-20 setting (LR 0x13, PL 0x1E, BL 0x11, CL 0x10: 20 rows of 20 lines, two blank lines above and below each 16-line glyph), a 30-row 480-line SYNC block, each CRTC register on its own (PL below 16 starting the row inside the glyph, BL, CL, the GDC LR against a different CRTC row length), smooth scrolling with SUR = 0 (SSL lines eaten at the top, the SDR+1-row region cut) and with an unscrolled SUR band above the region, and 2-, 3- and 4-partition split screens from the full 16-byte PRAM (a partition switch in mid-row, the 0x74 PRAM command's offset, and the wrap from the fourth partition back to the first), rows short enough that the row index passes 63 (LR 5 / BL 5: 67 rows, LR 1 / BL 1: 200 rows on 400 lines, NP2kai's row address accumulating with no row limit, maketext.c:321), and the row-0 re-walk after a mid-frame start-word change reading all 80 cells of row 0 at the new start word although the sequencer's next row has moved to partition 1 by the walk's second line. FAIL-FIRST: the pre-change scanout decoded every line as a fixed 16-line row of one partition (row = vline >> 4) and ignored the CRTC registers and the PRAM lengths, so every case but the 25-line default and the 30-row block (whose 16-line rows the old decode already drew; its walk request did not follow) mismatches there.
+// TB_PC9821_TEXT_MODES: the text plane's ROW GEOMETRY follows the master GDC and the CRTC the way NP2kai's maketext() does (vram/maketext.c:162-435, transcribed in this bench as a whole-frame loop over ints): for every active raster line of a frame, the TRAM word the scanout fetches for column 1 is that line's character-row address plus one, the pixel drawn there is the glyph line only while 0 <= nowline < min(CL,16), the underline lights the row's last line (nowline + 1 == lines) and the cursor the lines nowline in [CSRFORM top, bottom], and on each row's first line the kanji row-cache walk asks for exactly the row that is drawn next (its address and a bank that differs from the one on screen and is the one that row is then drawn from) - over the 25-line default, NP2kai's BIOS 400-20 setting (LR 0x13, PL 0x1E, BL 0x11, CL 0x10: 20 rows of 20 lines, two blank lines above and below each 16-line glyph), a 30-row 480-line SYNC block, each CRTC register on its own (PL below 16 starting the row inside the glyph, BL, CL, the GDC LR against a different CRTC row length), smooth scrolling with SUR = 0 (SSL lines eaten at the top, the SDR+1-row region cut) and with an unscrolled SUR band above the region, and 2-, 3- and 4-partition split screens from the full 16-byte PRAM (a partition switch in mid-row, the 0x74 PRAM command's offset, and the wrap from the fourth partition back to the first), rows short enough that the row index passes 63 (LR 5 / BL 5: 67 rows, LR 1 / BL 1: 200 rows on 400 lines, NP2kai's row address accumulating with no row limit, maketext.c:321), and the row-0 re-walk after a mid-frame start-word change reading all 80 cells of row 0 at the new start word although the sequencer's next row has moved to partition 1 by the walk's second line; and the real Xe10's text pitch and row start, from its filmed run of TXTMODE /D (docs/probes/KIT2-XE10-TXTMODE.TXT, the probe's own SYNC blocks): a SYNC block's C/R byte loads the pitch, for 0x0F and the display-off 0x0E alike, and a later PITCH overrides it (P1 C/R 0x4E, P3 0x4C and P4 0x3E with no PITCH run pitch 78, 76 and 62; P5 SYNC 0x0E then START runs 78; P6 PITCH 80 then SYNC runs the SYNC's 78), and every line's column 0 draws its row's own first word at AW 78 and AW 64 too (the cell the render registers latched at the line before's last cell), with or without PITCH 80. FAIL-FIRST: the pre-change scanout decoded every line as a fixed 16-line row of one partition (row = vline >> 4) and ignored the CRTC registers and the PRAM lengths, so every case but the 25-line default and the 30-row block (whose 16-line rows the old decode already drew; its walk request did not follow) mismatches there; and before the kit-2 change a SYNC block left the pitch at 80, so P1-P6 mismatch on every row after the first, and a block narrower than 80 cells drew the cell past the line's end in every column 0, so P3, P4 and AW 64 + PITCH 80 mismatch on every line.
 //
 // THE REFERENCE is NP2kai vram/maketext.c maketext() - `np2_maketext` below is its loop with
 // NP2kai's variable names, run once per case for the whole frame, independent of the RTL's
@@ -64,7 +64,6 @@ module tb_pc9821_text_modes;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire hs_out, vs_out, de_out;
   wire cg_rd_hold, cg_win_byte_hold;
   wire gfx_odd_line;
@@ -108,6 +107,16 @@ module tb_pc9821_text_modes;
   integer c_csr_on, c_csr_word, c_csr_top, c_csr_bot;
   integer c_ul;                 // the attribute's underline bit is set
   integer c_pram_cmd;           // 0x70 (all sixteen bytes) or 0x74 (partitions 1-3 only)
+  // THE SYNC BLOCK'S C/R BYTE AND THE PITCH ORDER (kit 2's TXTMODE /D). c_cr is the block's
+  // second byte (AW - 2); c_pord the PITCH 80 command's place: 0 after the block (what the
+  // BIOS does), 1 none, 2 before it; c_sync the SYNC command (0x0F, or 0x0E then START 0x0D).
+  // c_pitch is the pitch the real Xe10 then runs, from its own filmed run of TXTMODE /D
+  // (docs/probes/KIT2-XE10-TXTMODE.TXT): a SYNC block's C/R byte loads the pitch and a later
+  // PITCH overrides it - P1 `OUT C0F P10 P4E ...` (no PITCH) shears the rows 2 cells each
+  // (pitch 78), P3 `P4C` 4 cells (76), P4 `P3E` 18 cells (62), P5 `OUT C0E P10 P4E ... C0D` 2
+  // cells (78), P6 `OUT C47 P50 C0F P10 P4E ...` 2 cells (78: the SYNC wins), P2/P7 (PITCH 0x50
+  // after the block) none (80). NP2kai's SYNC leaves the pitch alone; the machine outranks it.
+  integer c_cr, c_pord, c_sync, c_pitch;
 
   task automatic defaults;
     integer k;
@@ -116,6 +125,7 @@ module tb_pc9821_text_modes;
       for (k = 0; k < 4; k = k + 1) begin c_sad[k] = 0; c_len[k] = 0; end
       c_lf = 400; c_csr_on = 0; c_csr_word = 0; c_csr_top = 0; c_csr_bot = 15; c_ul = 0;
       c_pram_cmd = 'h70;
+      c_cr = 'h4E; c_pord = 0; c_sync = 'h0F; c_pitch = 80;
     end
   endtask
 
@@ -131,10 +141,13 @@ module tb_pc9821_text_modes;
       end
       // SYNC (0x0F): NP2kai's defsyncm24 {10 4e 07 25 07 07 90 65} (io/gdc.c:42), with lf
       // replaced for the 480-line case: lf 480 = 0x1E0 -> bytes 6/7 = E0, (vbp << 2) | 1.
-      gcmd(8'h0F);
-      gpar(8'h10); gpar(8'h4E); gpar(8'h07); gpar(8'h25); gpar(8'h07); gpar(8'h07);
+      // c_cr replaces the C/R byte for the item-128/191 cases (TXTMODE's own blocks).
+      if (c_pord == 2) begin gcmd(8'h47); gpar(8'd80); end          // PITCH 80 first (P6)
+      gcmd(c_sync[7:0]);
+      gpar(8'h10); gpar(c_cr[7:0]); gpar(8'h07); gpar(8'h25); gpar(8'h07); gpar(8'h07);
       gpar(c_lf[7:0]); gpar({6'd25, c_lf[9:8]});
-      gcmd(8'h47); gpar(8'd80);                                      // PITCH 80
+      if (c_sync == 'h0E) gcmd(8'h0D);                               // START (P5)
+      if (c_pord == 0) begin gcmd(8'h47); gpar(8'd80); end          // PITCH 80
       // CSRFORM: byte 0 = cursor enable | LR; byte 1 = non-blink (bit 5) | top; byte 2 =
       // bottom << 3 | 3 (the BIOS's own rate bits).
       gcmd(8'h4B);
@@ -184,7 +197,7 @@ module tb_pc9821_text_modes;
         wait2 = c_ssl;
         TEXT_SDR = c_sdr + 1;
       end else TEXT_SUR = 32 - TEXT_SUR;
-      pitch = 80 & 'hFE;                                 // :194
+      pitch = c_pitch & 'hFE;                            // :194 (the machine's pitch)
       esi = c_sad[0] & 'hFFF;                            // :196-198
       scroll = c_len[0];
       scrp = 0;
@@ -272,7 +285,7 @@ module tb_pc9821_text_modes;
           nexta = -1;
           for (y2 = y + 1; y2 < ymax; y2 = y2 + 1) if (nexta < 0 && m_new[y2]) nexta = m_addr[y2];
           if (nexta < 0) nexta = m_addr[first];        // the next frame's first row
-          wkaddr = (dut.u_crtc.o_v_sad + dut.u_crtc.o_wk_k * 80) & 'hFFF;
+          wkaddr = (dut.u_crtc.o_v_sad + dut.u_crtc.o_wk_k * c_pitch) & 'hFFF;
           if (dut.u_crtc.o_wk_go !== 1'b1) fail({name, " wk_go"}, y, dut.u_crtc.o_wk_go, 1);
           if (wkaddr != nexta) fail({name, " wk_next_row_addr"}, y, wkaddr, nexta);
         end else if (dut.u_crtc.o_wk_go !== 1'b0) fail({name, " wk_go_off_row_start"}, y, 1, 0);
@@ -287,6 +300,13 @@ module tb_pc9821_text_modes;
             fail({name, " walk_bank_is_drawn_bank"}, y, dut.u_crtc.o_wk_bank, -1);
           pend_bank = dut.u_crtc.o_wk_bank; have_pend = 1;
         end
+        // ---- dot 4: column 0's cell, the render registers the last cell of the line before
+        // latched: the row's own first word, at every AW. The real Xe10 draws the
+        // row's first word there at AW 78 and AW 64 (TXTMODE P3/P4, filmed); the cell past the
+        // line's end is not drawn.
+        at_dot(y, 4);
+        if (dut.u_crtc.r_wordidx[11:0] !== m_addr[y][11:0])
+          fail({name, " column0_word"}, y, dut.u_crtc.r_wordidx[11:0], m_addr[y] & 'hFFF);
         // ---- dot 12: column 1's pixel ----
         at_dot(y, 12);
         glyph = (m_now[y] >= 0) && (m_now[y] < m_cl);                          // :348
@@ -430,6 +450,17 @@ module tb_pc9821_text_modes;
     if (sw_bad != 0) errors = errors + 1;
     $display("%0s stale row-0 re-walk: %0d reads, %0d off the new start word",
              (sw_bad == 0 && sw_reads == 160) ? "ok      " : "FAILED  ", sw_reads, sw_bad);
+
+    // 17-22. THE SYNC BLOCK LOADS THE PITCH, and a block narrower than 80 cells starts each
+    //     row at its own first word: TXTMODE /D's own blocks, as the real
+    //     Xe10 ran them (docs/probes/KIT2-XE10-TXTMODE.TXT, see c_pitch above). The 25-line
+    //     CRTC rows; the pitch the machine shows is the model's.
+    defaults; c_pord = 1; c_cr = 'h4E; c_pitch = 'h4E; run_case("P1 SYNC 4E, no PITCH");
+    defaults; c_pord = 1; c_cr = 'h4C; c_pitch = 'h4C; run_case("P3 SYNC 4C (AW 78), no PITCH");
+    defaults; c_pord = 1; c_cr = 'h3E; c_pitch = 'h3E; run_case("P4 SYNC 3E (AW 64), no PITCH");
+    defaults; c_pord = 1; c_sync = 'h0E; c_pitch = 'h4E; run_case("P5 SYNC 0E 4E + START");
+    defaults; c_pord = 2; c_pitch = 'h4E; run_case("P6 PITCH 80 then SYNC 4E");
+    defaults; c_cr = 'h3E; run_case("AW 64 + PITCH 80");
 
     $display("NOTE text_modes: %0d lines checked, %0d mismatch(es)", checks, errors);
     if (errors == 0) begin

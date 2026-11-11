@@ -1,0 +1,33 @@
+CPUSUITE BEGIN V1 PROGRAMS=266 PASSES=1 FROM=ud_realmode
+CPUSUITE CPU ac=1 cpuid=none bda486=0432 detail=dma resetdx=00000432
+ud_realmode SKIP
+umov_gpr_hazard FAIL verdict=FF data=00000000 eax=000000FF
+unreal_cs_cpl PASS
+v86_gp_int_frame PASS
+v86_gp_int_frame_rf PASS
+v86_int_stack_reuse PASS
+v86_invd_gp FAIL verdict=FF data=0D010079 eax=0D0100FF
+v86_monitor_bounce_stack PASS
+v86_user_page PASS
+vipt_alu_dst_partial PASS
+vipt_alu_fault PASS
+vipt_alu_fault_rf PASS
+vipt_alu_rm PASS
+vipt_load_chain PASS
+vipt_load_interlocks PASS
+vipt_load_widths PASS
+vipt_moffs_load PASS
+vipt_moffs_page_fault PASS
+vipt_moffs_page_fault_rf PASS
+vipt_moffs_seg_fault PASS
+vipt_moffs_seg_fault_rf PASS
+vipt_rmw_fast PASS
+vipt_rmw_fault PASS
+vipt_rmw_fault_rf PASS
+wb_order_same_dst PASS
+x87_em_nm PASS
+xadd_cmpxchg PASS
+xadd_cmpxchg_486 PASS
+xadd_cmpxchg_fault PASS
+xadd_cmpxchg_lanes PASS
+CPUSUITE END PASSES=1 RUN=29 PASS=27 FAIL=2 SKIP=1

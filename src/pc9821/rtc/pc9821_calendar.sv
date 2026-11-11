@@ -3,8 +3,9 @@
 //
 // Four surfaces: 0x20 write = command latch (bits 2:0 command, 3 STB, 4 CLK,
 // 5 DATA); 0x22 r/w = mode latch, bit 5 selects the uPD4993A format; 0x33 bit 0 =
-// serial data out; 0x128 r/w = tick rate, read back as 0x80 | rate, and a read
-// clears the pending tick interrupt (IRQ15).
+// serial data out; 0x128 r/w = the interval interrupt (IRQ15): bit 7 enable, bits 1:0
+// rate, bit 4 a tick flag that a read clears; the IRQ15 line is high with a short low pulse at
+// each tick (see the tick block below).
 //
 // The command is taken on the RISING edge of STB and each rising CLK advances the
 // shift register. Normally the opcode is the field in bits 2:0, but when that field
@@ -41,8 +42,8 @@ module pc9821_calendar #(
   input  wire [7:0]  mode_din,
   output wire [7:0]  mode_dout,
   input  wire        tick_we,       // 0x128 write
-  input  wire        tick_rd,       // 0x128 read: clears a pending tick
-  /* verilator lint_off UNUSEDSIGNAL */   // the reference masks the tick-rate field to 2 bits (`dat & 0x3`); the upper six bits of the port carry nothing
+  input  wire        tick_rd,       // 0x128 read: clears the tick flag (the IRQ15 line is left as it is)
+  /* verilator lint_off UNUSEDSIGNAL */   // bit 7 (enable) and bits 1:0 (rate) are the register; the machine's read-back shows nothing else written (bits 6:5 and 3:2 read 0, bit 4 is the tick flag)
   input  wire [7:0]  tick_din,
   /* verilator lint_on UNUSEDSIGNAL */
   output wire [7:0]  tick_dout,
@@ -72,8 +73,11 @@ module pc9821_calendar #(
   reg [5:0]  in_bits;       // data-phase clocks since the last SHIFT; a TIMESET needs 48
 
   reg [1:0]  tick_rate;     // 0 = 1/64 s, 1 = 1/32 s, 2 = off, 3 = 1/16 s
-  reg        tick_pending;
+  reg        tick_en;       // 0x128 bit 7: the interrupt enable
+  reg        tick_flag;     // 0x128 bit 4: a tick since the last read
+  reg        tick_line;     // the IRQ15 request line
   reg [22:0] tick_div;
+  reg [15:0] tick_low;      // what is left of the low pulse at a tick (0 = not in one)
   reg [26:0] hz_div;        // 27 bits hold the longest profile's 1 Hz count
 
   // c_month is packed BCD (0x01..0x12, the framework RTC's form and what
@@ -94,9 +98,9 @@ module pc9821_calendar #(
   wire [47:0] emit_payload = {c_year, month_wday, c_day, c_hour, c_min, c_sec};
 
   assign mode_dout = mode_reg;
-  assign tick_dout = {6'b100000, tick_rate};       // 0x80 | rate
+  assign tick_dout = {tick_en, 2'b00, tick_flag, 2'b00, tick_rate};
   assign cdat      = shifting ? sreg[0] : 1'b0;
-  assign irq       = tick_pending;
+  assign irq       = tick_line;
 
   // The command the STB edge latches. A field of 7 selects the serial channel: the
   // opcode then lives in cmd_serial, not in the field bits (NP2kai `parallel == 7`,
@@ -146,6 +150,21 @@ module pc9821_calendar #(
   wire [22:0] tick_period = (tick_rate == 2'd3) ? 23'(SYS_CLOCK_HZ / 16 - 1) :
                             (tick_rate == 2'd1) ? 23'(SYS_CLOCK_HZ / 32 - 1) :
                                                   23'(SYS_CLOCK_HZ / 64 - 1);
+  // The low pulse at a tick: 5 us, inside the 1-2 ARTIC ticks (3.3-6.5 us at 307.2 kHz) the
+  // machine's line stays low (docs/probes/KIT2-XE10-AUDIT2.TXT:27-41, e.g. `cfg=81 mode=R ...
+  // e=-8013,+8015,-17615,+17616`, `cfg=81 mode=N ... e=-5311,+5312`), at least one clock.
+  localparam integer TICK_LOW_N = (SYS_CLOCK_HZ / 200_000 > 0) ? SYS_CLOCK_HZ / 200_000 : 1;
+  // The tick block's line (see its comment): a tick with the interrupt enabled starts the low
+  // pulse, its end raises the line, and a write that disables the tick (bit 7 clear or rate 2)
+  // drops it; a read changes nothing.
+  wire        tick_now     = !tick_we && (tick_rate != 2'd2) && (tick_div == tick_period);
+  wire        tick_off_wr  = tick_we && (!tick_din[7] || tick_din[1:0] == 2'd2);
+  wire        tick_line_nx = tick_off_wr ? 1'b0 :
+                             tick_now    ? 1'b0 :
+                             (tick_low == 16'd1) ? 1'b1 : tick_line;
+  wire [15:0] tick_low_nx  = tick_off_wr ? 16'd0 :
+                             (tick_now && tick_en) ? 16'(TICK_LOW_N) :
+                             (tick_low != 16'd0) ? (tick_low - 16'd1) : 16'd0;
   localparam [26:0] HZ_DIV_MAX = 27'(SYS_CLOCK_HZ) - 27'd1;   // one second
 
   // ---- the 1 Hz ripple, counted from its roll signals ---------------------
@@ -191,8 +210,11 @@ module pc9821_calendar #(
       in_sreg      <= 48'h0;
       in_bits      <= 6'd0;
       tick_rate    <= 2'd1;    // 1/32 s, the machine's power-up rate
-      tick_pending <= 1'b0;
+      tick_en      <= 1'b1;    // read back 0x81 as before; the ITF writes 0x81 at power-on
+      tick_flag    <= 1'b0;
+      tick_line    <= 1'b0;
       tick_div     <= 23'd0;
+      tick_low     <= 16'd0;
       hz_div       <= 27'd0;
     end else begin
       // ---------------- 1 Hz counters with BCD carries ----------------
@@ -220,20 +242,59 @@ module pc9821_calendar #(
       end else hz_div <= hz_div + 27'd1;
 
       // ---------------- periodic tick and IRQ15 ----------------
-      if (tick_rd) begin
-        // Reading the rate register acknowledges the tick (NP2kai pic_resetirq(15)).
-        tick_pending <= 1'b0;
-      end else if (tick_we) begin
+      // The Xe10 (docs/probes/XE10T-XE10-AUDIT.TXT, the CAL rows: INT 17h counted over
+      // 0.5 s with a handler that reads 0x128 (R) and one that never does (N)):
+      //   - ONE REQUEST PER TICK whether or not 0x128 is read: 0x81 R 16 / N 16, 0x80 R 32 /
+      //     N 32, 0x83 R 9 / N 8 - so rate 1 = 32 Hz, 0 = 64 Hz, 3 = 16 Hz, and the request
+      //     falls by itself before the next tick (an edge 8259 saw a new edge every tick);
+      //   - 0x82 stops the tick (R 0 / N 0, read back 82: no tick flag either);
+      //   - bit 7 clear disables the interrupt but not the tick: 0x00 and 0x01 deliver
+      //     nothing (R 0 / N 0) and read back 10 / 11, the tick flag set;
+      //   - bit 4 is that tick flag, cleared by a read: as found 91, then 81 (CAL128 `v=91`,
+      //     RESTORE `P128_TICK was=91 now=81`), N rows read 91/90/93 after the window, R
+      //     rows 81/80/83.
+      // THE LINE IS HIGH WITH A SHORT LOW PULSE AT EACH TICK, and a read leaves it. Kit 2's
+      // /AUDIT2 sampled the masked slave IRR bit 7 (which follows the line, WD_MASK) for 100 ms
+      // at 0x128 = as found, 81, 80 and 83, with and without a 0x128 read at every rise
+      // (docs/probes/KIT2-XE10-AUDIT2.TXT:27-41): high for 97784-97791 of 97792 samples, low
+      // for 1-2 ARTIC ticks once per period (`cfg=81 mode=N ... e=-5311,+5312,-14912,+14913`,
+      // 9600 ticks = 31.25 ms apart; 4800 at 80, 19200 at 83), the same with the reads
+      // (`cfg=81 mode=R ... ones=97790`), so the PIC's edge is the pulse's end, one per tick.
+      // Each row writes its 0x128 value and reads 0x128 before it samples, and the line was
+      // already high at the first sample (`first=1`): neither drops it. Only the first window
+      // (as found, after the earlier section left the tick off) started low and rose at the
+      // first tick (`cfg=FF mode=N first=0 ... e=+9462`), so a line that has had no enabled
+      // tick is low. The undoc98 / NP2kai rule this replaces (a read lowers the request,
+      // io_cal.txt I/O 0128h, upd4990_i128 `pic_resetirq(15);`) is not the machine. The
+      // machine's backup battery was dead for the run, which costs the calendar its time across
+      // power-off, not its running count: the calendar ran at 1 s/s in the session and the four
+      // rates' periods agree, so the shape stands. NOT MEASURED, so inferred: with bit 7 clear
+      // or rate 2 (off) no interrupt comes (kit 1, XE10T-XE10-AUDIT.TXT `cfg=01 ... n=0`), and
+      // the line is held low there.
+      // The write still restarts the period, which the capture does not support (the first
+      // fall after `0x128 <- 81` lands 5311 and 8013 ticks in, not a period); todo item 114.
+      // One assignment per register per cycle: the line and the pulse count take their next
+      // value from the arms below (tick_line_nx / tick_low_nx).
+      tick_line <= tick_line_nx;
+      tick_low  <= tick_low_nx;
+      if (tick_we) begin
         tick_rate    <= tick_din[1:0];
+        tick_en      <= tick_din[7];
         tick_div     <= 23'd0;
-        tick_pending <= 1'b0;   // a write drops any pending request
+        tick_flag    <= 1'b0;
       end else if (tick_rate == 2'd2) begin
         tick_div <= 23'd0;
+        if (tick_rd) tick_flag <= 1'b0;
       // tick_div never passes tick_period: the rate moves only on tick_we, which zeroes it.
       end else if (tick_div == tick_period) begin
         tick_div     <= 23'd0;
-        tick_pending <= 1'b1;
-      end else tick_div <= tick_div + 23'd1;
+        // A tick landing on a read's cycle is a new tick: the flag sets (race-idiom R3, set
+        // wins).
+        tick_flag    <= 1'b1;
+      end else begin
+        tick_div <= tick_div + 23'd1;
+        if (tick_rd) tick_flag <= 1'b0;
+      end
 
       // ---------------- 0x22 mode latch ----------------
       if (mode_we) mode_reg <= mode_din;

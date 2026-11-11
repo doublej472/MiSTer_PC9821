@@ -19,8 +19,8 @@ describes the core as it stands.
 
 ## Running state
 
-The core boots the authentic PC-9821Xe10 / Xe firmware (the user's own dumps, packed by
-`tools/build_pack.py`) through the ITF and the BIOS POST to DOS, and runs Touhou 1-5, DOOM
+The core boots the authentic PC-9821Xe10 firmware (the user's own dumps, packed by
+`tools/build_pack.py`; the Xe set does not boot yet) through the ITF and the BIOS POST to DOS, and runs Touhou 1-5, DOOM
 (packed 256-colour mode), and a range of other PC-98 games on a real MiSTer at the shipping
 90 MHz build. Sprites, the GRCG/EGC drawing engines and the analogue palette display correctly
 on the real card.
@@ -50,19 +50,31 @@ itself and prints `SET THE SOFTWARE DIP-SWITCH` until the next power-up.
 ### I/O access timing
 
 The machine's I/O access time is not uniform, and `pc9821_iobus.sv`'s `io_access_cycles`
-charges each access a per-port class, selected at compile time (`IO_LATENCY_PROFILE`):
+charges each access a per-port class from one of two tables, chosen at run time by the OSD's
+**I/O timing** field (`status[79]`, `io_timing_xe10`; an owner exception to the compile-time-knob
+rule, todo item 82):
 
-- **min** (the shipped build): every class is the short FSM floor except the two the
-  firmware's own timing tests need - port `0x005F` (the I/O-wait port the firmware's delay
-  loops are calibrated on) at the machine's measured **1621 ns** in both directions, and an
-  8253 **write** at one 2.4576 MHz PIT tick (the ITF's port/counter walk fails if an access is
-  shorter).
-- **faithful** (`build_profile.py iofaithful`): the machine's captured per-class times from
-  `docs/probes/IO.TXT` (default 823 ns R / 862 ns W, text GDC 444, graphics GDC 676, EGC
-  386 R / 356 W, GRCG 823 R / 359 W, 8253 823 R / 861 W, `0x005F` 826 R / 1621 W, ...).
+- **Fast** (the default): every class is the short FSM floor except the two the
+  firmware's own timing tests need - a port `0x005F` **write** (the I/O-wait port the
+  firmware's delay loops are calibrated on), which is POSTED as on the machine: the CPU goes
+  on at once and the next I/O access waits until **1744 ns** after it (the XE10T capture's
+  write period, `docs/probes/XE10T-XE10.TXT` /IO W8_005F), and an 8253 **write** at one
+  2.4576 MHz PIT tick (the ITF's port/counter walk fails if an access is shorter). A `0x005F`
+  read is the default class.
+- **Xe10**: the machine's measured per-class times, the `net_ns` of the Xe10's XE10T /IO rows
+  (`docs/probes/XE10T-XE10.TXT`: default 792 ns R / 823 ns W, text GDC 414, graphics GDC 639,
+  EGC 350 R, the fast write class 318 on 0x6A/0xA6/0x7C/0x7E/0x64/0xA4 and the EGC file, the
+  EGC file's even read 5990, 0x09A0/0x09A8 353, 0x0FAA 255, `0x005F` 792 R / posted W), less the
+  core CPU's own 8 clk_sys around an I/O instruction (`docs/probes/core/KIT2-CORE-SPEED.TXT`), so
+  the whole `in`/`out` takes the machine's time; a 16-bit access pays one class (R16_005C,
+  R16_0188, W16_04A8). Kit 2's SPEED cross-checks it: `in al,dx` 802 ns at 0x02 and 651 ns at
+  0xA0 on the machine. The older ioprobe capture (`docs/probes/IO.TXT`) reads the same classes
+  3-5 % higher and the EGC file's even read at 8.6-9.4 us; XE10T and SPEED agree, so XE10T is
+  the table.
 
-All of it is derived from real time, not `clk_sys` counts, so raising the clock does not
-change a guest-visible time (`tb_pc9821_sysclk_invariance`).
+The Xe10 classes are real times, not `clk_sys` counts, so raising the clock does not change a
+guest-visible time (`tb_pc9821_sysclk_invariance`); `tb_pc9821_io_latency_profile` pins both
+tables and the run-time switch.
 
 ## Memory map and firmware pack
 
@@ -108,10 +120,11 @@ The `F8000-FFFFF` window has ten states: the eight 32 KiB ROM banks selected by 
 (`0xE0 | bank << 1`, as QEMU's `mem_bankctl_write`) and the two states port `0x043D` selects
 (ITF or the top BIOS bank). A cache flush runs only when the state actually changes.
 
-**Machine (`O[31:28]`).** `Machine,Xe10,Xe` selects the port-`0x00F0` machine-ID strap to match
+**Machine (`O[31:28]`).** `Machine,Xe10,Xe (not working)` selects the port-`0x00F0` machine-ID strap to match
 the loaded pack: `0xA9` for the Xe10 (measured, `docs/probes/PORTS.TXT`) and `0x89` for the Xe
 (**derived**: `0xA9` with bit 5 cleared, from the Xe ITF's bit-5 test - a real Xe capture would
-confirm it). It is latched at machine reset/reload only (`tb_pc9821_bios_select`).
+confirm it). It is latched at machine reset/reload only (`tb_pc9821_bios_select`). The Xe entry is labelled
+"(not working)" rather than hidden, so the field's positions and a saved config keep their meaning.
 
 ### Address-map details
 
@@ -147,7 +160,11 @@ The text GDC renders the text plane (80- and 40-column ANK, JIS kanji pairs, the
 colour/reverse/underline/blink/cursor and the simple-graphics cells of MODE FF1 bit 0) over
 the graphics. **The raster is the guest's**: line length, frame length, porches and VSYNC width
 come from the GDC's SYNC parameter block (`pc9821_crtc.sv`), not constants; the default BIOS
-mode is 848x440 total / 640x400 active at ~56.4 Hz. Text colour is the fixed 8-colour table
+mode is 848x440 total / 640x400 active at ~56.4 Hz. As on the real Xe10 (`TXTMODE /D`,
+`docs/probes/KIT2-XE10-TXTMODE.TXT`), a block narrower than 80 cells shortens the line (AW 64 runs
+720 dots, 29.24 kHz; the 24 kHz x floor is the machine's 90, not NP2kai's 100), each line wraps
+the text fetch at its own last cell, and the block's C/R byte loads the text pitch until a later
+PITCH command overrides it. Text colour is the fixed 8-colour table
 (`attr[7:5]`), matching NP2kai and QEMU; attribute bit 0 clears the cell. The `0xA4` display
 page flip takes effect at the write (the real-machine probe shows the tear).
 
@@ -174,7 +191,8 @@ mask to `0x7F` (NP2kai `io/cgrom.c`, QEMU `pc98-vga.c`).
 
 `0xA4` selects the displayed page and `0xA6` the CPU's page. The four planes (`A8000` blue,
 `B0000` red, `B8000` green, `E0000` intensity) live behind one datapath (`pc9821_gvram`) in
-M10K, and the **GRCG** (`0x7C`/`0x7E`, tile direct-write and RMW) and the **EGC**
+M10K (the `E0000` window is mapped only in the 16-colour mode, `0x6A` FF2 num 0: in the
+digital mode it is open bus, as on the machine, `docs/probes/DMAROUTE-XE10.TXT` case P4), and the **GRCG** (`0x7C`/`0x7E`, tile direct-write and RMW) and the **EGC**
 (`0x04A0-0x04AF`, gated by the guest's own enable bits) are clients of it. The scanout folds
 the four planes through the digital/analogue palette and composites the text plane over them.
 
@@ -191,8 +209,8 @@ machine's 677 ns); trade-candidates T41 carries the area and cycle numbers.
 arms and the `0xE0102` aperture gate, the packed scanout, the 256-entry palette), and the
 packed store path drains through a posted, byte-combining store buffer and same-row SDRAM
 gather sessions with a byte mask on the module's DQM-on-address pins
-([`sdram-dqm-wiring.md`](sdram-dqm-wiring.md)). The PEGC **plane-mode engine** is not
-implemented (README known issues).
+([`sdram.md`](sdram.md#dqm-wiring)). The PEGC **plane-mode engine** is not
+implemented ([known issues](user/troubleshooting.md#known-issues)).
 
 **The 640x480 256-colour mode** (INT 18h AH=30h BH=0x31 on the 31 kHz raster, the mode the
 Windows 95 PC-9821 driver `PEGCV8.DRV` sets) displays: the packed walk's stride is the slave's
@@ -265,8 +283,43 @@ SNDTEST recordings (`docs/probes/SNDTEST-balance-2026-09-25.txt`). The rhythm im
 input (see the pack). An **MPU-PC98II** MIDI interface over the MiSTer UART is built in every
 preset except `trace`, and is present to the guest (ports 0xE0D0/0xE0D2, IRQ6) only while the
 OSD's UART mode is MIDI: otherwise its ports read open bus and it is held in reset, so it
-reappears in its power-on state (`tb_pc9821_mpu_system`). The core's ADPCM-A rhythm sounds without a driver, while the real machine's
-is silent until a driver such as PMD is resident - an open divergence (TODO item 47).
+reappears in its power-on state (`tb_pc9821_mpu_system`). The core's ADPCM-A rhythm sounds without a driver; the Xe10's `XE10T /OPNA3 /LISTEN` run also
+plays the rhythm with no driver resident, so the earlier "machine silent" observation is being re-checked (TODO item 47).
+
+**Write timing at the YM2608, and why the rhythm registers drain with the FM gap.** The board
+glue feeds the chip through a write queue (`src/opna/pc9821_opna.sv`), and two die mechanisms set
+how far apart the queue must space the writes it replays. Both come from YM2608-LLE
+(`fmopna_impl.c` at commit 7a2aca7; the line numbers below refer to that file) and agree with
+the Xe10's XE10T `/OPNA3` captures (`docs/probes/XE10T-XE10-OPNA3.TXT`,
+`XE10T-XE10-OPNA3-LISTEN.TXT`, `XE10T-XE10-OPNA3-SWEEP.TXT`, `XE10T-XE10-OPNA3-SWEEP2.TXT`;
+what was heard on each run is recorded in `docs/probes/README.md`).
+
+- **The select synchronizer.** A register select passes a two-phase synchronizer on the chip's
+  internal clock (`fmopna_impl.c:309-323`, `write0_en`), 1-2 internal clocks (0.75 us each),
+  before the address latches from the shared bus-input latch (`:366-367`, `:425`). A data write
+  that arrives first becomes the address. A select-to-data spacing of at least about 1.5 us is
+  always safe; one Xe10 I/O access (about 0.85 us) is not, which is why the first `/OPNA3`
+  sweep (select and data one access apart) played every step quiet whatever the gap it
+  measured. Yamaha's documented wait after a select (17 master clocks, 2.1 us) covers it.
+- **The pending level/key word.** 0x18-0x1D go through the chip's one pending FM data word and
+  are copied into a drum's level ring only when the ring counter reaches that drum, once per
+  9 us turn (`:437`, `:935-937`, `:789`). ANY next register select drops the pending word
+  (`write_fm_data[0] = ... || (write_fm_data[1] && !write0_en)`, `:437`), not only the next
+  level write. The rhythm key (0x10) is taken from the bus latch about 16-20 us after its write
+  (`:2765`, `:2780`); a select inside that window loses it. `/OPNA3` /LISTEN PHASE 2 (a 0x18
+  write followed about 6.4 us later by the 0x19 select) is quiet about one time in three on the
+  Xe10, as LLE predicts for a drop window of one turn.
+
+A driver that honours BUSY (about 24 us after a data write) clears both windows, so every
+rhythm key and level write lands: MDRV2 3.4F (Touhou 1) polls BUSY, writes the select, waits 28
+`out 5Fh`, writes the data and one more `out 5Fh`, so its next poll comes past the synchronizer
+and sees BUSY. The queue reproduces that: 0x10 and 0x18-0x1D drain with the FM write's
+`DRAIN_GAP` (216 cen, 27 us), which covers both the 9 us turn and the about 20 us key sample (a
+gap sized only for the turn would still lose keys). The core keeps writes the die would lose in
+out-of-spec sequences (select-to-data under about 1.5 us, or a select within one turn of a level
+write): it latches a select on the bus write itself (`jt12_mmr.v` `selected_register <= din`)
+and only a next LEVEL write replaces jt12's pending level word (`lracl`/`up_lracl`). No title
+is known to write that way; `tb_pc9821_opna_rhythm_level` holds the BUSY-honouring case.
 
 ## Interrupts, timers, input, RTC
 
@@ -274,10 +327,13 @@ is silent until a driver such as PMD is resident - an open divergence (TODO item
 PIT IRQ0, keyboard IRQ1, VSYNC IRQ2, the two-cycle z486 INTA handshake. Load-bearing details:
 
 - requests latch on the edge regardless of the mask; the mask applies to `pending`;
-- **per-line falling-edge withdraw** (`WD_MASK`), measured on the Xe10 (`docs/probes/IRQWD.TXT`):
-  while masked, IRQ0's IRR bit follows the PIT channel-0 OUT pin, and the keyboard (IRQ1) and
-  IDE (IRQ9) requests clear when their acking read lowers the line. IRQ2 (VSYNC), IRQ12 (OPNA)
-  and IRQ15 keep the pure edge latch (IRQ15 is untested on the machine);
+- **per-line falling-edge withdraw** (`WD_MASK` while masked, `WD_UNMASKED` also unmasked),
+  measured on the Xe10 (`docs/probes/IRQWD.TXT`, the XE10T `/OPNA2`, `/FDC` and `/AUDIT` rows):
+  while masked, IRQ0's IRR bit follows the PIT channel-0 OUT pin, the keyboard (IRQ1) and IDE
+  (IRQ9) requests clear when their acking read lowers the line, and IRQ11, IRQ12 and IRQ15
+  clear with their lines; unmasked, IRQ0, IRQ1, IRQ12 and the cascade do too (the master's IR7
+  goes when the slave's request goes: `/AUDIT` CASC rows). IRQ2 (VSYNC) keeps the pure edge
+  latch;
 - INT deasserts when nothing is left to forward; a stray INTA returns the spurious vector
   `icw2 | 7`; in-service priority is enforced; single-mode ICW sequences are sized correctly.
 
@@ -289,12 +345,15 @@ decrements by two per source clock (the form the games' `(N - read) / 2` calibra
 NP2kai's delivery gate. **HELP** is mapped to End; a key held through a boot produces no event
 (the framework does not report keys already down). The **bus mouse** is the uPD8255 at
 `0x7FD9-0x7FDF` plus the `0xBFDB` timer port, fed by the MiSTer PS/2 mouse. The **joystick** is
-both interfaces of the nine-pin connector: the PC-9801-118 game port at `0x1480-0x1487` and the
-OPNA register `0x0E` switch lines (measured, `docs/probes/JOY.TXT`); there is no OSD selection
-for its button mode.
+the OPNA register `0x0E` switch lines (measured, `docs/probes/JOY.TXT`), the Xe10's own path; the
+PC-9801-118 game port at `0x1480-0x1487` is a compile-time option (`GAMEPORT_118`, off: the Xe10
+has no -118 and reads open bus there). There is no OSD selection for its button mode.
 
 `pc9821_calendar.sv` is the uPD4990A with the uPD4993A extended format (ports `0x20`, `0x22`,
-`0x128`, data on `0x33` bit 0, IRQ15), counting from the MiSTer RTC in BCD. **Its bit order is
+`0x128`, data on `0x33` bit 0, IRQ15), counting from the MiSTer RTC in BCD. `0x128` is the
+interval interrupt as the Xe10 answers it (`docs/probes/XE10T-XE10-AUDIT.TXT`): bits 1:0 the rate
+(64, 32, off, 16 Hz), bit 7 the IRQ15 enable, bit 4 a tick flag a read clears, and one request
+per tick whether or not the handler reads the port. **Its bit order is
 not hardware-verified**: the measurement machine's backup battery is dead (every bit reads 1);
 the order follows the firmware's own reader and two references.
 
@@ -327,7 +386,7 @@ settings are approximations of the named clock, not cycle-exact models of those 
   falls back to the old behaviour byte for byte: offset 0, capacity `file size / 512`. The parsed
   offset survives an OSD reset like the other medium latches; only an eject or a replacement mount
   clears it. An HDI with an unpadded 32-byte header (or any header that is not a whole sector)
-  cannot be sector-addressed and falls back to raw (README known issues).
+  cannot be sector-addressed and falls back to raw ([known issues](user/troubleshooting.md#known-issues)).
   `tb_pc9821_hdi_img` is the fail-first bench.
 - **Fixed VHD hard-disk images** (`pc9821_hdd_image.sv`, the same seam): a Microsoft Virtual PC
   fixed VHD has its guest data at file offset 0 and a 512-byte BIG-endian footer at the END of
@@ -342,21 +401,43 @@ settings are approximations of the named clock, not cycle-exact models of those 
   VHDs (disk type 3/4, the "cxsparse" header at offset 512) are not supported and fall back to
   raw. The two formats are mutually exclusive: an HDI is recognised by its front header and
   short-circuits the tail probe; a fixed VHD by its tail. `tb_pc9821_hdi_img` covers both.
-- **IDE layout (fixed)**: the hard disk (hps_io slot 0) is ALWAYS bank 0's
-  master (IDE unit 0) and the CD-ROM, when built, ALWAYS bank 1's master (unit 2); without the CD
-  bank 1 is an empty connector. Nothing moves with `CDROM_EN` or with a disc mount or eject. This
-  is the stock CD-equipped Xe10's layout and NP2kai's default (HDD at unit 0, CD at unit 2). The
-  measured Xe10 answers at bank 1 and floats bank 0 (`docs/probes/IDE.TXT`, `ATA.TXT`) only because
-  its CF card sits in the CD connector; the core uses that machine's measured live-bank answers
-  and empty-bank float (`0x0E` task file, `0x0F` at `0x74C`/`0x74E`) at its own banks. Port
-  `0xF0` bits 5/6 are the two connectors' drive-present lines (active low; the ITF's IDE drive
-  bitmap at BANK4@0x19DF-0x19F2 and its `0x457` byte): bit 5 clears while the disk's image is
-  mounted and bit 6 is clear only in the CD build, so the Xe10 strap reads `0x89` with a disk and
-  the CD (the stock machine), `0xA9` with the CD alone, `0xC9` with the disk alone and `0xE9`
-  with neither (`tb_pc9821_ide_layout`, both builds through the real `pc9821_system`).
+- **IDE layout**: the hard disk (hps_io slot 0) is ALWAYS bank 0's master (IDE unit 0). Bank 1's
+  master (unit 2) is the OSD's **IDE bank 1** field (`status[67]`, CD builds; entry 0 = the CD-ROM):
+  the CD-ROM - the stock CD-equipped Xe10's layout and NP2kai's default (HDD at unit 0, CD at unit
+  2) - or a second hard disk (hps_io slot 3, "Mount HDD2"). A build without the CD has no field and
+  its bank 1 holds the second disk when one is mounted, else nothing. The field is latched at the
+  platform reset (`pc9821_system`'s `ide_bank1_hdd_eff`), and a change, like a hard-disk mount,
+  resets the platform (`pc9821_disk_change_reset`). With the second disk selected the CD drive gets
+  no write, so it never answers. Nothing moves with a disc mount or eject. The measured Xe10 answers at
+  bank 1 and floats bank 0 (`docs/probes/IDE.TXT`, `ATA.TXT`) only because its CF card sits in the
+  CD connector; the core uses that machine's measured live-bank answers and empty-bank float (`0x0E`
+  task file, `0x0F` at `0x74C`/`0x74E`) at its own banks. Port `0xF0` bits 5/6 are the two
+  connectors' drive-present lines (active low; the ITF's IDE drive bitmap at BANK4@0x19DF-0x19F2 and
+  its `0x457` byte): bit 5 clears while the first disk's image is mounted, and bit 6 is clear while
+  bank 1's master exists - the CD drive in a CD build with the default field, else the second disk's
+  image. The Xe10 strap reads `0x89` with a disk and the CD (the stock machine), `0xA9` with the CD
+  alone, `0xC9` with the disk alone and `0xE9` with neither (`tb_pc9821_ide_layout`, both builds
+  through the real `pc9821_system`), and `0x89` with two disks (`tb_pc9821_ide_bank1_hdd`).
+  The Xe10 IDE ROM registers an ATA device at each master its bitmap holds (BANK3@0x0A0A, IDENTIFY,
+  then `or [0x5ba],1<<slot` at @0x0A96) and numbers the disks in slot order (@0x0DC0-0x0DFB), so the
+  second disk is DA/UA `0x81` behind the first, or `0x80` alone, and MS-DOS, which reaches hard
+  disks through the BIOS (INT 1Bh, DISK_EQUIP `0x55D`), gives it the next drive letter (from the
+  disassembly; the capture on the machine is todo item 167). NEC's CD drivers (`NECCD.SYS`, `NECCDD.SYS`) look for the CD on bank 1's master only, so
+  there is no CD for DOS with the second disk selected.
+  `pc9821_ata` serves both disks with ONE transfer engine and a second register context per bank
+  (task file, STATUS/ERROR, interrupt pending, nIEN/SRST, IDP geometry, SET MULTIPLE), exchanged in
+  the same edge as the `0x0432` write while the engine is idle; a bank selected while the other
+  bank's transfer runs reads BSY (and its own registers) until the engine frees, a trade raised as
+  `docs/trade-candidates.md` T76. Each bank's INTRQ, gated by its own nIEN, drives the one IDE
+  interrupt line (NP2kai `setintr`). One `pc9821_hdd_image` detector serves both images (per-drive
+  records, one probe at a time), and `pc9821_block_share` carries the disk's unit on its disk port
+  (slot D for slot 3), flushing the read-ahead window when the served disk changes.
+  `tb_pc9821_ide_bank1_hdd` covers the field, both banks' IDENTIFY/READ/WRITE, the per-bank task
+  file and interrupt, and the CD's absence.
 - **CD-ROM** (`pc9821_atapi.sv`, on in every preset): an ATAPI drive as bank 1's master with
-  the hard disk on bank 0, ISO and PCD images (`tools/cue2pcd.py` converts BIN/CUE), and CD-DA
-  playback, its level the OSD's "CD audio volume" field (default 0 dB, the unity level shipped
+  the hard disk on bank 0, ISO and PCD images (`tools/cue2pcd.py` converts BIN/CUE and CloneCD
+  `.ccd`/`.img` sets, the latter read as NP2kai `diskimage/cd/cdd_ccd.c` reads them), and CD-DA
+  playback, its level the OSD Audio page's "CD audio" field (default 0 dB, the unity level shipped
   before the field; NP2kai's default CD-DA level, -6 dB, is a step; `tb_pc9821_osd_cd_volume`). Expected values follow NP2kai's `cbus/ideio.c`/`atapicmd.c`. Verified with NEC's
   `NECCD.SYS` + MSCDEX. While CD-DA plays, every file read on the CD fails with the driver's
   "CDR101: Not ready" (DOS error 5 to a program whose INT 24h answers Fail). That is the guest
@@ -371,12 +452,25 @@ settings are approximations of the named clock, not cycle-exact models of those 
   TEST UNIT READY is GOOD, READ SUB-CHANNEL reports 0x11; MMC drives and MAME
   `machine/t10mmc.cpp` (`abort_audio()`) stop the play on a READ instead, which no NEC-driver path
   can observe.
-- **Floppy** (`pc9821_fdc.sv`, `pc9821_fdd_media.sv`): two drives, D88 and raw images, READ
+- **Floppy** (`pc9821_fdc.sv`, `pc9821_fdd_media.sv`): two drives, D88, raw and FDI images, READ
   DATA/READ ID/WRITE DATA over DMA channel 2, raw FORMAT, live mount/eject with NP2kai's
-  media-change interrupts, and NP2kai's media-mode gate (a D88's 2D/2DD/2HD class against the
-  controller's 2HD/2DD mode and the unit's 0x04BE rpm bit). **D88 FORMAT remains** (README known
-  issues), as do the per-sector `rpm_flg` test of a 2HD D88 whose fd_type minor is non-zero
-  (NP2kai `fdd_d88.c` rpmcheck; here such a disk reads at either rpm) and 2HS media.
+  media-change interrupts, the uPD765A's drive-poll interrupt 1.024 ms after a 0x94 controller
+  reset is released with the motor bit (AI|unit per ready drive; the Windows 95 floppy driver sleeps
+  on it), the interrupt line as the uPD765A's INT flag (lowered by every data-port byte and by a
+  reset, raised by each completion and ready change, a ready change presented only with the
+  controller idle; MAME `upd765.cpp`), READ ID answering one sector period after the command,
+  when its ID field has passed the head (the Xe10's back-to-back READ ID spacing,
+  `docs/probes/XE10T-XE10-FDC.TXT`; MSR CB alone meanwhile), and NP2kai's media-mode gate (a D88's 2D/2DD/2HD class against the
+  controller's 2HD/2DD mode and the unit's 0x04BE rpm bit, and for a 2HD D88 whose fd_type minor
+  is non-zero each sector's `rpm_flg` against that bit, NP2kai `fdd_d88.c` rpmcheck). **D88
+  FORMAT remains** ([known issues](user/troubleshooting.md#known-issues)), as does 2HS media. An FDI
+  mounts directly with NP2kai's `fdd_set_fdi` acceptance (`diskimage/fd/fdd_xdf.c`: the header's
+  geometry, its size equation exact) when its header is a whole number of 512-byte blocks and its
+  sectors are 256/512/1024 bytes; a 2D FDI (which NP2kai mounts but its raw reader can never
+  serve) and the other FDIs are left to `tools/fdconv.py`. The other
+  PC-98 floppy formats (Virtual98 FDD, NFD r0/r1) are converted off the core to a raw image
+  or a D88 by `tools/fdconv.py`, whose readers follow NP2kai's (`diskimage/fd/`); NFD r1 retry
+  copies and special reads, which a D88 cannot hold, are dropped only with `--lossy`.
 - **DMA**: the 8237-compatible DMA controller (`pc9821_dmac`) serves the FDC; the PCM
   board does not use DMA.
 
@@ -425,9 +519,16 @@ always runs on clk_sys.
 
 ## Hardware debug surface
 
-**LEDs** (`z486_mister.sv`): `LED_USER = pll_locked`, `LED_POWER[0] = rom_ready` (pack
-registered, CPU released), `LED_DISK[0] = cpu_run && z_valid` (CPU issuing memory requests).
-A disk LED that flickers and stops means the CPU started and stopped requesting memory.
+**LEDs** (`z486_mister.sv`): `LED_POWER[0] = rom_ready` (pack registered, CPU released);
+`LED_DISK[0]` = the access lamp, lit while a hard disk, the CD drive or the floppy controller
+moves data with its image (a sector or block transfer: pc9821_ata's and pc9821_atapi's `xfer`,
+the FDC's media data path), never for a command that only polls (status, IDENTIFY, TEST UNIT
+READY, SENSE DRIVE STATUS), as ao486 lights its lamp from the HPS block requests alone; it is the
+lamp the I/O board shows (`LED_HDD`). `LED_USER` = the floppy's own lamp (its transfers alone),
+on the DE10-Nano board LED. Each is held on for 50 ms after its activity ends
+(`pc9821_disk_led`, `tb_pc9821_disk_led`). The disk LED is no longer a boot indicator: the CPU's first fetch (`debug_first_instruction`) is still a
+`pc9821_system` output but drives no LED, so a hang before the first fetch shows only as
+`LED_POWER` lit with no disk activity and no picture.
 
 **`io_debug_status`** (port `0x0EE0`, the watchdog's `ST`): bit0 `rom_ready`, bit1
 `ioctl_download`, bit2 `cpu_run`, bit3 loader owns the backend, bit4 `load_error`, bits 7:5
@@ -442,9 +543,19 @@ A mid-range 486 PC-9821 (Xe10 / Xe), not a PCI-era model:
 
 - **No PCI bus**: `0x0CF8-0x0CFF` read open bus, which is what makes the BIOS conclude there is
   no PCI (answering a host bridge diverts its IDE path).
+- **Word `IN` at the 8-bit ports** answers as the Xe10 does (`docs/probes/XE10T-XE10-AUDIT.TXT`):
+  two byte reads with their side effects, except at the even ports of NP2kai's terminated set,
+  where `P + 1` is not read and the high byte is `0xFF` (0x30-0x36, 0x40-0x46, 0x7C) or `0x00`
+  (0x20-0x26, 0x60-0x7A, 0xA0-0xAC); NP2kai's 0x2588 word terminator and its CPU-AH ports are
+  not the machine.
 - **The software DIP switches** (`0x8F1F` control, `0x841E-0x8F1E` data) are a 24-byte,
-  two-bank, parity-protected writable store holding the measured power-up image; the ITF
-  writes all 24 back and verifies them.
+  two-bank, parity-protected writable store holding the measured power-up image with the OSD's
+  SETUP memory-switch item (0x871E bit 5) and floppy disk mode (0x861E bits 1:0, which
+  port 0x00BE bits 3:2 read back; the OSD default auto (1M) seeds 0xF7 where the measured
+  image holds the factory 1M's 0x76) folded in; the ITF writes all 24 back
+  and verifies them. The store, its CG mirror and the configuration record are re-seeded from the
+  OSD at every reset and at the guest's 0x534 reboot, so SETUP is not used. Which SETUP item
+  writes which bit, and what the core does with it, is in [`bios-setup.md`](bios-setup.md).
 - Emulating more of a machine than the firmware expects is not automatically safer: a PCI
   space and an IDE slave bit were both removed once a measurement showed what the machine
   answers.
@@ -455,7 +566,7 @@ A mid-range 486 PC-9821 (Xe10 / Xe), not a PCI-era model:
 - the WSS/MSS 16-bit audio board;
 - the serial port;
 - x87 / FPU;
-- FDC D88 FORMAT, the per-sector D88 `rpm_flg` test and 2HS media;
+- FDC D88 FORMAT and 2HS media;
 - the `0xDA000` IDE work-RAM paging (served as plain RAM) and the `FA0000-FFFFFF` mirror
   (served as RAM);
 - reserved/open-bus decode is approximate outside the ranges the firmware exercises.
@@ -474,8 +585,10 @@ bench, a hardware capture or a cited source shows.
 
 ## Licensing
 
-The licence for the project's own code has not been decided yet (TODO item 140), so the tree has
-no root `LICENSE`; `NOTICE` lists the third-party parts and their licences. Upstream z486 is
+The project's own code and documentation are licensed under the Apache License 2.0 (root
+`LICENSE`); `NOTICE` states what that grant covers and lists the third-party parts, which keep
+their own licences. The code surviving from the original MiSTer port has no confirmed licence
+yet (TODO item 140), so the grant covers only the project's contributions to those files. Upstream z486 is
 Apache-2.0 with `src/z486/LICENSE-SCOPE.md` excluding `ucode.hex` from that grant, and
 `src/opna/` keeps each vendored part's licence header with `src/opna/LICENSE-SCOPE.md` scoping it.
 **No firmware is vendored in this tree, and none may be**: the ROMs, the font and the rhythm image

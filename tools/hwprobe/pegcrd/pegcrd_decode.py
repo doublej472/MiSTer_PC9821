@@ -39,7 +39,7 @@ import re
 import sys
 
 ROW = re.compile(
-    r"^(16|256)\s+ENTRY=([0-9A-F]{2})\s+"
+    r"^(16|256|ALIAS16)\s+ENTRY=([0-9A-F]{2})\s+"
     # pegcrd.s prints the G and B fields bare (`msg_g: " G="`); the prefixed form is accepted too.
     r"WROTE_R=([0-9A-F]{2})\s+(?:WROTE_)?G=([0-9A-F]{2})\s+(?:WROTE_)?B=([0-9A-F]{2})\s+"
     r"READ_R=([0-9A-F]{2})\s+(?:READ_)?G=([0-9A-F]{2})\s+(?:READ_)?B=([0-9A-F]{2})\s*$")
@@ -60,13 +60,48 @@ def classify(w, r):
     return "other"
 
 
+SELFTEST = """BEGIN:PEGCRD
+MODE 6A=00 9A0_04=01 9A0_07=00 9A0_08=00 9A0_0A=00
+16  ENTRY=5A WROTE_R=11 G=22 B=33 READ_R=01 G=02 B=03
+16  ENTRY=A5 WROTE_R=44 G=55 B=66 READ_R=04 G=05 B=06
+ALIAS16 ENTRY=0A WROTE_R=07 G=08 B=09 READ_R=01 G=02 B=03
+ALIAS16 ENTRY=05 WROTE_R=0D G=0E B=0C READ_R=04 G=05 B=06
+END:PEGCRD
+"""
+
+
+def selftest() -> int:
+    import contextlib
+    import io
+    import os
+    import tempfile
+    fails = 0
+    for text, want in ((SELFTEST, "VERDICT: 4-bit index"),
+                       (SELFTEST.replace("READ_R=01 G=02 B=03\nALIAS16 ENTRY=05", "READ_R=07 G=08 B=09\nALIAS16 ENTRY=05")
+                                .replace("ENTRY=05 WROTE_R=0D G=0E B=0C READ_R=04 G=05 B=06", "ENTRY=05 WROTE_R=0D G=0E B=0C READ_R=0D G=0E B=0C"),
+                        "VERDICT: 8-bit index")):
+        with tempfile.NamedTemporaryFile("w", suffix=".TXT", delete=False) as f:
+            f.write(text)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["x", f.name])
+        os.unlink(f.name)
+        ok = want in buf.getvalue()
+        print(f'{"PASS" if ok else "FAIL"} {want}')
+        fails += 0 if ok else 1
+    print(f'{"PASS" if not fails else "FAIL"}: pegcrd_decode selftest ({fails} failing)')
+    return 1 if fails else 0
+
+
 def main(argv):
+    if argv[1:] == ["--selftest"]:
+        return selftest()
     if len(argv) != 2:
         print(__doc__)
         return 2
     text = open(argv[1], "rb").read().decode("ascii", "replace")
     modes = []
-    rows = {"16": [], "256": []}
+    rows = {"16": [], "256": [], "ALIAS16": []}
     for line in text.splitlines():
         m = MODE.match(line)
         if m:
@@ -168,6 +203,23 @@ def main(argv):
             else:
                 print("  index: 5A/A5 do not both return their own bytes; "
                       "compare with entries 0A/05 before calling the index width.")
+    if rows["ALIAS16"]:
+        print("\n== the 16-colour 0xA8 index width (ALIAS16) ==")
+        pat = {e: w for e, w, _, _ in rows["16"]}
+        verdicts = []
+        for entry, w, r, _ in rows["ALIAS16"]:
+            src = pat.get(entry | 0x50 if entry == 0x0A else 0xA5 if entry == 0x05 else -1)
+            alias = tuple(x & 0x0F for x in src) if src else None
+            if r == tuple(x & 0x0F for x in w):
+                v = "marker kept -> 8-bit index"
+            elif alias is not None and r == alias:
+                v = "overwritten by the aliased write -> 4-bit index (pc9821_gfx_palette's palnum & 15)"
+            else:
+                v = "neither"
+            verdicts.append(v.split(" -> ")[-1] if "->" in v else v)
+            print(f"  entry {entry:02X}: marker {w[0]:02X} {w[1]:02X} {w[2]:02X}, read {r[0]:02X} {r[1]:02X} {r[2]:02X}: {v}")
+        if len(set(verdicts)) == 1:
+            print(f"  VERDICT: {verdicts[0]}")
     if "END:PEGCRD" not in text:
         print("\n** capture has no END:PEGCRD: a mode section did not finish **")
         return 1

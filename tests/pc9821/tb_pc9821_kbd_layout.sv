@@ -58,7 +58,6 @@ module tb_pc9821_kbd_layout;
       .dout(dout),
       .irq(irq),
       .ps2_key(ps2_key),
-      .bios_setup(1'b0),
       .layout_jis(layout_jis)
   );
 

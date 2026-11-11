@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DISK_CHANGE_RESET: The image slot a mount lands in decides whether the core asks for a platform reset: a mount on hps_io slot 0 (the ATA/HDD image) while the firmware pack is loaded raises reset_req for exactly ONE cycle, a mount on slot 1 (the FDC0 floppy, the OSD's S1,D88FDDHDM,Mount FDD1 entry) raises nothing at all however long it is held, and a mount on either slot before the pack is loaded raises nothing either (the boot mount is excluded by ordering, since the MGL lists the image before the pack) - so changing a floppy cannot re-POST the machine, which is the rule and a FAIL-FIRST scoping proof against the reset wire that ORed both slots; a held mount level raises nothing on every new clock (the request is the rising edge) and a second separate mount pulses again.
+// TB_PC9821_DISK_CHANGE_RESET: The image slot a mount lands in decides whether the core asks for a platform reset: a mount on hps_io slot 0 (the ATA/HDD image) while the firmware pack is loaded raises reset_req for exactly ONE cycle, a mount on slot 1 (the FDC0 floppy, the OSD's S1,D88FDDHDMFDI,Mount FDD1 entry) raises nothing at all however long it is held, and a mount on either slot before the pack is loaded raises nothing either (the boot mount is excluded by ordering, since the MGL lists the image before the pack) - so changing a floppy cannot re-POST the machine, which is the rule and a FAIL-FIRST scoping proof against the reset wire that ORed both slots; a held mount level raises nothing on every new clock (the request is the rising edge) and a second separate mount pulses again; a mount on slot 3 (the second hard disk) resets exactly as slot 0's does (one cycle with the pack loaded, none before it), and so does every change of the OSD's IDE bank 1 field, in either direction (one cycle each with the pack loaded, none before it).
 //
 // The slot-1 case is the rule that changing a floppy must not reset the machine, and it
 // FAILS against a reset wire that ORs both slots together - which is what this core did before
@@ -26,6 +26,8 @@ module tb_pc9821_disk_change_reset;
   reg        reset_async = 1;
   reg [1:0]  img_mounted = 2'b00;
   reg        pack_loaded = 1'b0;
+  reg        hdd1_mounted = 1'b0;    // hps_io slot 3, the second hard disk
+  reg        bank1_hdd = 1'b0;       // the OSD's IDE bank 1 field
   wire       reset_req;
 
   pc9821_disk_change_reset dut (
@@ -33,6 +35,8 @@ module tb_pc9821_disk_change_reset;
       .reset_async(reset_async),
       .img_mounted(img_mounted),
       .pack_loaded(pack_loaded),
+      .hdd1_mounted(hdd1_mounted),
+      .ide_bank1_hdd(bank1_hdd),
       .reset_req(reset_req)
   );
 
@@ -89,6 +93,12 @@ module tb_pc9821_disk_change_reset;
     // The pack is not loaded yet, so the boot-time image mount is excluded by ordering.
     mount_slot(0, 4, highs);
     check(highs == 0, "C1 an HDD mount before the pack is loaded raises no reset");
+    // The same for the second disk and for the field (a saved config's value arrives at start).
+    @(negedge clk); pulses = 0; counting = 1'b1;
+    hdd1_mounted = 1'b1; repeat (4) @(negedge clk); hdd1_mounted = 1'b0;
+    bank1_hdd = 1'b1; repeat (4) @(negedge clk); bank1_hdd = 1'b0; repeat (4) @(negedge clk);
+    counting = 1'b0;
+    check(pulses == 0, "C1 an HDD2 mount or an IDE bank 1 change before the pack raises no reset");
     mount_slot(1, 4, highs);
     check(highs == 0, "C1 a floppy mount before the pack is loaded raises no reset");
 
@@ -141,6 +151,26 @@ module tb_pc9821_disk_change_reset;
     repeat (2) @(negedge clk);
     mount_slot(0, 4, highs);
     check(highs == 1, "C4 the next HDD mount after the reset still raises one reset");
+
+    // ---------------- C5: the second hard disk's mount resets like slot 0's ----------------
+    // The IDE BIOS registers its disks at POST (the Xe10 IDE ROM's IDENTIFY loop,
+    // BANK3@0x0789-0x07B7), so a disk that appears under a running guest needs the re-POST.
+    repeat (4) @(negedge clk);
+    @(negedge clk); pulses = 0; counting = 1'b1;
+    hdd1_mounted = 1'b1; repeat (8) @(negedge clk); hdd1_mounted = 1'b0; repeat (4) @(negedge clk);
+    counting = 1'b0;
+    check(pulses == 1, "C5 an HDD2 mount with the pack loaded raises a ONE-cycle reset");
+
+    // ---------------- C6: a change of the IDE bank 1 field resets, both directions ----------------
+    repeat (4) @(negedge clk);
+    @(negedge clk); pulses = 0; counting = 1'b1;
+    bank1_hdd = 1'b1; repeat (8) @(negedge clk);
+    counting = 1'b0;
+    check(pulses == 1, "C6 IDE bank 1 CD-ROM -> HDD2 raises a ONE-cycle reset");
+    @(negedge clk); pulses = 0; counting = 1'b1;
+    bank1_hdd = 1'b0; repeat (8) @(negedge clk);
+    counting = 1'b0;
+    check(pulses == 1, "C6 IDE bank 1 HDD2 -> CD-ROM raises a ONE-cycle reset");
 
     if (fails == 0) begin
       // ==== VERDICT ====

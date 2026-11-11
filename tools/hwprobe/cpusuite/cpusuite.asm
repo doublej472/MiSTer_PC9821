@@ -22,12 +22,52 @@
 ;   A program that hangs (a HLT with IF=0, a loop) hangs the machine: the line naming it is
 ;   already in the result file (committed before the program starts) with no verdict.
 ;
-; USAGE    CPUSUITE [/P:n] [name]
-;   /P:n   run the whole pack n times (a stress loop; default 1); /Pn is the same
-;   name   run only the program of that name
+; FAILURE DETAIL. prelude.inc keeps the program's last DATA_PORT (0xE4) write - the whole EAX at
+; that OUT - in DMA channel 1's address/count registers and the EAX the verdict trap was entered
+; with in channel 0's (prelude.inc, "THE DETAIL REGISTERS": a CPU reset clears every register but
+; EDX). Before each program the COM saves DOS's values of both channels and writes the sentinel
+; DETAIL_NONE; after it, it reads them back and restores DOS's. A FAIL row ends
+; " data=xxxxxxxx|none eax=xxxxxxxx" (eax only when the trap ran). At start the COM checks that
+; the four registers read back what is written; if not, the CPU row says detail=none and the
+; FAIL rows carry no detail.
+;
+; CPU IDENTITY. After a CPU reset EDX holds the processor's component ID (Intel486: DH = 04h the
+; family, DL = model and stepping; other vendors' 486s differ), and the firmware's CPU-reset
+; return does not touch EDX before its RETF into the engine (BANK7.BIN@0x5804-0x5817, FD80:0004:
+; `xor ax,ax / mov ds,ax / in al,0x35 / test al,0x80 / jnz / mov ss,[0x406] / mov sp,[0x404] /
+; jmp 0x644`; FD80:0644 reloads SS:SP and jumps to FD80:0780, which `push eax / push dx /
+; mov dx,0x43f / mov al,0xa0 / out dx,al / pop dx`, rewrites CR0 (CD/NW cleared unless 0x596
+; bit 3, NE set), `pop eax` and jumps to the `retf` at FD80:001A), so the engine's landing
+; stores EDX first thing. Before the first
+; program the COM does one reset round trip of its own (no program: the engine saves DOS and
+; resets) and writes, after BEGIN:
+;   CPUSUITE CPU ac=0|1 cpuid=none|<vendor>/<leaf-1 EAX> bda486=xxxx detail=dma|none resetdx=xxxxxxxx
+; ac: EFLAGS.AC (bit 18) can be toggled (a 486 or later; a 386 cannot); cpuid: EFLAGS.ID (bit 21)
+; can be toggled, so CPUID exists (later 486 steppings), and what leaves 0 and 1 return;
+; bda486: the word at 0000:0486, where the firmware's own boot-time reset stores DX
+; (BANK7.BIN@0x5878, FD80:0078 `mov [0x486],dx`); resetdx: EDX after the round trip. The
+; reset's EDX after every program is compared with it, and a row ends " resetdx=xxxxxxxx" only
+; when it differs (it then becomes the value compared with).
+;
+; USAGE    CPUSUITE [/P:n] [/A] [/FROM:name] [/SKIP:name ...] [name]
+;   /P:n        run the whole pack n times (a stress loop; default 1); /Pn is the same
+;   /FROM:name  start at the program of that name: the ones before it are not run and get no row
+;               (resuming after a lock-up). Only the first pass starts there; later passes of /P:n
+;               run the whole pack
+;   /SKIP:name  do not run that program; it gets the row "<name> SKIP". Up to MAX_SKIP (16), each
+;               with its own /SKIP
+;   /A          append to CPUSUITE.TXT instead of replacing it
+;   name        run only the program of that name
+;   A switch's value follows ':' or '=' (as COMMAND.COM splits a switch) or blanks: /SKIP:x,
+;   /SKIP=x and /SKIP x are the same. Switches are case-blind; names are matched lower-cased. A
+;   /FROM or /SKIP name the pack does not hold stops CPUSUITE before it writes anything.
 ; Writes CPUSUITE.TXT in the current directory: "<name> PASS|FAIL <why>" per program and a final
-; "CPUSUITE END PASSES=n RUN=r PASS=p FAIL=f". Needs an XMS driver (HIMEM.SYS) and NO EMM386
-; (virtual 8086 mode cannot run a program that enters protected mode itself).
+; "CPUSUITE END PASSES=n RUN=r PASS=p FAIL=f", with " SKIP=s" appended when s > 0 programs were
+; skipped. /FROM, /SKIP and /A APPEND to an existing CPUSUITE.TXT (a CR LF first, which ends the
+; name row a lock-up left without a verdict, then a new BEGIN row with " FROM=name" appended when
+; /FROM is given), so the first run's rows are kept; without them the file is replaced. Resuming
+; after a lock-up in program X: CPUSUITE /FROM:X /SKIP:X. Needs an XMS driver (HIMEM.SYS) and NO
+; EMM386 (virtual 8086 mode cannot run a program that enters protected mode itself).
 ;
 ; PACK FORMAT (little-endian; gen_cpusuite.py record()):
 ;   0   "CPUSUIT1"   8   u32 count   12  u32 offset of the first record (16)
@@ -45,11 +85,14 @@
 ENG             equ 0x9F000             ; the engine page (gen_cpusuite.py ENG_PHYS)
 ENGSEG          equ ENG >> 4
 SAVE_BYTES      equ 0xA0000             ; 0-0x9FFFF
+DETAIL_NONE     equ 0xA5A5A5A5          ; the detail registers' value when nothing was recorded
 SEL_C32         equ 0x08                ; the engine's GDT
 SEL_D32         equ 0x10
 SEL_C16         equ 0x18
 SEL_D16         equ 0x20
 REC_SIZE        equ 128
+MAX_SKIP        equ 16                  ; /SKIP names
+NAME_LEN        equ 40                  ; a name buffer: up to 39 characters and the NUL
 ; STAGE MARKS: each step of one program's run writes a letter into text VRAM, row 0, columns
 ; 72-78 (cleared by the COM before each program), so a screenshot or the userdisk tier's TRAM dump
 ; of a machine that did not come back shows how far it got:
@@ -113,6 +156,12 @@ start:
         mov     dx, s_v86
         jmp     die
 .real_ok:
+        call    cpu_ident
+        call    dma_check
+        push    word 0                  ; the BDA word, through FS = 0
+        pop     fs
+        mov     ax, [fs:0x486]
+        mov     [bda486], ax
         ; ---- the pack: open, size, read into XMS
         mov     ax, 0x3D00
         mov     dx, s_packname
@@ -194,6 +243,7 @@ start:
 .pack_ok:
         mov     eax, [rec+8]
         mov     [count], eax
+        call    check_names
         ; ---- A20: on now (DOS=HIGH) if 0000:0000 and FFFF:0010 differ
         push    ds
         push    es
@@ -210,7 +260,23 @@ start:
         ; DOS's CR0, restored after every program
         mov     eax, cr0
         mov     [dos_cr0], eax
-        ; ---- the result file
+        ; ---- the result file: appended to (/A, /FROM, /SKIP) or replaced
+        cmp     byte [append], 0
+        je      .create
+        mov     ax, 0x3D01              ; open, write-only
+        mov     dx, s_outname
+        int     0x21
+        jc      .create                 ; none yet
+        mov     [fh_out], ax
+        mov     bx, ax
+        mov     ax, 0x4202              ; to its end
+        xor     cx, cx
+        xor     dx, dx
+        int     0x21
+        mov     si, s_crlf              ; ends a row a lock-up left without a verdict
+        call    out_str
+        jmp     .out_hdr
+.create:
         mov     ah, 0x3C
         xor     cx, cx
         mov     dx, s_outname
@@ -220,6 +286,7 @@ start:
         jmp     die
 .out_ok:
         mov     [fh_out], ax
+.out_hdr:
         mov     si, s_hdr
         call    out_str
         mov     eax, [count]
@@ -228,6 +295,62 @@ start:
         call    out_str
         movzx   eax, word [passes]
         call    out_dec
+        cmp     byte [from_name], 0
+        je      .hdr_end
+        mov     si, s_hdr_from
+        call    out_str
+        mov     si, from_name
+        call    out_str
+.hdr_end:
+        mov     si, s_crlf
+        call    out_str
+        ; ---- the CPU row: what the COM can see, committed, then one reset round trip for EDX
+        mov     si, s_cpu
+        call    out_str
+        mov     al, [has_ac]
+        add     al, '0'
+        mov     [numbuf], al
+        mov     byte [numbuf+1], 0
+        mov     si, numbuf
+        call    out_str
+        mov     si, s_cpu_id
+        call    out_str
+        cmp     byte [has_id], 0
+        jne     .cpuid
+        mov     si, s_none
+        call    out_str
+        jmp     .cpu_bda
+.cpuid: mov     si, cpu_vendor
+        call    out_str
+        mov     si, s_slash
+        call    out_str
+        mov     eax, [cpu_sig]
+        call    out_hex8
+.cpu_bda:
+        mov     si, s_cpu_bda
+        call    out_str
+        mov     ax, [bda486]
+        xchg    al, ah
+        call    out_hex2
+        mov     al, [bda486]
+        call    out_hex2
+        mov     si, s_cpu_detail
+        cmp     byte [dma_ok], 0
+        jne     .cpu_dma
+        mov     si, s_cpu_nodetail
+.cpu_dma:
+        call    out_str
+        mov     si, s_cpu_reset
+        call    out_str
+        mov     ah, 0x68
+        mov     bx, [fh_out]
+        int     0x21
+        mov     byte [probe], 1
+        call    run_one
+        mov     byte [probe], 0
+        mov     eax, [last_edx]
+        mov     [ref_edx], eax
+        call    out_hex8
         mov     si, s_crlf
         call    out_str
 
@@ -257,6 +380,32 @@ start:
         test    al, al
         jnz     .cmpname
 .take:
+        ; /FROM: nothing runs (and no row is written) until its program, in the first pass only
+        cmp     byte [from_wait], 0
+        je      .from_done
+        mov     di, from_name
+        call    name_eq
+        jne     .skip
+        mov     byte [from_wait], 0
+.from_done:
+        ; /SKIP: a row that says so, and the program does not run
+        xor     bx, bx
+.skl:   cmp     bx, [nskip]
+        jae     .run
+        imul    di, bx, NAME_LEN
+        add     di, skip_names
+        call    name_eq
+        je      .skiprow
+        inc     bx
+        jmp     .skl
+.skiprow:
+        mov     si, rec
+        call    out_str
+        mov     si, s_skip
+        call    out_str
+        inc     dword [nskipped]
+        jmp     .skip
+.run:
         ; the name, then commit: if the program hangs the machine, the file ends on its name
         mov     si, rec
         call    out_str
@@ -294,6 +443,14 @@ start:
         call    out_str
         mov     eax, [nfail]
         call    out_dec
+        mov     eax, [nskipped]         ; " SKIP=s" only when something was skipped
+        test    eax, eax
+        jz      .end_eol
+        mov     si, s_end_skip
+        call    out_str
+        mov     eax, [nskipped]
+        call    out_dec
+.end_eol:
         mov     si, s_crlf
         call    out_str
         mov     ah, 0x3E
@@ -327,6 +484,11 @@ run_one:
         out     0x0A, al
         in      al, 0x35
         mov     [portc], al
+        ; the detail registers: DOS's values kept, the sentinel in
+        mov     di, dma_dos
+        call    dma_read
+        mov     si, dma_sentinel
+        call    dma_write
         ; the engine page -> save block + 0x9F000
         mov     dword [xm_len], 0x1000
         mov     word [xm_sh], 0
@@ -366,6 +528,8 @@ run_one:
         mov     [es:p_portc], al
         mov     al, [a20_on]
         mov     [es:p_a20], al
+        mov     al, [probe]
+        mov     [es:p_probe], al
         pop     es
         jmp     ENGSEG:0
 .back:
@@ -376,6 +540,7 @@ run_one:
         mov     ds, bx
         mov     es, bx
         mov     [last_imr], al
+        mov     [last_edx], edx         ; EDX after the CPU reset (the engine's landing)
         mov     dword [xm_len], 0x1000
         mov     ax, [h_save]
         mov     [xm_sh], ax
@@ -385,6 +550,10 @@ run_one:
         call    xms_move
         cli
         STAGE16 6, 'B'
+        mov     di, dma_rd              ; what the program left, then DOS's values back
+        call    dma_read
+        mov     si, dma_dos
+        call    dma_write
         mov     al, [imr_m]
         out     0x02, al
         mov     al, [imr_s]
@@ -421,6 +590,7 @@ verdict:
         mov     si, s_fail_reset
         inc     dword [nfail]
         call    out_str
+        call    fail_detail
         jmp     .eol
 .n2:
         mov     si, s_fail
@@ -430,9 +600,126 @@ verdict:
         mov     al, [last_imr]
         not     al
         call    out_hex2
+        call    fail_detail
 .eol:
+        mov     eax, [last_edx]         ; the reset signature, only when it changed
+        cmp     eax, [ref_edx]
+        je      .eol2
+        mov     [ref_edx], eax
+        mov     si, s_resetdx
+        call    out_str
+        mov     eax, [ref_edx]
+        call    out_hex8
+.eol2:
         mov     si, s_crlf
         call    out_str
+        ret
+
+; " data=xxxxxxxx|none" and, when the trap ran, " eax=xxxxxxxx" (the detail registers)
+fail_detail:
+        cmp     byte [dma_ok], 0
+        je      .r
+        mov     si, s_data
+        call    out_str
+        mov     eax, [dma_rd+4]
+        cmp     eax, DETAIL_NONE
+        jne     .hex
+        mov     si, s_none
+        call    out_str
+        jmp     .eax
+.hex:   call    out_hex8
+.eax:   mov     eax, [dma_rd]
+        cmp     eax, DETAIL_NONE
+        je      .r
+        mov     si, s_eax
+        call    out_str
+        mov     eax, [dma_rd]
+        call    out_hex8
+.r:     ret
+
+; ---------------------------------------------------------------- the detail registers
+; DMA channels 0 and 1, address and count, in the order dma_ports names (prelude.inc, "THE
+; DETAIL REGISTERS"). Interrupts off: the byte flip-flop is shared.
+; dma_read: DI = 8 bytes <- the registers
+dma_read:
+        out     0x19, al                ; clear the byte flip-flop
+        mov     bx, dma_ports
+        mov     cx, 8
+.l:     movzx   dx, byte [bx]
+        inc     bx
+        in      al, dx
+        stosb
+        loop    .l
+        ret
+; dma_write: SI = 8 bytes -> the registers
+dma_write:
+        out     0x19, al
+        mov     bx, dma_ports
+        mov     cx, 8
+.l:     movzx   dx, byte [bx]
+        inc     bx
+        lodsb
+        out     dx, al
+        loop    .l
+        ret
+; dma_ok = 1 if a pattern written reads back (DOS's values restored after)
+dma_check:
+        cli
+        mov     di, dma_dos
+        call    dma_read
+        mov     si, dma_pattern
+        call    dma_write
+        mov     di, dma_rd
+        call    dma_read
+        mov     si, dma_dos
+        call    dma_write
+        sti
+        mov     si, dma_pattern
+        mov     di, dma_rd
+        mov     cx, 8
+        repe    cmpsb
+        sete    byte [dma_ok]
+        ret
+
+; ---------------------------------------------------------------- CPU identity (real mode)
+; has_ac: EFLAGS.AC toggles (486+). has_id: EFLAGS.ID toggles, so CPUID exists; then
+; cpu_vendor = leaf 0's EBX:EDX:ECX and cpu_sig = leaf 1's EAX (0 when leaf 1 is absent).
+cpu_ident:
+        mov     ecx, 1 << 18
+        call    .toggle
+        mov     [has_ac], al
+        mov     ecx, 1 << 21
+        call    .toggle
+        mov     [has_id], al
+        test    al, al
+        jz      .r
+        xor     eax, eax
+        db      0x0F, 0xA2              ; cpuid (cpu 486 has no mnemonic for it)
+        mov     [cpu_vendor], ebx
+        mov     [cpu_vendor+4], edx
+        mov     [cpu_vendor+8], ecx
+        mov     byte [cpu_vendor+12], 0
+        test    eax, eax
+        jz      .r
+        mov     eax, 1
+        db      0x0F, 0xA2              ; cpuid (cpu 486 has no mnemonic for it)
+        mov     [cpu_sig], eax
+.r:     ret
+; ECX = one EFLAGS bit -> AL = 1 if it can be flipped; EFLAGS as it was
+.toggle:
+        pushfd
+        pop     eax
+        mov     edx, eax                ; the original
+        xor     eax, ecx
+        push    eax
+        popfd
+        pushfd
+        pop     eax
+        push    edx
+        popfd
+        xor     eax, edx
+        test    eax, ecx
+        setnz   al
         ret
 
 ; ---------------------------------------------------------------- XMS
@@ -552,6 +839,18 @@ out_hex2:
         add     al, 7
 .n:     ret
 
+; EAX -> eight hex digits
+out_hex8:
+        mov     cx, 4
+.l:     rol     eax, 8
+        push    eax
+        push    cx
+        call    out_hex2
+        pop     cx
+        pop     eax
+        loop    .l
+        ret
+
 ; DX = '$'-terminated message, screen only
 puts:
         mov     ah, 0x09
@@ -564,7 +863,8 @@ die:
         mov     ax, 0x4C02
         int     0x21
 
-; ---------------------------------------------------------------- arguments: [/P:n] [name]
+; ---------------------------------------------------------------- arguments
+; [/P:n] [/A] [/FROM:name] [/SKIP:name ...] [name]; see USAGE at the top
 parse_args:
         mov     word [passes], 1
         mov     si, 0x81
@@ -577,12 +877,34 @@ parse_args:
         je      .done
         cmp     al, '/'
         jne     .name
-        lodsb
+        ; the switch's letters, upper-cased, into kw (at most 4)
+        mov     dword [kw], 0
+        xor     bx, bx
+.kw:    lodsb
         and     al, 0xDF
-        cmp     al, 'P'
-        jne     .bad
-        lodsb                           ; /P:n or /Pn (a typed ':' is not safe on every keymap)
+        cmp     al, 'A'
+        jb      .kwend
+        cmp     al, 'Z'
+        ja      .kwend
+        cmp     bx, 4
+        jae     .bad
+        mov     [kw+bx], al
+        inc     bx
+        jmp     .kw
+.kwend: dec     si                      ; SI = the character after the letters
+        cmp     dword [kw], 'P'
+        je      .p
+        cmp     dword [kw], 'A'
+        je      .a
+        cmp     dword [kw], 'SKIP'
+        je      .skipsw
+        cmp     dword [kw], 'FROM'
+        je      .from
+        jmp     .bad
+.p:     lodsb                           ; /P:n or /Pn (a typed ':' is not safe on every keymap)
         cmp     al, ':'
+        je      .pnum
+        cmp     al, '='
         je      .pnum
         dec     si
 .pnum:  xor     bx, bx
@@ -600,26 +922,145 @@ parse_args:
         jz      .bad
         mov     [passes], bx
         jmp     .sk
+.a:     mov     byte [append], 1
+        jmp     .sk
+.skipsw:
+        mov     ax, [nskip]
+        cmp     ax, MAX_SKIP
+        jae     .bad
+        imul    di, ax, NAME_LEN
+        add     di, skip_names
+        call    switch_value
+        inc     word [nskip]
+        mov     byte [append], 1
+        jmp     .sk
+.from:
+        mov     di, from_name
+        call    switch_value
+        mov     byte [from_wait], 1
+        mov     byte [append], 1
+        jmp     .sk
 .name:
-        mov     di, want
-        mov     cx, 39
-.nc:    cmp     al, ' '
-        jbe     .nend
-        cmp     al, 'A'
-        jb      .st
-        cmp     al, 'Z'
-        ja      .st
-        or      al, 0x20                ; program names are lower case
-.st:    stosb
-        lodsb
-        loop    .nc
-.nend:  mov     byte [di], 0
         dec     si
+        mov     di, want
+        call    read_name
         jmp     .sk
 .bad:
         mov     dx, s_usage
         jmp     die
 .done:  ret
+
+; SI = after a switch's letters, DI = the name buffer: the value after ':', '=' or blanks
+switch_value:
+        lodsb
+        cmp     al, ':'
+        je      read_name
+        cmp     al, '='
+        je      read_name
+.bl:    cmp     al, ' '
+        je      .nx
+        cmp     al, 9
+        jne     .v
+.nx:    lodsb
+        jmp     .bl
+.v:     dec     si
+        ; fall through
+; SI = a name's first character, DI = its buffer (NAME_LEN): the name lower-cased, NUL-ended;
+; it ends at a control character, a blank or '/'. An empty or over-long name is a usage error.
+read_name:
+        mov     cx, NAME_LEN
+.c:     lodsb
+        cmp     al, ' '
+        jbe     .e
+        cmp     al, '/'
+        je      .e
+        cmp     al, 'A'
+        jb      .st
+        cmp     al, 'Z'
+        ja      .st
+        or      al, 0x20                ; program names are lower case
+.st:    dec     cx
+        jz      parse_args.bad
+        stosb
+        jmp     .c
+.e:     dec     si
+        cmp     cx, NAME_LEN
+        je      parse_args.bad
+        mov     byte [di], 0
+        ret
+
+; DI = a NUL-ended name -> ZF set if it is the name in rec. Keeps BX.
+name_eq:
+        mov     si, rec
+.c:     lodsb
+        cmp     al, [di]
+        jne     .r
+        inc     di
+        test    al, al
+        jnz     .c
+.r:     ret
+
+; every /FROM and /SKIP name must be one of the pack's programs: a mistyped one would otherwise
+; run (or skip) nothing, silently. Runs before the result file is opened.
+check_names:
+        mov     dword [idx], 0
+.rec:   mov     eax, [idx]
+        cmp     eax, [count]
+        jae     .verify
+        shl     eax, 7                  ; * REC_SIZE
+        add     eax, 16
+        mov     ebx, rec
+        mov     ecx, REC_SIZE
+        call    pack_get
+        mov     di, from_name
+        call    name_eq
+        jne     .sk0
+        mov     byte [from_found], 1
+.sk0:   xor     bx, bx
+.skl:   cmp     bx, [nskip]
+        jae     .nx
+        imul    di, bx, NAME_LEN
+        add     di, skip_names
+        call    name_eq
+        jne     .skn
+        mov     byte [skip_found+bx], 1
+.skn:   inc     bx
+        jmp     .skl
+.nx:    inc     dword [idx]
+        jmp     .rec
+.verify:
+        mov     si, from_name
+        cmp     byte [si], 0
+        je      .vs
+        cmp     byte [from_found], 0
+        je      .unknown
+.vs:    xor     bx, bx
+.vsl:   cmp     bx, [nskip]
+        jae     .ok
+        imul    si, bx, NAME_LEN
+        add     si, skip_names
+        cmp     byte [skip_found+bx], 0
+        je      .unknown
+        inc     bx
+        jmp     .vsl
+.ok:    ret
+.unknown:                               ; SI = the name: screen only
+        push    si
+        mov     dx, s_unknown
+        call    puts
+        pop     si
+        mov     dx, si
+        xor     cx, cx
+.ln:    cmp     byte [si], 0
+        je      .pr
+        inc     si
+        inc     cx
+        jmp     .ln
+.pr:    mov     ah, 0x40
+        mov     bx, 1
+        int     0x21
+        mov     dx, s_crlf_d
+        jmp     die
 
 ; ---------------------------------------------------------------- data
 s_banner        db "CPUSUITE: z486 CPU test programs on the PC-98", 13, 10, "$"
@@ -631,11 +1072,15 @@ s_readerr       db "CPUSUITE: read error", 13, 10, "$"
 s_badpack       db "CPUSUITE: CPUSUITE.BIN is not a CPUSUITE pack", 13, 10, "$"
 s_noout         db "CPUSUITE: cannot create CPUSUITE.TXT", 13, 10, "$"
 s_xmserr        db "CPUSUITE: XMS call failed", 13, 10, "$"
-s_usage         db "usage: CPUSUITE [/P:n] [name]", 13, 10, "$"
+s_usage         db "usage: CPUSUITE [/P:n] [/A] [/FROM:name] [/SKIP:name ...] [name]", 13, 10, "$"
+s_unknown       db "CPUSUITE: not a program of CPUSUITE.BIN: $"
+s_crlf_d        db 13, 10, "$"
 s_packname      db "CPUSUITE.BIN", 0
 s_outname       db "CPUSUITE.TXT", 0
 s_hdr           db "CPUSUITE BEGIN V1 PROGRAMS=", 0
 s_hdr2          db " PASSES=", 0
+s_hdr_from      db " FROM=", 0
+s_skip          db " SKIP", 13, 10, 0
 s_sp            db " ", 0
 s_crlf          db 13, 10, 0
 s_pass          db "PASS", 0
@@ -647,6 +1092,21 @@ s_end           db "CPUSUITE END PASSES=", 0
 s_end_run       db " RUN=", 0
 s_end_pass      db " PASS=", 0
 s_end_fail      db " FAIL=", 0
+s_end_skip      db " SKIP=", 0
+s_cpu           db "CPUSUITE CPU ac=", 0
+s_cpu_id        db " cpuid=", 0
+s_cpu_bda       db " bda486=", 0
+s_cpu_detail    db " detail=dma", 0
+s_cpu_nodetail  db " detail=none", 0
+s_cpu_reset     db " resetdx=", 0
+s_resetdx       db " resetdx=", 0
+s_slash         db "/", 0
+s_none          db "none", 0
+s_data          db " data=", 0
+s_eax           db " eax=", 0
+dma_ports       db 0x01, 0x01, 0x03, 0x03, 0x05, 0x05, 0x07, 0x07
+dma_pattern     db 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0
+dma_sentinel    dd DETAIL_NONE, DETAIL_NONE
 
         align 4
 xms_entry       dd 0
@@ -658,6 +1118,19 @@ idx             dd 0
 ran             dd 0
 npass           dd 0
 nfail           dd 0
+nskipped        dd 0
+last_edx        dd 0                    ; EDX after the last CPU reset
+ref_edx         dd 0                    ; the reset signature rows are compared with
+cpu_sig         dd 0
+cpu_vendor      times 16 db 0
+dma_dos         times 8 db 0            ; DOS's DMA ch0/ch1 address and count
+dma_rd          times 8 db 0            ; what the program left there
+bda486          dw 0
+has_ac          db 0
+has_id          db 0
+dma_ok          db 0
+probe           db 0                    ; 1: the reset round trip, no program
+kw              dd 0                    ; parse_args: a switch's letters
 dos_cr0         dd 0
 rd_off          dd 0
 ; the XMS move structure (function 0Bh)
@@ -678,7 +1151,14 @@ portc           db 0
 a20_on          db 0
 last_imr        db 0
 numbuf          times 12 db 0
-want            times 40 db 0
+nskip           dw 0
+append          db 0                    ; 1: append to CPUSUITE.TXT
+from_wait       db 0                    ; 1: /FROM's program not reached yet (first pass)
+from_found      db 0
+skip_found      times MAX_SKIP db 0
+want            times NAME_LEN db 0
+from_name       times NAME_LEN db 0
+skip_names      times MAX_SKIP * NAME_LEN db 0
 rec             times REC_SIZE db 0
 
         align 16                        ; = the .eng section's file alignment below
@@ -708,7 +1188,10 @@ p_retsp         dw 0
 p_cr0           dd 0                    ; DOS's CR0
 p_portc         db 0                    ; DOS's port C
 p_a20           db 0                    ; 1: leave A20 enabled
+p_probe         db 0                    ; 1: no program, only the reset round trip
 r_imr           db 0
+        align 4
+r_edx           dd 0                    ; EDX at the landing: the reset's component ID
 
         align 8
 gdt_eng:
@@ -777,6 +1260,8 @@ pm_entry:
         mov     ecx, ENG / 4
         rep     movsd
         STAGE32 1, 'S'
+        cmp     byte [ENG + p_probe], 0
+        jne     probe_reset
         ; the bench's memory starts zeroed
         xor     eax, eax
         xor     edi, edi
@@ -937,6 +1422,15 @@ ld_ss:  mov     ss, eax
         mov     esp, 0xFF00
         jmp     far [cs:ENG + pm_jmp]
 
+; the COM's reset round trip: THE RETURN with no program (and no verdict) in between
+probe_reset:
+        mov     word [0x404], land_stack
+        mov     word [0x406], ENGSEG
+        mov     al, 0x0E
+        out     0x37, al                ; SHUT0 = 0
+        out     0xF0, al                ; the CPU reset
+        jmp     $
+
 ; ---------------------------------------------------------------- real-mode start
 ; Every register gets its cache attributes from a protected-mode load (descriptor = the bench's
 ; cache; CS's with base ENG so this code keeps running in it), then drops to real mode, where a
@@ -999,6 +1493,7 @@ rm_jmp: jmp     0:0                     ; patched: the program's CS:IP
 ; ---------------------------------------------------------------- THE RETURN (real mode)
 ; The firmware's RETF lands here after the trap's `out 0xF0` (or any other CPU reset).
 landing:
+        mov     [cs:r_edx], edx         ; first: the reset's EDX (the firmware's path keeps it)
         cli
         in      al, 0x0A                ; the verdict, before anything touches the 8259
         mov     [cs:r_imr], al
@@ -1054,6 +1549,7 @@ back_rm:
         mov     ss, [p_retss]
         mov     sp, [p_retsp]
         mov     al, [r_imr]
+        mov     edx, [r_edx]
         jmp     far [p_ret]
 
 eng_end:

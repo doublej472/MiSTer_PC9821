@@ -76,7 +76,6 @@ module tb_pc9821_gdc_graphics;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire        hs_out, vs_out, de_out;
 
   wire cg_rd_hold, cg_win_byte_hold;
@@ -160,10 +159,9 @@ module tb_pc9821_gdc_graphics;
       .text_opaque(text_opaque), .text_cell(text_cell), .text_colour(text_colour),
       .line_data(line_data), .line_ready(line_ready), .line_sel(line_sel),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
-      .clk(clk), .rst_n(rst_n_vid),
+      .clk(clk),
       .pal_mode16(gfx_mode16), .pal_dig(gfx_dig),
       .pal_wr_en(1'b0), .pal_wr_idx(4'd0), .pal_wr_chan(2'd0), .pal_wr_data(4'd0),
-      .pal_commit(1'b0),
       .fold_bypass(1'b0), .packed_idx(8'h00),
     .pegc_256(mix_pegc_256),
     .pal256_wr_en(mix_pal256_wr_en), .pal256_wr_idx(mix_pal256_wr_idx),

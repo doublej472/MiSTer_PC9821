@@ -1,0 +1,56 @@
+XE10T v1 sha=5c94f34129e02155 crc=0B64D463 imgcrc=0B64D463 size=45520 build=gas-xe10t args= /RASTER /O RASTER.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0032 cr0=00000032 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=70 bda0458=02 bda045C=40 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=CF bda054D=50 bda0594=10 bda0595=00
+I ID dos=6.20 bufseg=277E bufparas=4000 sel=00040000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=C8CC
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6146 pit=49161
+P CAL PITWIN i=1 art=6145 pit=49160
+P CAL PITWIN i=2 art=6146 pit=49162
+P CAL PITWIN i=3 art=6145 pit=49158
+P CAL PITWIN i=4 art=6144 pit=49157
+P CAL PITWIN i=5 art=6144 pit=49158
+P CAL PITWIN i=6 art=6144 pit=49159
+P CAL PITWIN i=7 art=6144 pit=49156
+P CAL PITEDGE edges=19 art=155646 vmax=65535 vmin=0
+P CAL VSYNC edges=60 art=326698 pit=2598655 tsc=-
+I CAL pit_mod=65536 ratio_x1000=8000 vsync_x10=54449 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=5072
+BEGIN:RASTER
+STATE RASTER visual q04=00 lines_per_frame=440 vsync_line=407
+P RASTER SPLIT frames=283 to=0 target=2722 at_min=2722 at_max=2723 at_sum=770431 dur_min=1 dur_max=2 dur_sum=494 outs=1024
+P RASTER TOGGLE frames=283 to=0 target=1800 at_min=1800 at_max=1801 at_sum=509486 dur_min=116 dur_max=117 dur_sum=33044 outs=1024
+P RASTER DTOGGLE frames=283 to=0 target=1800 at_min=1800 at_max=1801 at_sum=509504 dur_min=116 dur_max=117 dur_sum=32956 outs=1024
+RESTORE RASTER PAL_ANALOG_ENTRY0 was=- now=00 kind=default OK
+RESTORE RASTER PAL_DIGITAL was=- now=37152604 kind=default OK
+RESTORE RASTER GDC2_START was=- now=0D kind=default OK
+RESTORE RASTER q04_colour_mode was=00 now=00 kind=readback OK
+RESTORE RASTER P7C_GRCG was=- now=00 kind=default OK
+RESTORE RASTER PA6_PAGE was=- now=00 kind=default OK
+RESTORE RASTER Q9A07_EGC was=00 now=00 kind=readback OK
+END:RASTER rows=3 sum=349D
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=20BE
+XE10T DONE sections=4 sum=B2BA3548

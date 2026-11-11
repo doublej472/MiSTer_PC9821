@@ -561,11 +561,20 @@ function automatic seg_desc_t seg_desc_reset_cs();
     return desc;
 endfunction
 
-// IDT/IVT descriptor for real mode - base=0, limit=0x3FF (256 vectors * 4 bytes)
+// The IDTR and GDTR limit after reset (both bases 0). A PC-9821Xe10 (i486DX2)
+// reads IDTR and GDTR FFFF:00000000 at the DOS prompt after a boot that, on a
+// core resetting both to 03FFh, leaves 03FF:00000000 in both (neither register
+// is loaded on the way), so FFFFh is the machine's reset value; NP2kai
+// i386c/ia32/interface.c resets CPU_GDTR_LIMIT and CPU_IDTR_LIMIT to 0xffff.
+// The Intel486 PRM (1992) Table 10-1 and the Intel486 DX2 data sheet Table 6.2
+// give "IDTR Base = 0, Limit=3FFh" (GDTR not listed); the machine is followed.
+localparam logic [19:0] DTR_RESET_LIMIT = 20'h0FFFF;
+
+// IDTR/GDTR descriptor at reset: base 0, limit DTR_RESET_LIMIT (the IVT at 0)
 function automatic seg_desc_t seg_desc_idt_real_mode();
     seg_desc_t desc;
     desc.base       = 32'h00000000;               // IVT at linear address 0
-    desc.limit      = 20'h003FF;                  // 1KB limit (256 * 4 bytes)
+    desc.limit      = DTR_RESET_LIMIT;
     desc.seg_type   = 4'b0010;                    // Data, readable
     desc.S          = 1'b1;
     desc.DPL        = 2'b00;
@@ -1066,16 +1075,13 @@ localparam [11:0] UADDR_STACK_FAULT    = 12'h863;  // #SS(0) - sets SIGMA=3, err
 localparam [11:0] UADDR_DIVIDE_ERROR   = 12'h824;  // #DE(0) - divide error (vector 0)
 localparam [11:0] UADDR_DOUBLE_FAULT   = 12'h83F;  // #DF - vector 8, zero error code
 localparam [11:0] UADDR_ALIGN_FAULT    = 12'h9F6;  // #AC(0) - vector 17 (optimizer-owned entry)
-localparam [11:0] UADDR_CALL_STACK_FAULT = 12'h9F8; // #SS(new SS selector) for a CALL gate's new stack (optimizer-owned)
+localparam [11:0] UADDR_CALL_STACK_FAULT = 12'h9F8; // #SS(new SS selector) for a privilege switch's new stack (optimizer-owned)
 // Fault-class delivery word that sets EFLAGS.RF (EFLAGS <- EFLAGS | 10000h);
 // interrupts and traps enter the common body after it.
 localparam [11:0] UADDR_FAULT_SET_RF   = 12'h899;
 // Fault body word whose JTSSAF skips 894-899 (EIP restore and the RF set)
 // for a fault raised during a task switch's TSS accesses.
 localparam [11:0] UADDR_FAULT_TSS_SKIP = 12'h893;
-// MOV DRn general-detect branch (DR7.GD=1): restores EIP, sets DR6.BD and
-// enters the #DB body at 943h, which never passes 899h.
-localparam [11:0] UADDR_DEBUG_GD_FAULT = 12'h3A5;
 // Far CALL system-descriptor dispatch: its SINTHW marks a CALL for the task
 // switch's nesting test (JSTSKL), not an external event.
 localparam [11:0] UADDR_CALL_GATE_SINTHW = 12'h5B9;
@@ -1095,6 +1101,12 @@ localparam [11:0] UADDR_DESC_SKIP_DATA = 12'h8F8;
 localparam [11:0] UADDR_DESC_SKIP_CS   = 12'h8FA;
 localparam [11:0] UADDR_TSS_PROBLEM    = 12'h85D;  // #TS path used by protected-mode descriptor checks
 localparam [11:0] UADDR_FPU_STORE_TAIL = 12'h57B;  // Final 16-bit word of an m80 store
+// The error-code pushes of exception delivery: the privilege-switch tail
+// (62A), the task-switch tail (7D6) and the same-privilege tail (8E7).  Each
+// is a `WR w` after an IND step of the stack width.
+localparam [11:0] UADDR_ERRC_PUSH_PRIV = 12'h62A;
+localparam [11:0] UADDR_ERRC_PUSH_TASK = 12'h7D6;
+localparam [11:0] UADDR_ERRC_PUSH      = 12'h8E7;
 localparam [11:0] UADDR_RPTI_RNI       = 12'h20F;  // REP interrupt restart boundary
 localparam [11:0] UADDR_PAGE_FAULT     = 12'h8E9;  // #PF(14) - page fault
 localparam [11:0] UADDR_INVALID_LOCK   = 12'h82B;  // #UD for invalid LOCK usage
@@ -1332,9 +1344,13 @@ function automatic logic irf_writes_gpr(input [31:0] countr, input logic has_0f,
 endfunction
 
 // 486 debug-register fixed bits.  DR6: bits 31-16 and 11-4 read as one, bit
-// 12 as zero.  DR7: bit 10 reads as one, bits 15-14 and 12-11 as zero.
+// 12 keeps the written value (Intel SDM vol. 3, Architecture Compatibility,
+// "Differences in Debug Register DR6": "it is possible to write a 1 in this
+// bit on the Intel486 processor"; a real Am486DX4 reads FFFFFFFFh back,
+// CPUSUITE-XE10-triage tri_dr6dr7).  DR7: bit 10 reads as one, bits 15-14
+// and 12-11 as zero.
 function automatic [31:0] dr6_value(input [31:0] value);
-    dr6_value = (value | 32'hFFFF_0FF0) & ~32'h0000_1000;
+    dr6_value = value | 32'hFFFF_0FF0;
 endfunction
 function automatic [31:0] dr7_value(input [31:0] value);
     dr7_value = (value & ~32'h0000_D800) | 32'h0000_0400;

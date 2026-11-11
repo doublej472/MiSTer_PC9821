@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC's SYNC command OWNS the raster: the eight-parameter sync block a guest programs through 0x62/0x60 decides the line length, the active width, every porch and the frame length exactly as NP2kai's gdc_updateclock() derives them (io/gdc.c:370-444, the only reference that derives a raster - qemu-pc98 latches the same bytes and then syncs on a fixed 18 ms), and the machine's power-on block still gives the measured default. The expectations are NP2kai's, computed in the bench from the block bytes by a transcription of gdc_updateclock(), never read out of the DUT; the DUT is measured only through its own sync outputs and raster counters (dots per line, lines per frame, active dots per line, active lines, the dot the hsync pulse starts on, the hsync width, the vline the vsync pulse rises on and its width in lines). Three cases: the default block {10 4e 07 25 07 07 90 65} -> 848x440 total with 640x400 active, front porch 80, hsync 64 and back porch 64 dots (the uPD7220's field map, MAME upd7220.cpp:1243-1246 - NP2kai only sums those fields into the line), VFP 7, an 8-line VSYNC pulse rising on vline 407, VBP 25, 56.42 Hz; defsyncm15 written on a 24 kHz machine -> x = 112 characters = 896 dots and the raw 260-line frame CLAMPED to the machine's 400-line minimum; and a hand-built 550-line block (lf 480, vs 10, vfp 20, vbp 40) whose pulse rises on vline 500 at 45.1 Hz. The default's pulse width is the block's vs field because the machine's own 2M-sample status histogram measures bit 5 high for 36 385 of 2 097 152 samples = 1.735 % = 8 of 440 lines once its loop's x1.048 duty bias is divided out (the factor its bit 6 carries against the 208/848 horizontal blank), where the '2.8 % = 12 lines' the tree used to carry divided the same count by 1 310 720 instead of the capture's own 2^21. FAIL-FIRST: on the pre-change tree cases 2 and 3 cannot move the raster at all, case 1's pulse is 12 lines wide and case 2's line never leaves 848; and on the tree before 2026-10-15 the default's hsync started at dot 768 (HFP 128) and was 56 dots wide, a 24-dot back porch; and the VSYNC pin moved 128 dots after the HSYNC leading edge (at the first active dot), where the uPD7220 moves it WITH the HSYNC leading edge (MAME upd7220.cpp update_vsync_timer) - every VSYNC-pin edge is now checked to land on an HSYNC-pin leading edge.
+// The GDC's SYNC command OWNS the raster: the eight-parameter sync block a guest programs through 0x62/0x60 decides the line length, the active width, every porch and the frame length exactly as NP2kai's gdc_updateclock() derives them (io/gdc.c:370-444, the only reference that derives a raster - qemu-pc98 latches the same bytes and then syncs on a fixed 18 ms), and the machine's power-on block still gives the measured default. The expectations are NP2kai's, computed in the bench from the block bytes by a transcription of gdc_updateclock(), never read out of the DUT; the DUT is measured only through its own sync outputs and raster counters (dots per line, lines per frame, active dots per line, active lines, the dot the hsync pulse starts on, the hsync width, the vline the vsync pulse rises on and its width in lines). Five cases: the default block {10 4e 07 25 07 07 90 65} -> 848x440 total with 640x400 active, front porch 80, hsync 64 and back porch 64 dots (the uPD7220's field map, MAME upd7220.cpp:1243-1246 - NP2kai only sums those fields into the line), VFP 7, an 8-line VSYNC pulse rising on vline 407, VBP 25, 56.42 Hz; defsyncm15 written on a 24 kHz machine -> x = 112 characters = 896 dots and the raw 260-line frame CLAMPED to the machine's 400-line minimum; a hand-built 550-line block (lf 480, vs 10, vfp 20, vbp 40) whose pulse rises on vline 500 at 45.1 Hz; and TXTMODE /D's AW 64 and AW 78 blocks (C/R 0x3E and 0x4C), whose lines run 720 and 832 dots (66.45 Hz / 29.24 kHz and 57.51 Hz / 25.30 kHz) as on the real Xe10 (docs/probes/KIT2-XE10-TXTMODE.TXT:36 `ticks=000120F1` and :27 `ticks=00014DE4` against the default's :9 `ticks=0001544F` = 848 dots), the 24 kHz x floor being the machine's 90, not NP2kai's gdcclk[1] minx 100. The default's pulse width is the block's vs field because the machine's own 2M-sample status histogram measures bit 5 high for 36 385 of 2 097 152 samples = 1.735 % = 8 of 440 lines once its loop's x1.048 duty bias is divided out (the factor its bit 6 carries against the 208/848 horizontal blank), where the '2.8 % = 12 lines' the tree used to carry divided the same count by 1 310 720 instead of the capture's own 2^21. FAIL-FIRST: before the kit-2 change case 4's line is clamped to 800 dots; on the pre-change tree cases 2 and 3 cannot move the raster at all, case 1's pulse is 12 lines wide and case 2's line never leaves 848; and on the tree before 2026-10-15 the default's hsync started at dot 768 (HFP 128) and was 56 dots wide, a 24-dot back porch; and the VSYNC pin moved 128 dots after the HSYNC leading edge (at the first active dot), where the uPD7220 moves it WITH the HSYNC leading edge (MAME upd7220.cpp update_vsync_timer) - every VSYNC-pin edge is now checked to land on an HSYNC-pin leading edge.
 //
 // The GDC's SYNC command OWNS the raster. The eight-parameter sync block a guest programs
 // through 0x62 (command) / 0x60 (parameters) decides the line length, the active width, every
@@ -92,7 +92,7 @@ module tb_pc9821_gdc_sync_raster;
   wire [9:0]  pix_dot;
   wire        pix_h_active, pix_v_active, gfx_odd_line, gfx_mode16;
   wire [31:0] gfx_dig;
-  wire        pal_wr_en, pal_commit;
+  wire        pal_wr_en;
   wire  [3:0] pal_wr_idx, pal_wr_data;
   wire  [1:0] pal_wr_chan;
   wire        hs_out, vs_out, de_out;
@@ -132,7 +132,7 @@ module tb_pc9821_gdc_sync_raster;
       .gfx_odd_line(gfx_odd_line),
       .gfx_mode16(gfx_mode16), .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
-      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
       .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out)
   );
 
@@ -148,8 +148,10 @@ module tb_pc9821_gdc_sync_raster;
 
   // The 24 kHz machine's gdcclk[1] (io/gdc.c:34): minx, maxx, miny, maxy. The Xe10 is strapped
   // to this entry - its GDC clock select never moves the raster - and the 15 kHz and 31 kHz
-  // entries are other machines' monitors.
-  localparam integer CLK_MINX = 100, CLK_MAXX = 112;
+  // entries are other machines' monitors. EXCEPT minx: the real Xe10 runs x = 90 (AW 64) as a
+  // 720-dot line (docs/probes/KIT2-XE10-TXTMODE.TXT:36 `FRAME 16 VSYNC ticks=000120F1
+  // lines=01B8`; case 4 below), where gdcclk[1]'s 100 would hold it at 800, so the floor is 90.
+  localparam integer CLK_MINX = 90, CLK_MAXX = 112;
   localparam integer CLK_MINY = 400, CLK_MAXY = 575;
 
   // ==== CHECKS ====
@@ -434,6 +436,26 @@ module tb_pc9821_gdc_sync_raster;
     expect_eq(g_v_rise, 500, "550-block vsync rise vline");
     expect_eq(g_htotal, 848, "550-block htotal is the default's");
 
+    // ---- cases 4 and 5: TXTMODE /D's AW 64 and AW 78 blocks, as the real Xe10 ran them ----
+    // The default block with C/R 0x3E (AW 64: x = 64 + 26 = 90) and 0x4C (AW 78: x = 104). The
+    // machine's 16-frame times against its own default's (docs/probes/KIT2-XE10-TXTMODE.TXT:9
+    // `FRAME 16 VSYNC ticks=0001544F lines=01B8`, 848 dots): :36 `FRAME 16 VSYNC ticks=000120F1
+    // lines=01B8` is 848 x 0x120F1 / 0x1544F = 720.0 dots (29.24 kHz / 66.46 Hz on the OSSC) and
+    // :27 `FRAME 16 VSYNC ticks=00014DE4 lines=01B8` 832.0 dots: the line shortens by the
+    // missing words, with no 800-dot floor.
+    sb[0] = 8'h10; sb[1] = 8'h3e; sb[2] = 8'h07; sb[3] = 8'h25;
+    sb[4] = 8'h07; sb[5] = 8'h07; sb[6] = 8'h90; sb[7] = 8'h65;
+    run_case("TXTMODE P4 AW 64", 1);
+    np2_sync_geometry;
+    expect_eq(g_x_raw, 90, "AW 64 block x");
+    expect_eq(g_htotal, (848 * 'h120F1 + 'h1544F / 2) / 'h1544F,
+              "AW 64 line: the Xe10's 720 dots (KIT2-XE10-TXTMODE.TXT:36 vs :9)");
+    sb[1] = 8'h4c;
+    run_case("TXTMODE P3 AW 78", 1);
+    np2_sync_geometry;
+    expect_eq(g_htotal, (848 * 'h14DE4 + 'h1544F / 2) / 'h1544F,
+              "AW 78 line: the Xe10's 832 dots (KIT2-XE10-TXTMODE.TXT:27 vs :9)");
+
     // ==== VERDICT ====
     if (errors == 0) begin
       $display("TB_PC9821_GDC_SYNC_RASTER: PASS");
@@ -443,11 +465,11 @@ module tb_pc9821_gdc_sync_raster;
   end
 
   initial begin
-    // Three cases, each with a few frames of settling plus one measured frame; the longest is
-    // case 3's 550 lines x 848 dots = 466 400 dots, so ~4 M cycles is generous. Written as a
+    // Five cases, each with a few frames of settling plus one measured frame; the longest is
+    // case 3's 550 lines x 848 dots = 466 400 dots, so ~6 M cycles is generous. Written as a
     // literal because the structure checker accepts a cycle bound only in that form
     // (`repeat ( <number> ) @(posedge ...`).
-    repeat (6_000_000) @(posedge clk_sys);
+    repeat (9_000_000) @(posedge clk_sys);
     $fatal(1, "TB_PC9821_GDC_SYNC_RASTER: TIMEOUT (the raster produced no frame)");
   end
 endmodule

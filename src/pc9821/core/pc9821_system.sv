@@ -94,6 +94,10 @@ module pc9821_system (
     input  [26:0] ioctl_addr,
     input  [15:0] ioctl_dout,
     output        ioctl_wait,
+    // A firmware-pack download is being taken under the OSD Reset level
+    // (pc9821_memory_subsystem's pack-download hold); z486_mister.sv keeps the SDRAM backend out
+    // of the platform reset while it is high.
+    output        pack_load_hold,
     input         img_mounted,
     input         img_readonly,
     input  [63:0] img_size,
@@ -126,6 +130,16 @@ module pc9821_system (
     output        fdd1_wr,
     input         fdd1_ack,
     output [15:0] fdd1_buff_din,
+    // The SECOND HARD DISK's image slot (hps_io slot 3, "Mount HDD2"): bank 1's master when the
+    // OSD's IDE bank 1 field says HDD2 (`ide_bank1_hdd`). hps_io's shared img_readonly applies.
+    input         hdd1_mounted,
+    input  [63:0] hdd1_size,
+    output [31:0] hdd1_lba,
+    output  [5:0] hdd1_blk_cnt,
+    output        hdd1_rd,
+    output        hdd1_wr,
+    input         hdd1_ack,
+    output [15:0] hdd1_buff_din,
     // The CD-ROM (hps_io slot 4, CDROM_EN): bank 1's ATAPI master (pc9821_atapi). Read-only, so
     // the slot has no write leg; its CD-DA stream goes to the top level's cdda ring.
     input         cd_mounted,
@@ -144,7 +158,7 @@ module pc9821_system (
 	input         ps2_kbclk_in,
 	input         ps2_kbdat_in,
     input  [10:0] ps2_key,
-    // hps_io's parsed PS/2 mouse packet (sys/hps_io.sv:106-107), handed to
+    // hps_io's parsed PS/2 mouse packet (sys/hps_io.sv:121-122), handed to
     // pc9821_mouse through pc9821_iobus: [24] toggles once per packet,
     // [23:16] Y delta (PS/2: positive = up), [15:8] X delta (positive =
     // right), [2:0] {middle, right, left}, 1 = pressed.
@@ -205,7 +219,6 @@ module pc9821_system (
     // for the 32/64/128 MB module classes). `ram_size` arrives already clamped to it; this port
     // exists because the pack's base is the ceiling rather than the selected size.
     input   [2:0] ram_size_max,
-    input         bios_setup,     // OSD: hold HELP from reset so the ITF enters SETUP
     input         kbd_layout_jis, // OSD Keyboard: 1 = JIS host layout, 0 = US (pc9821_kbd)
     // OSD: WHICH MACHINE'S PORT-0xF0 MACHINE-ID STRAP to answer, a four-bit field. 0 =
     // PC-9821Xe10 (the measured strap, and the config-less default), 1 = PC-9821Xe,
@@ -224,9 +237,24 @@ module pc9821_system (
     // and nothing else. Like bios_set, the arm reads a reset-qualified latch
     // (gdc_strap_eff), so the selection applies at machine reset / reload only.
     input         gdc_clock_5m,
-    // OSD: the FDD-mode switch, 0x00BE bit 2: 0 = Auto-Detection (the default), 1 = Fixed.
-    // Latched on reset inside pc9821_fdc (POST samples it); see its dip_fixed port.
-    input         fdd_dip_fixed,
+    // OSD: two SETUP items (docs/bios-setup.md), each reaching pc9821_iobus, whose ports carry
+    // the evidence, and through its setup_cfg the configuration record and mirror in pc9821_cg.
+    // 1 = 20 text lines (port 0x31 bit 3 set); 0 = 25, the measured machine.
+    input         text_lines_20,
+    // 1 = keep the memory switch (port 0x31 bit 4 clear, 0x871E bit 5 clear); 0 = initialise,
+    // the measured machine.
+    input         msw_keep,
+    // SETUP's floppy disk mode, the OSD Floppy mode field's LIST POSITION: 0 = Auto (1M) (the
+    // default, so an undriven port is it), 1 = 1M (the measured machine), 2 = Auto (640K),
+    // 3 = 640K. See
+    // pc9821_iobus's floppy_mode port.
+    input  [1:0]  floppy_mode,
+    // OSD: WHAT IS IDE BANK 1'S MASTER - 0 = the CD-ROM (the stock layout, the default), 1 = the
+    // second hard disk (slot 3). A build without the CD drive drives 1 (bank 1 then has only the
+    // disk to hold). Latched on the platform reset / reload strobe like the Machine field
+    // (`ide_bank1_hdd_eff`), and the top level resets the platform when it changes, so the drive
+    // on a cable never changes under a running guest.
+    input         ide_bank1_hdd,
     // OSD: the CD audio volume, already decoded by pc9821_osd into pc9821_audio_volume's 5-bit
     // gain code (31 = 0 dB, 2 dB per step, 0 = mute). It drives vol_cd_l/r below; without the
     // CD drive's player (CDROM_AUDIO_EN 0) it is unread and the CD channel is the constant 0.
@@ -250,6 +278,11 @@ module pc9821_system (
     // undriven port or a card with no config file is full speed at every profile. Only the CPU
     // slows: the bus, I/O and every device keep their real rates (src/z486/docs/throttle.md).
     input   [3:0] cpu_speed_sel,
+    // OSD I/O timing (status[79]): 0 = Fast, 1 = Xe10, the machine's measured per-class I/O
+    // access times and GVRAM store periods. A runtime level, passed straight to pc9821_iobus (its
+    // io_timing_xe10 port says what each table charges and when a change applies) and through
+    // pc9821_memory_subsystem to pc9821_gvram_arb (its Xe10 store table). An undriven port is Fast.
+    input         io_timing_xe10,
 	output wire        video_ce,
 	// 0x09A8 bit 0 (pc9821_iobus's latch): the raster runs on the 31 kHz dot clock. A level on
 	// clk_sys; the top moves the video PLL to the matching clock (pc9821_vpll_ctl).
@@ -263,7 +296,7 @@ module pc9821_system (
 
 	// The PC-9801-86 card: the OPNA YM2608 and the 86-PCM, summed WIDE and
 	// delivered UNCLAMPED here (the chain's LAST saturation is at the final DAC,
-	// z486_mister's mix_dry - NP2kai's _saturation_s16).
+	// pc9821_audio_mix's mix_dry - NP2kai's _saturation_s16).
 	// 20 bits: the FM+ADPCM sum is clamped to +-32,767 at the jt08_acc junction
 	// (ymfm's clamp16, ymfm_opn.cpp:1410-1414), the AC-COUPLED (zero-mean) SSG is
 	// added after that clamp (up to +-12,276 at the <<2 join), and a full-scale
@@ -285,7 +318,7 @@ module pc9821_system (
 	output  [4:0] vol_line_r,
 	output  [1:0] vol_spk,
 	// The 2-bit beeper volume from software-DIP 0x871E bits [3:2] (pc9821_iobus):
-	// z486_mister scales the speaker amplitude by it, 0 = exact mute (NP2kai
+	// pc9821_audio_mix scales the speaker amplitude by it, 0 = exact mute (NP2kai
 	// io/dipsw.c:44-57 -> beep_setvol, sound/beepg.c linear scale).
 	output  [1:0] beep_vol,
 	output  [4:0] vol_en,
@@ -295,6 +328,11 @@ module pc9821_system (
     output reg    debug_sd_error,
 	output        debug_bios_loaded,
 	output        debug_first_instruction,
+    // The access lamps (pc9821_disk_led): led_disk while any drive - a hard disk, the CD drive
+    // or the floppy controller - moves data with its image, led_fdd for the floppy alone, each
+    // held on for a display-only 50 ms after. z486_mister drives LED_DISK / LED_USER.
+    output        led_disk,
+    output        led_fdd,
     output reg [7:0]  debug_post_code,
     output reg        debug_post_write,
 
@@ -309,7 +347,7 @@ module pc9821_system (
 
 parameter SYS_FREQ = 50_000_000;
 // L1 caches: 4 KiB data + 4 KiB instruction (SET_BITS=6 = 64 sets x 4 ways x 16 B).
-// The size is set ONCE at z486_mister.sv:274-275 (`DCACHE_SET_BITS`), which overrides this default; this
+// The size is set ONCE at z486_mister.sv:297-298 (`DCACHE_SET_BITS`), which overrides this default; this
 // parameter exists only as pc9821_system's interface to the vendored z486. Kept small to
 // free M10K blocks (the GVRAM owns 256 and the Kanji font needs room) - the 486's 8 KiB
 // unified cache is not needed by DOS/Touhou; the smaller cache is a deliberate choice.
@@ -321,11 +359,6 @@ parameter ENABLE_X87 = 1'b0;
 // build_profile.py rewrites for the 'trace' profile): with 0 the whole telemetry section below
 // does not exist in the netlist and the two output ports are tied off.
 parameter PERF_LOG_EN = 1'b0;
-// WHICH I/O-LATENCY PROFILE the bus implements (pc9821_iobus's IO_LATENCY_PROFILE). A
-// COMPILE-TIME choice only, threaded from z486_mister.sv's own localparam the same way SYS_FREQ
-// is, so the unselected class table const-folds away. 0 = the min profile (today's table), 1/2
-// = the faithful profile; see pc9821_iobus.sv for the values.
-parameter [1:0] IO_LATENCY_PROFILE = 2'd0;
 // WHETHER THE MPU-PC98II SOUND CARD EXISTS on the device bus: its registers at 0xE0D0/0xE0D2,
 // its 31250-baud MIDI-out line, and its IRQ. COMPILED OUT, NOT DISABLED, unless the build turns
 // it on (z486_mister.sv's MPU_EN, which build_profile.py writes from mpu_en, on in every preset except trace):
@@ -338,6 +371,13 @@ parameter MPU_EN = 1'b0;
 // 0x5FF0/0x5FF2. With 0 the select is a constant 0, the instance below does not exist and the
 // read mux's arm is unreachable, so nothing is built.
 parameter SDRAM_PHASE_DYN = 1'b0;
+// A PC-9801-118 game port at 0x1480-0x1487 (pc9821_iobus's GAMEPORT_118). The Xe10 has none, so
+// 0 (every build) leaves the eight ports open bus; pc9821_gameport stays for the OPNA's
+// register 0x0E switch lines, the Xe10's own joystick path. 1 builds the -118's axis port.
+parameter GAMEPORT_118 = 1'b0;
+// 0x0EE0's read-back of the platform status byte (pc9821_iobus's DBG_STATUS_PORT): off in
+// every build, so the port reads the machine's 0xFF.
+parameter DBG_STATUS_PORT = 1'b0;
 // THE CD-ROM (z486_mister.sv's CDROM_EN, build_profile.py's cdrom_en): pc9821_atapi as bank 1's
 // master. With 0 the instance does not exist, its read-mux arm and IRQ term are constant 0 and
 // bank 1 is an empty connector (port 0xF0 bit 6 set); the hard disk is bank 0's master either way. CDROM_AUDIO_EN adds the CD-DA player (PLAY/PAUSE/SUB-CHANNEL
@@ -347,16 +387,26 @@ parameter CDROM_AUDIO_EN = 1'b0;
 // The CD drive's command log (pc9821_atapi LOG_EN) on dbg_uart_byte/dbg_uart_we, which carry it only
 // when the telemetry (PERF_LOG_EN) is compiled out. A debug instrument; off in every preset.
 parameter CDROM_LOG_EN = 1'b0;
+// THE GRAPHICS GDC'S DRAW PACING (z486_mister.sv's GDC_WRITE_PACE_NS / GDC_FIG_PACE_NS,
+// build_profile.py --gdc-write-pace / --gdc-fig-pace; 0 in every preset): pc9821_gdc2's
+// WRITE_PACE_NS and FIG_PACE_NS, each WRITE unit / figure step in real ns (the Xe10's is 1400).
+// 0 = unpaced, today's engine; the paced branch const-folds away.
+parameter integer GDC_WRITE_PACE_NS = 0;
+parameter integer GDC_FIG_PACE_NS = 0;
 // THE DEBUG-UART INSTRUMENT FRAMEWORK (build_profile.py --dbg-*; docs/mister-testing.md,
 // "The debug UART"). Each is a compile-time parameter, off in every preset,
 // and the unselected instrument does not exist: the generate-if below instantiates nothing, the
 // mux is absent and dbg_uart_byte/we are the constants they always were. They share the CD log's
 // UART arm (so they need PERF_LOG_EN = 0) and pc9821_dbg_mux interleaves them on record boundaries.
 //   DBG_GDC_EN      pc9821_gdc_log: the display programming (both GDCs, the mode registers)
+//   DBG_FDC_EN      pc9821_fdc_log: the floppy controller's ports, its interrupt, DMA channel 2
 //   DBG_CPU_EN      pc9821_dbg_cpu's sampler (CS:EIP, INTA counts, PIC state, VSYNC, port events)
 //   DBG_SNOOP_EN    ... its physical-address memory snoop over [DBG_SNOOP_LO, DBG_SNOOP_HI)
 //   DBG_TRIG_KIND   ... its frozen instruction trace and the trigger (0 = no trace; see the module)
+//   DBG_LAST_MS     ... its LAST-occurrence mode: re-arm on every match, dump after this many quiet ms
+//   DBG_TRACE_AW    ... its trace ring depth, 2^DBG_TRACE_AW issues (default 9, the module's own)
 parameter DBG_GDC_EN = 1'b0;
+parameter DBG_FDC_EN = 1'b0;
 parameter DBG_CPU_EN = 1'b0;
 parameter DBG_SAMPLE_MS = 10;
 parameter DBG_SNOOP_EN = 1'b0;
@@ -369,6 +419,8 @@ parameter [31:0] DBG_TRIG2_LO = 32'h0;
 parameter [31:0] DBG_TRIG2_HI = 32'h0;
 parameter DBG_ARM_S = 0;
 parameter DBG_POST = 32;
+parameter DBG_LAST_MS = 0;
+parameter DBG_TRACE_AW = 9;
 // THE GATHER SESSION'S ENTRY COUNT (the G3 drain shape):
 // how many same-row PEGC stores one backend request carries. COMPILE-TIME, threaded from
 // z486_mister.sv's one GATHER_K the same way SYS_FREQ is, into both the store buffer's grouping
@@ -484,6 +536,10 @@ wire bios_ram_gate;
 // 0x043F's 0x8 nibble, the 0xF8000-0xFFFFF window's writable-shadow enable. Latched in
 // pc9821_iobus, consumed by pc9821_memory_subsystem.
 wire top_shadow_en;
+// pc9821_iobus's one-cycle reboot strobe (the 0x534 soft reset, a software reboot). It is a
+// reset class like `reset`: it clears pc9821_memory_subsystem's top-window shadow-dirty flag and
+// resets the IDE devices' task files (ide_dev_rst_n, below).
+wire soft_reboot;
 // 0x043B bit 2, the 15-16 MiB system-space window. pc9821_iobus latches it and the memory
 // subsystem needs it BEFORE its route selects, so it is wired straight across.
 wire sys16m_en;
@@ -524,18 +580,23 @@ wire cache_flush_done;
 // fed straight in would be lost whenever cpu_ce is 0 (any OSD CPU Speed but Full).
 // A whole-L1 walk per DMA/FDC completion would hold cpu_ready low for 136 cycles.
 wire dma_snoop_valid = dma_mem_req && dma_mem_we && dma_mem_ready;
+// The line it names is the byte's address AFTER the memory map's window-0 move (the
+// subsystem's dma_snoop_addr): a byte the DMA writes through a moved 0x0461 window lands in
+// RAM under that RAM's own name, which is the name the CPU may hold cached (the window alias
+// itself is uncached, win0_unmapped below).
+wire [31:0] dma_snoop_addr;
 
 // THE DMA-WRITE BACK-PRESSURE. The bridge's snoop hold is ONE entry, so a
 // second DMA write accepted before the CPU's next enabled edge would take its place in
 // the address mux and the first write's line would never be invalidated - silently on
 // hardware (the bridge's check is simulation-only). While a snoop waits (dma_snoop_busy),
 // the next DMA WRITE byte is therefore neither PRESENTED (dma_mem_req_pres drives the
-// memory subsystem's mem_valid DMA arm, pc9821_memory_subsystem.sv:1498 `assign mem_valid`) nor ACCEPTED
-// (dma_mem_ack is the dma_ready the DMAC sees, :1333). Both terms are needed: the
-// subsystem's owner lock releases on mem_ready (:1311 `else if (mem_ready || !mem_valid)`),
+// memory subsystem's mem_valid DMA arm, pc9821_memory_subsystem.sv:1723 `assign mem_valid`) nor ACCEPTED
+// (dma_mem_ack is the dma_ready the DMAC sees, :1500). Both terms are needed: the
+// subsystem's owner lock releases on mem_ready (:1477 `else if (mem_ready || !mem_valid)`),
 // so gating the accept alone would let it re-present the same byte and the backend
 // re-accept it every cycle. The uPD71071 holds mem_req as a LEVEL through S_MEM until
-// mem_ready (pc9821_dmac.sv:497 `S_MEM: if (mem_ready) begin`), so the byte waits for the
+// mem_ready (pc9821_dmac.sv:486 `S_MEM: if (mem_ready) begin`), so the byte waits for the
 // CPU edge; reads are never snooped and are not gated. The cost is at most one CPU clock
 // period per written byte - the pacing a real 486's EADS# imposes (one invalidate per CPU
 // clock), and still 8x the FDC's 62.5 kB/s at the slowest 0.5 MHz setting on an 80 MHz
@@ -551,6 +612,7 @@ wire [15:0] dbg_last_io_addr;
 wire  [7:0] dbg_last_io_data;
 wire        dbg_last_io_rd;
 wire        dbg_last_io_wr;
+wire        dbg_last_io_stb;
 // The FDC's own diagnostics, through iobus from pc9821_fdc: the stall record's
 // FST/FCM/FRS/FCH fields. See pc9821_fdc for the packing and what each answers.
 wire [7:0]  dbg_fdc_state;
@@ -653,27 +715,40 @@ wire cal_irq, cal_cdat;
 // A drive on the bank-0 IDE connector (IDE unit 0, the hard disk): the port 0xF0 strap reports it
 // (pc9821_iobus's ide_unit0_present). Assigned beside the ATA.
 wire ide_unit0_present;
+// ... and on the bank-1 connector (IDE unit 2): the CD drive or the second hard disk.
+wire ide_unit2_present;
 wire device_rd_wait;
 wire device_rd_hold;
 wire device_wr_wait;
-// The machine-reset seed's one-cycle strobe from pc9821_iobus: the store loads use it there
-// and the CG-record restore in pc9821_cg uses it here, so both configuration stores reset on
-// the same event (one cycle at the reset assertion). The two stores' restore walks have this
-// one source.
+// The reset seed's one-cycle strobe from pc9821_iobus: the store loads use it there and the
+// CG-record restore in pc9821_cg uses it here, so both configuration stores reset on the same
+// event (the reset assertion, a configuration change inside it, and the guest's 0x534 reboot).
+// The two stores' restore walks have this one source, and setup_cfg is the OSD configuration
+// both are built from.
 wire sdip_seed_pulse;
+wire [23:0] setup_cfg;
 
-pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
-               .IDE_UNIT2_PRESENT(CDROM_EN), .MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN)) iobus (
-      .ide_unit0_present(ide_unit0_present),
+pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ),
+               .MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN),
+               .GAMEPORT_118(GAMEPORT_118), .DBG_STATUS_PORT(DBG_STATUS_PORT)) iobus (
+      .ide_unit0_present(ide_unit0_present), .ide_unit2_present(ide_unit2_present),
     .clk(clk_sys), .reset(reset || !cpu_run),
     // The OSD's Machine field: which port-0xF0 machine-ID strap to answer. See the port
     // comment at pc9821_system's declaration and
     // This instance's reset IS the field's reset/reload strobe (bios_set_eff inside): the
     // platform reset OR the pack-reload window, so the selection applies only there.
     .bios_set(bios_set),
+    .io_timing_xe10(io_timing_xe10),
     // Same reset/reload strobe for the GDC-clock strap's latch (gdc_strap_eff inside).
     .gdc_clock_5m(gdc_clock_5m),
-    .fdd_dip_fixed(fdd_dip_fixed),
+    // Port 0x31 bit 4 at HOLD when the OSD's Memory switch field says Keep, and whenever the
+    // Boot order field seeds a non-default 0xA3FF2 nibble (positions 1..6; 0 and the unoffered
+    // 7 decode to the measured nibble 0 in pc9821_text_mem's msw_fdd_nib), so the ITF's
+    // memory-switch init (BANK4@0x5B9A) does not overwrite the seed. See pc9821_iobus's
+    // msw_hold port.
+    .msw_hold(msw_keep || ((cfg_fdd_mode != 3'd0) && (cfg_fdd_mode != 3'd7))),
+    .text_lines_20(text_lines_20),
+    .floppy_mode(floppy_mode),
     .cpu_addr({z_addr, 2'b00}), .cpu_din(z_dout), .cpu_be(z_be),
     .cpu_valid(z_valid && z_io && !z_inta), .cpu_write(z_write),
     .cpu_dout(io_cpu_dout), .cpu_ready(io_cpu_ready),
@@ -694,6 +769,8 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .cfg_ram_mib(cfg_ram_mib), .cfg_seed_en(1'b1),
     // The machine-reset seed's one-shot: the CG record is restored by the same event (below).
     .sdip_seed_pulse(sdip_seed_pulse),
+    // The OSD configuration the CG record and mirror are built from (pc9821_cg, below).
+    .setup_cfg(setup_cfg),
     .top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(d8_bank),
     .ide_ram_gate(ide_ram_gate),
     .ems_state(ems_state),
@@ -710,13 +787,14 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .fdd_ready(fdd_ready), .fdd_rdy(fdd_rdy), .fdd_hdrv(fdd_hdrv), .fdd_err(fdd_err),
     .fdd_dout(fdd_dout), .fdd_hr(fdd_hr), .fdd_hn(fdd_hn), .fdd_hs(fdd_hs),
     .fdd_adv(fdd_adv), .fdd_req_wr(fdd_req_wr), .fdd_din(fdd_din), .fdd_abort(fdd_abort),
-    .dma_mem_addr(dma_mem_addr), .dma_mem_gvwin(dma_mem_gvwin), .dma_mem_din(dma_mem_din), .dma_mem_be(dma_mem_be),
+    .dma_mem_addr(dma_mem_addr), .dma_mem_addr_nx(dma_mem_addr_nx), .dma_mem_load(dma_mem_load), .dma_mem_din(dma_mem_din), .dma_mem_be(dma_mem_be),
     .dma_mem_req(dma_mem_req), .dma_mem_we(dma_mem_we),
     .dma_mem_ready(dma_mem_ack), .dma_mem_dout(dma_mem_dout),
     .dma_mem_resp_valid(dma_mem_resp_valid),
     .mouse_irq(mouse_irq), .ps2_mouse(ps2_mouse),
     .bios_ram_gate(bios_ram_gate),
     .top_shadow_en(top_shadow_en),
+    .soft_reboot(soft_reboot),
     .win0_sel(win0_sel),
     .win0_sel_moved(win0_sel_moved),
     .sys16m_en(sys16m_en),
@@ -730,6 +808,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ), .IO_LATENCY_PROFILE(IO_LATENCY_PROFILE),
     .dbg_artic_hi(artic_hi),
     .dbg_last_io_addr(dbg_last_io_addr), .dbg_last_io_data(dbg_last_io_data),
     .dbg_last_io_rd(dbg_last_io_rd), .dbg_last_io_wr(dbg_last_io_wr),
+    .dbg_last_io_stb(dbg_last_io_stb),
     .dbg_fdc_state(dbg_fdc_state), .dbg_fdc_cmd(dbg_fdc_cmd),
     .dbg_fdc_result(dbg_fdc_result), .dbg_fdc_chrn(dbg_fdc_chrn),
     .post_write(io_post_write),
@@ -770,14 +849,14 @@ wire win0_unmapped = win0_sel_moved;   // == (win0_sel != 8'h08) every cycle (pc
 // handshake and pulse for the CPU's next enabled edge (src/pc9821/core/pc9821_cpu_gate.sv,
 // src/z486/docs/throttle.md and src/z486/docs/cpu-review2-2026-10-10.md section 7). Position 0 makes cpu_ce
 // constant 1: the bridge is then a wire and the core is cycle-identical to an ungated one.
-// The reset is the CPU's own (pc9821_cpu_reset_gate's hold is far longer than the two cycles
-// cpu_throttle needs to force cpu_ce while it is low).
+// The reset is the CPU's own (its hold is far longer than the three cycles cpu_throttle and the
+// gate's one-cycle-ahead enable stage, pc9821_cpu_clk.sv, need to force cpu_ce while it is low).
 localparam int CPU_THROTTLE_KHZ = SYS_FREQ / 1000;
-wire cpu_ce, cpu_clk;
+wire cpu_ce_next, cpu_ce, cpu_clk;
 cpu_throttle #(.CLOCK_RATE_KHZ(CPU_THROTTLE_KHZ)) u_cpu_throttle (
-    .clk(clk_sys), .reset_n(cpu_reset_n), .speed_sel(cpu_speed_sel), .cpu_ce(cpu_ce)
+    .clk(clk_sys), .reset_n(cpu_reset_n), .speed_sel(cpu_speed_sel), .cpu_ce(cpu_ce_next)
 );
-pc9821_cpu_clk u_cpu_clk (.clk(clk_sys), .ena(cpu_ce), .gclk(cpu_clk));
+pc9821_cpu_clk u_cpu_clk (.clk(clk_sys), .ce_next(cpu_ce_next), .ce(cpu_ce), .gclk(cpu_clk));
 wire zc_flush_req, zc_flush_busy, zc_flush_done, zc_triple_fault;
 wire zc_snoop_valid;   // the DMA snoop after the bridge's pulse-hold (see the bridge)
 wire [31:0] zc_snoop_addr;
@@ -790,7 +869,7 @@ pc9821_cpu_bus_bridge u_cpu_bridge (
     .p_flush_req(cache_flush_req), .c_flush_req(zc_flush_req),
     .c_flush_busy(zc_flush_busy), .p_flush_busy(cache_flush_busy),
     .c_flush_done(zc_flush_done), .p_flush_done(cache_flush_done),
-    .p_snoop_valid(dma_snoop_valid), .p_snoop_addr(dma_mem_addr),
+    .p_snoop_valid(dma_snoop_valid), .p_snoop_addr(dma_snoop_addr),
     .c_snoop_valid(zc_snoop_valid), .c_snoop_addr(zc_snoop_addr),
     .p_snoop_busy(dma_snoop_busy),
     .c_triple_fault(zc_triple_fault), .p_triple_fault(triple_fault_reset),
@@ -1018,17 +1097,21 @@ wire         gdc_mem_resp;
 // The PEGC view state from pc9821_crtc (the FF2 num-0x10 and dat-0x68 latches)
 // and the packed scanout's outputs (row 3), declared before their first readers.
 wire         gdc_pegc_256, gdc_pegc_256e;
+// GDC2's START latch AND the slave SYNC window: the compositor's grph_disp, and the GVRAM
+// arbiter's graphics-line level (its Xe10 store table), declared before both readers.
+wire        gdc_gfx_grph_on;
 wire  [7:0]  peg_packed_idx;
 wire         peg_line_sel, peg_line_ready;
 
 pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
-    .clk(clk_sys), .reset(reset), .top_bank(top_bank),
+    .clk(clk_sys), .reset(reset), .hps_apply_reset(hps_apply_reset), .top_bank(top_bank),
     .ems_state(ems_state),
     .ide_rom_enable(ide_rom_enable),
     .d8_bank(d8_bank),
     .ide_ram_gate(ide_ram_gate),
     .bios_ram_gate(bios_ram_gate),
     .top_shadow_en(top_shadow_en),
+    .soft_reboot(soft_reboot),
     .win0_sel(win0_sel),
     .win0_sel_moved(win0_sel_moved),
     .sys16m_en(sys16m_en),
@@ -1036,6 +1119,9 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     // 0xE0000 window is the PEGC register file and the packed windows replace the
     // planar ones.
     .pegc_256(gdc_pegc_256), .pegc_256e(gdc_pegc_256e), .scan_dot(gdc_pix_dot[2:0]),
+    // The 16-colour select (pc9821_crtc's mode2_16color, the 0x9A0 query's index 4 bit,
+    // gdc_ff2_state[3]): the E plane at 0xE0000 is mapped only with it set.
+    .mode2_16color(gdc_ff2_state[3]),
     .scan_dot_ce(pixel_ce), .scan_dot_act(gdc_pix_h_active),
     .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
     // The uPD71071's bus-master port: a floppy READ stores into memory and owes no response,
@@ -1043,10 +1129,10 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     // subsystem's port comment). dma_valid is
     // the back-pressured presentation: a WRITE byte is withdrawn from the
     // subsystem while the bridge still holds a snoop for the CPU.
-    .dma_addr(dma_mem_addr), .dma_gvwin(dma_mem_gvwin), .dma_din(dma_mem_din), .dma_be(dma_mem_be),
+    .dma_addr(dma_mem_addr), .dma_addr_nx(dma_mem_addr_nx), .dma_load(dma_mem_load), .dma_din(dma_mem_din), .dma_be(dma_mem_be),
     .dma_valid(dma_mem_req_pres), .dma_write(dma_mem_we),
     .dma_ready(dma_mem_ready), .dma_dout(dma_mem_dout),
-    .dma_resp_valid(dma_mem_resp_valid),
+    .dma_resp_valid(dma_mem_resp_valid), .dma_snoop_addr(dma_snoop_addr),
     .gvram_access_page(gdc_access_page),
     .grcg_we(grcg_port_we), .grcg_addr(device_io_addr[7:0]),
     .grcg_din(device_io_din), .grcg_expand(mem_grcg_expand),
@@ -1073,6 +1159,10 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     // enable): the scanout fetch follows the DISP
     // bit alone, as NP2kai gates the graphics plane on `gdc.mode1 & 0x80`.
     .scan_enable(gdc_disp),
+    // The OSD I/O timing field's GVRAM half (pc9821_gvram_arb's Xe10 store table): the same
+    // level the iobus reads, and the graphics GDC's fetch window that table's RMW row keys on.
+    .gvram_timing_xe10(io_timing_xe10),
+    .gvram_gfx_scan_on(gdc_gfx_grph_on),
     .scan_line_tick(gvram_scan_line_tick),
     .scan_page(gdc_gfx_line_addr[15]),
     .scan_line_base(gdc_gfx_line_addr[14:0]),
@@ -1086,7 +1176,8 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     .ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
     .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
     .ioctl_wait(ioctl_wait), .rom_ready(rom_ready), .load_error(load_error),
-    .cpu_run(cpu_run), .font_addr(font_addr), .font_data(font_data),
+    .cpu_run(cpu_run), .pack_load_hold(pack_load_hold),
+    .font_addr(font_addr), .font_data(font_data),
     .font_we(font_we),
     .cpu_addr({z_addr, 2'b00}), .cpu_din(z_dout),
     .cpu_dout(mem_cpu_dout),
@@ -1181,11 +1272,17 @@ assign device_rd_wait = gdc_cs || opna_rd_wait;   // declared above the iobus in
 // lanes -- its window is the bound.
 wire opna_wr_wait, pcm86_wr_wait;
 assign device_wr_wait = (opna_cs && opna_wr_wait) || pcm86_wr_wait;
-// A device that needs MORE than the one extra cycle holds the bus. Only the CG block does:
-// a JIS read of port 0xA9 or the 0xA4000 window waits until its SDRAM glyph burst lands.
-// The qualification keeps it to the CG pattern port, so no other device read is ever held.
+// A device that needs MORE than the one extra cycle holds the bus. Two do:
+//   * the CG block: a JIS read of port 0xA9 or the 0xA4000 window waits until its SDRAM
+//     glyph burst lands; the qualification keeps it to the CG pattern port.
+//   * the OPNA: a status read (0x188/0x18C) waits while a queued flag-class write (timer
+//     control, IRQ enables, ADPCM-B control and flag control) has not reached the chip,
+//     so the guest never reads a flag it has already reset (pc9821_opna flg_pend). Its
+//     hold is low whenever no such write is queued.
+wire opna_rd_hold;
 wire cg_port_rd    = gdc_cs && (device_io_addr[7:0] == 8'hA9);
-assign device_rd_hold = cg_port_rd && cg_rd_hold;   // declared above the iobus instance
+assign device_rd_hold = (cg_port_rd && cg_rd_hold) ||
+                        (opna_cs && opna_rd_hold);   // declared above the iobus instance
 wire [7:0] cd_io_dout;
 wire       cd_io_own, cd_irq;
 wire [7:0] cd_log_byte;
@@ -1213,12 +1310,16 @@ wire pit_out1;
 // interrupts module's port list stays symmetric, and waived rather than silently unused.
 wire pit_out2;
 /* verilator lint_on UNUSEDSIGNAL */
-// 0x20 is write-only (the machine reads 0xFF there); 0x128 returns 0x80 | rate.
+// 0x20 is write-only (the machine reads 0xFF there); 0x128 returns the enable, the tick flag and the rate (pc9821_calendar).
 assign cal_io_dout = (device_io_addr == 16'h0022) ? cal_mode_dout :
                      (device_io_addr == 16'h0128) ? cal_tick_dout : 8'hFF;
+// 0x0433 is the IDE interface's per-bank interrupt-pending port (pc9821_ata's read arm says
+// where each bit comes from): pc9821_ata answers its own drives' INTRQs, and the CD-ROM, bank 1's
+// master, adds its INTRQ as bit 1 (qemu-pc98 hw/ide/pc98-ide.c:203 `ret = s->irq_levels & 0x03;`).
+wire [7:0] ide_433_cd = {6'd0, cd_irq && (device_io_addr == 16'h0433), 1'b0};
 assign device_io_dout = interrupt_cs ? interrupt_io_dout :
                         kbd_cs       ? kbd_io_dout       :
-                        ata_cs       ? (cd_io_own ? cd_io_dout : ata_io_dout) :
+                        ata_cs       ? (cd_io_own ? cd_io_dout : (ata_io_dout | ide_433_cd)) :
                         cal_cs       ? cal_io_dout       :
                         opna_cs      ? opna_io_dout      :
                         pcm_cs       ? pcm86_io_dout     :
@@ -1328,7 +1429,7 @@ pc9821_calendar #(.SYS_CLOCK_HZ(SYS_FREQ)) calendar (
 //
 // IRQ line: the factory-default DIP setting INT5 is IRQ12 (the slave 8259's IR4, vector
 // 0x14), and that is the level PMD selects from PSG register 0x0E's readback (bits 7:6 =
-// 11 -> level 12). Both timers are masked out of reset (0x29), so
+// 11 -> level 12). Both timers' IRQ enables (0x27 bits 2-3) are clear out of reset, so
 // the line is benign until a driver raises one.
 //
 // The rhythm image rides the pack download, the one stream carrying the user's YM2608 ADPCM-A
@@ -1354,6 +1455,7 @@ pc9821_opna #(.SYS_CLOCK_HZ(SYS_FREQ)) sound (
     .io_din(device_io_din),
     .io_dout(opna_io_dout),
     .io_rd_wait(opna_rd_wait),
+    .io_rd_hold(opna_rd_hold),
     .io_wr_wait(opna_wr_wait),
     .extend(sound_extend),
     // The card's own joystick read (register 0x0E) is the GAME PORT's switch lines, not
@@ -1366,7 +1468,7 @@ pc9821_opna #(.SYS_CLOCK_HZ(SYS_FREQ)) sound (
 );
 
 // ---------------------------------------------------------------
-// The 9-pin game port (PC-9801-118, 0x1480-0x1487)
+// The 9-pin game port (PC-9801-118, 0x1480-0x1487, only with GAMEPORT_118)
 // ---------------------------------------------------------------
 // The connector the whole joystick story is about: the axis one-shots above, read with the
 // IBM protocol, and the six switch lines the sound board's own joystick register answers.
@@ -1390,8 +1492,8 @@ pc9821_gameport #(.SYS_CLOCK_HZ(SYS_FREQ)) gameport (
 // Its seven even ports 0xA462-0xA46E, a 32 KiB sample buffer and the drain
 // engine that plays it. Its interrupt is
 // a level the guest clears at 0xA468 bit 4, and on the card ONE strap feeds the
-// OPNA's timers and this block, so both sources are ORed into the same 8259
-// line below rather than given separate numbers -- an implementation that
+// OPNA's timers and this block, so both sources share the same 8259 input
+// (pc9821_irq_share, below) rather than being given separate numbers -- an implementation that
 // straps them differently is wrong. The line itself is IRQ12 and is shared by
 // this block; moving the strap moves both.
 pc9821_pcm86 #(.SYS_CLOCK_HZ(SYS_FREQ)) pcm86 (
@@ -1421,6 +1523,15 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(SYS_FREQ)) pcm86 (
     .sdram_din(ext_mem2_din), .sdram_dout(ext_mem2_dout),
     .sdram_resp_valid(ext_mem2_resp_valid), .sdram_be(ext_mem2_be),
     .sdram_burstcount(ext_mem2_burstcount)
+);
+
+// The INT5 strap's two sources on one 8259 input: every OPNA timer event and every 86-PCM
+// event is its own request even while the other source holds the line (see the module).
+wire int5_irq;
+pc9821_irq_share int5_share (
+    .clk(clk_sys), .reset(reset || !cpu_run),
+    .irq_a(opna_irq), .irq_b(pcm86_irq),
+    .irq(int5_irq)
 );
 
 // Debug observability wires from the interrupts and keyboard instances below. Declared
@@ -1454,7 +1565,7 @@ pc9821_interrupts #(.SYS_CLOCK_HZ(SYS_FREQ)) interrupts (
     // event - mouseint's pic_setirq(0x0d), io/mouseif.c:135; the same IRQ13 the
     // qemu-pc98 board wires it to, hw/i386/pc98.c:422-423), bit 7 = IRQ15 (the
     // calendar tick). Keep the width visible: 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 8.
-    .slave_irq({cal_irq, 1'b0, mouse_irq, opna_irq | pcm86_irq, fdc_irq,
+    .slave_irq({cal_irq, 1'b0, mouse_irq, int5_irq, fdc_irq,
                 fdc_irq10, ata_irq | cd_irq, 1'b0}),
     // THE STROBE IS THE CPU'S OWN: z486's inta output, NOT the bridge's masked
     // p_inta. During an accept held for a disabled CPU cycle the bridge drops p_inta, so a
@@ -1472,7 +1583,6 @@ pc9821_kbd #(.SYS_CLOCK_HZ(SYS_FREQ)) keyboard (
     .a0(device_io_addr[1]), .wr(device_io_wr), .rd(device_io_rd),
     .din(device_io_din), .dout(kbd_io_dout), .irq(kbd_irq),
     .ps2_key(ps2_key),
-    .bios_setup(bios_setup),
     .layout_jis(kbd_layout_jis),
     .led_status(kbd_led_status),
     .dbg_events(kbd_dbg_events), .dbg_delivered(kbd_dbg_delivered),
@@ -1520,27 +1630,59 @@ wire [31:0] ata_dbg_lba;
 wire [15:0] ata_dbg_sec;
 /* verilator lint_on UNUSEDSIGNAL */
 
-// THE IDE LAYOUT IS FIXED: the one hard disk (hps_io slot 0) is ALWAYS bank
-// 0's master (IDE unit 0) and the CD-ROM, when built, ALWAYS bank 1's master (unit 2); with the
-// CD left out bank 1 is empty. That is the stock CD-equipped Xe10's layout and NP2kai's default
+// THE IDE LAYOUT AT ITS DEFAULT: the hard disk (hps_io slot 0) is ALWAYS bank
+// 0's master (IDE unit 0) and the CD-ROM, when built, bank 1's master (unit 2); with the CD left
+// out bank 1 is empty unless the second disk is mounted. That is the stock CD-equipped Xe10's layout and NP2kai's default
 // (HDD at unit 0, CD at unit 2); the measured Xe10 has its disk on bank 1 only because a CF card
 // sits in its CD connector. Port 0xF0 bit 5 reports the disk (so the ITF's IDE drive bitmap
-// includes unit 0 and the IDE ROM probes and boots it) and bit 6 the CD build (the iobus's
-// IDE_UNIT2_PRESENT); neither moves with a CD mount or eject.
+// includes unit 0 and the IDE ROM probes and boots it) and bit 6 the CD drive; neither moves with
+// a CD mount or eject.
+// BANK 1'S MASTER IS THE OSD'S CHOICE (`ide_bank1_hdd`): the CD-ROM (the default, above) or the
+// second hard disk. With the disk the CD drive is absent from the bus (no write reaches it, see
+// its instance) and bank 1 is the disk's: pc9821_ata serves it as its
+// second bank, and port 0xF0 bit 6 follows that disk's image as bit 5 follows the first disk's.
+// The Xe10 IDE ROM then registers the disk on bank 1 by IDENTIFY (BANK3@0x0A96) as DA/UA 0x81
+// behind bank 0's disk, or 0x80 alone. With the CD selected the second image is invisible.
+/* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
+reg ide_bank1_hdd_eff = 1'b0;           // power-on default: the CD-ROM, the stock layout
+/* verilator lint_on PROCASSINIT */
+always @(posedge clk_sys) if (reset || !cpu_run) ide_bank1_hdd_eff <= ide_bank1_hdd;
+wire hdd2_mounted, hdd2_readonly;
+wire [31:0] hdd2_capacity;
+wire ata_block_unit, hdd_a_req_unit;
+wire ata_mounted1 = ide_bank1_hdd_eff && hdd2_mounted;
 assign ide_unit0_present = hdd_mounted;
+// Bank 1's master is present: the second disk's image when it holds bank 1, else the CD drive
+// (a drive on the cable whether or not a disc is in it).
+assign ide_unit2_present = ide_bank1_hdd_eff ? hdd2_mounted : CDROM_EN;
+
+// THE IDE DEVICES RESET ON A SOFTWARE REBOOT. The Xe10 IDE ROM accepts a drive only when its
+// ERROR register reads the post-reset diagnostic 0x01 (pc9821_ata's reset arm); a reboot that left
+// the task file as DOS's last command left it (ERROR 0x00) made the ROM's presence check reject
+// the disk, and the re-POST looped on the floppy boot (the userdisk tier, an RBOOT from DOS: BANK3
+// D800:0D7B read 0x0642 = 00 where the cold boot reads 01). NP2kai resets the IDE devices on its
+// CPU reset for exactly this case (pccore.c `ideio_basereset(); // XXX: Win9x...`, whose devinit
+// sets `drv->error = IDEERR_AMNF`), and QEMU's armed 0x534 is a machine reset. Only the reboot
+// does it here, not out 0xF0: that reset is the protected-mode return's, which the machine's
+// drives never see. The hdd images and their host transfers survive, as they do a platform reset.
+wire ide_dev_rst_n = !(reset || !cpu_run || soft_reboot);
+// The IDE devices' "command in progress" (BSY|DRQ) views, for the HDD access lamp below.
+wire ata_xfer, cd_xfer;
 
 pc9821_ata ata (
-    .clk(clk_sys), .rst_n(!(reset || !cpu_run)),
+    .clk(clk_sys), .rst_n(ide_dev_rst_n),
     .io_rd(device_io_rd && ata_cs), .io_wr(device_io_wr && ata_cs),
     .io_addr(device_io_addr), .io_din(device_io_din), .io_dout(ata_io_dout),
     .mounted(hdd_mounted), .readonly(hdd_readonly), .capacity(hdd_capacity),
+    .mounted1(ata_mounted1), .readonly1(hdd2_readonly), .capacity1(hdd2_capacity),
     .block_read(ata_block_read), .block_write(ata_block_write),
-    .block_lba(ata_block_lba),
+    .block_lba(ata_block_lba), .block_unit(ata_block_unit),
     .block_done(ata_block_done), .block_error(ata_block_error),
     .block_buf_we(ata_buf_we), .block_buf_addr(ata_buf_addr),
     .block_buf_data(ata_buf_data),
     .block_rd_addr(ata_buf_rd_addr), .block_rd_data(ata_buf_rd_data),
     .irq(ata_irq),
+    .xfer(ata_xfer),
     .dbg_state(ata_dbg_state),
     .dbg_cmd(ata_dbg_cmd),
     .dbg_lba(ata_dbg_lba),
@@ -1555,13 +1697,17 @@ pc9821_ata ata (
 // states the format, the validation and why the offset survives a platform reset.
 pc9821_hdd_image hdd_image (
     .clk(clk_sys), .rst_n(!reset),
-    .img_mounted(img_mounted), .img_readonly(img_readonly), .img_size(img_size),
+    // Both disks' slots: the size is the pulsing slot's (one hps_io register at the top level).
+    .img_mounted(img_mounted), .img_mounted1(hdd1_mounted), .img_readonly(img_readonly),
+    .img_size(hdd1_mounted ? hdd1_size : img_size),
     .mounted(hdd_mounted), .readonly(hdd_readonly), .capacity(hdd_capacity),
+    .mounted1(hdd2_mounted), .readonly1(hdd2_readonly), .capacity1(hdd2_capacity),
     .req_read(ata_block_read), .req_write(ata_block_write), .req_lba(ata_block_lba),
+    .req_unit(ata_block_unit),
     .req_done(ata_block_done), .req_error(ata_block_error), .busy(hdd_busy),
     .buf_we(ata_buf_we), .buf_addr(ata_buf_addr), .buf_data(ata_buf_data),
     .a_req_read(hdd_a_req_read), .a_req_write(hdd_a_req_write), .a_req_lba(hdd_a_req_lba),
-    .a_req_window(hdd_a_req_window),
+    .a_req_window(hdd_a_req_window), .a_req_unit(hdd_a_req_unit),
     .a_req_done(hdd_a_req_done), .a_req_error(hdd_a_req_error),
     .a_buf_we(hdd_a_buf_we), .a_buf_addr(hdd_a_buf_addr), .a_buf_data(hdd_a_buf_data)
 );
@@ -1580,17 +1726,23 @@ wire [12:0] disk_buff_addr, cd_buff_addr;
 wire [15:0] disk_buff_dout, cd_buff_dout;
 pc9821_hps_slot_demux hps_demux (
     .sd_buff_wr(img_buff_wr), .sd_buff_addr(img_buff_addr), .sd_buff_dout(img_buff_din),
-    .disk_ack(img_ack | fdd_ack | fdd1_ack), .cd_ack(cd_ack),
+    .disk_ack(img_ack | fdd_ack | fdd1_ack | hdd1_ack), .cd_ack(cd_ack),
     .disk_buff_wr(disk_buff_wr), .disk_buff_addr(disk_buff_addr), .disk_buff_dout(disk_buff_dout),
     .cd_buff_wr(cd_buff_wr), .cd_buff_addr(cd_buff_addr), .cd_buff_dout(cd_buff_dout)
 );
 generate if (CDROM_EN) begin : g_cdrom
 pc9821_atapi #(.AUDIO_EN(CDROM_AUDIO_EN), .LOG_EN(CDROM_LOG_EN && !PERF_LOG_EN),
                .LOG_CLK_HZ(SYS_FREQ)) atapi (
-    .clk(clk_sys), .rst_n(!(reset || !cpu_run)),
-    .io_rd(device_io_rd && ata_cs), .io_wr(device_io_wr && ata_cs),
+    .clk(clk_sys), .rst_n(ide_dev_rst_n),
+    // ABSENT FROM THE BUS while bank 1 holds the second hard disk (ide_bank1_hdd_eff): no write
+    // reaches it, so its own bank latch stays at its reset value 0 (the field changes only across
+    // a platform reset, which resets this drive's task file too). Every read side effect, its
+    // read ownership (`io_own`) and every interrupt it can raise (a command's completion) are
+    // behind that latch, so the drive is not there for the guest at all.
+    .io_rd(device_io_rd && ata_cs),
+    .io_wr(device_io_wr && ata_cs && !ide_bank1_hdd_eff),
     .io_addr(device_io_addr), .io_din(device_io_din), .io_dout(cd_io_dout),
-    .io_own(cd_io_own), .irq(cd_irq),
+    .io_own(cd_io_own), .irq(cd_irq), .xfer(cd_xfer),
     .img_mounted(cd_mounted), .img_size(cd_size),
     .sd_lba(cd_lba), .sd_blk_cnt(cd_blk_cnt), .sd_rd(cd_rd), .sd_ack(cd_ack),
     .sd_buff_wr(cd_buff_wr), .sd_buff_addr(cd_buff_addr), .sd_buff_dout(cd_buff_dout),
@@ -1604,6 +1756,7 @@ assign cd_log_we   = 1'b0;
 assign cd_io_dout = 8'hFF;
 assign cd_io_own  = 1'b0;
 assign cd_irq     = 1'b0;
+assign cd_xfer    = 1'b0;
 assign cd_lba     = 32'd0;
 assign cd_blk_cnt = 6'd0;
 assign cd_rd      = 1'b0;
@@ -1615,6 +1768,17 @@ assign cdda_data  = 32'd0;
 wire cd_unused = cd_mounted | (|cd_size) | cd_ack | cdda_req | cdda_req4 | cdda_played | cd_buff_wr | (|cd_buff_addr) | (|cd_buff_dout);
 /* verilator lint_on UNUSEDSIGNAL */
 end endgenerate
+
+// ------------------------------------------------------------------ the access lamps
+// Display only (see the module): the drives' data transfers with their images - the ATA's and
+// the CD's `xfer`, the FDC's media data path (x_st of its dbg_state tap {IRQ, DRQ, st, x_st}) -
+// each held on for 50 ms so a microsecond transfer is visible.
+pc9821_disk_led #(.CLK_HZ(SYS_FREQ), .HOLD_MS(50)) disk_led (
+    .clk(clk_sys), .reset(reset),
+    .ata_xfer(ata_xfer), .cd_xfer(cd_xfer),
+    .fdc_x_st(dbg_fdc_state[2:0]),
+    .led_disk(led_disk), .led_fdd(led_fdd)
+);
 
 pc9821_block_share block_share (
     // Reset only with the core, NOT with cpu_run: the HPS mounts the image
@@ -1636,7 +1800,7 @@ pc9821_block_share block_share (
     .a_mounted(), .a_readonly(), .a_capacity(),
     /* verilator lint_on PINCONNECTEMPTY */
     .a_req_read(hdd_a_req_read), .a_req_write(hdd_a_req_write), .a_req_lba(hdd_a_req_lba),
-    .a_req_window(hdd_a_req_window),
+    .a_req_window(hdd_a_req_window), .a_req_unit(hdd_a_req_unit),
     .a_req_done(hdd_a_req_done), .a_req_error(hdd_a_req_error),
     /* verilator lint_off PINCONNECTEMPTY */   // the detector's `busy` replaces it
     .a_busy(),
@@ -1646,6 +1810,11 @@ pc9821_block_share block_share (
     .a_sd_lba(hdd_sd_lba), .a_sd_blk_cnt(hdd_sd_blk_cnt),
     .a_sd_rd(hdd_sd_rd), .a_sd_wr(hdd_sd_wr),
     .a_sd_ack(img_ack), .a_sd_buff_din(img_buff_dout),
+
+    // ---- slot 3: the second hard disk (the A port's requests with a_req_unit = 1) ----
+    .d_img_mounted(hdd1_mounted), .d_img_readonly(img_readonly), .d_img_size(hdd1_size),
+    .d_sd_lba(hdd1_lba), .d_sd_blk_cnt(hdd1_blk_cnt), .d_sd_rd(hdd1_rd), .d_sd_wr(hdd1_wr),
+    .d_sd_ack(hdd1_ack), .d_sd_buff_din(hdd1_buff_din),
 
     // ---- slots 1/2: the floppy drives (pc9821_fdd_media) ----
     // ONE DEVICE PORT FOR TWO DRIVES. The medium has one byte stream and one fetch in flight, so
@@ -1751,7 +1920,8 @@ pc9821_fdd_media fdd_media (
 
 // The uPD71071's bus-master port, from pc9821_iobus to the memory subsystem's arbiter.
 wire [31:0] dma_mem_addr, dma_mem_din;
-wire [1:0]  dma_mem_gvwin;   // dma_mem_addr's plane-window class, registered with it (pc9821_dmac)
+wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and the cycle it loads (pc9821_dmac)
+wire        dma_mem_load;
 wire [3:0]  dma_mem_be;
 wire        dma_mem_req, dma_mem_we, dma_mem_ready, dma_mem_resp_valid;
 wire [31:0] dma_mem_dout;
@@ -1816,7 +1986,6 @@ wire        gdc_pal_wr_en;
 wire [3:0]  gdc_pal_wr_idx;
 wire [1:0]  gdc_pal_wr_chan;
 wire [3:0]  gdc_pal_wr_data;
-wire        gdc_pal_commit;
 wire        gdc_pal256_wr_en;
 wire [7:0]  gdc_pal256_wr_idx, gdc_pal256_wr_data;
 wire [1:0]  gdc_pal256_wr_chan;
@@ -1868,7 +2037,6 @@ wire [1:0]  crtc_o_wk_bank;
 wire [9:0]  crtc_o_vline;
 wire [9:0]  crtc_o_vtotal;
 wire [5:0]  crtc_o_vbp;
-wire        gdc_gfx_grph_on;   // GDC2's START latch AND the slave SYNC window: grph_disp
 wire [9:0]  crtc_o_hdot;
 wire        crtc_o_frame_end, crtc_o_cfg_snap, crtc_o_cfg_pending, crtc_o_display_page;
 wire        crtc_o_stat_blank, crtc_o_stat_vsync;
@@ -1924,14 +2092,17 @@ pc9821_crtc u_crtc (
     .gfx_mode16(gdc_mode16), .gfx_dig(gdc_dig),
     .pal_wr_en(gdc_pal_wr_en), .pal_wr_idx(gdc_pal_wr_idx),
     .pal_wr_chan(gdc_pal_wr_chan), .pal_wr_data(gdc_pal_wr_data),
-    .pal_commit(gdc_pal_commit),
     .pal256_wr_en(gdc_pal256_wr_en), .pal256_wr_idx(gdc_pal256_wr_idx),
     .pal256_wr_chan(gdc_pal256_wr_chan), .pal256_wr_data(gdc_pal256_wr_data),
     .gfx_pegc_256(gdc_pegc_256), .gfx_pegc_256e(gdc_pegc_256e),
     .hs_out(video_hsync), .vs_out(video_vsync), .de_out(gdc_de)
 );
 
-pc9821_gdc2 u_gdc2 (
+pc9821_gdc2 #(
+    .SYS_FREQ(SYS_FREQ),
+    .WRITE_PACE_NS(GDC_WRITE_PACE_NS),
+    .FIG_PACE_NS(GDC_FIG_PACE_NS)
+) u_gdc2 (
     .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce),
     .io_wr(device_io_wr && gdc_cs), .io_rd(device_io_rd && gdc_cs),
     .io_addr(device_io_addr[7:0]),
@@ -1976,6 +2147,7 @@ pc9821_cg u_cg (
     .cg_rd_hold(cg_rd_hold),
     .font_ld_addr(font_addr), .font_ld_data(font_data), .font_ld_we(font_we),
     .cg_record_restore(sdip_seed_pulse),
+    .setup_cfg(setup_cfg),
     // The Machine field reaches the record's model table; cfg_seed_en gates the static
     // configuration view. Both are sampled into reset-time latches inside pc9821_cg.
     .bios_set(bios_set),
@@ -2017,7 +2189,7 @@ localparam [1:0] COMP_RULE = 2'b00;
 // START paints black where a graphics pixel would be.
 
 pc9821_video_mixer video_mixer (
-    .clk(clk_sys), .rst_n(rst_n_sys),
+    .clk(clk_sys),
     .dot_x(gdc_pix_dot),
     .h_active(gdc_pix_h_active), .v_active(gdc_pix_v_active),
     .gfx_odd_line(gdc_gfx_odd_line),
@@ -2030,7 +2202,6 @@ pc9821_video_mixer video_mixer (
     .pal_mode16(gdc_mode16), .pal_dig(gdc_dig),
     .pal_wr_en(gdc_pal_wr_en), .pal_wr_idx(gdc_pal_wr_idx),
     .pal_wr_chan(gdc_pal_wr_chan), .pal_wr_data(gdc_pal_wr_data),
-    .pal_commit(gdc_pal_commit),
     // The PEGC arm: the 256-colour write port (the crtc's widened palette
     // decode), the mode mux, and the fold seam. packed_idx is pc9821_pegc_scan's
     // packed dot; fold_bypass/pegc_256 are the same view select the map's window
@@ -2385,10 +2556,11 @@ end else begin : g_no_telemetry
     // interleaved by record on the one UART arm. With none built there is no mux, and the arm is
     // the constant it was before the framework existed (the CD log's tie-off).
     localparam DBG_CPU_ANY = DBG_CPU_EN || DBG_SNOOP_EN || (DBG_TRIG_KIND != 0);
-    localparam DBG_ANY = CDROM_LOG_EN || DBG_GDC_EN || DBG_CPU_ANY;
+    localparam DBG_ANY = CDROM_LOG_EN || DBG_GDC_EN || DBG_FDC_EN || DBG_CPU_ANY;
     if (DBG_ANY) begin : g_dbg
-    wire [7:0] gdc_log_byte, cpu_log_byte;
+    wire [7:0] gdc_log_byte, cpu_log_byte, fdc_log_byte;
     wire       gdc_log_we, cpu_log_we, gdc_log_accept, cpu_log_accept;
+    wire       fdc_log_we, fdc_log_accept;
     if (DBG_GDC_EN) begin : g_gdc_log
     pc9821_gdc_log #(.LOG_CLK_HZ(SYS_FREQ)) u_gdc_log (
         .clk(clk_sys), .rst_n(!reset),
@@ -2401,12 +2573,28 @@ end else begin : g_no_telemetry
     assign gdc_log_byte = 8'h00;
     assign gdc_log_we   = 1'b0;
     end
+    if (DBG_FDC_EN) begin : g_fdc_log
+    // The floppy controller's log: the iobus's last-access latch (every port the guest touches,
+    // with the byte the CPU received for a read), the controller's interrupt line on either
+    // window, and its state byte (pc9821_fdc dbg_state).
+    pc9821_fdc_log #(.LOG_CLK_HZ(SYS_FREQ)) u_fdc_log (
+        .clk(clk_sys), .rst_n(!reset),
+        .io_stb(dbg_last_io_stb), .io_wr(dbg_last_io_wr), .io_addr(dbg_last_io_addr),
+        .io_data(dbg_last_io_data),
+        .fdc_irq(fdc_irq | fdc_irq10), .fdc_state(dbg_fdc_state),
+        .log_byte(fdc_log_byte), .log_we(fdc_log_we), .log_accept(fdc_log_accept)
+    );
+    end else begin : g_no_fdc_log
+    assign fdc_log_byte = 8'h00;
+    assign fdc_log_we   = 1'b0;
+    end
     if (DBG_CPU_ANY) begin : g_cpu_log
     pc9821_dbg_cpu #(
         .LOG_CLK_HZ(SYS_FREQ), .SAMPLER_EN(DBG_CPU_EN ? 1 : 0), .SAMPLE_MS(DBG_SAMPLE_MS),
         .SNOOP_EN(DBG_SNOOP_EN ? 1 : 0), .SNOOP_LO(DBG_SNOOP_LO), .SNOOP_HI(DBG_SNOOP_HI),
         .TRIG_KIND(DBG_TRIG_KIND), .TRIG_ADDR(DBG_TRIG_ADDR), .TRIG_CS(DBG_TRIG_CS),
-        .TRIG2_LO(DBG_TRIG2_LO), .TRIG2_HI(DBG_TRIG2_HI), .ARM_S(DBG_ARM_S), .POST(DBG_POST)
+        .TRIG2_LO(DBG_TRIG2_LO), .TRIG2_HI(DBG_TRIG2_HI), .ARM_S(DBG_ARM_S), .POST(DBG_POST),
+        .LAST_MS(DBG_LAST_MS), .TRACE_AW(DBG_TRACE_AW)
     ) u_dbg_cpu (
         .clk(clk_sys), .cpu_cs(cpu_cs), .cpu_eip(cpu_eip), .cpu_pe(cpu_pe), .cpu_vm(cpu_vm),
         .cpu_if(cpu_dbg_eflags[9]), .cpu_intr(z_intr), .cpu_sp(cpu_dbg_SP),
@@ -2418,6 +2606,9 @@ end else begin : g_no_telemetry
         .ata_block_read(ata_block_read),
         .gate_read(cpu_dbg_gate_read), .gate_addr(cpu_dbg_gate_addr),
         .issue(cpu_dbg_issue), .issue_eip(cpu_dbg_issue_eip),
+        // the I/O trigger: every landed access, the FDC's own ports included (the iobus latch)
+        .lio_stb(dbg_last_io_stb), .lio_wr(dbg_last_io_wr), .lio_addr(dbg_last_io_addr),
+        .lio_data(dbg_last_io_data),
         .m_valid(cpu_mem_valid), .m_ready(mem_cpu_ready), .m_write(z_write), .m_addr({z_addr, 2'b00}),
         .m_be(z_be), .m_burst(z_burstcount), .m_line(z_line_read), .m_wdata(z_dout),
         .m_resp_valid(mem_cpu_resp_valid), .m_rdata(mem_cpu_dout),
@@ -2427,16 +2618,17 @@ end else begin : g_no_telemetry
     assign cpu_log_byte = 8'h00;
     assign cpu_log_we   = 1'b0;
     end
-    wire [2:0] mux_acc;
-    pc9821_dbg_mux #(.N(3)) u_dbg_mux (
+    wire [3:0] mux_acc;
+    pc9821_dbg_mux #(.N(4)) u_dbg_mux (
         .clk(clk_sys),
-        .in_byte({cpu_log_byte, gdc_log_byte, cd_log_byte}),
-        .in_we({cpu_log_we, gdc_log_we, cd_log_we}), .in_accept(mux_acc),
+        .in_byte({fdc_log_byte, cpu_log_byte, gdc_log_byte, cd_log_byte}),
+        .in_we({fdc_log_we, cpu_log_we, gdc_log_we, cd_log_we}), .in_accept(mux_acc),
         .out_byte(dbg_uart_byte), .out_we(dbg_uart_we), .out_accept(dbg_uart_accept)
     );
     assign cd_log_accept  = mux_acc[0];
     assign gdc_log_accept = mux_acc[1];
     assign cpu_log_accept = mux_acc[2];
+    assign fdc_log_accept = mux_acc[3];
     end else begin : g_no_dbg
     assign dbg_uart_byte = cd_log_byte;
     assign dbg_uart_we   = cd_log_we;
@@ -2449,14 +2641,13 @@ assign mpu_uart_tx = mpu_uart_tx_int;
 assign software_reset = triple_fault_reset;
 
 // The PC-9801-86's stereo output, summed from the card's two devices: the OPNA
-// (pc9821_opna) and the 86-PCM block (pc9821_pcm86). `z486_mister.sv` already
-// mixes this slot through pc9821_audio_volume and CDC's/filters it in sys/audio_out, so
-// nothing else is added downstream. The one compromise here is deliberate: the
-// two devices share the slot's volume control (vol_voice below), which is right
-// for one card and is what the framework's OSD master volume sits behind
-// anyway. THE SUM IS WIDE AND UNCLAMPED: the two DACs
+// (pc9821_opna) and the 86-PCM block (pc9821_pcm86). `z486_mister.sv` crosses it to
+// CLK_AUDIO and pc9821_audio_mix mixes it as one slot of pc9821_audio_volume, so
+// nothing else is added downstream. The two devices share the slot's gain (vol_voice
+// below, in series with the OSD Audio page's PC-9801-86 level), which is right for one
+// card: the board as one source. THE SUM IS WIDE AND UNCLAMPED: the two DACs
 // (YM2608 FM+SSG and the LC7881) meet at one analog sum whose only clip is the
-// output stage, modelled at the FINAL DAC (z486_mister's mix_dry saturator).
+// output stage, modelled at the FINAL DAC (pc9821_audio_mix's mix_dry saturator).
 // An intermediate 16-bit saturation here would flat-top the join whenever FM+SSG
 // passed 16 bits, even with a cancelling negative PCM86 sample still to come. The FM+ADPCM sum is clamped once at the jt08_acc junction (ymfm's clamp16
 // point, ymfm_opn.cpp:1410-1414); this join carries that clamped junction, the
@@ -2481,7 +2672,7 @@ assign sample_86_r = snd86_r;
 //   * GATE is system port C bit 3, a MUTE: clear means audible (NP2kai sound/beepc.c:170).
 //     The ITF clears it before stage 0x1F and sets it again after (BANK4@0x37F / BANK4@0x3CB).
 //   * LEVEL is the software-DIP beeper volume, 0x871E bits [3:2] (beep_vol below): the
-//     speaker amplitude in z486_mister scales linearly with it and code 0 is an exact mute
+//     speaker amplitude in pc9821_audio_mix scales linearly with it and code 0 is an exact mute
 //     (NP2kai io/dipsw.c:44-57 writes the code, sound/beepg.c:113-114/161-163 scale by it).
 //
 // Power-on is silent by construction: port C resets to the value MEASURED on the machine
@@ -2489,30 +2680,29 @@ assign sample_86_r = snd86_r;
 assign speaker_out = ~beep_mute & pit_out1;
 assign vol_master_l = 5'd31;
 assign vol_master_r = 5'd31;
-// The OPNA reaches the mixer at full scale; the framework's master volume
-// (vol_master above) is the OSD control. 5'd0 here would mute the slot.
+// The -86 board reaches the mixer at full scale; pc9821_audio_mix puts the OSD Audio page's
+// PC-9801-86 level in series with this code (and the framework's own master volume acts after
+// the core). 5'd0 here would mute the slot.
 assign vol_voice_l = 5'd31;
 assign vol_voice_r = 5'd31;
-// THE CD CHANNEL'S GAIN: the mixer sums `vol_en[2] ? cd_l : 0` (z486_mister), and cd_l is the
-// CD-DA stream scaled by vol_cd. WITHOUT THE CD DRIVE'S PLAYER (CDROM_AUDIO_EN 0) vol_cd is the
-// constant 0, so the CD contributes exactly zero. WITH IT, vol_cd is the OSD's "CD audio volume"
-// field (cd_volume_code, decoded by pc9821_osd), a user control like the volume wheel on a real
-// CD drive, both channels at the same code. Its default (list position 0) is 0 dB, the unity
+// THE CD CHANNEL'S GAIN: the mixer sums `vol_en[2] ? cd_l : 0` (pc9821_audio_mix), and cd_l is
+// the CD-DA stream scaled by vol_cd. WITHOUT THE CD DRIVE'S PLAYER (CDROM_AUDIO_EN 0) vol_cd is the
+// constant 0, so the CD contributes exactly zero. WITH IT, vol_cd is the OSD's "CD audio"
+// field (cd_volume_code, decoded by pc9821_osd; the Audio page's CD audio), a user control
+// like the volume wheel on a real CD drive, both channels at the same code. Its default (list position 0) is 0 dB, the unity
 // level shipped before the field (NP2kai's -6 dB default is a step); the drive's level is still
 // uncaptured (todo item 106), which is why it is a control rather than a constant.
 // THE CROSSING: cd_volume_code comes from hps_io's status word on clk_sys, and
-// pc9821_audio_volume samples vol_cd on CLK_AUDIO with no synchroniser - the quasi-static OSD
-// level convention every vol_* input follows (docs/clock-domains.md, "Quasi-static levels").
-// The register below makes the crossing's source one flop per bit rather than the decode's
-// combinational logic, so the only transient is the one sample a change can land mid-way.
+// pc9821_audio_volume reads vol_cd on CLK_AUDIO. The code is a 5-bit WORD whose neighbouring
+// steps flip several bits (28 -> 27 is 11100 -> 11011), so a raw crossing lets one CLK_AUDIO
+// edge assemble a code from both (31 = 0 dB on that step). pc9821_audio_mix therefore carries
+// vol_cd_l/r into CLK_AUDIO through the held handshake (level_cdc, the A1/A5 mechanism, with
+// the Audio page's other two levels), whose clk_sys hold register is this word's one source
+// flop; nothing here registers it again (docs/clock-domains.md A7; tb_pc9821_audio_level_cdc).
 generate
 if (CDROM_AUDIO_EN) begin : g_vol_cd
-    /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
-    reg [4:0] vol_cd_q = 5'd0;
-    /* verilator lint_on PROCASSINIT */
-    always @(posedge clk_sys) vol_cd_q <= cd_volume_code;
-    assign vol_cd_l = vol_cd_q;
-    assign vol_cd_r = vol_cd_q;
+    assign vol_cd_l = cd_volume_code;
+    assign vol_cd_r = cd_volume_code;
 end else begin : g_no_vol_cd
     assign vol_cd_l = 5'd0;
     assign vol_cd_r = 5'd0;
@@ -2525,9 +2715,9 @@ assign vol_line_r = 5'd0;
 // The PC speaker's level in the mixer. The framework's own sound.v resets this to 2'h3
 // (0 dB) and documents the four steps as -18..0 dB, so 2'd3 is the un-attenuated step: this
 // is one of the two places the speaker's level is set, and it is NOT a taste decision. THE
-// OTHER PLACE IS `status[19:18]` in z486_mister's spk expression (one sounding bit is
-// beep_vol * (1 << (10 + status[19:18]))), and that bit range is UNDECLARED in this core's
-// CONF_STR - so the shift is always 0 and a sounding beep is 1,024/2,048/3,072 across the
+// OTHER PLACE IS the unit of pc9821_audio_mix's beeper ladder (one sounding bit is
+// beep_vol * 1024 at the OSD Beeper level's 0 dB; the ancestor's status[19:18] shift that once
+// raised it is UNDECLARED in this core's CONF_STR), so a sounding beep is 1,024/2,048/3,072 across the
 // 0x871E beeper-volume ladder (code 2 - NP2kai's default - is the historical 2,048; code 0
 // is an exact mute), of the +32,767 rail. The LADDER is the machine's register (NP2kai
 // io/dipsw.c:44-57 / sound/beepg.c); the ladder's absolute level is a LEVEL decision that

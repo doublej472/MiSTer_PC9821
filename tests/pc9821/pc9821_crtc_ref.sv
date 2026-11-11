@@ -154,7 +154,6 @@ module pc9821_crtc_ref (
     output wire [3:0]  pal_wr_idx,
     output wire [1:0]  pal_wr_chan,
     output wire [3:0]  pal_wr_data,
-    output wire        pal_commit,
     // The PEGC 256-colour palette's CPU write port (row 5): the UNMASKED 8-bit
     // 0xA8 index and FULL-byte channel writes, mode-gated on mode2_256col (NP2kai
     // gdc_oaa/oac/oae write `anareg[(16*3) + palnum*4 + c] = dat` under
@@ -1197,7 +1196,7 @@ module pc9821_crtc_ref (
   // needs to know whether the fetched cell is a JIS glyph inside the grid, so that the row cache
   // and the ANK store can be told apart.
   wire [7:0]  f_ku_i  = {1'b0, code_lo_r[6:0]} - 8'h01;   // ku - 0x21
-  wire        f_row_in = (f_ku_i < 92);   // JIS_ROWS
+  wire        f_row_in = (f_ku_i < 92) && (code_hi_r[6:0] >= 7'h20);   // the live module's grid test (column ten >= 0x20 too)
   // The right half reuses the pair's own row and column and IGNORES its own TRAM code, which
   // is what NP2kai's kanji2nd arm does (bitmap[x] = lastbitp + 0x800). The carried right-half
   // flag must NOT survive the line wrap: last_cell's fetch is the NEXT line's column 0, and
@@ -1237,9 +1236,9 @@ module pc9821_crtc_ref (
     end else if (pixel_ce && fetch_fo) begin
       f_jis_here_r <= f_jis_here;
       f_pair2nd_r  <= f_pair2nd;   // both describe the cell addressed at THIS dot
-      if (f_jis && f_row_in && !f_pair2nd) begin
+      if (f_jis && !f_pair2nd) begin   // the live module: an out-of-grid code pairs blank
         f_jis2nd <= 1'b1;        // this cell is a left half; the next is its right half
-        f_jis_ok  <= 1'b1;
+        f_jis_ok  <= f_row_in;
       end else begin
         f_jis2nd <= 1'b0;
         f_jis_ok  <= 1'b0;
@@ -1395,7 +1394,7 @@ module pc9821_crtc_ref (
   // cleared 0x0020, and NP2kai/QEMU ignore it), so it usually arrives here as the ANK
   // class with r_font already holding the JIS half - the ANK arm above is what draws it.
   wire       jis_ok   = (|r_code_hi) && !gaiji_ok && r_jis_ok;
-  wire       glyph_on = (ank_ok || gaiji_ok || jis_ok) && glyph_bit;
+  wire       glyph_on = (ank_ok || gaiji_ok || jis_ok) && glyph_bit && !(r_jis_2nd && !r_jis_ok);   // the live module's blank pair
 
   // Attribute decode (ReactOS sdk/.../pc98/video.h, ReC98, QEMU ATTR_COL):
   //   bit0 visible  bit1 blink  bit2 reverse  bit3 underline  bit4 vertical line
@@ -1579,7 +1578,6 @@ module pc9821_crtc_ref (
   assign pal_wr_idx  = pal_sel[3:0];
   assign pal_wr_chan = (pc == 5'd22) ? 2'd0 : (pc == 5'd23) ? 2'd1 : 2'd2;
   assign pal_wr_data = io_din[3:0];
-  assign pal_commit  = frame_end;
   assign gfx_pegc_256  = mode2_256col;
   assign gfx_pegc_256e = mode2_256e;
   // THE PEGC 256-COLOUR READ MIRROR (row 5). Three 256x8 M10K byte lanes, the
@@ -1740,7 +1738,7 @@ module pc9821_crtc_ref (
       // with nothing pending (NP2kai gdc_i62, io/gdc.c:684). The pop is in the
       // sequential block; gdc_snd_q is the byte the pop returns.
       5'd1:  io_dout_r = gdc_snd_q;
-      5'd3:  io_dout_r = mode1;
+      5'd3:  io_dout_r = {1'b0, mode1[6:0]};   // the live module's 0x68 read (bit 7 reads 0)
       // 0x6E is write-only on this machine, so do not answer a latch.
       5'd5:  io_dout_r = 8'hFF;
       5'd6:  io_dout_r = crtc_pl;
@@ -1757,13 +1755,13 @@ module pc9821_crtc_ref (
       // 0xFF when modereg holds 0xFF"): 0x5A is not 0xFF. The GRCG's mode still reaches
       // its consumers as a signal (pc9821_grcg owns it; the EGC gate takes it directly),
       // so nothing but the guest read moves. The 16-bit `in ax,7Ch` FOLD is unchanged
-      // (pc9821_iobus's term7c_hi forces lane 1 to 0x00), but the word read's LOW lane
-      // follows this byte read, so `in ax,7Ch` moves from 0x00<mode> to 0x00FF; the word
-      // form was never machine-measured (TODO item 42).
+      // (pc9821_iobus's word-read termination fills lane 1 with 0xFF), but the word read's LOW lane
+      // follows this byte read, so `in ax,7Ch` moves from 0xFF<mode> to 0xFFFF, the Xe10's
+      // value (docs/probes/XE10T-XE10-AUDIT.TXT W007C `w1=FFFF`).
       5'd12: io_dout_r = 8'hFF;
       // NP2kai gdc_i6a returns gdc.mode2 itself, so a set bit reads back (io/gdc.c:703),
       // bit 1 included (P6: the FF2 num-1 latch round-trips).
-      5'd4:  io_dout_r = {4'b0000, mode2_wren, mode2_egc, mode2_ff2b1, mode2_16color};
+      5'd4:  io_dout_r = 8'h00;   // the live module's 0x6A read (00 on the machine)
       // NP2kai gdc_ia8 returns gdc.palnum VERBATIM in analogue modes (io/gdc.c:913-919):
       // out 0xA8,0xAB / in 0xA8 reads 0xAB, not 0x0B. The ANALOGUE path is
       // untouched: the machine capture that settles the DIGITAL path below ran in

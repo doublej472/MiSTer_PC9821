@@ -11,7 +11,7 @@
 // ZERO for that period. It does NOT repeat the frame before it. The zero-order hold is
 // only for the gap BETWEEN frames: with playback left enabled and a drained buffer, a
 // held sample is a stuck DC level, which eats headroom on one rail at the machine's single
-// final clamp (z486_mister's mix_dry) for as long as the guest leaves the DAC on.
+// final clamp (pc9821_audio_mix's mix_dry) for as long as the guest leaves the DAC on.
 //
 // ==== WHERE THE EXPECTED VALUES COME FROM (never from this RTL) ====
 //   * NP2kai (PRIMARY) - each of the four generator paths abandons its sample state when the

@@ -264,7 +264,7 @@ module pc9821_block_io #(
   wire [12:0] fetch_span = {fetch_total, 8'd00};
   // A word is THIS engine's only while its own slot is acknowledged. hps_io serves one slot at a
   // time over ONE word bus shared by every slot (sd_buff_wr/addr/dout); `sd_ack` is per slot
-  // (sys/hps_io.sv:331 "sd_ack <= disk[VD:0]") and is the only thing that says whose words
+  // (sys/hps_io.sv:347 "sd_ack <= disk[VD:0]") and is the only thing that says whose words
   // they are. Counting any word while the request merely waited in F_REQ took another slot's
   // transfer as this sector: with the CD-ROM's CD-DA streaming on slot 4, the disk's sectors
   // arrived as CD audio (Policenauts' intro). pc9821_atapi
@@ -515,9 +515,9 @@ module pc9821_block_io #(
         // A request PRESENTED in this same cycle is ANSWERED, never dropped. This is the one
         // cycle in which the acceptance block below cannot run, so a requester that handed its
         // request over here would otherwise wait for a completion no edge can ever produce: the
-        // disk holds BSY in X_WAIT_BLOCK (pc9821_ata.sv:700 (xfer_state <= X_WAIT_BLOCK;)) and
+        // disk holds BSY in X_WAIT_BLOCK (pc9821_ata.sv:872 (xfer_state <= X_WAIT_BLOCK;)) and
         // never sees its block_done, and the floppy holds `rbusy` so it never asks again
-        // (pc9821_fdd_media.sv:1018 "if (bwant && !rbusy && !blk_req_rd) begin") - a silent hang,
+        // (pc9821_fdd_media.sv:1126 "if (bwant && !rbusy && !blk_req_rd) begin") - a silent hang,
         // not the visible abort every other eject alignment produces. The medium the request was
         // for is gone, so the answer is that same error. (A pulse while a serve is owed is still
         // neither latched nor queued: the branch above already owns that completion.)

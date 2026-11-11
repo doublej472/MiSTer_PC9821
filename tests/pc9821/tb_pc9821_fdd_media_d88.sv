@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// pc9821_fdd_media reads a D88 and a raw sector image through the HPS block protocol and serves them over the byte seam pc9821_fdc drives: the D88 header is parsed where d88head.h puts its fields (fd_type at 0x1B, fd_size at 0x1C, trackp[164] at 0x20 as little-endian 32-bit offsets), a sector's file offset is found by walking the track's [16-byte _D88SEC][data] run and testing (c,h,r,n) as NP2kai's searchsector_d88 does, so a header that matches C/H/R with a different N is not the sector, a sector whose stored size is shorter than 128<<N still delivers the full 128<<N bytes with a ZERO tail, READ ID answers the requested ordinal with the track's own sector count, a raw image maps CHRN straight onto its geometry row's file offset and refuses an N that is not the row's N, and a missing sector, a missing track, an ordinal past the track's headers and an unknown image size are each reported as not available. The host side is a model of the MiSTer block reader: sd_ack held for the transfer, one 16-bit word per clk_sys at sd_buff_addr with (sd_blk_cnt+1) sectors per handshake. A RE-MOUNT MOVES THE MEDIUM, which is what lets the platform stop resetting the machine on a floppy change: mounting a second image of the same geometry answers the SECOND image's sector bytes (so neither a cached block nor a parsed track table may survive the swap), an eject - a mount of a sub-sector image - clears present and answers no byte out of the ejected medium, and remounting the first image serves it byte-exact again. THE RAW SIZE GUESSER IS NP2kai's fdd_xdf.c supportxdf rows (headersize 0) AND THE GEOMETRY IS PER DRIVE: the 512-byte rows (2DD 9x512 and 8x512, 2HD 15x512/18x512/21x512), the 256-byte 26x256 row and the 9x1024 row mount and each answers READ ID with ITS OWN N and sector count (fdd_readid_common, diskimage/fddfile.c:319-345) while refusing a request whose N is not the row's (fdd_read_xdf's 0xC0, fdd_xdf.c:341-343); the double-claimed 655,360-byte body answers the DD6 row's 8x512 geometry, fdd_set_xdf's first size match in table order (:41 before the same-sized DDB row :47, whose .ddb extension tiebreak :129-133 does not exist at this seam), and a D88 whose fd_type major is 2D or 2DD (0 or 1) mounts beside the 2HD classes and answers its geometry from the walked per-track headers (fdd_d88.c:92-118 takes majors 0/1/2). Each medium answers only in its own media mode (the controller's 0x00BE bit 1 and the unit's 0x04BE rpm bit): a 2DD class read in 2HD mode, a 2HD class in 2DD mode or a minor-0 2HD at 360 rpm misses (NP2kai fdd_d88.c d88trk_read, fddfile.c fdd_seeksector_common).
+// pc9821_fdd_media reads a D88 and a raw sector image through the HPS block protocol and serves them over the byte seam pc9821_fdc drives: the D88 header is parsed where d88head.h puts its fields (fd_type at 0x1B, fd_size at 0x1C, trackp[164] at 0x20 as little-endian 32-bit offsets), a sector's file offset is found by walking the track's [16-byte _D88SEC][data] run and testing (c,h,r,n) as NP2kai's searchsector_d88 does, so a header that matches C/H/R with a different N is not the sector, a sector whose stored size is shorter than 128<<N still delivers the full 128<<N bytes with a ZERO tail, READ ID answers the requested ordinal with the track's own sector count, a raw image maps CHRN straight onto its geometry row's file offset and refuses an N that is not the row's N, and a missing sector, a missing track, an ordinal past the track's headers and an unknown image size are each reported as not available. The host side is a model of the MiSTer block reader: sd_ack held for the transfer, one 16-bit word per clk_sys at sd_buff_addr with (sd_blk_cnt+1) sectors per handshake. A RE-MOUNT MOVES THE MEDIUM, which is what lets the platform stop resetting the machine on a floppy change: mounting a second image of the same geometry answers the SECOND image's sector bytes (so neither a cached block nor a parsed track table may survive the swap), an eject - a mount of a sub-sector image - clears present and answers no byte out of the ejected medium, and remounting the first image serves it byte-exact again. THE RAW SIZE GUESSER IS NP2kai's fdd_xdf.c supportxdf rows (headersize 0) AND THE GEOMETRY IS PER DRIVE: the 512-byte rows (2DD 9x512 and 8x512, 2HD 15x512/18x512/21x512), the 256-byte 26x256 row and the 9x1024 row mount and each answers READ ID with ITS OWN N and sector count (fdd_readid_common, diskimage/fddfile.c:319-345) while refusing a request whose N is not the row's (fdd_read_xdf's 0xC0, fdd_xdf.c:341-343); the double-claimed 655,360-byte body answers the DD6 row's 8x512 geometry, fdd_set_xdf's first size match in table order (:41 before the same-sized DDB row :47, whose .ddb extension tiebreak :129-133 does not exist at this seam), and a D88 whose fd_type major is 2D or 2DD (0 or 1) mounts beside the 2HD classes and answers its geometry from the walked per-track headers (fdd_d88.c:92-118 takes majors 0/1/2). Each medium answers only in its own media mode (the controller's 0x00BE bit 1 and the unit's 0x04BE rpm bit): a 2DD class read in 2HD mode, a 2HD class in 2DD mode or a minor-0 2HD at 360 rpm misses (NP2kai fdd_d88.c d88trk_read, fddfile.c fdd_seeksector_common). A 2HD D88 whose fd_type minor is non-zero matches each header's rpm_flg (byte 13) against the unit's rpm bit as NP2kai's rpmcheck does (fdd_d88.c `if (sec->rpm_flg != rpm) return(FAILURE);`, applied in searchsector_d88 and fdd_readid_d88): of two headers with the same C/H/R/N the one recorded at the drive's rpm answers, a sector recorded at the other rpm misses, a READ ID ordinal whose header fails the test has no ID, and a minor-0 2HD never reads the flag.
 //
 // pc9821_fdd_media reads a D88 and a raw sector image through the HPS block protocol and
 // serves them over the byte seam pc9821_fdc drives, with every layout taken from NP2kai's
@@ -817,6 +817,50 @@ module tb_pc9821_fdd_media_d88;
     do_req(0, 2'd0, 8'h00, 8'h00, 8'h01, 8'h03, 8'h00);
     expect8(err, 1'b0, "D19 the 2HD D88 in its own mode reads");
     drain_bytes(4096);
+
+    // ---------------- D20: a 2HD D88 with a non-zero minor matches each sector's rpm_flg ----
+    // NP2kai fdd_d88.c rpmcheck: for DISKTYPE_2HD with `fdtype_minor` (fd_type & 0x0f) non-zero a
+    // header is the sector only if `sec->rpm_flg == fdc.rpm[fdc.us]` (byte 13 of _D88SEC,
+    // d88head.h `rpm_flg; // rpm 0:1.2 1:1.44`); searchsector_d88 tests it beside C/H/R/N and
+    // walks on past a mismatch, and fdd_readid_d88 takes the crcn-th header only if it passes
+    // (`(sec == fdc.crcn) && (!rpmcheck(...))`), so a mismatch there is no ID. A minor-0 2HD
+    // never reads the flag. Track 0 here: header 0 is C0 H0 R1 N3 at rpm 1 (data pattern R=1),
+    // header 1 the SAME C0 H0 R1 N3 at rpm 0 (data pattern R=2), header 2 R3 at rpm 0.
+    // PRE-CHANGE: rpm_flg was never read, so the first CHRN match answered at either rpm.
+    img[8'h1B] = 8'h21;                              // 2HD, minor 1
+    img[T0_OFF + 13] = 8'h01;                        // header 0: rpm_flg 1 (1.44 MB)
+    img[T0_OFF + 1040 + 2] = 8'h01;                  // header 1: R = 1, rpm_flg 0
+    mount(IMG_BYTES);
+    b_2hd = 1'b1;
+    b_rpm = 1'b0;
+    do_req(0, 2'd0, 8'h00, 8'h00, 8'h01, 8'h03, 8'h00);
+    expect8(err, 1'b0, "D20 R=1 at rpm 0 is found");
+    drain_bytes(4096);
+    expecti(nget, 1024, "D20 R=1 at rpm 0 length");
+    check_sector(8'h02, 1024);                       // header 1's data, not header 0's
+    b_rpm = 1'b1;
+    do_req(0, 2'd0, 8'h00, 8'h00, 8'h01, 8'h03, 8'h00);
+    expect8(err, 1'b0, "D20 R=1 at rpm 1 is found");
+    drain_bytes(4096);
+    expecti(nget, 1024, "D20 R=1 at rpm 1 length");
+    check_sector(8'h01, 1024);                       // header 0's data
+    do_req(0, 2'd0, 8'h00, 8'h00, 8'h03, 8'h03, 8'h00);
+    expect8(err, 1'b1, "D20 R=3 (rpm_flg 0) at rpm 1 misses");
+    if (!err) drain_bytes(4096);                     // (a wrong answer still ends cleanly)
+    do_req(1, 2'd0, 8'h00, 8'h00, 8'h00, 8'h03, 8'h00);
+    expect8(hdrv, 1'b1, "D20 READ ID ordinal 0 at rpm 1 answers");
+    expect8(hdr_r, 8'h01, "D20 READ ID ordinal 0 at rpm 1 R");
+    b_rpm = 1'b0;
+    do_req(1, 2'd0, 8'h00, 8'h00, 8'h00, 8'h03, 8'h00);
+    expect8(err, 1'b1, "D20 READ ID ordinal 0 (rpm_flg 1) at rpm 0 has no ID");
+    do_req(1, 2'd0, 8'h00, 8'h00, 8'h00, 8'h03, 8'h01);
+    expect8(hdrv, 1'b1, "D20 READ ID ordinal 1 at rpm 0 answers");
+    img[8'h1B] = 8'h20;                              // minor 0: the flag is not read
+    mount(IMG_BYTES);
+    do_req(0, 2'd0, 8'h00, 8'h00, 8'h01, 8'h03, 8'h00);
+    expect8(err, 1'b0, "D20 minor 0 ignores rpm_flg");
+    drain_bytes(4096);
+    check_sector(8'h01, 1024);                       // the first CHRN match
 
   // ==== VERDICT ====
     if (fails == 0) begin

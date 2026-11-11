@@ -325,23 +325,32 @@ module tb_pc9821_calendar;
     // ---------------------------------------------------------------
     // Tick rate register and the IRQ it raises.
     // ---------------------------------------------------------------
-    cal_tick(8'h02);
+    cal_tick(8'h82);   // the enable (bit 7) set, as the ITF writes it; tb_pc9821_calendar_xe10 owns bit 7 clear
     if (tick_dout !== 8'h82) fail("0x128 read did not report rate 2 (off)");
     repeat (200) @(posedge clk);
     if (irq !== 1'b0) fail("IRQ15 asserted while the tick is off");
-    cal_tick(8'h01);
+    cal_tick(8'h81);
     if (tick_dout !== 8'h81) fail("0x128 read did not report rate 1");
     // 1/32 s at 50 MHz is 1,562,499 cycles; preset the divider rather than
     // spinning that long.
     @(negedge clk);
     dut.tick_div = 22'd1_562_498;
     repeat (2) @(posedge clk);
-    // Reading 0x128 acknowledges and clears it.
-    if (tick_dout !== 8'h81) fail("0x128 read did not report rate 1");
+    @(negedge clk);
+    // The tick sets the tick flag, bit 4 (the Xe10 reads 0x91 with a tick unread,
+    // docs/probes/XE10T-XE10-AUDIT.TXT CAL128 `v=91`), and IRQ15 rises at the end of the
+    // tick's short low pulse (docs/probes/KIT2-XE10-AUDIT2.TXT:27-41, 1-2 ARTIC ticks low);
+    // reading 0x128 clears the flag (0x81 after it) and leaves the line high (`cfg=81 mode=R
+    // ... ones=97790`).
+    if (irq !== 1'b0) fail("IRQ15 is not low in the tick's pulse");
+    if (tick_dout !== 8'h91) fail("0x128 did not report the tick flag (0x91) with a tick unread");
+    repeat (300) @(posedge clk);         // the 5 us pulse is 250 clocks at 50 MHz
+    if (irq !== 1'b1) fail("the tick did not raise IRQ15 at its pulse's end");
     @(negedge clk); tick_rd = 1;
     @(negedge clk); tick_rd = 0;
     repeat (2) @(posedge clk);
-    if (irq !== 1'b0) fail("IRQ15 stayed asserted after the 0x128 read");
+    if (irq !== 1'b1) fail("the 0x128 read lowered IRQ15 (the Xe10's line stays high)");
+    if (tick_dout !== 8'h81) fail("the 0x128 read did not clear the tick flag (0x81)");
   // ==== VERDICT ====
 
     if (errors == 0) begin

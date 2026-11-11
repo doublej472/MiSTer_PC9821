@@ -14,7 +14,9 @@ device-bus match lines were deleted and that claim moved to pc9821_device_select
 which `tb_pc9821_device_select` sweeps against the old list verbatim. So the two revisions need
 not name the same lines; what this tool requires is:
   * every line the working tree names also exists in --old (a renamed/dropped SYSTEM line is a
-    defect, not a refactor), and
+    defect, not a refactor), except a SYSTEM port added since: its reference is the full compare
+    its own name spells (`hit[HX_006C]` against `port_addr == 16'h006C`), so a new line is
+    proved like every old one and cannot answer a port its name does not, and
   * the set the working tree no longer names is EXACTLY the old revision's device half, taken
     from that revision's own `pc9821_ports_pkg.sv` (the constants whose index is below the first
     system index, 85 there) -- so the deletion cannot quietly take a system port with it.
@@ -62,8 +64,12 @@ def git_show(rev, path):
     return r.stdout
 
 
+ADDED_REF = {}   # name -> the full compare its name spells, for a SYSTEM line added since --old
+
+
 def build(old, new, names):
     lo, ln = lines(old), lines(new)
+    lo.update(ADDED_REF)
     v = ["module m(input wire [15:0] port_addr, input wire MPU_EN, output wire mismatch, output wire multi);"]
     v.append(helpers(new))
     n = len(names)
@@ -110,9 +116,14 @@ def main():
     dropped = set(lo) - set(ln)
     added = set(ln) - set(lo)
     bad = 0
+    for name in sorted(added):
+        if not re.fullmatch(r"HX_[0-9A-F]{4}", name):
+            sys.exit("the working tree names a hit[] line %s that --old %s does not, and its name "
+                     "spells no port to prove it against" % (name, rev))
+        ADDED_REF[name] = "(port_addr == 16'h%s)" % name[3:]
     if added:
-        sys.exit("the working tree names hit[] lines %s that --old %s does not: a new SYSTEM line "
-                 "has no full-compare reference in this proof" % (sorted(added), rev))
+        print("hit[] lines added since %s, each proved against the compare its name spells: %s"
+              % (rev, ", ".join(sorted(added))))
     dev = device_names(old_pkg, old)
     if dropped:
         if dropped != dev:
@@ -145,6 +156,21 @@ def main():
             refused = True
         print("  plant (a system line dropped) %s" % ("caught" if refused else "NOT caught"))
         bad += 0 if refused else 1
+        # an ADDED line answering a port its name does not spell must fail the proof too
+        for name in sorted(added):
+            m = re.search(r"assign hit\[%s\] = \(hb_(..) && lb_(..)\);" % name, new)
+            if not m:
+                continue
+            wrong = "%02X" % (int(m.group(2), 16) ^ 0x01)
+            planted = new.replace(m.group(0), "assign hit[%s] = (hb_%s && lb_%s);"
+                                  % (name, m.group(1), wrong))
+            if "wire lb_%s " % wrong not in planted:
+                planted = planted.replace("  wire lb_%s " % m.group(2),
+                                          "  wire lb_%s = (port_addr[7:0] == 8'h%s);\n  wire lb_%s "
+                                          % (wrong, wrong, m.group(2)), 1)
+            pok, _ = prove(old, planted, names)
+            print("  plant (an added line, wrong low byte) %s" % ("NOT caught" if pok else "caught"))
+            bad += pok
     sys.exit(1 if bad else 0)
 
 

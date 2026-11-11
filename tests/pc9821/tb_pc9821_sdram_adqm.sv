@@ -12,8 +12,8 @@
 //
 //  1. MASKED WRITES CHANGE EXACTLY THE ENABLED BYTES. A full-dword store establishes all
 //     four bytes; a masked store then writes a new dword; the read-back must equal the
-//     software model per byte. [source: docs/sdram-dqm-wiring.md section 3; the XSDS
-//     schematic tying DQML/DQMH to A11/A12]
+//     software model per byte. [source: docs/sdram.md "The per-command A[12:11] contract";
+//     the XSDS schematic tying DQML/DQMH to A11/A12]
 //
 //  2. THE MASK ON A[12:11] DOES NOT ALIAS A ROW. A[12:11] are row bits during ACT and the
 //     byte mask during a WRITE. Four addresses whose row A11/A12 differ must each keep

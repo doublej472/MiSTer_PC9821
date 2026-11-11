@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Every window the PC-9821 memory map decodes is driven against the reference decode and the RTL's answer is recorded: the first-megabyte RAM, window 0's 0x0461 alias (the identity, the 0x0C absent area and the 0x0E ROM window), the A0000-BFFFF text/CG/plane windows, the 0xD8000 option-ROM window and its 8 KiB byte routing, the 0xC0000-D7FFF absent area and the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window carved out of it, the E8000-F7FFF lower BIOS, the F8000-FFFFF banked ROM window (every bank selection plus the 0xFFFF8000 top-of-4G alias), the 0x043F EMS page window, the 0xF00000 PEGC window, the 0x043B system-space split (PEGC VRAM, the F80000-F9FFFF hole, and the FA0000-FFFFFF mirror onto the low routes), the open-bus responder's phases, and window 0's own 0x0A VRAM page; the references are qemu-pc98 hw/i386/pc98-mem.c (the memory map) and NP2kai i386c/cpumem.c + mem/memvram.c + mem/memems.c, with the machine's own probes (docs/probes/WIN.TXT, EMS.TXT) where they disagree. The PEGC 256-colour window arms are driven the same way (pegc-scope-REPORT.md 4 row 2): the packed windows 0xA8000/0xB0000 splice to peg_base + {bank, offset[14:0]} and shadow the EMS overlay entirely, 0xB8000-0xBFFFF is not connected, 0xE0000-0xE7FFF is the register file's byte port under the view, plane mode (0xE0100 bit 0) reads open bus because the engine is ladder rung L3 and is not built, the flat aperture is gated by the register file's [0xE0102] bit 0 (open bus with it clear - the FAIL-FIRST row for that gate), and with the view down the planar arms are unchanged.
+// Every window the PC-9821 memory map decodes is driven against the reference decode and the RTL's answer is recorded: the first-megabyte RAM, window 0's 0x0461 alias (the identity, the 0x0C absent area and the 0x0E ROM window), the A0000-BFFFF text/CG/plane windows, the 0xD8000 option-ROM window and its 8 KiB byte routing, the 0xC0000-D7FFF absent area and the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window carved out of it, the E8000-F7FFF lower BIOS, the F8000-FFFFF banked ROM window (every bank selection plus the 0xFFFF8000 top-of-4G alias), the 0x043F EMS page window, the 0xF00000 PEGC window, the 0x043B system-space split (PEGC VRAM, the F80000-F9FFFF hole, and the FA0000-FFFFFF mirror onto the low routes), the open-bus responder's phases, and window 0's own 0x0A page (RAM of its own on the machine, docs/probes/DMAROUTE-XE10.TXT W1/W2, not QEMU's VRAM overlay), the E plane at 0xE0000 only in the 16-colour mode (the digital-mode slot is open bus, docs/probes/DMAROUTE-XE10.TXT P4 view V1 and WIN.TXT 0461=0E); the references are qemu-pc98 hw/i386/pc98-mem.c (the memory map) and NP2kai i386c/cpumem.c + mem/memvram.c + mem/memems.c, with the machine's own probes (docs/probes/WIN.TXT, EMS.TXT) where they disagree. The PEGC 256-colour window arms are driven the same way (pegc-scope-REPORT.md 4 row 2): the packed windows 0xA8000/0xB0000 splice to peg_base + {bank, offset[14:0]} and shadow the EMS overlay entirely, 0xB8000-0xBFFFF is not connected, 0xE0000-0xE7FFF is the register file's byte port under the view, plane mode (0xE0100 bit 0) reads open bus because the engine is ladder rung L3 and is not built, the flat aperture is gated by the register file's [0xE0102] bit 0 (open bus with it clear - the FAIL-FIRST row for that gate), and with the view down the planar arms are unchanged.
 
 // ==== DUT ====
 // TWO instances, because the decode is split across them. pc9821_memory_map owns the
@@ -18,6 +18,10 @@
 // case the map's translated address IS the byte routing.
 
 module tb_pc9821_memmap_ref;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -30,6 +34,7 @@ module tb_pc9821_memmap_ref;
   reg        ide_ram_gate = 1;
   reg        bios_ram_gate = 0;
   reg        top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg        fw_shadow_dirty = 0;
   reg [31:0] fw_shadow_base = 32'h0215_8000;   // pack_base + PACK_BYTES + 0x58000
   reg  [1:0] ems_state = 2'd0;
@@ -104,6 +109,7 @@ module tb_pc9821_memmap_ref;
   reg [15:0] ioctl_dout = 0;
   wire       ioctl_wait, rom_ready, load_error, cpu_run;
   reg        scan_enable = 0, scan_line_tick = 0, scan_page = 0;
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_walk_page = 0;
   reg [14:0] scan_line_base = 0;
   reg  [6:0] line_rd_addr = 0;
@@ -150,7 +156,13 @@ module tb_pc9821_memmap_ref;
 
   // The map's own decode. Its cpu_* outputs are separate from the subsystem's so the two
   // instances can share the address regs without sharing a driver.
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
+  wire       e_plane_nc;
   pc9821_memory_map map_dut (
+      .mode2_16color(mode2_16color),
+      .e_plane_nc(e_plane_nc),
       .top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00),
       .ide_ram_gate(ide_ram_gate),
       .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en),
@@ -196,7 +208,9 @@ module tb_pc9821_memmap_ref;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
-  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
+  wire        dma_load    = 1'b0;
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -482,10 +496,36 @@ module tb_pc9821_memmap_ref;
              "B8000 plane G start", "NP2 memvram0 / QEMU vram_b0000");
     map_case(32'h000B_FFFF, 32'h000B_FFFF, 1'b1, 1, 2'd2, 15'h7FFF, 1'b0,
              "BFFFF plane G end", "NP2 memvram0 / QEMU vram_b0000");
+    // The intensity plane is a 16-colour-mode window: the guest's OUT 0x6A,0x01 (FF2 num 0).
+    mode2_16color = 1'b1;
     map_case(32'h000E_0000, 32'h000E_0000, 1'b1, 1, 2'd3, 15'h0000, 1'b0,
              "E0000 plane I start", "NP2 memvram0 plane 3 / QEMU vram_e0000");
     map_case(32'h000E_7FFF, 32'h000E_7FFF, 1'b1, 1, 2'd3, 15'h7FFF, 1'b0,
              "E7FFF plane I end", "NP2 memvram0 plane 3 / QEMU vram_e0000");
+    // In the digital mode the machine resets to (and DOS leaves) the slot is open bus: 0xE0004
+    // reads FF and keeps no store (docs/probes/DMAROUTE-XE10.TXT case P4 view V1, `ORIG=FFFFFFFF
+    // PRE=FFFFFFFF POST=FFFFFFFF`), 0xE0000 `got= FF FF FF FF` (docs/probes/VRAM2.TXT), and NP2kai
+    // installs memnc over the slot while VOPBIT_ANALOG is clear (i386c/cpumem.c).
+    mode2_16color = 1'b0;
+    cpu_addr = 32'h000E_0004; cpu_write = 1'b0; cpu_valid = 1'b1; #1;
+    cases = cases + 1;
+    if (!(e_plane_nc === 1'b1 && gvram_window === 1'b0)) begin
+      $display("FAIL     E0004 digital mode: e_plane_nc=%b gvram=%b, want 1/0   [MEAS DMAROUTE-XE10.TXT P4 V1; NP2 memnc]",
+               e_plane_nc, gvram_window);
+      errors = errors + 1;
+    end else
+      $display("ok       E0004 digital mode: the open-bus slot, no plane   [MEAS DMAROUTE-XE10.TXT P4 V1; NP2 memnc]");
+    cpu_valid = 1'b0;
+    bus_store(32'h000E_0004, 32'h0000_09EB, 4'hF);
+    bus_read(32'h000E_0004, probe_target);
+    cases = cases + 1;
+    if (probe_target !== 32'hFFFF_FFFF) begin
+      $display("FAIL     E0004 digital mode: read %08x after a store, want ffffffff   [MEAS DMAROUTE-XE10.TXT P4 V1 POST=FFFFFFFF]",
+               probe_target);
+      errors = errors + 1;
+    end else
+      $display("ok       E0004 digital mode: reads ffffffff after a store   [MEAS DMAROUTE-XE10.TXT P4 V1 POST=FFFFFFFF]");
+    mode2_16color = 1'b1;
 
     // ---- the lower BIOS and the banked ROM window [QEMU bios/f8000_rom] ----
     map_case(32'h000E_8000, pack_base + 32'h0001_0000, 1'b1, 0, 2'd0, 15'd0, 1'b0,
@@ -600,25 +640,37 @@ module tb_pc9821_memmap_ref;
                "NP2 memtram / QEMU tvram overlay");
     route_case(1'b1, 32'h000A_4000, R_CG, 32'h0, "0xA4000 direct",
                "MEAS PORTS.TXT VRAM / QEMU cgwindow at 0xA4000");
-    // Window 0 = 0x0A: qemu enables window 0's vram overlays at that value, so the
-    // window's 0x80000-0x87FFF aliases the text VRAM at 0xA0000-0xA7FFF and its 0x84000
-    // aliases the same physical address as 0xA4000. The machine agrees that 0x80000 is
-    // not the RAM page: WIN.TXT reads b=0800 there rather than the 0x5AA5 marker stored
-    // under the identity window, and p/q=FF (the marker is in no low-RAM copy). This
-    // core hands the window's text and CG pages straight to the backend (the map's own
-    // translation reaches physical 0xA0000/0xA4000, where the subsystem decodes the TRAM
-    // and CG routes on the PRE-bias address), while its plane pages do follow the bias.
+    // Window 0 = 0x0A: qemu enables window 0's vram overlays at that value (its 0x80000-0x87FFF
+    // the text VRAM), but the MACHINE answers otherwise and outranks it: a store through 0x81000
+    // under 0x0461=0x0A reads back through the window while the text RAM at 0xA1000 keeps its
+    // prefill, and the same for 0x88100 against plane B (docs/probes/DMAROUTE-XE10.TXT cases
+    // W1/W2, CPU runs: V0 -> D, V1 -> P1), the as-found bytes there being DRAM noise rather than
+    // the text RAM's 0x0020 (WIN.TXT `0461=0A ... b=0800`). So the window's page is RAM: the
+    // backend at the translated address, the text and CG routes not taken.
     win0_sel = 8'h0A;
-    route_case(1'b1, 32'h0008_0000, R_TRAM, 32'h0, "win0 0x0A 0x80000 = 0xA0000",
-               "QEMU window-0 vram overlays at val 0x0a; MEAS WIN.TXT 0461=0A b=0800");
-    route_case(1'b1, 32'h0008_4000, R_TRAM, 32'h0, "win0 0x0A 0x84000 = 0xA4000",
-               "QEMU window-0 tvram 0x8000 covers 0xA0000-0xA7FFF, so 0x84000 is on it too");
+    route_case(1'b1, 32'h0008_0000, R_BACKEND, 32'h000A_0000, "win0 0x0A 0x80000 = RAM 0xA0000",
+               "MEAS DMAROUTE-XE10.TXT W2 (text RAM untouched) outranks QEMU's val-0x0a vram overlays");
+    route_case(1'b1, 32'h0008_4000, R_BACKEND, 32'h000A_4000, "win0 0x0A 0x84000 = RAM 0xA4000",
+               "MEAS DMAROUTE-XE10.TXT W1/W2: the window page is RAM of its own, no CG window");
     win0_sel = 8'h08;
     // 0x0461 = 0x0E aliases the intensity page; the machine answered 0xFFFF there at the
-    // DOS prompt (WIN.TXT 0461=0E b=FFFF) because the planar plane is mode-gated, and
-    // this core serves it unconditionally. Recorded, not failed.
-    $display("DIVERGE  win0 0x0E 0x80000 = 0xE0000: RTL serves plane 3 (see the map cases above); MEAS WIN.TXT 0461=0E b=FFFF (the plane is mode-gated)   [MEAS vs RTL]");
-    cases = cases + 1; diverge = diverge + 1;
+    // DOS prompt, the digital mode (WIN.TXT `0461=0E rb=0F b=FFFF a=FFFF`): the plane is
+    // mode-gated through the window as at 0xE0000, and served in the 16-colour mode.
+    win0_sel = 8'h0E;
+    mode2_16color = 1'b0;
+    cpu_addr = 32'h0008_0000; cpu_write = 1'b0; cpu_valid = 1'b1; #1;
+    cases = cases + 1;
+    if (!(e_plane_nc === 1'b1 && gvram_window === 1'b0)) begin
+      $display("FAIL     win0 0x0E 0x80000 digital mode: e_plane_nc=%b gvram=%b, want 1/0   [MEAS WIN.TXT 0461=0E b=FFFF a=FFFF]",
+               e_plane_nc, gvram_window);
+      errors = errors + 1;
+    end else
+      $display("ok       win0 0x0E 0x80000 digital mode: the open-bus slot   [MEAS WIN.TXT 0461=0E b=FFFF a=FFFF]");
+    cpu_valid = 1'b0;
+    mode2_16color = 1'b1;
+    map_case(32'h0008_0000, 32'h000E_0000, 1'b1, 1, 2'd3, 15'h0000, 1'b0,
+             "win0 0x0E 0x80000 16-colour = plane I", "NP2 memvram0 plane 3 through the window");
+    win0_sel = 8'h08;
     // 0xA5000-0xA7FFF: qemu's window-1 tvram overlay covers it (32 KiB from 0xA0000) and
     // the machine decodes nothing there - it reads 0xFF and discards stores
     // (docs/probes/VRAM.TXT:141-142, `A600wrote= 00 FF 55 AA` / `got= FF FF FF FF`, reproduced
@@ -884,11 +936,13 @@ module tb_pc9821_memmap_ref;
   // ==== VERDICT ====
     $display("TB_PC9821_MEMMAP_REF: %0d reference cases, %0d mismatches, %0d reported divergences",
              cases, errors, diverge);
-    // The divergence report is PINNED: the seven reported rows are each a recorded
+    // The divergence report is PINNED: the six reported rows are each a recorded
     // judgement, so a decode change that adds one (an asserted-agreeing note row turning
     // into a DIVERGE) or removes one must fail here and be re-adjudicated, not scroll by.
-    if (diverge != 7) begin
-      $display("FAIL     the reported divergences changed: %0d, the adjudicated set is 7", diverge);
+    // (Seven until the window-0 0x0E row became a case: the E plane is mode-gated now,
+    // docs/probes/WIN.TXT `0461=0E rb=0F b=FFFF a=FFFF`.)
+    if (diverge != 6) begin
+      $display("FAIL     the reported divergences changed: %0d, the adjudicated set is 6", diverge);
       errors = errors + 1;
     end
     if (errors == 0) begin

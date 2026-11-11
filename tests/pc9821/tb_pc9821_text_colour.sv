@@ -110,7 +110,7 @@ module tb_pc9821_text_colour;
       .cpu_resp_valid(cpu_resp_valid),
       .cpu_line_word_valid(cpu_line_word_valid),
       // The DMA port is idle here: no bus-master byte reaches the text RAM in this bench.
-      .dma_valid(1'b0), .dma_write(1'b0), .dma_addr(14'd0), .dma_din(8'h00),
+      .dma_route_cg(1'b0), .dma_valid(1'b0), .dma_write(1'b0), .dma_addr(14'd0), .dma_din(8'h00),
       .dma_ready(unused_dma_ready), .dma_resp_valid(unused_dma_resp), .dma_dout(unused_dma_dout),
       .tram_addr(tram_addr), .tram_din(tram_din), .tram_we(tram_we),
       .tram_dout(tram_dout),

@@ -1,0 +1,6 @@
+XE10CFG configuration stores (tools/hwprobe/xe10cfg)
+ROW W4A0 BYTE in al,0x4A0 / in al,0x4A1
+W4A0 bytes 04A0/04A1 FF FF
+ROW W4A0 WORD in ax,0x4A0 x2 (FLAGGED: suspected of freezing the machine; power-cycle after)
+W4A0 word FFFF FFFF
+XE10CFG DONE

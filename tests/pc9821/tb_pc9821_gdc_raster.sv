@@ -46,7 +46,6 @@ module tb_pc9821_gdc_raster;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire [15:0] gfx_line_addr;
   wire [7:0]  tram_cpu_dout;
   wire hs_out, vs_out, de_out;
@@ -74,7 +73,7 @@ module tb_pc9821_gdc_raster;
       .pix_h_active(pix_h_active), .pix_v_active(pix_v_active), .gfx_mode16(gfx_mode16),
       .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
-      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
       .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out)
   );
 

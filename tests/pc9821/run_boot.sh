@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The integrated boot tier: the diagnostic pack through the real CPU/memory/IO path.
 #
-#   bash tests/pc9821/run_boot.sh                 build and run (golden CYCLES used=930533)
+#   bash tests/pc9821/run_boot.sh                 build and run (golden CYCLES used=930528)
 #   bash tests/pc9821/run_boot.sh --compile-only  elaborate the tier only, no run
 #
 # --compile-only exists because this tier is outside `tools/bench.py --all` (it needs no
@@ -56,7 +56,7 @@ fi
 # bench $fatal(1)s on any deviation (which fails this script through pipefail), and this
 # asserts the printed line too, so a future refactor that turned that fatal back into a
 # display cannot leave the tier green while the boot has moved.
-if ! grep -qE '^CYCLES used=930533 of 20000000 .*backend= *real timing$' "$BOOT_LOG"; then
-  echo "run_boot.sh: the boot did not report the required 'CYCLES used=930533 ... backend=real timing' line" >&2
+if ! grep -qE '^CYCLES used=930528 of 20000000 .*backend= *real timing$' "$BOOT_LOG"; then
+  echo "run_boot.sh: the boot did not report the required 'CYCLES used=930528 ... backend=real timing' line" >&2
   exit 1
 fi

@@ -3,7 +3,7 @@
 // WHAT AN EJECT IS AT THIS SEAM. Every consumer of an hps_io image slot (pc9821_block_share's
 // slot latches, pc9821_fdd_media's mount latch, pc9821_disk_change_reset's IDE reset) reads one
 // event: img_mounted for the slot, with img_size / img_readonly "valid only for active bit in
-// img_mounted" (sys/hps_io.sv:129-130). An image smaller than one sector is an UNMOUNT to all of
+// img_mounted" (sys/hps_io.sv:144-145). An image smaller than one sector is an UNMOUNT to all of
 // them - pc9821_block_io's own rule (`eject = img_mounted && (img_size < 512)`) - so an eject is a
 // mount event with img_size 0. Whether Main_MiSTer itself ever sends one (an unmount from its file
 // browser) is the ARM program's behaviour, which is not in this repo; this module does not depend

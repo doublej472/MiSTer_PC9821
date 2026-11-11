@@ -81,8 +81,8 @@
 //      interface, in both directions).
 //   4. A command issued after the ROM's bank select reaches the drive: it
 //      completes, the task file the drive accepted is readable, 0x0433 reports
-//      the CONNECT flag (NP2kai's ideio_i433), and the
-//      status read clears the interrupt without moving that flag.
+//      bank 0's pending interrupt (01, the Xe10's IRQ433 row), and the
+//      status read clears the interrupt and that bit with it.
 //   5. The ROM's own ISR bracket (BANK3 file offset 0x1A0C), in order: the 0x80
 //      park write leaves the register alone, the drive's bank byte connects the
 //      interface, ERROR/STATUS are readable inside the bracket, and the restored
@@ -237,7 +237,9 @@ module tb_pc9821_ata_blockmap;
         expect_port(16'h0740 + (i * 2), 8'h0F, "second-channel task file floats at 0x0F");
         expect_port(16'h0741 + (i * 2), 8'hFF, "its odd partner floats at 0xFF");
       end
-      expect_port(16'h0432, bank, "0x0432 still reads back the bank");
+      // Called with 0x01 and 0x03, which both read back 01 on the machine
+      // (docs/probes/KIT1-XE10-IDE1.TXT:6 `w=01 r432=01`, :10 `w=03 r432=01`).
+      expect_port(16'h0432, {7'd0, bank[0]}, "0x0432 still reads back the bank");
     end
   endtask
   // ==== CHECKS ====
@@ -262,7 +264,8 @@ module tb_pc9821_ata_blockmap;
     //    showed at ITS empty bank (probes/JOY.TXT, probes/WIN.TXT at the DOS prompt).
     expect_bank_floats(8'h01, "bank 0x01 floats (R10.TXT values)");
 
-    // 3. Banks 0x02/0x03 are unmeasured on the machine, and they differ under
+    // 3. Banks 0x02/0x03 read a task file of their own on the machine (status 00 / 04,
+    //    docs/probes/KIT1-XE10-IDE1.TXT:8,10), which is not modelled; they differ under
     //    the channel rule: 0x03 has bit 0 set (the empty channel) and 0x02 has
     //    bit 0 clear, i.e. the disk's channel. Byte equality
     //    floated both. QEMU models the channel select as `val & 1` and masks
@@ -270,7 +273,8 @@ module tb_pc9821_ata_blockmap;
     expect_bank_floats(8'h03, "bank 0x03 has no disk (bit 0 set)");
     write_byte(16'h0432, 8'h02);
     expect_port(16'h064E, 8'h50, "bank 0x02 is the same channel as 0x00");
-    expect_port(16'h0432, 8'h02, "0x0432 stores what the guest wrote (no mask)");
+    // The read-back drops bit 1 without bit 5 (KIT1-XE10-IDE1.TXT:8 `w=02 r432=00`).
+    expect_port(16'h0432, 8'h00, "0x0432 <- 02 reads back 00");
 
     // 4. A task-file write at a floating bank does not reach the drive; the
     //    same write at 0x00 does (step 6). The register is a window on the
@@ -301,7 +305,8 @@ module tb_pc9821_ata_blockmap;
     //     success.
     write_byte(16'h0432, 8'h08);
     expect_port(16'h064E, 8'h50, "bank 0x08 is still channel 0 (bit 3 is not a bank bit)");
-    expect_port(16'h0432, 8'h08, "0x0432 readback with bit 3 set");
+    // Bit 3 never reads back (KIT1-XE10-IDE1.TXT:12 `w=2A r432=22`).
+    expect_port(16'h0432, 8'h00, "0x0432 <- 08 reads back 00 (bit 3 never)");
     expect_bank_answers("the disk's bank again after 0x08");
 
     // 6. A command issued after the bank select reaches the drive. This is the
@@ -311,17 +316,13 @@ module tb_pc9821_ata_blockmap;
     expect_port(16'h0644, 8'h03, "0x644 sector count write reached the drive");
     expect_port(16'h064E, 8'h50, "status before the command");
     write_byte(16'h064E, 8'h10);          // RECALIBRATE
-    // 0x0433 is the source-identification port and answers the CONNECT flag
-    // (NP2kai ideio_i433 bit 1 = "the selected bank has a connected device",
-    // cbus/ideio.c:660-675) - not an IRQ-pending bit.
-    // The machine reads 0x00 there with nothing pending AND the bank at 0x00
-    // (the fingerprint table in probes/JOY.TXT and probes/WIN.TXT, `0433300`),
-    // which every model answers alike. It is read before 0x064E, because a
-    // status read acknowledges the interrupt - and the flag is unmoved by that.
-    expect_port(16'h0433, 8'h02, "0x0433 reports the connect flag while the drive is selected");
+    // 0x0433 is the interrupt-pending port: bit 0 is bank 0's interrupt, 01 while the
+    // completion pends and 00 once the status read acknowledges it
+    // (docs/probes/KIT1-XE10-IDE1.TXT:18, the IRQ433 row `00 10 01 12 01 50 50 00`).
+    expect_port(16'h0433, 8'h01, "0x0433 reports bank 0's pending interrupt");
     expect_port(16'h064E, 8'h50, "RECALIBRATE completed READY|DSC");
     expect_port(16'h0642, 8'h00, "0x642 ERROR clear after a completed command");
-    expect_port(16'h0433, 8'h02, "0x0433 is the connect flag: unmoved by the status ack");
+    expect_port(16'h0433, 8'h00, "0x0433 clears with the status ack");
     // 7. The ROM's own ISR bracket, in its own order (BANK3 file offset 0x1A0C):
     //      `mov dx,0x432 / mov al,0x80 / out dx,al / in al,dx / mov es:0x2075,al`
     //    then the drive's bank byte, then the ERROR/STATUS reads, then the ack to

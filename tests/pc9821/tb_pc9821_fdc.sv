@@ -113,7 +113,9 @@ module tb_pc9821_fdc;
     reset_dut();
     wr8(2'd1, 8'h4A);
     wr8(2'd1, 8'h00);
-    repeat (1200) @(negedge clk);
+    // A not-ready READ ID interrupts about 29 us after its byte on the machine (pc9821_fdc
+    // NR_RID_CYCLES, 25 us = 1250 cycles at the DUT's default 50 MHz).
+    repeat (1700) @(negedge clk);
     $display("0x4A READ ID MF=1 ->");
     expect_irq(1'b1);
 

@@ -88,6 +88,13 @@ mf_ok:
     call    mode_state
     call    save_pal16
 
+    /* the analogue index-width row (2026-11 kit; answered, docs/probes/KIT1-XE10-PEGCRD.TXT): entries 0A and 05 get a marker BEFORE the pattern writes 5A and A5,
+     * and are read back after it (ALIAS16 rows): a 4-bit index makes 5A/A5 overwrite them. */
+    mov     si, offset alias_pre
+    call    write_entry
+    add     si, 4
+    call    write_entry
+
     mov     si, offset pattern
     mov     cx, PATTERN_N
 p16_loop:
@@ -103,6 +110,21 @@ p16_loop:
     add     si, 4
     pop     cx
     loop    p16_loop
+
+    mov     si, offset alias_pre
+    mov     cx, 2
+p16_alias:
+    push    cx
+    mov     al, [si]
+    mov     dx, 0x00A8
+    out     dx, al
+    call    iowait
+    call    read_entry
+    mov     di, offset prealias
+    call    print_entry
+    add     si, 4
+    pop     cx
+    loop    p16_alias
 
     cmp     byte ptr [save16_ok], 0
     je      p16_nec
@@ -601,6 +623,13 @@ pattern:
     .byte 0x5A, 0x11, 0x22, 0x33
     .byte 0xA5, 0x44, 0x55, 0x66
 
+/* {index, R, G, B} markers for the index-width row: written before the pattern, read after it. A 4-bit
+ * index aliases 5A -> 0A (pattern 11 22 33, read 01 02 03) and A5 -> 05 (44 55 66 -> 04 05 06);
+ * an 8-bit index keeps the markers (07 08 09, 0D 0E 0C). */
+alias_pre:
+    .byte 0x0A, 0x07, 0x08, 0x09
+    .byte 0x05, 0x0D, 0x0E, 0x0C
+
 /* NEC power-on 16-colour analogue table, {R,G,B} nibbles, itf.rom 0x042F. */
 pal16:
     .byte 0,0,0,     0,0,7,     7,0,0,     7,0,7
@@ -616,6 +645,7 @@ msg_q08:     .asciz " 9A0_08="
 msg_q0a:     .asciz " 9A0_0A="
 pre16:       .asciz "16  "
 pre256:      .asciz "256 "
+prealias:    .asciz "ALIAS16 "
 msg_entry:   .asciz "ENTRY="
 msg_wrote:   .asciz " WROTE_R="
 msg_g:       .asciz " G="

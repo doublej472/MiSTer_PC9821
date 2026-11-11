@@ -24,8 +24,8 @@ ROM_DEPTH = 2560
 UCODE_BITS = 37
 # Free words after upstream's XADD/CMPXCHG/INVD block (0x9D9-0x9F5).
 ALIGN_FAULT_ENTRY = 0x9F6     # 486 #AC fault entry (two words)
-CALL_STACK_FAULT = 0x9F8      # #SS(new SS selector) for a CALL gate's new stack (three words)
-REAL_INT_FLAGS = 0x9FB        # real-mode interrupt entry: EFLAGS high word cleared (three words)
+CALL_STACK_FAULT = 0x9F8      # #SS(new SS selector) for a privilege switch's new stack (three words)
+REAL_INT_FLAGS = 0x91B        # real-mode interrupt entry: EFLAGS mask + its own delivery tail (16 words, in LOADALL_FREE)
 SRC_SLCTR = 0x35
 ALUJMP_AND = 0x08
 # The 80386 LOADALL routine (entry 0x8F6, words 0x8F7-0x931) is reached only
@@ -38,6 +38,7 @@ DESC_SET_ACCESSED = LOADALL_FREE + 0x04  # locked Accessed-bit RMW (8 words)
 TASK_SET_BUSY = LOADALL_FREE + 0x0C      # task switch: locked busy-bit RMW (8 words)
 LTR_SET_BUSY = LOADALL_FREE + 0x14       # LTR: locked busy-bit RMW (5 words)
 TASK_LIMIT_CHECK = LOADALL_FREE + 0x19   # task switch: TSS limit check (10 words)
+# REAL_INT_FLAGS = LOADALL_FREE + 0x23 (16 words) follows it.
 ALUSRC_CONST_8 = 0x19
 ALUSRC_CONST_4 = 0x33
 ALUSRC_CONST_NEG4 = 0x37
@@ -218,17 +219,67 @@ PATCHES = [
     # 0; AC <- 0"; SingleStepTests 80386 real mode under the 486 expectation,
     # e.g. F6.4[46]). The real-mode entry goes through its own copy of the
     # 386 pair instead: AND EFLAGS with MASK16 (the 386's 8D5), then a long
-    # jump to 8D7 whose delay slot writes EFLAGS (the 386's 8D6). One cycle
-    # more than the shared pair, on the real-mode path only.
-    Patch(0x8AE, "real-mode interrupt entry: long jump to its own EFLAGS mask",
+    # jump back to 8D7 whose delay slot wrote EFLAGS (the 386's 8D6): one
+    # cycle more than the shared pair.  The copy now carries the rest of the
+    # 386 delivery tail too (8D7 DESCOD .. 8E4, the three pushes, the eIP/eSP/CS
+    # writes and the completion marker), so the pair runs straight into it and
+    # the long jump back is gone: the real-mode path costs what the 386's did.
+    # Only 8AE enters it; 8DF's JNERRC keeps its relative target (8E3's copy)
+    # and 8E1's LJMPP (protected mode only) its absolute one.
+    Patch(0x8AE, "real-mode interrupt entry: long jump to its own EFLAGS mask and tail",
           fields=longjump(REAL_INT_FLAGS)),
     Patch(REAL_INT_FLAGS, "real-mode interrupt entry: EFLAGS AND MASK16 (the 386's 8D5)",
           copy_from=0x8D5),
-    Patch(REAL_INT_FLAGS + 1, "real-mode interrupt entry: long jump to the vector read at 8D7",
-          word=uword(**longjump(0x8D7))),
-    Patch(REAL_INT_FLAGS + 2, "real-mode interrupt entry: EFLAGS <- SIGMA in the delay slot (the 386's 8D6)",
+    Patch(REAL_INT_FLAGS + 1, "real-mode interrupt entry: EFLAGS <- SIGMA (the 386's 8D6)",
           copy_from=0x8D6),
+    *[Patch(REAL_INT_FLAGS + 2 + (a - 0x8D7),
+            f"real-mode interrupt entry: copy of the delivery tail word {a:03X}",
+            copy_from=a,
+            fields=(dict(aluop=ALUJMP_USTEP_FAULT_DONE) if a == 0x8E3 else None))
+      for a in range(0x8D7, 0x8E5)],
 
+    # CLI/STI (entry 7F7, shared; the decoder supplies the flag op): the 386
+    # routine's IOPL gate jumps to 7EC, which flushes the queue and refetches
+    # the next sequential instruction (7EC DESCOD <- EIP, 7ED PREF, 7EE DLY)
+    # before 7EF writes IF (FLGOPS) and 7F0 retires.  z486 needs no refetch:
+    # decode does not depend on IF, the STI shadow starts at the instruction's
+    # RNI from its boundary action (interrupt_controller shadow_start), and
+    # the boundary reads EFLAGS[9] after 7EF either way.  The gate jumps
+    # straight to 7EF; its not-taken (#GP) path is unchanged.  8 -> about 5
+    # clocks (i486: 5, MAME cycles.h CLI/STI 486 column).
+    Patch(0x7F7, "CLI/STI: IOPL gate jumps straight to the FLGOPS word 7EF (no 7EC/7ED refetch)",
+          fields=dict(alusrc=reljump(0x7F7, 0x7EF))),
+    # LOOP/LOOPcc not taken: JCNT1 (059) and LOOPnE (061) jump here, and a
+    # taken one already suppresses its delay-slot PREF (microsequencer
+    # pref_suppress_taken), so the 386's re-flush to EIP at 05D/05E refetches
+    # the next sequential instruction for nothing.  Write eCX and retire.
+    # 10 -> about 6.7 clocks (i486: 6).
+    Patch(0x05D, "LOOP/LOOPcc not taken: eCX <- COUNTR + RNI (no re-flush)",
+          copy_from=0x05C, fields=dict(op=0)),
+    Patch(0x05E, "LOOP/LOOPcc not taken: blank RNI delay slot",
+          copy_from=0x030),
+    # Real-mode/V86 far transfer tail (CALL/JMP ptr16:16 and m16:16, RETF,
+    # IRET: 2E3, the 2EA fall-through, 302 and 814 enter 2EB; 2FA enters
+    # 2ED).  The 386 reads the CS limit into IRF2 (2EB LLIM), keeps it in
+    # TMPB (2EC), loads the base (2ED SBRM) and writes the limit back (2EE
+    # SLIM) before SPCR (2EF) and the redirect (2F0 DESCOD, 2F1 PREF).  z486's
+    # SBRM leaves the limit and granularity alone (segmentation_unit.sv
+    # SEG_CMD_SBRM: "Limit and granularity are NOT reset"), so the write-back
+    # only restores the limit already there - and through LLIM's G-expanded
+    # value it would even change a G=1 limit, where a real-mode load keeps
+    # it.  Nothing after 2EE reads TMPB or that IRF2 value (2F0 reloads IND
+    # before the PREF; the tail retires at 2F3).  2EB/2EC/2ED become SBRM,
+    # SPCR with a jump to the PREF, and the DESCOD word in its delay slot;
+    # 2FA jumps to 2EB.  Three clocks off each of these (one off m16:16 JMP),
+    # the old 2EE/2EF are unreachable; 2F0/2F1 keep their other entries.
+    Patch(0x2EB, "real-mode far tail: CS base <- selector (the 386's 2ED SBRM); limit kept",
+          copy_from=0x2ED),
+    Patch(0x2EC, "real-mode far tail: SPCR (the 386's 2EF) + jump to the PREF at 2F1",
+          copy_from=0x2EF, fields=dict(aluop=ALUJMP_JMP, alusrc=reljump(0x2EC, 0x2F1))),
+    Patch(0x2ED, "real-mode far tail: DESCOD <- TMPG (the 386's 2F0) in the jump's delay slot",
+          copy_from=0x2F0),
+    Patch(0x2FA, "far JMP m16:16 (real mode): jump to the shortened tail at 2EB",
+          fields=dict(alusrc=reljump(0x2FA, 0x2EB))),
     # 0F C8-CF has no 80386 PLA entry. The decoder redirects it to this
     # otherwise unused word and selects the register through opcode[2:0].
     Patch(0x9C4, "BSWAP r32 extension: SRCREG -> byte-swapped SRCREG + RNI",
@@ -702,11 +753,14 @@ PATCHES = [
 
     # A CALL through a gate to a more privileged level whose new stack has no
     # room for the parameters plus the return frame raises #SS(new SS
-    # selector) (i486 PRM, CALL), where INT n raises #SS(0).  The new SS
-    # selector is still in SLCTR (loaded at 607h) while the parameter copy and
-    # frame pushes run; event_control enters here for the stack-limit fault
-    # of such a CALL.  The #SS(0) entry 863h/864h passes SIGMA into TMPE, so
-    # form SIGMA = SLCTR & ~3 (EXT = 0) first, as the #TS entry does with TR.
+    # selector) (i486 PRM, CALL); so do INT n and an exception through an
+    # interrupt/trap gate whose new stack cannot hold the frame (a real
+    # Am486DX4: 38h for INT n, 39h with EXT for an exception).  The new SS
+    # selector is still in SLCTR (loaded at 607h) while the pushes run;
+    # event_control enters here for the stack-limit fault of such a privilege
+    # switch.  The #SS(0) entry 863h/864h passes SIGMA into TMPE, so form
+    # SIGMA = SLCTR & ~3 first (the fault body adds EXT), as the #TS entry
+    # does with TR.
     Patch(CALL_STACK_FAULT, "#SS(new SS selector): SIGMA = SLCTR & ~3",
           word=uword(src=SRC_SLCTR, aluop=ALUJMP_AND, alusrc=ALUSRC_CONST_NEG4)),
     Patch(CALL_STACK_FAULT + 1, "#SS(new SS selector): long jump into the shared fault body",

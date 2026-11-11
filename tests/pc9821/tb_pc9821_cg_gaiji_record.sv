@@ -56,7 +56,6 @@ module tb_pc9821_cg_gaiji_record;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire hs_out, vs_out, de_out;
   reg cg_record_restore = 0;
   reg [3:0] bios_set = 4'd0;

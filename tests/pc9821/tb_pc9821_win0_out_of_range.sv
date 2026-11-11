@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// A window-0 access whose TARGET page is not guest RAM behaves exactly like the direct encoding of that page (aliases.md A6): past guest_ram_bytes both are open bus with stores discarded, and under sys16m with win0 over 0xF00000-0xF7FFFF both reach the PEGC EVRAM at peg_base. out_of_range used to test cpu_addr (0x80000, inside RAM) instead of the biased d_addr, so the fallthrough emitted raw d_addr and the overlay reached ordinary SDRAM behind the map. FAIL-FIRST: the overlay's store lands in SDRAM and reads back where the direct encoding reads F's, and the two encodings disagree byte for byte over the PEGC window.
+// A window-0 access whose TARGET page is not guest RAM behaves exactly like the direct encoding of that page (aliases.md A6): past guest_ram_bytes both are open bus with stores discarded, and under sys16m with win0 over 0xF00000-0xF7FFFF both reach the PEGC EVRAM at peg_base. out_of_range used to test cpu_addr (0x80000, inside RAM) instead of the biased d_addr, so the fallthrough emitted raw d_addr and the overlay reached ordinary SDRAM behind the map. FAIL-FIRST: the overlay's store lands in SDRAM and reads back where the direct encoding reads F's, and the two encodings disagree byte for byte over the PEGC window. A window page below 8 is a hole on the real Xe10 (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17, RISKY /461): with 0x0461 = 00, 02, 04 or 06 every window word at 0x80000-0x9FFFC reads FFFFFFFF while the conventional memory the page names keeps its contents, and a store through the window at pages 00 and 02 never reaches that memory, while page 08 is the identity - FAIL-FIRST, the core aliased the conventional memory there.
 //
 // A window-0 (0x0461) access whose TARGET page is not guest RAM behaves exactly like the
 // direct encoding of that page: the overlay must not reach ordinary SDRAM where the direct
@@ -25,6 +25,7 @@ module tb_pc9821_win0_out_of_range;
   reg ide_rom_enable = 0;
   reg bios_ram_gate = 0;
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   reg  sys16m_en = 1'b0;
   reg [31:0] pack_base = 32'h0010_0000;
@@ -124,12 +125,16 @@ module tb_pc9821_win0_out_of_range;
   // The PEGC view select (pc9821_crtc's mode2_256col): opened only for the
   // [0xE0102] aperture-enable write (the machine's own flow), then closed.
   reg        pegc_256 = 1'b0;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk), .reset(reset),
       .top_bank(top_bank), .ems_state(ems_state),
       .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(1'b1), .bios_ram_gate(bios_ram_gate),
-      .top_shadow_en(top_shadow_en), .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08), .sys16m_en(sys16m_en),
+      .top_shadow_en(top_shadow_en), .soft_reboot(soft_reboot), .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08), .sys16m_en(sys16m_en),
       .pegc_256(pegc_256),
       .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
       .gvram_access_page(gvram_access_page),
@@ -282,6 +287,44 @@ module tb_pc9821_win0_out_of_range;
                backend.peek(32'h00F0_0000));
       errors = errors + 1;
     end
+
+    // ==== Case 3: pages 00-06 are a hole (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17) ====
+    // `R461 00 rb=01 win(80000 80400 90000 9FFFE)=FFFF FFFF FFFF FFFF dir=B625 7002 0001 82E8
+    // mark(win before/after, cell)=FFFF FFFF 3C5A`: the window reads FFFF where the page's own
+    // memory holds data, and the marker stored through it never reaches the cell. Pages 02, 04
+    // and 06 read FFFF likewise (lines 9-15); page 08 is the identity (line 17).
+    sys16m_en = 1'b0;
+    win0_sel = 8'h08;
+    req(32'h0000_0000, 1'b1, 32'h7002_B625, rd);
+    req(32'h0001_0000, 1'b1, 32'h82E8_0001, rd);
+    req(32'h0002_0400, 1'b1, 32'hA282_4558, rd);
+    req(32'h0006_FFFC, 1'b1, 32'h0606_0606, rd);
+    req(32'h0008_0000, 1'b1, 32'h3A41_0808, rd);
+    win0_sel = 8'h00;
+    req(32'h0008_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 00: the window at 0x80000 reads FFFF FFFF");
+    req(32'h0009_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 00: the window at 0x90000 reads FFFF FFFF");
+    req(32'h0008_0000, 1'b1, 32'hC3A5_C3A5, rd);
+    req(32'h0008_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 00: the marker reads back FFFF FFFF through the window");
+    win0_sel = 8'h02;
+    req(32'h0008_0400, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 02: the window at 0x80400 reads FFFF FFFF");
+    req(32'h0008_0400, 1'b1, 32'h5A5A_5A5A, rd);
+    win0_sel = 8'h04;
+    req(32'h0009_FFFC, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 04: the window at 0x9FFFC reads FFFF FFFF");
+    win0_sel = 8'h06;
+    req(32'h0008_FFFC, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 06: the window at 0x8FFFC reads FFFF FFFF");
+    win0_sel = 8'h08;
+    req(32'h0000_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'h7002_B625, "R461 00: the page's own memory kept its word (dir)");
+    req(32'h0002_0400, 1'b0, 32'h0, rd);
+    chk(rd, 32'hA282_4558, "R461 02: the store through the hole never reached 0x20400");
+    req(32'h0008_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'h3A41_0808, "R461 08: page 08 is the identity");
 
     // ==== Controls: a RAM-target window and direct RAM are untouched ====
     win0_sel = 8'h20;

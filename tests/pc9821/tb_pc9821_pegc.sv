@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PEGC: the PEGC register file at 0xE0000 answers as NP2kai's memvgaio byte store does - bank A at 0xE0004 and bank B at 0xE0006 round-trip the full written byte while the exported bank value is the low nibble, 0xE0100 keeps bit 0 only (the packed/plane mode select) while 0xE0102 keeps the whole written byte with bit 0 exported as the flat-aperture VRAM enable, the plane engine's control registers 0xE0104-0xE011F round-trip as plain bytes with no engine consuming them, every other offset in the 32 KiB window reads 0x00 with its stores dropped, a dword read composes the four byte answers in little-endian lane order, and the responder never accepts and answers in one cycle. FAIL-FIRST: on the tree without pc9821_pegc there is no register file at all, so every read-back row fails.
+// TB_PC9821_PEGC: the PEGC register file at 0xE0000 answers as NP2kai's memvgaio byte store does, except where the machine's read-back differs - bank A at 0xE0004 and bank B at 0xE0006 keep bits 5-0 of the written byte (bits 7-6 read 0) and 0xE0005/0xE0007 read 0x00 whatever is written, as the real Xe10 answers (docs/probes/DMAROUTE-XE10.TXT case P4: B1 53 5A 5A reads back 31 00 1A 00 and EB 09 00 00 reads back 2B 00 00 00; NP2kai round-trips the whole byte), while the exported bank value is the low nibble, 0xE0100 keeps bit 0 only (the packed/plane mode select) while 0xE0102 keeps the whole written byte with bit 0 exported as the flat-aperture VRAM enable, the plane engine's control registers 0xE0104-0xE011F round-trip as plain bytes with no engine consuming them, every other offset in the 32 KiB window reads 0x00 with its stores dropped, a dword read composes the four byte answers in little-endian lane order, and the responder never accepts and answers in one cycle. FAIL-FIRST: the full-byte round-trip read 0xB1/0x53 and 0xEB/0x09 back where the machine reads 0x31/0x00 and 0x2B/0x00.
 
 // ==== DUT ====
 // pc9821_pegc alone: the register file and its registered responder, driven on the
@@ -47,7 +47,7 @@ module tb_pc9821_pegc;
       .cpu_dout(cpu_dout),
       .cpu_ready(cpu_ready), .cpu_resp_valid(cpu_resp_valid),
       .bank_a(bank_a), .bank_b(bank_b),
-      .plane_mode(plane_mode), .vram_en(vram_en)
+      .plane_mode(plane_mode), .vram_en(vram_en), .idle()
   );
 
   integer errors = 0;
@@ -140,12 +140,19 @@ module tb_pc9821_pegc;
     reset = 0;
 
     // ---- 1. the bank registers (NP2kai memvga.h PPM_BANK_A8/B0, memvga.c VGARD8) ----
-    // Full-byte round-trip (NP2kai stores `value` verbatim and masks & 15 at USE);
-    // MAME masks the write to 4 bits, recorded not asserted.
+    // The machine's read-back (docs/probes/DMAROUTE-XE10.TXT case P4, 256-colour mode, the
+    // bytes stored at 0xE0004-0xE0007): bits 5-0 of 0xE0004/0xE0006 come back, bits 7-6 and
+    // 0xE0005/0xE0007 read 0 - the prefill B1 53 5A 5A reads `PRE=31001A00` and the sector's
+    // EB 09 00 00 reads `POST=2B000000`. It outranks NP2kai (a full-byte round-trip) and MAME
+    // (a 4-bit write mask). The exported bank is the low nibble (NP2kai VGARD8 `& 15`).
+    cpu_store(15'h0004, 32'h5A5A_53B1, 4'hF);
+    expect_rd(15'h0004, 32'h001A_0031, "P4 PRE: B1 53 5A 5A reads back 31 00 1A 00 (DMAROUTE-XE10)");
+    cpu_store(15'h0004, 32'h0000_09EB, 4'hF);
+    expect_rd(15'h0004, 32'h0000_002B, "P4 POST: EB 09 00 00 reads back 2B 00 00 00 (DMAROUTE-XE10)");
     store_byte(15'h0004, 8'hAB);
     store_byte(15'h0006, 8'h05);
-    expect_byte(15'h0004, 8'hAB, "bank A byte round-trips (NP2kai mio1)");
-    expect_byte(15'h0006, 8'h05, "bank B byte round-trips (NP2kai mio1)");
+    expect_byte(15'h0004, 8'h2B, "bank A keeps bits 5-0 (0xAB -> 0x2B)");
+    expect_byte(15'h0006, 8'h05, "bank B keeps bits 5-0");
     if (bank_a !== 4'hB) begin
       $display("FAIL: bank_a exported %x, want b (the nibble NP2kai banks on)", bank_a);
       errors = errors + 1;
@@ -206,7 +213,7 @@ module tb_pc9821_pegc;
     store_byte(15'h0004, 8'hAB);
     store_byte(15'h0005, 8'hCD);
     store_byte(15'h0006, 8'h05);
-    expect_rd(15'h0004, 32'h0005_CDAB, "dword at 0xE0004 = {mio1[3..0]}");
+    expect_rd(15'h0004, 32'h0005_002B, "dword at 0xE0004 = {0, bank B, 0, bank A}");
 
     // ---- 6. the recorded gaps and the dropped-store arms ----
     // The pattern block 0xE0120-0xE019F is L3's (the engine's ROP source) and is
@@ -238,7 +245,7 @@ module tb_pc9821_pegc;
         if (cpu_ready) seen_ready = 1;
         if (cpu_resp_valid) begin
           beats = beats + 1;
-          if (cpu_dout !== 32'h0005_CDAB) begin
+          if (cpu_dout !== 32'h0005_002B) begin
             $display("FAIL: line beat %0d answered %08x, want the dword repeated x4",
                      beats, cpu_dout);
             errors = errors + 1;

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_MEMORY_MAP:
-// The memory map's decode: every region routes where it should, including the 32 MiB open-bus boundary and the absent ROM area at 0xC0000-0xD7FFF minus the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window (served from the pack; its 0x461 = 0x0C alias included), which this block decodes and leaves unclaimed rather than serving. The local open-bus path answers in one cycle and these assertions record that shape: it is a z486 hazard, unreachable in the built design, and tb_pc9821_open_bus.sv is the bench that pins the correct phases. It also transforms the 0x043F 0x2-nibble EMS window at 0xB0000-0xBFFFF: the identity state leaves the GVRAM planes there alone, the 0x22 state reads and writes a 64 KiB page in the backend, and the unmapped state reaches neither the planes nor the backend -- and the window is a first-MiB aperture, so a guest address above 1 MiB with the same low 20 bits stays ordinary RAM. And it pins the ROM windows' read-only contract: a store into the 0xE8000-0xF7FFF main BIOS, the 0xD8000-0xD9FFF option-ROM window or the 0xCC000-0xCFFFF SOUND.ROM window is rejected in BOTH 0x053D bit-1 gate states (their only backing is the pack, and NP2kai discards those stores: cpumem.c:135 memnc_wr8), while the 0xF8000-0xFFFFF window's store is gated by 0x053D bit 1 and falls into the BIOS shadow.
+// The memory map's decode: every region routes where it should, including the 32 MiB open-bus boundary and the absent ROM area at 0xC0000-0xD7FFF minus the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window (served from the pack; its 0x461 = 0x0C alias included), which this block decodes and leaves unclaimed rather than serving. The local open-bus path answers in one cycle and these assertions record that shape: it is a z486 hazard, unreachable in the built design, and tb_pc9821_open_bus.sv is the bench that pins the correct phases. It also transforms the 0x043F 0x2-nibble EMS window at 0xB0000-0xBFFFF: the identity state leaves the GVRAM planes there alone, the 0x22 state reads and writes a 64 KiB page in the backend, and the unmapped state reaches neither the planes nor the backend -- and the window is a first-MiB aperture, so a guest address above 1 MiB with the same low 20 bits stays ordinary RAM. And it pins the ROM windows' read-only contract: a store into the 0xE8000-0xF7FFF main BIOS, the 0xD8000-0xD9FFF option-ROM window or the 0xCC000-0xCFFFF SOUND.ROM window is rejected in BOTH 0x053D bit-1 gate states (their only backing is the pack, and NP2kai discards those stores: cpumem.c:135 memnc_wr8), while the 0xF8000-0xFFFFF window's store is gated by 0x053D bit 1 and falls into the BIOS shadow. The intensity window 0xE0000-0xE7FFF, and its window-0 0x0E alias at 0x80000, is a plane only in the 16-colour mode (0x6A FF2 num 0): in the digital mode it decodes no plane and is the open-bus slot e_plane_nc, as the machine answers FF there and keeps no store (docs/probes/DMAROUTE-XE10.TXT case P4 view V1, docs/probes/VRAM2.TXT `E000wrote= 00 FF 55 AA` / `got= FF FF FF FF`, docs/probes/WIN.TXT `0461=0E rb=0F b=FFFF a=FFFF`) - FAIL-FIRST, the core decoded the plane in every mode.
 
 
 module tb_pc9821_memory_map;
@@ -88,6 +88,10 @@ module tb_pc9821_memory_map;
   wire [31:0] cpu_addr_raw = cpu_addr;
   wire        xl_low20 = 1'b0;
   wire        xl_peg = 1'b0;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
+  wire       e_plane_nc;
   pc9821_memory_map dut (.*);
 
   integer errors = 0;
@@ -107,6 +111,33 @@ module tb_pc9821_memory_map;
         $display("FAIL gvram %08x -> win=%b plane=%0d off=%04x mem=%08x, want plane=%0d off=%04x mem=%08x",
                  addr, gvram_window, gvram_win_plane, gvram_win_offset,
                  mem_addr, plane, off, identity);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
+  // The digital-mode E slot: no plane window, and e_plane_nc names it for the open-bus responder
+  // (want_nc = 0: e_plane_nc stays low; the plane decode, if any, is checked separately).
+  task automatic check_e_nc(input [31:0] addr, input bit want_nc);
+    begin
+      cpu_addr = addr;
+      #1;
+      if ((want_nc && gvram_window) || e_plane_nc !== want_nc) begin
+        $display("FAIL e-slot %08x (16-colour=%b) -> win=%b e_plane_nc=%b, want no plane window and e_plane_nc=%b",
+                 addr, mode2_16color, gvram_window, e_plane_nc, want_nc);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
+  // A plain-RAM answer: the backend at `expected`, and no plane window decoded.
+  task automatic check_ram_page(input [31:0] addr, input [31:0] expected);
+    begin
+      cpu_addr = addr;
+      #1;
+      if (gvram_window || mem_addr !== expected) begin
+        $display("FAIL ram %08x -> win=%b mem=%08x, want no plane window and mem=%08x",
+                 addr, gvram_window, mem_addr, expected);
         errors = errors + 1;
       end
     end
@@ -196,8 +227,8 @@ module tb_pc9821_memory_map;
     // with the gate clear (docs/probes/SHADOW.TXT:201-213, ffblocks=000C) and
     // QEMU models the rest of the window as rom_empty (hw/i386/pc98-mem.c
     // d8000_rom, the 0xFF fill; NP2kai's 12 KiB mask is the outlier). The
-    // gate-ON state of the tail is capture-pending: one marker write at 0xDC000
-    // under 0x1E8E=0x81 settles it (probe2 /IDEGATE, item 34).
+    // gate-ON state of the tail is measured too (docs/probes/XE10CFG-XE10-CFGWR.TXT:9-13:
+    // FF x16 under 0x1E8E=0x81 before and after a 5A A5 store at 0xDC000).
     check_addr(32'h000D_A000, 32'h000D_A000);
     check_addr(32'h000D_BFFF, 32'h000D_BFFF);
     // The gated decode, both edges: clear takes exactly 0xDA000-0xDBFFF to the
@@ -403,6 +434,19 @@ module tb_pc9821_memory_map;
     check_gvram(32'h000B_0000, 32'h000B_0000, 2'd1, 15'h0000);  // red
     check_gvram(32'h000B_7FFF, 32'h000B_7FFF, 2'd1, 15'h7FFF);
     check_gvram(32'h000B_8000, 32'h000B_8000, 2'd2, 15'h0000);  // green
+    // The intensity plane is a 16-colour-mode window (the guest's OUT 0x6A,0x01): in the digital
+    // mode the machine resets to, 0xE0000-0xE7FFF is open bus - 0xE0004 reads FF and keeps no
+    // store (docs/probes/DMAROUTE-XE10.TXT case P4 view V1, `ORIG=FFFFFFFF PRE=FFFFFFFF
+    // POST=FFFFFFFF`), 0xE0000 `got= FF FF FF FF` after `E000wrote= 00 FF 55 AA`
+    // (docs/probes/VRAM2.TXT) - and NP2kai installs memnc there (i386c/cpumem.c).
+    check_e_nc(32'h000E_0000, 1'b1);
+    check_e_nc(32'h000E_0004, 1'b1);
+    check_e_nc(32'h000E_7FFF, 1'b1);
+    check_e_nc(32'h000B_8000, 1'b0);                 // G stays a plane in both modes...
+    check_gvram(32'h000B_8000, 32'h000B_8000, 2'd2, 15'h0000);
+    check_e_nc(32'h000E_8000, 1'b0);                 // ...and 0xE8000 is the BIOS, not the slot
+    mode2_16color = 1'b1;
+    check_e_nc(32'h000E_0000, 1'b0);
     check_gvram(32'h000E_0000, 32'h000E_0000, 2'd3, 15'h0000);  // intensity
     check_gvram(32'h000E_7FFF, 32'h000E_7FFF, 2'd3, 15'h7FFF);
 
@@ -588,11 +632,16 @@ module tb_pc9821_memory_map;
     // 0x80000-0x87FFF is the first 32 KiB of the window, which aliases
     // 0xE0000: the same bytes the intensity window serves with the window at
     // identity. The firmware never touches that part, but it must not be RAM.
-    // Measured, at the DOS prompt in TEXT mode the machine answers 0xFFFF there
-    // and discards the store (`0461=0E rb=0F b=FFFF a=FFFF`), i.e. the
-    // intensity plane is not served in that mode; this core serves it
-    // unconditionally and does not model the mode gate (an open question).
-    check_gvram(32'h0008_0000, 32'h000E_0000, 2'd3, 15'h0000);  // == 0xE0000
+    // Measured, at the DOS prompt (the digital mode) the machine answers 0xFFFF there
+    // and discards the store (docs/probes/WIN.TXT `0461=0E rb=0F b=FFFF a=FFFF`): the
+    // intensity plane is not served in that mode, through the window as at 0xE0000. In the
+    // 16-colour mode the window serves the plane.
+    check_gvram(32'h0008_0000, 32'h000E_0000, 2'd3, 15'h0000);  // == 0xE0000 (16-colour)
+    mode2_16color = 1'b0;
+    check_e_nc(32'h0008_0000, 1'b1);                 // `0461=0E ... b=FFFF a=FFFF`
+    check_e_nc(32'h0008_7FFF, 1'b1);
+    check_e_nc(32'h0008_8000, 1'b0);                 // -> the lower BIOS
+    mode2_16color = 1'b1;
     // The window exists only in the first MiB: its 1 MiB alias is guest RAM.
     check_addr(32'h0018_8000, 32'h0018_8000);
     check_addr(32'h0019_8000, 32'h0019_8000);
@@ -667,33 +716,43 @@ module tb_pc9821_memory_map;
     // pc9821_iobus.sv's next_win0). This is QEMU's mem_apply_window rule
     // (pc98-mem.c:295) with the measured confirmation attached.
     win0_sel = 8'h0A;                                  // 0xA0000-0xBFFFF
-    // A VRAM window in QEMU's sense: the window covers 0xA0000-0xBFFFF and the
-    // graphics planes in it are the ones the core serves. The *low* 32 KiB is
-    // NOT the TRAM/CG apertures: those are decoded on the guest address in the
-    // subsystem, so this map hands 0xA0000-0xA4FFF straight to the backend
-    // (guest RAM) instead of to the TRAM/CG bridges -- see the routing assertion
-    // in tb_pc9821_memory_subsystem.sv. The machine's own window base under 0x0A
-    // is not the flat 0xA0000 word either (b=0800, markers at no 64 KiB-aligned
-    // address of the first MiB), and the 0x463 sweep in the same capture proves
-    // 0xA0000's word is the text RAM's 0x0020, so what the machine shows there
-    // is undetermined (an open question).
+    // Window 0 at 0x0A is RAM of its own on the machine, not the VRAM windows: a store through
+    // 0x88100 (-> 0xA8100) or 0x81000 (-> 0xA1000) reads back through the window while plane B
+    // and the text RAM keep their bytes (docs/probes/DMAROUTE-XE10.TXT cases W1/W2, CPU runs:
+    // V0 -> D, V1 -> P1, V2 -> P2), and the as-found bytes there are DRAM noise, not the plane's
+    // zeros or the text RAM's 0x0020 (`V0 ORIG=00200000...`; WIN.TXT `0461=0A ... b=0800`). So the
+    // whole 128 KiB goes to the backend at the translated address and no plane window is decoded
+    // (the subsystem keeps its text-RAM/CG routes off the moved address too; see
+    // tb_pc9821_memory_subsystem.sv).
     check_addr(32'h0008_0000, 32'h000A_0000);          // -> RAM at 0xA0000, not TRAM
-    check_gvram(32'h0008_8000, 32'h000A_8000, 2'd0, 15'h0000);  // == 0xA8000: B
-    check_gvram(32'h0009_0000, 32'h000B_0000, 2'd1, 15'h0000);  // == 0xB0000: R
-    check_gvram(32'h0009_8000, 32'h000B_8000, 2'd2, 15'h0000);  // == 0xB8000: G
+    check_ram_page(32'h0008_8100, 32'h000A_8100);      // W1's target: RAM, not plane B
+    check_ram_page(32'h0009_0000, 32'h000B_0000);      // not plane R
+    check_ram_page(32'h0009_8000, 32'h000B_8000);      // not plane G
     win0_sel = 8'h10;
     check_addr(32'h0008_0000, 32'h0010_0000);          // 1 MiB, above the window
     check_addr(32'h0009_FFFF, 32'h0011_FFFF);
     win0_sel = 8'h7E;
     check_addr(32'h0008_0000, 32'h007E_0000);          // the top of the range
-    // 0x00 is page 0 by the same rule. The machine reads 0xFFFF at the window
-    // base there and discards the store (`0461=00 rb=01 b=FFFF a=FFFF`), which
-    // this map does NOT reproduce -- the mechanism is unknown and it is OPEN
-    // (Q2 in the same report). The line below freezes the approved rule-(a)
-    // arithmetic, not the machine's answer, and is here so the difference is
-    // visible rather than silent.
+    // Pages 0x00-0x07 are a hole, not an alias: the machine reads 0xFFFF at the window
+    // base and discards the store (`0461=00 rb=01 b=FFFF a=FFFF`), and kit 2 read FFFF over
+    // the whole window at pages 00-06 while the memory those pages name held data
+    // (docs/probes/KIT2-XE10-RISKY-461.TXT:5-15). The map routes the access to the absent
+    // area (the open-bus responder); tb_pc9821_win0_out_of_range pins the bytes.
+    cpu_valid = 1;                                     // (still 1 from the 0xC0000 section)
     win0_sel = 8'h00;
-    check_addr(32'h0008_0000, 32'h0000_0000);          // page 0
+    cpu_addr = 32'h0008_0000;
+    #1;
+    if (!absent_area || mem_valid) begin
+      $display("FAIL window-0 page 00 not a hole: absent_area=%b mem_valid=%b", absent_area, mem_valid);
+      errors = errors + 1;
+    end
+    win0_sel = 8'h06;
+    cpu_addr = 32'h0009_FFFC;
+    #1;
+    if (!absent_area || mem_valid) begin
+      $display("FAIL window-0 page 06 not a hole: absent_area=%b mem_valid=%b", absent_area, mem_valid);
+      errors = errors + 1;
+    end
 
     // ---- the EMS window at 0xB0000-0xBFFFF (0x043F's 0x2 nibble) ------
     // The ITF's own test (BANK4@0xF8296-0xF8317) needs two things of this window:

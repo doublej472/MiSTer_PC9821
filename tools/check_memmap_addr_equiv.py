@@ -36,6 +36,24 @@ exactly as the subsystem does; every 32-bit eff_addr is reachable that way (an u
 address is its own raw form), so the old module still sees every input it ever could. An `--old`
 revision that predates P0-d takes `cpu_addr` instead and gets no raw-arm connections.
 
+ONE DELIBERATE CHANGE IS CARVED OUT, and proved on its own terms instead: window 0 at 0x0A
+(`win0_sel == 8'h0A`, a moved address) is RAM on the machine, not the VRAM windows
+(docs/probes/DMAROUTE-XE10.TXT cases W1/W2; pc9821_memory_map's win0_ram_page). There the new
+map must decode no window at all (no plane, packed, register, not-connected, EMS, absent or
+shadow arm), issue the backend request whenever the CPU presents one, and name d_addr itself.
+Every other input is compared with the old revision as before.
+
+A THIRD CARVE-OUT: window 0 below page 8 (`win0_sel[7:3] == 0`, a moved address) is a hole on
+the machine (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17; pc9821_memory_map's win0_hole_page). There
+the new map must assert absent_area, issue no backend request and decode no window (no plane,
+packed, register, not-connected, EMS or shadow arm).
+
+A SECOND CARVE-OUT: the E plane is an analog-mode window. With `mode2_16color` clear (the
+digital mode; docs/probes/DMAROUTE-XE10.TXT case P4 view V1, docs/probes/VRAM2.TXT's E000 row)
+and the PEGC view off, 0xE0000-0xE7FFF of the first MiB must decode no plane window and assert
+`e_plane_nc`; everywhere else `e_plane_nc` must stay low and every output is compared with the
+old revision. `mode2_16color` is free, so the analog mode is proved equal to the old map too.
+
 The proof wraps the OLD module (from `--old REV`, renamed) and the CURRENT file under those
 invariants, with every other input free, and asks yosys's SAT engine whether anything can
 differ. `--plant` mutates the current text and the run must then FAIL; `--selftest` runs the
@@ -98,6 +116,18 @@ PLANTS = {
     # A3: the EMS page's low 20 bits are the constant 0x48000 - the wrong constant
     "ems_const": ("{3'b010, gvram_low[15], ~gvram_low[15], gvram_low[14:0]}",
                   "{3'b100, gvram_low[15], ~gvram_low[15], gvram_low[14:0]}"),
+    # window 0 at 0x0A: the B-block EMS/plane decode left on the RAM page
+    "win0_ram_mask": ("dv_mv_dec & ~17'h00074", "dv_mv_dec & ~17'h00070"),
+    # the E plane decoded in the digital mode too (the gate dropped)
+    "e_plane_gate": ("wire        gvram_inten  = dv[3] && mode2_16color;",
+                     "wire        gvram_inten  = dv[3];"),
+    # the digital-mode E slot claimed in the 256-colour view too (the register file's slot)
+    "e_plane_pegc": ("assign      e_plane_nc   = dv[3] && dv[16] && !pegc_256 && !mode2_16color;",
+                     "assign      e_plane_nc   = dv[3] && dv[16] && !mode2_16color;"),
+    # window 0 below page 8: the hole stops one page short (page 06 aliases RAM again)
+    "win0_hole_page": ("(win0_sel[7:3] == 5'd0)", "(win0_sel[7:2] == 6'd0)"),
+    # window 0 at 0x0A: the RAM page test off by one page value
+    "win0_ram_page": ("(win0_sel == 8'h0A)", "(win0_sel == 8'h0C)"),
     # A3: the EMS splice's bit-15 carry term not inverted (the whole concat, so the
     # anchor cannot land in the comment above it)
     "ems_bit15": ("{3'b010, gvram_low[15], ~gvram_low[15], gvram_low[14:0]}",
@@ -114,7 +144,7 @@ module wrap(
   input [3:0] top_bank, input ide_rom_enable, input [1:0] d8_bank, input ide_ram_gate,
   input bios_ram_gate, input top_shadow_en, input fw_shadow_dirty, input [1:0] ems_state,
   input [7:0] win0_sel, input peg_window_i, input pegc_256, input pegc_plane,
-  input [3:0] pegc_bank_a, input [3:0] pegc_bank_b,
+  input [3:0] pegc_bank_a, input [3:0] pegc_bank_b, input mode2_16color,
   input [31:0] cpu_addr_raw, input sys16m_en, input [31:0] cpu_din, input [3:0] cpu_be, input [7:0] cpu_burstcount,
   input cpu_line_read, input cpu_valid, input cpu_write,
   output mismatch);
@@ -157,7 +187,7 @@ module wrap(
   wire cr1,cv1, cr2,cv2;
   wire [31:0] x1, x2; wire [3:0] be2; wire [7:0] bc2; wire v2,w2;
   wire a1,e1,s1, a2,e2,s2, ga1, ga2, gb1, gb2, gc1, gc2, gv1, gv2; wire [1:0] gp1, gp2; wire [14:0] go1, go2;
-  wire gar1, gar2;
+  wire gar1, gar2, en2;
   wire [31:0] do1, do2;
   pc9821_memory_map_old u_old(.top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(d8_bank),
     .ide_ram_gate(ide_ram_gate), .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en),
@@ -181,6 +211,7 @@ module wrap(
     .guest_ram_bytes(guest_ram_bytes), .peg_window(peg_window), .peg_base(peg_base),
     .pegc_256(pegc_256), .pegc_plane(pegc_plane), .pegc_bank_a(pegc_bank_a), .pegc_bank_b(pegc_bank_b),
     .pegc_packed(ga2), .pegc_reg_win(gb2), .pegc_nc(gc2),
+    .mode2_16color(mode2_16color), .e_plane_nc(en2),
     .gvram_window(gv2), .gvram_win_plane(gp2), .gvram_win_offset(go2),
     .cpu_addr(cpu_addr), .cpu_addr_raw(cpu_addr_raw), .xl_low20(sys16m_mirror || bios_top),
     .xl_peg(peg_high), .cpu_din(cpu_din), .cpu_dout(do2), .cpu_be(cpu_be),
@@ -196,10 +227,21 @@ module wrap(
   // proof was failing against post-P3 revisions - the model was a dangling net, not a defect).
   // mem_addr is a don't-care wherever mem_valid is low (no backend request is issued)
   assign mismatch = v1 && (a_old != a_new);
+  // the carved-out change: window 0 at 0x0A is plain RAM at d_addr (see the docstring)
+  wire w0ram = win0_mv && (win0_sel == 8'h0A);
+  wire w0ram_bad = gv2 || ga2 || gb2 || gc2 || en2 || e2 || a2 || s2 || (v2 != cpu_valid) ||
+                   (v2 && (a_new != d_addr));
+  // the third carve-out: window 0 below page 8 is a hole (absent, no request, no window)
+  wire w0hole = win0_mv && (win0_sel[7:3] == 5'd0);
+  wire w0hole_bad = !a2 || v2 || gv2 || ga2 || gb2 || gc2 || en2 || e2 || s2;
+  // the second carve-out: the digital-mode E slot is no plane window and is e_plane_nc
+  wire e_dig = !mode2_16color && !pegc_256 && !(|d_addr[31:20]) && (d_addr[19:15] == 5'b11100);
+  wire gv_bad = e_dig ? gv2 : (gv1 != gv2);
   // and every other output must be untouched
   wire others = (v1 != v2) || (a1 != a2) || (e1 != e2) || (s1 != s2) || (ga1 != ga2) ||
                 %%GE_TERM%%
-                (gb1 != gb2) || (gc1 != gc2) || (gv1 != gv2) || (gp1 != gp2) || (go1 != go2) ||
+                (en2 != e_dig) ||
+                (gb1 != gb2) || (gc1 != gc2) || gv_bad || (gp1 != gp2) || (go1 != go2) ||
                 (cr1 != cr2) || (cv1 != cv2) || (do1 != do2);
   wire unused = o1;
 endmodule
@@ -258,7 +300,8 @@ def prove(old_rev, plant=None):
     wrap = wrap.replace("%%GE_TERM%%", GE_TERM if "addr_ge_ram" in old else "")
     wrap = wrap.replace("wire unused = o1;", "").replace("wire o1,o2,o3,o4,o5,o6,o7,o8,o9,o10,o11;", "")
     wrap = wrap.replace("  assign mismatch = v1 && (a_old != a_new);",
-                        "  assign mismatch = (v1 && (a_old != a_new)) || others;")
+                        "  assign mismatch = w0ram ? w0ram_bad : w0hole ? w0hole_bad :"
+                        " ((v1 && (a_old != a_new)) || others);")
     with tempfile.TemporaryDirectory() as tmp:
         open(os.path.join(tmp, "old.sv"), "w").write(old)
         open(os.path.join(tmp, "new.sv"), "w").write(new)

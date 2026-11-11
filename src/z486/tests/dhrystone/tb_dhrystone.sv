@@ -443,6 +443,23 @@ localparam ENABLE_X87 = 0;
 
         force dut.CR0 = 32'h8000_0001;
         force dut.CR3 = 32'h0000_0000;
+`ifdef Z486_CURRENT_CORE
+        // dut.EAX..EDI and dut.EFLAGS are nets driven through data_unit's
+        // output ports; force the registers that drive them.  A force on the
+        // upper side of a port reaches the lower side only when the simulator
+        // merges the two (Verilator: only when it inlines data_unit), and the
+        // register keeps its forced value on release only if the force is on
+        // the register itself (IEEE 1800-2017 10.6.2).
+        force dut.data_unit_inst.eax = 32'h0;
+        force dut.data_unit_inst.ecx = 32'h0;
+        force dut.data_unit_inst.edx = 32'h0;
+        force dut.data_unit_inst.ebx = 32'h0;
+        force dut.data_unit_inst.esp = 32'h0000_FF00;
+        force dut.data_unit_inst.ebp = 32'h0;
+        force dut.data_unit_inst.esi = 32'h0;
+        force dut.data_unit_inst.edi = 32'h0;
+        force dut.data_unit_inst.eflags = 32'h0000_0002;
+`else
         force dut.EAX = 32'h0;
         force dut.ECX = 32'h0;
         force dut.EDX = 32'h0;
@@ -452,6 +469,7 @@ localparam ENABLE_X87 = 0;
         force dut.ESI = 32'h0;
         force dut.EDI = 32'h0;
         force dut.EFLAGS = 32'h0000_0002;
+`endif
         force dut.CS = 16'h0008;
         force dut.DS = 16'h0010;
         force dut.SS = 16'h0018;
@@ -493,6 +511,17 @@ localparam ENABLE_X87 = 0;
         reset_n = 1;
         release dut.CR0;
         release dut.CR3;
+`ifdef Z486_CURRENT_CORE
+        release dut.data_unit_inst.eax;
+        release dut.data_unit_inst.ecx;
+        release dut.data_unit_inst.edx;
+        release dut.data_unit_inst.ebx;
+        release dut.data_unit_inst.esp;
+        release dut.data_unit_inst.ebp;
+        release dut.data_unit_inst.esi;
+        release dut.data_unit_inst.edi;
+        release dut.data_unit_inst.eflags;
+`else
         release dut.EAX;
         release dut.ECX;
         release dut.EDX;
@@ -502,6 +531,7 @@ localparam ENABLE_X87 = 0;
         release dut.ESI;
         release dut.EDI;
         release dut.EFLAGS;
+`endif
         release dut.CS;
         release dut.DS;
         release dut.SS;

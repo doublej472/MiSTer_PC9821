@@ -1,0 +1,36 @@
+CPUSUITE BEGIN V1 PROGRAMS=266 PASSES=1 FROM=debug_task_ibp
+CPUSUITE CPU ac=1 cpuid=none bda486=0432 detail=dma resetdx=00000432
+debug_task_ibp SKIP
+desc_abit_set PASS
+desc_ro_gdt PASS
+desc_ro_gdt_pf FAIL verdict=FF data=00000023 eax=000000FF
+desc_ro_gdt_wp0 PASS
+div_cyrix_probe PASS
+div_edges FAIL verdict=FF data=000000E7 eax=000000FF
+div_flags_intel PASS
+div_zf_386 PASS
+divtest_ref PASS
+dr_regs FAIL verdict=FF data=0000000A eax=000000FF
+ed_seg_limit_check PASS
+ed_stack_real PASS
+eflags_ac_486 PASS
+enter_check_cross_pf PASS
+enter_pf_restart PASS
+esp16_high PASS
+exc_newstack_ss FAIL verdict=FF data=55000039 eax=550000FF
+expand_down_b_bit PASS
+expand_down_limits PASS
+expand_down_stack PASS
+far_jump_pm PASS
+far_jump_real PASS
+far_xfer_restart PASS
+fault_rf PASS
+fault_rf_classes FAIL verdict=FF data=F0000040 eax=F00000FF
+fault_rf_gd FAIL verdict=FF data=F0000002 eax=F00000FF
+fault_rf_pf PASS
+flag_chain PASS
+flag_sequences PASS
+flags_restore PASS
+fpu_detect PASS
+gp_double_fault_deliver PASS
+hw_breakpoints 

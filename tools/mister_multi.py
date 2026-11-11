@@ -32,7 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REGRESS = ROOT / "tools" / "mister_regress.py"
-DEFAULT_ITEMS = ("keymap", "probe", "probe-cda", "doom", "th05", "rusty", "policenauts", "flamezap", "cpusuite")  # = mister_regress.DEFAULT_ITEMS
+DEFAULT_ITEMS = ("speeds", "keymap", "probe", "probe-cda", "doom", "th05", "rusty", "policenauts", "flamezap", "cpusuite")  # = mister_regress.DEFAULT_ITEMS
 
 
 def norm_host(h: str) -> str:

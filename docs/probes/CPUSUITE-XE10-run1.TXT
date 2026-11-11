@@ -1,0 +1,57 @@
+CPUSUITE BEGIN V1 PROGRAMS=266 PASSES=1
+aaa_halfcarry PASS
+aaa_upper_word PASS
+aas_halfborrow PASS
+ac_insn_forms PASS
+ac_int_keep PASS
+ac_int_real PASS
+ac_supervisor_callgate PASS
+ac_supervisor_push PASS
+ac_v86_iret FAIL verdict=FF
+ac_v86_stack PASS
+ac_v86_task PASS
+align_check PASS
+align_check_rf PASS
+alu_load_partial_merge PASS
+arpl_idle_rpt PASS
+bit_string_reg_index PASS
+bittst_after_wide_shift PASS
+bswap_486 FAIL verdict=FF
+call_gate PASS
+call_gate16_ldt PASS
+call_gate16_params PASS
+call_gate_cross PASS
+callgate_newstack_ss FAIL verdict=FF
+callgate_samepl_ss PASS
+cli_iopl_gp16 PASS
+cmpxchg_ro PASS
+conforming_cpl PASS
+conforming_rpl PASS
+conforming_xfer PASS
+conforming_xfer_rpl PASS
+cpl3_call_retry PASS
+cpl3_enter_retry PASS
+cpl3_priv_gp FAIL verdict=FF
+cpl3_priv_gp_ucode PASS
+cpl3_push_retry PASS
+cpl3_pushw_retry PASS
+cpl3_retry PASS
+cr0_486 PASS
+cr0_ops PASS
+cr3_walk_race_fault FAIL reset without a verdict
+cr3_walk_race_l20 PASS
+cr3_walk_race_l5 PASS
+cr3_walk_race_same PASS
+cs_indirect_call PASS
+cs_limit_fetch_real PASS
+debug_arm_adjacent PASS
+debug_bn_noenable FAIL verdict=FF
+debug_bn_noenable_dr123 FAIL verdict=FF
+debug_bp FAIL reset without a verdict
+debug_bp2 FAIL reset without a verdict
+debug_gd PASS
+debug_ibp FAIL verdict=FF
+debug_kinds PASS
+debug_ss_shadow PASS
+debug_task PASS
+debug_task_ibp 

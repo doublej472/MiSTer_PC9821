@@ -1,10 +1,10 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_FDD_MOUNT_RESET: a MOUNT SURVIVES THE CORE RESET - the flow (mount an image in the OSD while the machine runs, then select Reset in the OSD) leaves the image mounted: present is still asserted and the medium's sector bytes still come out through the real shared block adapter after the reset releases, because the parsed container/geometry and the slots' metadata live in a power-on-only domain while only the transfer/FSM state resets; a reset that lands IN the header walk re-arms and re-runs that walk instead of losing the mount (its img_mounted pulse already fired and the framework never re-pulses it), and the HDD slot's latched metadata (mounted/readonly/capacity) survives the same reset. FAIL-FIRST: the pre-change tree reset present and st with the walk's mount already consumed, so the post-reset request never answered and the guest boots to BASIC.
+// TB_PC9821_FDD_MOUNT_RESET: a MOUNT SURVIVES THE CORE RESET - the flow (mount an image in the OSD while the machine runs, then select Reset in the OSD) leaves the image mounted: present is still asserted and the medium's sector bytes still come out through the real shared block adapter after the reset releases, because the parsed container/geometry and the slots' metadata live in a power-on-only domain while only the transfer/FSM state resets; a reset that lands IN the header walk re-arms and re-runs that walk instead of losing the mount (its img_mounted pulse already fired and the framework never re-pulses it), and the HDD slot's latched metadata (mounted/readonly/capacity) survives the same reset; the medium's WRITE-PROTECT survives with it (NP2kai sets fdd->protect once at the mount, diskimage/fd/fdd_d88.c:306), from a read-only file and from a D88 header protect bit (0x1A bit 4) on a writable file, across both an OSD Reset and a Load BIOS ROM (cpu_run low), with an unprotected writable D88 reading 0 as the control. FAIL-FIRST: the pre-change tree reset present and st with the walk's mount already consumed, so the post-reset request never answered and the guest boots to BASIC.
 //
 // WHY THE MOUNT MUST SURVIVE WITHOUT A SECOND PULSE. hps_io pulses `img_mounted` from one
-// place only - the HPS's "notify image selection" transaction (sys/hps_io.sv:461 in the
+// place only - the HPS's "notify image selection" transaction (sys/hps_io.sv:490 in the
 // `'h1c` handler, cleared at every transaction end by :318) - and the OSD Reset is a STATUS
 // bit (the `'h1e` handler), so the framework does NOT re-announce an already-mounted image
 // when the user resets. The core must therefore keep the mount itself. This bench never
@@ -20,8 +20,8 @@
 // status[0] | disk_change_reset` and CONF_STR's "T[0],Reset" both feed the synchroniser whose
 // `reset_sync_r[2]` is pc9821_system's `reset`, and pc9821_system wires the floppy medium's
 // reset as `reset || !cpu_run` (the `!cpu_run` half is fdd_mount_hold's business, not this
-// bench's - cpu_run stays HIGH across an OSD reset because the firmware pack is still
-// loaded). The D88 layout and the sector walk are the ones tb_pc9821_fdd_media_d88 pins
+// bench's for the mount itself - cpu_run stays HIGH across an OSD reset because the firmware
+// pack is still loaded; R5/R6 drop it for the Load BIOS ROM case of the write-protect). The D88 layout and the sector walk are the ones tb_pc9821_fdd_media_d88 pins
 // against NP2kai's own readers; this bench reuses that minimal image so the mount's RESULT is
 // checked (present AND the medium's bytes), not just a flag. The HDD slot arm pins
 // pc9821_block_share's slot metadata (its a_mounted/a_readonly/a_capacity outputs), the
@@ -181,11 +181,16 @@ module tb_pc9821_fdd_mount_reset;
   // THE INTEGRATION'S OWN RESET TERM, with cpu_run pinned HIGH: an OSD reset asserts
   // `reset` while the firmware pack stays loaded (pc9821_system wires
   // `.reset(reset || !cpu_run)` into the medium and `.rst_n(!reset)` into the adapter).
-  wire cpu_run = 1'b1;
+  // R5/R6 drop cpu_run (Load BIOS ROM: the pack is reloaded, pc9821_system holds the medium
+  // in `reset || !cpu_run` while `reset` itself stays low), and R6 mounts a writable file whose
+  // D88 header carries the protect bit, so both the mount's read-only flag and the medium's
+  // read-only file attribute are variables, not constants.
+  reg cpu_run = 1'b1;
+  reg img_ro  = 1'b1;
 
   pc9821_fdd_media dut (
       .clk(clk), .reset(reset || !cpu_run),
-      .img_mounted(img_mounted), .img_size(img_size), .img_readonly(1'b1),
+      .img_mounted(img_mounted), .img_size(img_size), .img_readonly(img_ro),
       .img1_mounted(1'b0), .img1_size(64'd0),
       .blk_req_rd(blk_rd), .blk_req_lba(blk_lba), .blk_slot(blk_slot),
       .blk_done(blk_done), .blk_err(blk_error), .blk_busy(blk_busy),
@@ -215,7 +220,7 @@ module tb_pc9821_fdd_mount_reset;
       .a_sd_lba(), .a_sd_blk_cnt(), .a_sd_rd(), .a_sd_wr(), .a_sd_ack(1'b0),
       .a_sd_buff_din(),
       // slot 1: the first floppy
-      .b_img_mounted(img_mounted), .b_img_readonly(1'b1), .b_img_size(img_size),
+      .b_img_mounted(img_mounted), .b_img_readonly(img_ro), .b_img_size(img_size),
       .b_req_read(blk_rd), .b_req_lba(blk_lba), .b_req_slot(blk_slot),
       .b_req_done(blk_done), .b_req_error(blk_error),
       .b_busy(blk_busy),
@@ -264,6 +269,18 @@ module tb_pc9821_fdd_mount_reset;
       @(negedge clk); reset = 1;
       repeat (hold_cycles) @(negedge clk);
       reset = 0;
+      repeat (10) @(negedge clk);
+    end
+  endtask
+
+  // LOAD BIOS ROM, modelled at the same terms: cpu_run drops for the pack download while
+  // `reset` stays low (pc9821_system's medium reset is `reset || !cpu_run`; the adapter's
+  // rst_n is `!reset` alone, so it keeps running).
+  task automatic rom_reload(input integer hold_cycles);
+    begin
+      @(negedge clk); cpu_run = 1'b0;
+      repeat (hold_cycles) @(negedge clk);
+      cpu_run = 1'b1;
       repeat (10) @(negedge clk);
     end
   endtask
@@ -374,6 +391,11 @@ module tb_pc9821_fdd_mount_reset;
     osd_reset(50);
     $display("PROBE R1 present after the OSD reset (mount while running): %0d", present[0]);
     expect_present("R1 the OSD reset unmounted the image the user had mounted");
+    // R1X: the medium stays present, so its protect state must stay with it. NP2kai sets
+    // fdd->protect once at the mount (diskimage/fd/fdd_d88.c:306 "fdd->protect = ((attr & 1) ||
+    // (fdd->inf.d88.head.protect & 0x10) || (ro));") and only an eject clears it.
+    $display("PROBE R1 writeprotect after the OSD reset: %0d", writeprotect);
+    expecti(writeprotect, 1, "R1X the OSD reset cleared the write-protect of a read-only medium");
     expect_sector(8'h01, "R1 the medium stopped answering after the OSD reset");
 
     // ---------------- R2: RESET DURING THE HEADER WALK --------------------------------
@@ -432,6 +454,38 @@ module tb_pc9821_fdd_mount_reset;
     expecti(a_mounted,  1,      "R4 the OSD reset cleared the HDD slot's mounted");
     expecti(a_readonly, 0,      "R4 the OSD reset cleared the HDD slot's readonly");
     expecti(a_capacity, 65536,  "R4 the OSD reset cleared the HDD slot's capacity");
+
+    // ---------------- R5: LOAD BIOS ROM KEEPS A READ-ONLY FILE'S WRITE-PROTECT ---------
+    // The same read-only mount, then cpu_run low with `reset` low (the pack reload). The
+    // protect state is the medium's (fdd_d88.c:306 above), not the CPU's.
+    rom_reload(50);
+    $display("PROBE R5 present/writeprotect after Load BIOS ROM: %0d / %0d", present[0], writeprotect);
+    expect_present("R5 Load BIOS ROM unmounted the image");
+    expecti(writeprotect, 1, "R5 Load BIOS ROM cleared the write-protect of a read-only medium");
+    expect_sector(8'h01, "R5 the medium stopped answering after Load BIOS ROM");
+
+    // ---------------- R6: THE D88 HEADER'S PROTECT BIT, ON A WRITABLE FILE -------------
+    // CONTROL first: a writable file with header byte 0x1A = 0 parses unprotected, so a
+    // writeprotect stuck at 1 cannot pass the arm. Then byte 0x1A = 0x10 (bit 4, NP2kai
+    // fdd_head_d88.h "UINT8 protect; // Write Protect bit:4") must protect it from the parse
+    // and keep it across both an OSD Reset and a Load BIOS ROM.
+    img_ro = 1'b0;
+    pulse_mount(IMG_BYTES);
+    expect_present("R6 the writable control mount did not take");
+    expecti(writeprotect, 0, "R6 CONTROL a writable unprotected D88 parsed write-protected");
+    img[8'h1A] = 8'h10;
+    pulse_mount(IMG_BYTES);
+    expect_present("R6 the header-protected mount did not take");
+    expecti(writeprotect, 1, "R6 the D88 header protect bit did not protect the medium");
+    osd_reset(50);
+    $display("PROBE R6 writeprotect (header bit) after the OSD reset: %0d", writeprotect);
+    expect_present("R6 the OSD reset unmounted the header-protected image");
+    expecti(writeprotect, 1, "R6 the OSD reset cleared the D88 header's write-protect");
+    rom_reload(50);
+    $display("PROBE R6 writeprotect (header bit) after Load BIOS ROM: %0d", writeprotect);
+    expect_present("R6 Load BIOS ROM unmounted the header-protected image");
+    expecti(writeprotect, 1, "R6 Load BIOS ROM cleared the D88 header's write-protect");
+    expect_sector(8'h01, "R6 the header-protected medium stopped answering");
 
     // ==== VERDICT ====
     if (fails == 0) begin

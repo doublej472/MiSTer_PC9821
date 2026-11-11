@@ -66,6 +66,7 @@ module tb_pc9821_window_coverage;
   reg         peg_window = 1'b0;
   reg  [31:0] peg_base = 32'd0;
   wire        top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fw_shadow_dirty;
   wire [31:0] fw_shadow_base;
   wire        fw_shadow_store;
@@ -85,6 +86,10 @@ module tb_pc9821_window_coverage;
   wire [31:0] cpu_addr_raw = cpu_addr;
   wire        xl_low20 = 1'b0;
   wire        xl_peg = 1'b0;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
+  wire       e_plane_nc;
   pc9821_memory_map dut (.*);
 
   integer errors = 0;

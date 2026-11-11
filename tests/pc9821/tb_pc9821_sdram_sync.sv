@@ -356,7 +356,7 @@ module tb_pc9821_sdram_sync_harness #(
 endmodule
 
 module tb_pc9821_sdram_sync;
-  // One harness per preset clock (build_profile.py): base/trace/iofaithful 90,
+  // One harness per preset clock (build_profile.py): base/trace 90,
   // mediumoc 100, heavyoc 120; 95 MHz, the fastest clock that keeps CL2 (the CAS cutover's
   // other side); and 50 MHz, the clock the other bridge benches run.
   reg clk90 = 1'b0, clk95 = 1'b0, clk100 = 1'b0, clk120 = 1'b0, clk50 = 1'b0;

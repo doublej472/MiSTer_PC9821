@@ -51,7 +51,36 @@ clocks at our 50 MHz / 7.9872 MHz DDS) let a fast SSG-data-write ->
 register-select sequence write the stale `psg_data` into the newly-selected SSG
 register. The die gates the SSG write to the data-write bus cycle
 (YM2608-LLE `fmopna_impl.c:301-302,:2144-2190`), which the one-host-clock
-strobe reproduces; marked `LOCAL FIX (PC-98 core)` at the site. The only
+strobe reproduces; marked `LOCAL FIX (PC-98 core)` at the site.
+`jtopna.v`, `jt08.v`, `jt12_top.v` and `jt12_mmr.v` also carry the flag-reset seam, marked
+`LOCAL CHANGE (flag-reset seam)`: a `host_clr_tmr` input that resets the timer A/B flags on
+the guest's own bus write, because the board glue feeds the register port through a queue
+and the chip resets a flag at the write (ymfm `engine_mode_write`
+`set_reset_status(0, reset_mask)`, `ym2608::write_data` `m_fm.set_reset_status(0, 0xff)`;
+NP2kai `opna_settimer`). A queued reset landing late made PMD's IRQ12 handler run a tick twice
+and wiped the other timer's overflows (`tb_pc9821_opna_flagsync` T2). The glue also holds
+`host_clr_tmr[1]` (`[0]`) high, a level, while the guest's `0x110` Timer-B (Timer-A) mask
+stands, because a real Xe10 keeps that flag clear under the mask while the timer runs
+(`docs/probes/KIT1-XE10-OPNA.TXT` STATUS3, `docs/probes/KIT2-XE10-OPNA4.TXT` S3A,
+`tb_pc9821_opna_kit1`); only the seam's port comments in `jtopna.v` and `jt12_top.v`
+say so, no logic in the vendored files changed for it. With the seam,
+`jt12_mmr.v`'s `0x110` bit-7 reset leaves the timer flags to the glue and resets only the
+ADPCM flags, in order behind the queued ADPCM-B writes. The same seam carries the timer
+registers (owner decision 2026-11-01, item 155): a `host_tmr` input (`{value_A, value_B,
+enable B, enable A, load B, load A}`, the glue's copy of 0x24, 0x25, 0x26 and 0x27 bits 3-0
+latched at the guest's write) that `jt12_top.v` feeds to `jt12_timers` and to the YM2608 IRQ
+enables in place of `jt12_mmr`'s queued latches, because the chip starts and reloads a timer at
+the write (ymfm `engine_mode_write` `update_timer(...)`; NP2kai `opna_settimer` on the register
+write). 0x27 bits 7-6 (the CH3 mode, `jt12_mmr`'s `effect`/`csm`) stay on the register port, in
+order with the queued FM writes; `jt12_mmr.v` is not changed by this part, its own timer latches
+are simply no longer read in the YM2608 configuration (`tb_pc9821_opna_xe10_rows` TMRQ).
+`jt12_top.v` also carries `LOCAL CHANGE (0x29 timer IRQ)`: register 0x29's bits 0 and 1 no longer
+gate the Timer A/B terms of the YM2608 IRQ (upstream ANDed `irq_mask[0]`/`irq_mask[1]` into them),
+because a real Xe10's -86 board interrupts on Timer A with 0x29 = 00 and 02 exactly as with 1F
+(`docs/probes/YM29-XE10.TXT`, verdict NO-GATE) and NEC's own SOUND.ROM relies on it; Timer B
+follows NP2kai (`sound/opntimer.c`, which never reads 0x29), as the die model's identical gate is
+falsified for Timer A. `irq_mask[4:2]` still gates the ADPCM flags (`tb_pc9821_opna_timers` 9b,
+`tb_pc9821_opna_regs` 9). The only
 additions outside those trees are our own `RHYTHM_ROM.v`,
 `pc9821_rhythm_loader.sv` (under `src/pc9821/core/`), `pc9821_opna.sv`,
 `opna.qip` and this file. The file list is exactly the union

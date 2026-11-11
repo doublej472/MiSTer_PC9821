@@ -2,7 +2,7 @@
 
 The live list of work we still need to follow up on or verify, one file per theme under
 [`todo/`](todo/). This file is the INDEX; [`todo/README.md`](todo/README.md) carries the
-status tags and the item -> file -> title table. Known limitations are in `README.md`; raw
+status tags and the item -> file -> title table. Known limitations are in `docs/user/troubleshooting.md`; raw
 machine captures live in `docs/probes/`.
 
 ## Sections

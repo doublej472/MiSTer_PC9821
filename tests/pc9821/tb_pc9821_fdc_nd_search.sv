@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// A READ DATA whose sector is not on the track, and a READ ID that finds no header, end at the controller's SECOND index pulse, as the uPD765A/uPD72065 searches the IDs (MAME src/devices/machine/upd765.cpp index_callback, SCAN_ID: `if(fi.counter == 2)`): from every starting angle of the spindle there is no interrupt for at least one revolution and the IC0/ND answer {0x40, 0x04, 0x00, C, H, R, N} comes with the interrupt by the end of the second - 360 rpm (1/6 s) on the 1 MB interface, 300 rpm (1/5 s) once port 0x04BE selects it for the unit - while the MSR shows the command busy (CB and the drive's bit); so a guest that marks its command pending after the last parameter byte (Star Cruiser's IRQ0-stepped loader, 0060:1011 then `mov [0x100],3`) cannot lose the interrupt to an answer that comes before that store.
+// A READ DATA whose sector is not on the track, and a READ ID that finds no header, end at the controller's SECOND index pulse, as the uPD765A/uPD72065 searches the IDs (MAME src/devices/machine/upd765.cpp index_callback, SCAN_ID: `if(fi.counter == 2)`): from every starting angle of the spindle there is no interrupt for at least one revolution and the IC0/ND answer {0x40, 0x04, 0x00, C, H, R, N} comes with the interrupt by the end of the second - 360 rpm (1/6 s) on the 1 MB interface, 300 rpm (1/5 s) once port 0x04BE selects it for the unit - while the MSR shows the command busy (CB alone, 10: the real Xe10's READ DATA sets no drive-busy bit, docs/probes/XE10T-XE10-FDC2A.TXT DMA_MSR); so a guest that marks its command pending after the last parameter byte (Star Cruiser's IRQ0-stepped loader, 0060:1011 then `mov [0x100],3`) cannot lose the interrupt to an answer that comes before that store.
 //
 // WHY THIS EXISTS. The controller answered a missing sector in the cycle the medium said
 // "not there" - a few clk_sys after the command's last byte. Star Cruiser's loader sends its
@@ -166,7 +166,9 @@ module tb_pc9821_fdc_nd_search;
     end
   endtask
 
-  // The MSR just after the command: the search is running (CB and drive 0's bit), no interrupt.
+  // The MSR just after the command: the search is running (CB), no interrupt. No drive-busy bit:
+  // the machine's READ DATA sets none (docs/probes/XE10T-XE10-FDC2A.TXT `DMA_MSR ... msr=10:`,
+  // drive 1 reading 10, not 11; pc9821_fdc `busy`).
   task automatic busy_probe(input integer rev);
     begin
       wr8(3'd1, 8'h46);
@@ -175,8 +177,8 @@ module tb_pc9821_fdc_nd_search;
       wr8(3'd1, 8'h35); wr8(3'd1, 8'hFF);
       repeat (16) @(negedge clk);
       rd8(3'd0);
-      if ((rd_val & 8'h11) != 8'h11 || irq) begin
-        $display("  FAIL: MSR right after the command is %02x (irq=%0d): CB and the drive bit must be set, no interrupt yet",
+      if (rd_val != 8'h10 || irq) begin
+        $display("  FAIL: MSR right after the command is %02x (irq=%0d): CB alone (10), no interrupt yet",
                  rd_val, irq);
         fails = fails + 1;
       end

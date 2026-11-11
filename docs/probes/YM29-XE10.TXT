@@ -1,0 +1,17 @@
+BEGIN:YM29
+YM29: does YM2608 reg 0x29 (IRQ enable) gate the Timer A IRQ? NA=0x200, windows of 61440 ARTIC ticks (0.2 s)
+BASE b=0188 st=03 st2=03 a460=40 id=01 r0e=FF r0f=FF r29=FF
+BASE b=0288 st=FF st2=FF a460=40
+USE b=0188 id=01 irq=12
+IRQ  v29=1F n=21 st_end=7C st_isr=7D irr_end=88 ticks=61440 pit0=7F24 pit1=FF04 sat=0
+POLL v29=1F flags=21 ir4=19 polls=25280 irr_or=98 ticks=61440 pit0=FCB5 pit1=7CA0
+IRQ  v29=03 n=21 st_end=00 st_isr=01 irr_end=88 ticks=61441 pit0=7A7A pit1=FA5A sat=0
+POLL v29=03 flags=21 ir4=20 polls=25281 irr_or=98 ticks=61440 pit0=F82A pit1=780E
+IRQ  v29=02 n=21 st_end=00 st_isr=01 irr_end=88 ticks=61440 pit0=75ED pit1=F5D7 sat=0
+POLL v29=02 flags=21 ir4=19 polls=25281 irr_or=98 ticks=61440 pit0=F3A9 pit1=738C
+IRQ  v29=00 n=21 st_end=00 st_isr=01 irr_end=88 ticks=61440 pit0=716C pit1=F159 sat=0
+POLL v29=00 flags=21 ir4=18 polls=25284 irr_or=98 ticks=61441 pit0=EF2E pit1=6F0E
+IRQ  v29=1F n=21 st_end=00 st_isr=01 irr_end=88 ticks=61440 pit0=6CEA pit1=ECCF sat=0
+POLL v29=1F flags=21 ir4=19 polls=25281 irr_or=98 ticks=61440 pit0=EAAA pit1=6A8D
+RESTORE m_imr=7D->7D s_imr=75->75 vec14=FD80:0937->FD80:0937 opna: 27=30 24=00 25=00 29=1F (reset values; reboot to restore the sound BIOS's own 0x29)
+END:YM29

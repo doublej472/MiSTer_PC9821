@@ -286,7 +286,7 @@ module pc9821_egc_par (
   // `addr`) and pc9821_system forms the guest address as {z_addr, 2'b00}
   // (src/pc9821/core/pc9821_system.sv:647 and :1061, the `.cpu_addr` connections), so
   // every access reaches this module DWORD-ALIGNED and the operand's byte lane is
-  // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1169 `calc_be`). Deriving the lane
+  // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1181 `calc_be`). Deriving the lane
   // from cpu_offset[1:0] made it 0 for every access, so a 16-bit unit on lanes 2:3
   // (be = 1100) became a BYTE unit on lane 0.
   //

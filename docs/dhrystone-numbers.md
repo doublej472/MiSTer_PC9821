@@ -29,6 +29,30 @@ The reference anchor is **~680 Dhrystone/s/MHz on a real 486** (~0.387 DMIPS/MHz
 cycle slope of the current core has not been re-fitted with the two-point run above (an earlier,
 slower core measured 1464 cycles/iteration = 683 Dhrystone/s/MHz, about the real-486 anchor).
 
+## On the card, against a real Xe10
+
+`tools/hwprobe/speed` (`SPEED`) runs the gate's own Dhrystone objects (-O2, 32-bit protected mode
+from conventional memory, timed on the ARTIC) and a set of timing loops, the same binary on the
+machine and on the core; `speed_decode.py A B` gives the ratios. The real Xe10
+(`docs/probes/KIT2-XE10-SPEED.TXT`) against the core at OSD CPU Speed Full, 90 MHz `base`
+(`docs/probes/core/KIT2-CORE-SPEED.TXT`):
+
+| row | Xe10 | core | core / Xe10 |
+|---|---|---|---|
+| Dhrystone 2.1, 100000 iterations | 51,149 /s (29.1 DMIPS) | 69,227 /s (39.4 DMIPS) | 1.35x faster |
+| `dec ecx / jnz` loop | 50.0 ns | 55.6 ns | 0.90x (5 clocks at 90 MHz on the core; 50.0 ns is 5 clocks at 100 MHz) |
+| 4 register ALU ops (net) | 80.0 ns | 100.0 ns | 0.80x |
+| `in al,dx` at 0x02 / 0xA0 (net) | 802 / 651 ns | 133 / 144 ns | 6.0x / 4.5x faster (item 82) |
+| `rep movsd` / `rep stosd`, RAM | 15.2 / 41.1 MB/s | 30.6 / 50.2 MB/s | 2.0x / 1.2x faster |
+| `rep lodsb`, RAM | 16.2 MB/s | 11.5 MB/s | 0.71x |
+| `rep stos` to the blue plane, byte / word / dword | 7.05 / 14.1 / 14.4 MB/s | 6.9 / 13.9 / 27.7 MB/s | equal, equal, 1.9x faster |
+| `rep stosw` to text VRAM | 14.1 MB/s | 16.4 MB/s | 1.16x faster |
+
+So the CPU rows are within 10-20 % (the machine runs a higher clock), while memory-bound and
+I/O-bound code runs faster on the core (the dword graphics store is one access on the core, two
+16-bit ones on the machine); only byte string loads from RAM are slower. The machine's backup
+battery was dead for that run (the calendar is not used by `SPEED`).
+
 ## What the harness measures
 
 The Verilator harness runs the **bare `z486` DUT on a fixed 10 ns testbench clock** with a
@@ -86,3 +110,24 @@ its effect on this number.
 fork: a 32-bit DSP multiply in two cycles (-400), IMUL r,r/m(,imm) retiring straight from the
 DSP product (-1000), and microcode reads probing the L1 from any microcode step (-2188). The
 instruction count has not changed since the port was added.
+
+The re-vendor to the fork's `d5d0974` (the todo item 160 outlier cuts: a misaligned direct
+load inside one line, CLI/STI and LOOP-not-taken without the refetch, the real-mode
+far-transfer tail, real-mode interrupt delivery) leaves it at exactly 242611 / 121837 / 1.991,
+after each of its four commits: the gcc Dhrystone loop runs none of those paths.
+The re-vendor to `9a40dcd` (IDIV r8 missed overflow, #DB pushing RF=0, #SS(new SS) for a
+privilege switch's new stack) leaves it at exactly 242611 / 121837 / 1.991, and the real-
+controller line at 271807: the loop runs no IDIV r8, debug exception or privilege switch.
+The re-vendor to `03cbac7` (IDIV r16/r32 missed overflow, test-only corrections) leaves both
+lines unchanged too (242611 / 121837 / 1.991, 271807): no divide in the loop is out of range,
+the only case the change touches.
+The re-vendor to `8b8fceb` (DR6 bit 12, REP CMPS/SCAS fault flags, the 2-byte error-code
+write, DR6.Bn for enabled breakpoints only) leaves both lines unchanged (242611 / 121837 /
+1.991, 271807): the loop takes no fault, debug exception or MOV DR6.
+The re-vendor to `bbe0e95` (testbench only: tb_dhrystone, tb_z486 and tb_test386 preload the
+GPRs by forcing `data_unit`'s registers, the bench rule in `docs/testing.md`) leaves both lines
+unchanged (242611 / 121837 / 1.991, 271807) under Verilator 5.052, and restores them under 5.054,
+where the old preload missed ESP and the run timed out at the first CALL.
+The re-vendor to `d5cf5bd` (IDTR and GDTR reset to limit FFFFh, `docs/probes/KIT1-XE10-CFG0.TXT:78`)
+leaves both lines unchanged (242611 / 121837 / 1.991, 271807): the bench forces the IDTR and GDTR
+before the loop, so it cannot see a reset value.

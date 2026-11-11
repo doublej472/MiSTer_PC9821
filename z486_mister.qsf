@@ -25,7 +25,7 @@ set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS OFF
 # Active profile: base
 # Active clock rate: 90_000_000 Hz (clk_sys, the SDRAM's clock too)
 # Active SDRAM phase: 7263 ps (derived)
-# Active config: {"alsa_en":true,"cdrom_audio_en":true,"cdrom_en":true,"cdrom_log_en":false,"clk_sys_hz":90000000,"fit_technique":"AREA","io_latency_profile":0,"mpu_en":true,"name":"base","perf_log_en":false,"preset":null,"sdram_dq_ddio":true,"sdram_out_ddio":true,"sdram_phase_ps":7263,"sdram_phase_source":"derived","trace_en":false,"vga_dbl_en":true}
+# Active config: {"alsa_en":true,"cdrom_audio_en":true,"cdrom_en":true,"cdrom_log_en":false,"clk_sys_hz":90000000,"fit_technique":"AREA","mpu_en":true,"name":"base","perf_log_en":false,"preset":null,"sdram_dq_ddio":true,"sdram_out_ddio":true,"sdram_phase_ps":7263,"sdram_phase_source":"derived","trace_en":false,"vga_dbl_en":true}
 # 90 MHz clk_sys, SDRAM on clk_sys (90/90, CL2), production AREA fit (no seed) - the default and shipping build (past timing closure)
 set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING OFF
 set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS

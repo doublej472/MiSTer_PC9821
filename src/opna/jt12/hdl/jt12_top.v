@@ -85,6 +85,29 @@ module jt12_top (
     // channels 3-5 are muted and channels 0-2 are forced to center. The board
     // glue drives this from its `extend` latch; see pc9821_opna.sv.
     input                 ch3_mono,
+    // LOCAL CHANGE (flag-reset seam, this repository): the board glue's timer flag
+    // reset, a one-clk pulse per flag ([0] timer A, [1] timer B) on the guest's data
+    // write that resets it (0x27 bit 4/5, or 0x110 bit 7). The chip resets the flag at
+    // the bus write (ymfm ymfm_fm.ipp engine_mode_write `set_reset_status(0, reset_mask);`,
+    // ymfm_opn.cpp ym2608::write_data `m_fm.set_reset_status(0, 0xff);`; NP2kai
+    // sound/opntimer.c opna_settimer `opna->s.status &= ~((cData & 0x30) >> 4);`), but
+    // the glue feeds the register port through a queue (pc9821_opna.sv), so the reset
+    // comes in here at the write instead and the queued copy no longer carries it.
+    // [1] is also held high, a level, while the guest's 0x110 Timer-B mask (bit 1)
+    // stands: a real Xe10 keeps that flag clear under the mask while the timer runs
+    // (pc9821_opna.sv tmr_mask_b, docs/probes/KIT1-XE10-OPNA.TXT STATUS3).
+    //   Only the YM2608 configuration (use_adpcm == 2) takes it.
+    input           [ 1:0] host_clr_tmr,
+    // The same seam carries the timer registers themselves: the glue's copy of 0x24
+    // (NA high), 0x25 (NA low), 0x26 (NB) and 0x27 bits 3-0 (enable B/A, load B/A),
+    // written at the guest's bus write, as {value_A[9:0], value_B[7:0], enable_irq_B,
+    // enable_irq_A, load_B, load_A}. The chip acts on them at the write (ymfm
+    // engine_mode_write `update_timer(0, m_regs.load_timer_a(), 0);`; NP2kai sound/opna.c
+    // `opna_settimer(opna, cData);` on the register write), and the queue in front of the
+    // register port would start or reload a timer up to its whole drain late. 0x27 bits
+    // 7-6 (the CH3 mode, jt12_mmr's `effect`/`csm`) stay on the register port, ordered
+    // with the FM writes queued before them. Only use_adpcm == 2 takes it.
+    input           [21:0] host_tmr,
     input           [ 7:0] debug_bus,
     output          [ 7:0] debug_view
 );
@@ -598,20 +621,38 @@ generate
             .clk_en     ( timer_cen     ),
             .rst        ( rst           ),
             .zero       ( zero          ),
-            .value_A    ( value_A       ),
-            .value_B    ( value_B       ),
-            .load_A     ( load_A        ),
-            .load_B     ( load_B        ),
-            .enable_irq_A( enable_irq_A ),
-            .enable_irq_B( enable_irq_B ),
-            .clr_flag_A ( clr_flag_A    ),
-            .clr_flag_B ( clr_flag_B    ),
+            // LOCAL CHANGE (flag-reset seam): the timer registers are the glue's
+            // (host_tmr above), not the register port's.
+            .value_A    ( host_tmr[21:12] ),
+            .value_B    ( host_tmr[11:4]  ),
+            .load_A     ( host_tmr[0]     ),
+            .load_B     ( host_tmr[1]     ),
+            .enable_irq_A( host_tmr[2]    ),
+            .enable_irq_B( host_tmr[3]    ),
+            // LOCAL CHANGE (flag-reset seam): the register port's reset or the glue's.
+            .clr_flag_A ( clr_flag_A | host_clr_tmr[0] ),
+            .clr_flag_B ( clr_flag_B | host_clr_tmr[1] ),
             .flag_A     ( flag_A        ),
             .flag_B     ( flag_B        ),
             .overflow_A ( overflow_A    ),
             .irq_n      (               )
         );
-        assign irq_n = ~( (flag_A&enable_irq_A&flag_mask[0]&irq_mask[0]) | (flag_B&enable_irq_B&flag_mask[1]&irq_mask[1]) | (|(adpcmb_flag2[2:0]&flag_mask[4:2]&irq_mask[4:2])) );
+        // LOCAL CHANGE (flag-reset seam): the enables are the glue's (host_tmr).
+        // LOCAL CHANGE (0x29 timer IRQ, this repository): register 0x29 does not gate
+        // the timer IRQs; upstream ANDed irq_mask[0]/[1] into the Timer A/B terms. On a
+        // real Xe10 with the -86 board, Timer A interrupted 21 times per 0.2 s window
+        // with 0x29 = 1F, 03, 02 and 00 alike (docs/probes/YM29-XE10.TXT
+        // `IRQ  v29=00 n=21 st_end=00 st_isr=01 irr_end=88 ticks=61440`), where the
+        // gated core read n=0 at 02 and 00
+        // (docs/probes/core/YM29-CORE-rc-1a0b94ba-s4.TXT). NEC's -86
+        // SOUND.ROM writes 0x29 = 00 and then waits for a Timer A interrupt. Timer B
+        // is measured too: it interrupted 21 times per window with 0x29 = 03, 02, 01
+        // and 00 alike (docs/probes/YM29B-XE10.TXT
+        // `IRQB v29=00 n=21 st_end=00 st_isr=02 irr_end=80 ticks=61440`), as NP2kai has
+        // it (sound/opntimer.c fmport_a/fmport_b test only `reg[0x27] & 0x04` / `& 0x08`)
+        // and against the die model's reg_irq gate. irq_mask[4:2] still
+        // gates the ADPCM flags (EOS, BRDY, ZERO), which the capture does not cover.
+        assign irq_n = ~( (flag_A&host_tmr[2]&flag_mask[0]) | (flag_B&host_tmr[3]&flag_mask[1]) | (|(adpcmb_flag2[2:0]&flag_mask[4:2]&irq_mask[4:2])) );
 
     end else begin
         jt12_timers #(.num_ch(num_ch)) u_timers (

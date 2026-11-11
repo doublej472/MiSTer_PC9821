@@ -18,7 +18,6 @@ module tb_pc9821_8251;
   wire [7:0] dout;
   wire irq;
   reg [10:0] ps2_key = 0;
-  reg        bios_setup = 0;
 
   // ==== DUT ====
   // Shrink the typematic delay/interval so the 0x9C 0x70 section is observable
@@ -43,8 +42,7 @@ module tb_pc9821_8251;
       .din(din),
       .dout(dout),
       .irq(irq),
-      .ps2_key(ps2_key),
-      .bios_setup(bios_setup)
+      .ps2_key(ps2_key)
   );
 
   integer errors = 0;

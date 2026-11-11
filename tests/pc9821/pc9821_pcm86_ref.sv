@@ -63,11 +63,11 @@ module pc9821_pcm86_ref #(
     // latched flag OR the live buffer-low level). It is LOW while the guest
     // masks it and rises AGAIN on a re-enable with the flag still latched,
     // which is the fresh edge the edge-latched PIC consumes
-    // (pc9821_pic.sv:168 `ir_set = ir_in & ~ir_prev`). The guest clears the
+    // (pc9821_pic.sv:172 `ir_set = ir_in & ~ir_prev`). The guest clears the
     // latched flag by writing 0xA468 with bit 4 clear. On the card one strap
-    // feeds the OPNA's timers and this block, so pc9821_system ORs this into
-    // the OPNA's IRQ line rather than giving the two devices different
-    // interrupt numbers.
+    // feeds the OPNA's timers and this block, so pc9821_system puts this and
+    // the OPNA's IRQ line on one 8259 input (pc9821_irq_share) rather than
+    // giving the two devices different interrupt numbers.
     output wire        irq,
 
     // The logical byte count, for the bench. The card has no port that exposes
@@ -352,7 +352,7 @@ module pc9821_pcm86_ref #(
   // A wire driven by irq_pending alone is NOT that query: it stays HIGH through
   // an 0xA468 write of 0x90 (bit 5 clear, bit 4 set, so the latch survives -
   // cbus/pcm86io.c:114-121) and eats the re-enable's rising edge at the PIC
-  // (pc9821_pic.sv:168; wired in at pc9821_system.sv:1457, `opna_irq | pcm86_irq`). tb_pc9821_pcm86_irqmask.
+  // (pc9821_pic.sv:168; wired in through pc9821_system.sv:1533, `.irq_a(opna_irq), .irq_b(pcm86_irq),`). tb_pc9821_pcm86_irqmask.
   wire irq_query = (irq_pending || (count <= fifosize)) && fifo[5];
 
   // EVERY ARMED THRESHOLD EVENT IS A FRESH REQUEST. NP2kai delivers each one with its own
@@ -397,7 +397,10 @@ module pc9821_pcm86_ref #(
       // to all four (cbus/pcm86io.c:342-346, at :433-434,483-484,489-490) and it
       // returns 0, so the primary reference answers 0x00 where the open-bus
       // default was 0xFF.
-      P_SPARE0, P_SPARE1, P_DATA, P_SPARE2: io_dout = 8'h00;
+      // The Xe10's read bytes (docs/probes/XE10T-XE10-AUDIT.TXT BA462/BA464/BA46C/BA46E), applied to
+      // this reference copy as to pc9821_pcm86.sv: a read-value change both sides carry, not a rewrite.
+      P_SPARE0, P_SPARE1, P_SPARE2: io_dout = 8'hFF;
+      P_DATA:   io_dout = 8'hEE;
       default:  io_dout = 8'hFF;
     endcase
   end

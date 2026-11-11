@@ -33,6 +33,10 @@ module jt08 (
     // LOCAL CHANGE (B-4, this repository): 0xA460 bit 0 dropping switches the
     // FM to NP2kai's 3-channel mono configuration (cbus/board86.c:79-94).
     input           ch3_mono,
+    // LOCAL CHANGE (flag-reset seam, this repository): the glue's timer flag reset at
+    // the guest's bus write; see jtopna.v and jt12_top.v.
+    input   [1:0]   host_clr_tmr,
+    input   [21:0]  host_tmr,       // the glue's timer registers, see jt12_top.v
     input   [7:0]   din,
     input   [1:0]   addr,
     input           cs_n,
@@ -121,6 +125,8 @@ u_jt12(
     .snd_sample     ( snd_sample   ),
     .ch_enable      ( 6'b111111    ),
     .ch3_mono       ( ch3_mono     ),
+    .host_clr_tmr   ( host_clr_tmr ),   // LOCAL CHANGE (flag-reset seam)
+    .host_tmr       ( host_tmr     ),   // LOCAL CHANGE (flag-reset seam)
     // unused pins
     .en_hifi_pcm    ( 1'b0         ), // used only on YM2612 mode
     .rhythm_gain_shift ( rhythm_gain_shift ),

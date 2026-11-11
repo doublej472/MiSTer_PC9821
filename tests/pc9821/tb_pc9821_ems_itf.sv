@@ -67,9 +67,9 @@ module tb_pc9821_ems_itf;
   wire        fdd_frame_tick = 1'b0;
 
   pc9821_iobus bus (
-      .ide_unit0_present(1'b0),
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),
       .clk(clk), .reset(reset),
-      .bios_set(4'h0), .gdc_clock_5m(1'b0), .fdd_dip_fixed(1'b0), .triple_fault_reset(1'b0),
+      .bios_set(4'h0), .gdc_clock_5m(1'b0), .triple_fault_reset(1'b0),
       .cpu_addr(io_cpu_addr), .cpu_din(io_cpu_din), .cpu_be(io_cpu_be),
       .cpu_valid(io_cpu_valid), .cpu_write(io_cpu_write),
       .cpu_dout(io_cpu_dout), .cpu_ready(io_cpu_ready),
@@ -88,8 +88,14 @@ module tb_pc9821_ems_itf;
       .cache_flush_done(cache_flush_req),
       .ems_state(ems_state)
   );
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
+  wire       e_plane_nc;
 
   pc9821_memory_map map (
+      .mode2_16color(mode2_16color),
+      .e_plane_nc(e_plane_nc),
       .top_bank(4'd3), .ide_rom_enable(1'b0), .d8_bank(2'b00), .ide_ram_gate(1'b0),
       .bios_ram_gate(1'b0), .top_shadow_en(1'b0), .fw_shadow_dirty(1'b0),
       .fw_shadow_base(32'h0),

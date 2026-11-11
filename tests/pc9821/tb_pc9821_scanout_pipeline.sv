@@ -104,7 +104,6 @@ module tb_pc9821_scanout_pipeline;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire        hs_out, vs_out, de_out;
 
   wire cg_rd_hold, cg_win_byte_hold;
@@ -176,8 +175,8 @@ module tb_pc9821_scanout_pipeline;
   
 
   // The pixel pipeline: fold -> graphics palette -> compositor, the graphics arm only. The
-  // analogue table is pc9821_gfx_palette's ping-pong RAM and its CPU write
-  // port comes from pc9821_gdc_text, exactly as pc9821_system wires it.
+  // analogue table's CPU write port comes from pc9821_gdc_text, exactly as pc9821_system
+  // wires it.
   wire [7:0] r_out, g_out, b_out;
   // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
@@ -186,14 +185,14 @@ module tb_pc9821_scanout_pipeline;
   reg  [7:0] mix_pal256_wr_idx = 8'd0, mix_pal256_wr_data = 8'd0;
   reg  [1:0] mix_pal256_wr_chan = 2'd0;
   pc9821_video_mixer u_mixer (
-      .clk(clk), .rst_n(~reset),
+      .clk(clk),
       .dot_x(pix_dot), .h_active(pix_h_active), .v_active(pix_v_active),
       .text_opaque(text_opaque), .text_cell(text_cell), .text_colour(text_colour),
       .line_data(line_data), .line_ready(line_ready), .line_sel(line_sel),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .pal_mode16(gfx_mode16), .pal_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx), .pal_wr_chan(pal_wr_chan),
-      .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_data(pal_wr_data),
       .fold_bypass(1'b0), .packed_idx(8'h00),
     .pegc_256(mix_pegc_256),
     .pal256_wr_en(mix_pal256_wr_en), .pal256_wr_idx(mix_pal256_wr_idx),
@@ -462,7 +461,7 @@ module tb_pc9821_scanout_pipeline;
     // ---------------------------------------------------------------
     // 0xA8 index, 0xAA green, 0xAC red, 0xAE blue, exactly the ITF loop's order, but a
     // value the power-on table does NOT carry - entry k -> R=k, G=15-k, B=k^5 - so the
-    // pixels prove the write port, the frame-boundary bank swap and the palette read all
+    // pixels prove the write port, the table and the palette read all
     // carry the table, rather than agreeing with the power-on image by accident.
     for (i = 0; i < 16; i = i + 1) begin
       write_io(8'hA8, i[7:0]);
@@ -485,7 +484,7 @@ module tb_pc9821_scanout_pipeline;
       $display("  (%0d written-table colours differ: the fold, the palette write port and the compositor do NOT carry the written table)", bad);
 
     // Put the MACHINE's own table back, so the sections below keep their ITF-ROM
-    // expectations, and let a frame boundary carry it into the displayed table.
+    // expectations.
     for (i = 0; i < 16; i = i + 1) begin
       write_io(8'hA8, i[7:0]);
       write_io(8'hAA, {4'h0, itf_entry(i[3:0])[7:4]});

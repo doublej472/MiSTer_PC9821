@@ -9,9 +9,10 @@ A change to anything the guest can see also passes the scripted hardware regress
 MiSTer: `tools/mister_regress.py --go` runs the item set and checks each item's screenshots are not
 frozen and reach a known frame. The items are `keymap`, `probe`, `probe-cda`, the game items
 `doom`, `th05`, `rusty`, `policenauts`, `flamezap`, and `cpusuite` (the z486 test programs from
-DOS). It deploys a test RBF under `zreg` names, boots a patched COPY of a disk image, and cleans
-up after itself; the item definitions, pass checks and every input are in "The scripted
-regression runner" below.
+DOS); `boot-loop` (repeated OSD resets) is opt-in. Every item first checks that the BIOS booted
+the hard disk, and fails at once if it did not. It deploys a test RBF under `zreg` names, boots a
+patched COPY of a disk image, and cleans up after itself; the item definitions, pass checks and
+every input are in "The scripted regression runner" below.
 
 ## Connecting
 
@@ -43,8 +44,7 @@ Every MiSTer tool takes the device from the environment:
   (`MISTER_CORE=PC9821Z486-zreg`), everything it writes or deletes is zreg-named: the RBF and the
   MGL are named after the core, the disk image and floppies must be zreg-named copies
   (`MISTER_IMG=.../<name>-zreg.img`, or `--no-image`; the card's `hdd.img` is never mounted), the
-  pack already on the card is used read-only (`--pack` is refused), the Scripts-menu converter is
-  not copied, and `--clean-stale` considers only zreg-named cores and MGLs. It takes no card lock:
+  pack already on the card is used read-only (`--pack` is refused), and `--clean-stale` considers only zreg-named cores and MGLs. It takes no card lock:
   take `/tmp/zreg.lock` yourself (as the regression runner does) and delete the zreg files when
   done.
 - `tools/deploy_mister.sh` (`make deploy`) stages the same set into `mister_deploy/` for a manual
@@ -157,7 +157,8 @@ tools/mister_capture.sh status                 # who holds the tty; captures on 
 ```
 
 `tools/decode_dbglog.py CAPTURE` prints the records; `--summary`, `--bins`, `--hist`, `--trace`,
-`--snoop-check` and `--gdcw OUT` select views. The CD log alone can also be read with
+`--snoop-check`, `--gdcw OUT` and `--fdc` (the floppy log alone, every command and result byte
+with the controller state) select views. The CD log alone can also be read with
 `tools/decode_cdlog.py`.
 
 **The `trace` profile's telemetry** is line-based: a watchdog record per trigger plus `PRF` and
@@ -187,8 +188,45 @@ created.
   (`mkdir /tmp/zreg.lock`, owner recorded in `/tmp/zreg.lock/owner`; an existing lock aborts the
   run and names its holder), uses only names containing `zreg` (`_Computer/PC9821Z486-zreg.rbf`,
   `/media/fat/ZREG.mgl`, `/tmp/zreg/`), and removes every file it created in a `finally`, verifying
-  the removal. `--keep` skips the cleanup for debugging.
-- Items (`--items`, comma-separated, default all): `keymap`, `probe` (runs `INTEG.COM` from
+  the removal, after loading the card's Menu core (`/media/fat/menu.rbf`) so the card is not left
+  running the removed test core. `--keep` skips the cleanup for debugging.
+- **The boot check.** A screenshot check cannot tell DOS from a BIOS prompt: on 639674f3 the BIOS
+  showed "insert a system disk" instead of booting the hard disk, `keymap` passed on its
+  screenshots and `probe` waited out its timeout. So the copy's `AUTOEXEC.BAT` starts with a line
+  that appends a row to `ZREGBOOT.TXT` in the hard disk's root, and before an item types anything
+  the runner reads that file out of the copy: it must hold exactly one row per boot since the core
+  load. Otherwise the item FAILs at once with "BIOS did not boot the hard disk" and a screenshot
+  (more rows than boots fails too: the machine restarted by itself). The file is polled for
+  `--boot-check-timeout` seconds (default 60) past the boot wait. A `CONFIG.SYS` that loads
+  SELSYS (the regression image's does) has `AUTOEXEC.BAT` rewritten from the chosen profile's
+  `REM .BAT` section at every boot (its manual, SELSYS22.DOC: it always overwrites AUTOEXEC.BAT),
+  so the line also goes first in each `REM .BAT` section of the copy's `CONFIG.SYS`, CRLF kept.
+  An image where no boot can run the line (SELSYS with `REM .SYS` profiles but no `REM .BAT` and
+  no `-s`/`-b`) stops the run before its plan. The rewritten files are left out of the probe's
+  manifest. `--no-boot-check` turns the check off, for a disk whose shell does not run
+  `AUTOEXEC.BAT`.
+- **`boot-loop`** (opt-in; not in the default set): loads the core once, then resets the machine
+  through the OSD until `--boot-count N` boots (default 6; the boot after the load counts as the
+  first) have run, with the boot check after each. One boot can miss a reset-state fault: the
+  639674f3 fault failed boots 1 and 2 after a load and then every other boot. Each reset is F12,
+  `--osd-reset-downs N` Down presses from the main page's top row (the OSD reopens there after a
+  load or after this row's reset) to "Reset and close OSD", and Enter. The row count depends on
+  the build profile, so it is a required input: count it once on an HDMI capture. The OSD is not in
+  a screenshot, so `--osd-verify CMD` checks the row before every Enter: CMD runs on the host
+  (environment `ZREG_OSD_ROW`, `ZREG_OSD_DOWNS`, `ZREG_BOOT`, `ZREG_HOST`, `ZREG_OUT`) and exits 0
+  only when the highlighted row is that row, for example a pixel test on a capture frame. When it
+  does not exit 0, Enter is not pressed, the OSD is closed and the item fails.
+  `--osd-verify counted` records that the count was verified on a capture for this same RBF
+  earlier, for a card with no capture. Without both options the item is a SKIP, never a pass.
+- **`speeds`** (in the default set): one core load per OSD CPU Speed in `--speeds` (list
+  positions, default `1,2,3` = 33, 25 and 16 MHz), each with that setting written into the card's
+  `config/PC9821.CFG` (status bits 17:14) before the load, and the boot check after each (one more
+  row per load). The file is backed up first and restored afterwards, also when a load fails. A
+  speed below Full gates the CPU's clock, which a Full-speed run never exercises: fits whose
+  clock-gate enable route was too long booted at Full and stayed black at every lower speed
+  ([`clock-domains.md`](clock-domains.md), "The enable into the clock-control block"), so no other
+  item sees that class.
+- Items (`--items`, comma-separated, default all but `boot-loop` and `crt31k`): `boot-loop`, `speeds`, `keymap`, `probe` (runs `INTEG.COM` from
   `tools/hwprobe/integ` in the guest and checks HDD/floppy/CD files against manifests built on the
   host from the same images), `probe-cda` (the same while CD-DA plays; needs `--cd` and MSCDEX),
   and the game items `doom`, `th05`, `rusty`, `policenauts`, `flamezap` (EGC-heavy).
@@ -198,6 +236,12 @@ created.
   passes on every pass (`--cpusuite-passes N` loops the pack; `--cpusuite-timeout S`); it boots
   profile 0 (noemm) since the programs enter protected mode themselves. A CPU stress test for
   builds past timing closure; `gen_cpusuite.py --simcheck` proves the patched programs in the bench.
+  The parse reads the `CPUSUITE CPU` row, FAIL-row detail and `SKIP` rows (a resumed real-machine
+  run, `tools/hwprobe/README.md`); the core run skips nothing, so its verdict is unchanged.
+  The pack comes from the tree the runner is started in, so a core that re-vendors z486 is tested
+  from that lane's own worktree: the main tree's pack carries the previous fork's expectations,
+  and a core with changed CPU behaviour then fails (or hangs in) the programs whose expected values
+  moved.
 - Game items run the command list in `--scenarios FILE` (JSON; the shape is
   `tools/mister/regress_scenarios.example.json`: per item `boot_wait`, `steps` of
   `type`/`wait`/`click`/`key`, `run`, `shot_every`, `dense`, `max_static_s`, `min_changes`,
@@ -216,11 +260,18 @@ created.
 - Inputs: `--rbf`, `--hdd-image` (with `--partition`, `--hdd-drive`, `--hdd-under`),
   `--fdd0`/`--fdd1`, `--cd` (`--cd-layout iso|pcd|raw`, `--cd-drive`), `--pack` (the pack already
   on the card), `--boot-wait`, `--probe-timeout`, `--uart` (capture `/dev/ttyS1` as well),
-  `--out` (default `.build/mister-regress/<time>`). `--selftest` exercises the hardware-free logic.
+  `--out` (default `.build/mister-regress/<time>`), and for the boot check and the loop
+  `--boot-check-timeout`, `--no-boot-check`, `--boot-count`, `--osd-reset-downs`, `--osd-verify`,
+  and `--speeds` for `speeds`.
+  `--selftest` exercises the hardware-free logic, including the boot check and the loop on a
+  scripted card.
+- **The release card run** includes `boot-loop` with `--boot-count 6` or more on every test card,
+  besides the default items: `--items boot-loop,keymap,probe,...`; and `speeds` (33, 25 and 16 MHz)
+  on every test card, which the default set already holds - an `--items` list must name it.
 
 ## Game test sets
 
-Every title in [`compatibility.md`](compatibility.md) belongs to the **extended test set**: it was run
+Every title in [`user/compatibility.md`](user/compatibility.md) belongs to the **extended test set**: it was run
 on hardware and judged by eye from screenshots, and it is run again in an occasional sweep or when a
 change touches what it exercises. A release validates on a **representative sample** of it instead
 (the maintainer's standard since 2026-10-30): about 25 titles that cover every medium (hard disk, CD,
@@ -249,6 +300,11 @@ runs every item on every card), one `--out` subdirectory per card and a combined
 - **Restore any configuration you change** (the core's `PC9821.CFG`, the MGLs, the pack in use).
 - A MiSTer is a shared device: use the regression runner's lock (or check for one) before driving
   it, and never leave a UART reader running.
+- **Verify the highlighted OSD row before every Enter**, on an HDMI capture (a screenshot does not
+  show the OSD). A key sequence counted on a capture can be reused on the same RBF; it is
+  recorded as such (the runner's `--osd-verify counted`).
+- **A single boot can miss a reset-state fault.** A change to anything the BIOS reads (ports,
+  DIP/SETUP values, reset state) is checked over several boots: `boot-loop` above.
 - Attribute a hardware failure to timing margin only after a timing-met lower-clock build of the
   same source fails to reproduce it over several runs (a logic bug once passed for margin).
 - **A wedged scaler is not a test result.** A badly negative framework `pll_hdmi` placement can

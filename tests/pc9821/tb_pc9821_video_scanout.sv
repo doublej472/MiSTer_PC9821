@@ -92,14 +92,13 @@ module tb_pc9821_video_scanout;
   reg [14:0] scan_line_base = 15'd0;
 
   // The pixel pipeline: fold -> graphics palette -> compositor. Only the graphics
-  // arm is exercised, and the analogue table - pc9821_gfx_palette's ping-pong RAM -
+  // arm is exercised, and the analogue table
   // is loaded through its write port so the index is readable off
   // r_out: entry k carries k in its red nibble, so r_out = {k,k}.
   reg         pal_we = 1'b0;
   reg  [3:0]  pal_widx = 4'd0;
   reg  [1:0]  pal_wchan = 2'd0;
   reg  [3:0]  pal_wdata = 4'd0;
-  reg         pal_commit = 1'b0;
   wire [7:0]  r_out, g_out, b_out;
   // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
@@ -108,14 +107,14 @@ module tb_pc9821_video_scanout;
   reg  [7:0] mix_pal256_wr_idx = 8'd0, mix_pal256_wr_data = 8'd0;
   reg  [1:0] mix_pal256_wr_chan = 2'd0;
   pc9821_video_mixer u_mixer (
-      .clk(clk), .rst_n(1'b1),
+      .clk(clk),
       .dot_x(hdot), .h_active(h_active), .v_active(v_active),
       .text_opaque(1'b0), .text_cell(1'b0), .text_colour(12'h000),
       .line_data(line_data), .line_ready(line_ready), .line_sel(line_sel),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .pal_mode16(1'b1), .pal_dig(32'd0),
       .pal_wr_en(pal_we), .pal_wr_idx(pal_widx), .pal_wr_chan(pal_wchan),
-      .pal_wr_data(pal_wdata), .pal_commit(pal_commit),
+      .pal_wr_data(pal_wdata),
       .fold_bypass(1'b0), .packed_idx(8'h00),
     .pegc_256(mix_pegc_256),
     .pal256_wr_en(mix_pal256_wr_en), .pal256_wr_idx(mix_pal256_wr_idx),
@@ -124,8 +123,8 @@ module tb_pc9821_video_scanout;
       .r_out(r_out), .g_out(g_out), .b_out(b_out)
   );
 
-  // Load entry k's red nibble with k through the table's write port, then swap the
-  // banks: r_out[7:4] then reads the 4-bit index, which is what the raster checks.
+  // Load entry k's red nibble with k through the table's write port: r_out[7:4] then
+  // reads the 4-bit index, which is what the raster checks.
   task automatic load_red_table;
     integer t;
     begin
@@ -136,11 +135,6 @@ module tb_pc9821_video_scanout;
         pal_we = 1'b0;
       end
       @(negedge clk);
-      pal_commit = 1'b1;
-      @(negedge clk);
-      pal_commit = 1'b0;
-      // the live-to-displayed copy walks 16 entries over 17 clk_sys
-      repeat (24) @(negedge clk);
     end
   endtask
 

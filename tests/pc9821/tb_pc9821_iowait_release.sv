@@ -50,7 +50,10 @@ module tb_pc9821_iowait_release;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
 
   // ---- the device fabric: the iobus's byte transaction ----
   wire        device_io_wr, device_io_rd;
@@ -91,6 +94,7 @@ module tb_pc9821_iowait_release;
   wire [15:0] dbg_last_io_addr;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd, dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -106,6 +110,7 @@ module tb_pc9821_iowait_release;
   wire        egc_shift_we;
   wire       sdip_seed_pulse;   // the machine-reset seed's one-shot (pc9821_iobus)
   wire        top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
 
@@ -133,7 +138,8 @@ module tb_pc9821_iowait_release;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -149,8 +155,10 @@ module tb_pc9821_iowait_release;
 
   wire [1:0] d8_bank;   // 0x063C bits 1-0 (the 0xD8000 bank select); unused here
 
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) bus (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   // The shipped device decode so the 0xA46C write is a real device port (pcm_cs) exactly as
   // pc9821_system's fabric routes it: P5 made the ONE pc9821_device_select instance live inside

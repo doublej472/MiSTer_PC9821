@@ -35,30 +35,22 @@ module tb_pc9821_osd_cd_volume;
 
   pc9821_osd #(.CD_AUDIO_EN(1'b1)) dut_on (
     .osd_ram_size  (3'd0),
-    .osd_bios_setup(1'b0),
     .osd_gdc_clock (1'b0),
-    .osd_fdd_mode  (1'b0),
     .osd_kbd_layout(1'b0),
     .osd_cd_volume (sel),
     .ram_size_code (),
-    .bios_setup    (),
     .gdc_clock_5m  (),
-    .fdd_dip_fixed (),
     .kbd_layout_jis(),
     .cd_volume_code(code_on)
   );
 
   pc9821_osd #(.CD_AUDIO_EN(1'b0)) dut_off (
     .osd_ram_size  (3'd0),
-    .osd_bios_setup(1'b0),
     .osd_gdc_clock (1'b0),
-    .osd_fdd_mode  (1'b0),
     .osd_kbd_layout(1'b0),
     .osd_cd_volume (sel),
     .ram_size_code (),
-    .bios_setup    (),
     .gdc_clock_5m  (),
-    .fdd_dip_fixed (),
     .kbd_layout_jis(),
     .cd_volume_code(code_off)
   );

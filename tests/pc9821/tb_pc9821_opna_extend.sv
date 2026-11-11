@@ -33,7 +33,7 @@ module tb_pc9821_opna_extend;
   wire [7:0] io_dout;
   wire       io_rd_wait, io_wr_wait, irq;
   // WIDE since A-1: pc9821_opna's stereo sum is the raw FM+ADPCM+SSG 20-bit value with the
-  // single clamp at the final DAC (z486_mister's mix_dry), not a 17-bit clamped one. This
+  // single clamp at the final DAC (pc9821_audio_mix's mix_dry), not a 17-bit clamped one. This
   // bench never reads these, but a 17-bit declaration would silently set the top three bits
   // of any sample that reached a check here.
   wire signed [19:0] snd_l, snd_r;

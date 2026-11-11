@@ -82,8 +82,8 @@ now, except the two guards marked.
 | privilege #GP vector | INVLPG/INVD/WBINVD/MOV CRn/DRn/TRn at CPL3 raised **#SS** whenever the last access segment was SS | `cpl3_priv_gp` |
 | CR0.CD / CR0.NW / PCD | CD: no allocation, hits kept; NW: write hits stay in the L1, snoops ignored; PTE/PDE/CR3 PCD: uncached miss (single bus read) for data, unallocated fetch for code and the prefetcher's branch-target buffer; walker reads honor CR3/PDE.PCD | `cache_ctrl_486`; `tb_l1_cache`, `tb_l1_icache` |
 | #AC alignment check | CR0.AM + EFLAGS.AC + CPL3; word/dword misalignment by linear address, error code 0, restartable; descriptor/TSS/LDT references exempt; limit faults win; new optimizer-owned entry at 9F6 | `align_check` |
-| hardware breakpoints | execution breakpoints (fault, RF resumes once), data write and read/write breakpoints (trap; LEN masking, crossing accesses, REP iterations), B0-B3 for disabled matches, BS+Bn together | `debug_bp`, `debug_bp2` |
-| RF in fault frames | faults now push RF=1 (the CROM sets it but pushed the pre-instruction FLAGSB); traps and interrupts unchanged | `fault_rf` |
+| hardware breakpoints | execution breakpoints (fault, RF resumes once), data write and read/write breakpoints (trap; LEN masking, crossing accesses, REP iterations), B0-B3 for enabled matches only (disabled ones clear, as AMD APM 24593 13.1.1.3 and an Am486DX4), BS+Bn together | `debug_bp`, `debug_bp2`, `debug_bn_disabled_clear` |
+| RF in fault frames | faults now push RF=1 (the CROM sets it but pushed the pre-instruction FLAGSB) except a debug exception (instruction breakpoint, general detect), which pushes RF=0 as a real Am486DX4 does; traps and interrupts unchanged | `fault_rf`, `fault_rf_gd` |
 | task-switch debug state | L0-L3 cleared, T bit raises #DB with BT (existing CROM; guard) | `debug_task` (guard) |
 | LOCK# | new `lock` output; LOCK prefix, XCHG mem, TSS busy update, INTA pair; locked reads bypass the L1 behind the store queue | `lock_rmw` (+`expect_lock`), `hlt_wakeup_intr_pm` (+`expect_inta_lock`), `tb_l1_cache` |
 | test registers | TR3-TR5 no longer #UD; TR6/TR7 drive a real TLB test port (write with way select, lookup with attribute pairs, PL/REP/LRU/PCD/PWT readback); TR5 CTL=11 invalidates the L1s | `test_regs` |
@@ -207,7 +207,7 @@ Run with `tests/prepare.sh` data, `--cpu 486`, on the RTL at commit 1c3f590:
 
 | suite | result |
 | --- | --- |
-| SingleStepTests 80386 real mode, all 1,758,700 vectors | 1,758,700/1,758,700 after the fixes above; the remaining differences are documented 386-vs-486 rules in `test_singlestep_real.py` (EFLAGS AC and reserved bits, AC cleared by real-mode interrupts, undefined flags of a faulting AAM and of a trailing fault's frame, IDIV quotients the 386 completed out of range, a RET returning to itself, the 386EX's on-chip REMAPCFG ports) |
+| SingleStepTests 80386 real mode, all 1,758,700 vectors | 1,758,700/1,758,700 after the fixes above; the remaining differences are documented 386-vs-486 rules in `test_singlestep_real.py` (EFLAGS AC and reserved bits, AC cleared by real-mode interrupts, undefined flags of a faulting AAM and of a trailing fault's frame, a RET returning to itself, the 386EX's on-chip REMAPCFG ports) |
 | SingleStepTests protected mode (86Box), 6100 vectors | 6100/6100 (`--cpu 486`: RF=1 in fault frames, i486 PRM 11.3.1.1) |
 | test386.asm (CPU_FAMILY=4) | complete: every self-checking POST (00h-1Ch, E0h) passes, POST 0xFF reached, and all 44,926 POST 0xEE result lines match `test386-EE-reference.txt` |
 

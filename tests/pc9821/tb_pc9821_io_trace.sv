@@ -41,6 +41,7 @@ module tb_pc9821_io_trace;
   wire sound_extend;
   wire ide_rom_enable, bios_ram_gate;
   wire beep_mute, top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire [7:0] win0_sel;
   wire sys16m_en;
   wire a20_enable, cpu_reset_req;
@@ -88,8 +89,8 @@ module tb_pc9821_io_trace;
   wire [7:0] fdd_din;
   wire       fdd_abort;
 
-  pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),
+  pc9821_iobus #(.SDIP_WRITES_ENABLED(1), .DBG_STATUS_PORT(1)) dut (
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),
     .clk(clk), .reset(reset), .triple_fault_reset(triple_fault_reset),
     .bios_set(bios_set),
     .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),

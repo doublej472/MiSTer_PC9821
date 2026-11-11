@@ -29,7 +29,7 @@ module tb_pc9821_gameport_np2;
   // The card's claim, decoded the way pc9821_system decodes it.
   reg  [15:0] addr = 16'd0;
   wire gameport_cs;
-  pc9821_device_select select_dut (.addr(addr), .gameport_cs(gameport_cs));
+  pc9821_device_select #(.GAMEPORT_118(1)) select_dut (.addr(addr), .gameport_cs(gameport_cs));
 
   // The device bus strobes, one clk each exactly as pc9821_iobus's S_BYTE issues them.
   reg         reset = 1;

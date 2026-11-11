@@ -102,7 +102,8 @@ module egc_eq_stack #(
       .gvr_line_word_valid(gvr_line_word_valid), .gvr_line_word(gvr_line_word));
 
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_arb (
-      .clk(clk), .reset(reset),
+      .clk(clk),
+      .timing_xe10(1'b0), .gfx_scan_on(1'b0),   // Fast: the pre-field periods .reset(reset),
       .access_page(gvr_page),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
       .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),

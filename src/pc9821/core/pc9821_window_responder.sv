@@ -5,7 +5,8 @@
 //
 // ONE SEQUENCER, TWO ROUTES. The two windows need the SAME byte-walk machine:
 // S_IDLE/S_READ_ISSUE/S_READ_WAIT/S_READ_CAPTURE/S_WRITE/S_WRITE_COMMIT/S_RESP/S_HOLD
-// (plus S_DMA_WAIT/S_DMA_CAPTURE, the text RAM's DMA read, ten states in all), the same
+// (plus S_DMA_WAIT/S_DMA_CAPTURE, the text RAM's DMA read, and S_DMA_CG_ISSUE/WAIT/CAPTURE, the
+// CG window's, thirteen states in all), the same
 // base_addr/write_data/write_be/byte_index/read_data[31:0]/line_request register set, the same
 // walk bound (`last_byte`: byte 15 on a cache-line read, byte 3 on a DWORD), and the
 // same accept-then-respond split (the responder contract in pc9821_memory_subsystem.sv:
@@ -95,6 +96,16 @@ module pc9821_window_responder (
     // for a read, dma_resp_valid comes two cycles later with the byte in dma_dout. It is served
     // from S_IDLE, so it never interleaves with a CPU walk, and it goes first when both wait
     // (a CPU request holds its valid until its ready).
+    // THE SAME BYTE INTO THE CG WINDOW (0xA4000-0xA4FFF): with dma_route_cg set (the
+    // subsystem's registered DMA class, held for the request's life) the byte takes the CG
+    // byte port at the position a CPU byte at that address takes ({offset[0], offset[4:1]}),
+    // because the machine sends it there: docs/probes/DMAROUTE-XE10.TXT case G1 (DMA = CPU,
+    // both views D - the window's odd bytes A4001+2i and port 0xA9 lines 0-15 hold the
+    // transferred bytes after a DMA run exactly as after a CPU run). NP2kai's handler slot for
+    // 0xA4000 is memtram_wr8 (mem/memtram.c), the CPU's own. A store pulses byte_we in the cycle
+    // after the accept; a read pulses byte_rd, waits out byte_hold as a CPU read does, and answers
+    // with the port's byte.
+    input  wire        dma_route_cg,
     input  wire        dma_valid,
     input  wire        dma_write,
     input  wire [13:0] dma_addr,
@@ -126,7 +137,8 @@ module pc9821_window_responder (
   localparam S_IDLE = 4'd0, S_READ_ISSUE = 4'd1, S_READ_WAIT = 4'd2,
              S_READ_CAPTURE = 4'd3, S_WRITE = 4'd4,
              S_WRITE_COMMIT = 4'd5, S_HOLD = 4'd6, S_RESP = 4'd7,
-             S_DMA_WAIT = 4'd8, S_DMA_CAPTURE = 4'd9;
+             S_DMA_WAIT = 4'd8, S_DMA_CAPTURE = 4'd9,
+             S_DMA_CG_ISSUE = 4'd10, S_DMA_CG_WAIT = 4'd11, S_DMA_CG_CAPTURE = 4'd12;
 
   reg [3:0] state;
   reg [13:2] base_addr;   // the transfer's dword-aligned base (its low two bits are always 0)
@@ -216,7 +228,17 @@ module pc9821_window_responder (
       byte_we <= 1'b0;
 
       case (state)
-        S_IDLE: if (dma_valid) begin
+        S_IDLE: if (dma_valid && dma_route_cg) begin
+          // One DMA byte into the CG window: its position is the CPU walk's own byte_sel of
+          // {base_addr, byte_index} = dma_addr (byte_index[3:2] zero, so indexed_addr is the
+          // address itself). A store's strobe is registered with that position; a read issues next.
+          base_addr  <= dma_addr[13:2];
+          byte_index <= {2'b00, dma_addr[1:0]};
+          byte_din   <= dma_din;
+          byte_we    <= dma_write;
+          dma_ready  <= 1'b1;
+          state <= dma_write ? S_HOLD : S_DMA_CG_ISSUE;
+        end else if (dma_valid) begin
           // One DMA byte: the write commits this cycle and the accept follows (S_HOLD lets the
           // engine drop its request before IDLE looks again); a read issues its address,
           // accepts, and answers from the RAM's registered port.
@@ -320,6 +342,19 @@ module pc9821_window_responder (
 
         S_DMA_CAPTURE: begin
           dma_dout <= dma_rd_odd ? 8'hFF : tram_dout;
+          dma_resp_valid <= 1'b1;
+          state <= S_HOLD;
+        end
+
+        // A DMA read of the CG window: the CPU read's three steps (S_READ_ISSUE/WAIT/CAPTURE),
+        // the byte_hold wait included.
+        S_DMA_CG_ISSUE: begin
+          byte_rd <= 1'b1;
+          state <= S_DMA_CG_WAIT;
+        end
+        S_DMA_CG_WAIT: if (!byte_hold) state <= S_DMA_CG_CAPTURE;
+        S_DMA_CG_CAPTURE: begin
+          dma_dout <= byte_dout;
           dma_resp_valid <= 1'b1;
           state <= S_HOLD;
         end

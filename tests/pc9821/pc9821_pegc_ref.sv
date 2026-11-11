@@ -115,9 +115,11 @@ module pc9821_pegc_ref (
         reg [14:0] lane_off;
         lane_off = req_addr + lane[14:0];
         if (cpu_be[lane]) begin
-          if (lane_off[14:2] == 13'd1)
-            mio1[lane_off[1:0]] <= cpu_din[lane*8 +: 8];
-          else if (lane_off[14:5] == 10'd8) begin
+          if (lane_off[14:2] == 13'd1) begin
+            // The machine's read-back (pc9821_pegc's header, DMAROUTE-XE10 P4), carried here so
+            // this reference keeps characterising the area rewrite and not the register semantics.
+            if (!lane_off[0]) mio1[lane_off[1:0]] <= {2'b00, cpu_din[lane*8 +: 6]};
+          end else if (lane_off[14:5] == 10'd8) begin
             // 0xE0100 keeps bit 0 only (NP2kai: `value &= 0x1` under SUPPORT_PEGC).
             if (lane_off[4:0] == 5'd0) mio2[5'd0] <= {7'h00, cpu_din[lane*8]};
             else                       mio2[lane_off[4:0]] <= cpu_din[lane*8 +: 8];

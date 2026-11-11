@@ -8,11 +8,11 @@
 // hps_io channel:
 //
 //   * hps_io presents one slot's request at a time. Its status word carries a single selected
-//     slot (`sdn`, sys/hps_io.sv:204 (reg [3:0] sdn;) with one `sd_blk_cnt`/`sd_rd`/`sd_wr`
+//     slot (`sdn`, sys/hps_io.sv:219 (reg [3:0] sdn;) with one `sd_blk_cnt`/`sd_rd`/`sd_wr`
 //     per status read, and the ARM answers with `sd_ack` for that one slot,
-//     sys/hps_io.sv:331 "sd_ack <= disk[VD:0]; sdn_ack <= io_din[11:8];".
+//     sys/hps_io.sv:347 "sd_ack <= disk[VD:0]; sdn_ack <= io_din[11:8];".
 //   * the payload is ONE bus for both slots: `sd_buff_addr` / `sd_buff_wr` / `sd_buff_dout`
-//     (z486_mister.sv:874 (wire [12:0] sd_buff_addr;) and its neighbours, NOT a per-slot
+//     (z486_mister.sv:978 (wire [12:0] sd_buff_addr;) and its neighbours, NOT a per-slot
 //     array), so two engines could not both ingest a word stream even if both were
 //     acknowledged.
 //
@@ -51,7 +51,7 @@
 // What that costs here is bounded and is NOT new: this core has never had two transfers in
 // flight (the channel above is one deep), and the arbitration below reproduces the alternation
 // hps_io already performed (`sdn` is round-robin-started,
-// sys/hps_io.sv:210 "for(i = VDNUM - 1; i >= 0; i = i - 1) begin"), at the same granularity -
+// sys/hps_io.sv:225 "for(i = VDNUM - 1; i >= 0; i = i - 1) begin"), at the same granularity -
 // one handshake per device. The loser of a hand-over waits for the winner's in-flight handshake
 // and is served next; a device that keeps streaming cannot starve the other, because ownership
 // is released as soon as the engine is idle (burst tail included) and the next grant goes to
@@ -79,6 +79,16 @@
 // re-mounted image can never be answered out of the old one's blocks. A mount of a floppy slot
 // does not touch the disk's window; the floppy's own image is protected by the tag instead, so
 // no block of one medium can be answered out of the other's blocks.
+//
+// THE SECOND HARD DISK IS A FOURTH IMAGE ON THE DISK'S PORT. Bank 1's master can be a hard disk
+// (hps_io slot 3, slot D here), and the two disks are one device to this module exactly as the
+// two floppies are: pc9821_ata has one transfer engine, and pc9821_hdd_image forwards its requests
+// tagged with the drive (`a_req_unit`), so slot D's requests arrive on the A port and the tag is
+// part of the ownership record (`owner_slot`) like the floppy's `b_req_slot`. The read-ahead window
+// stays the disk's, and it now follows the disk the engine last served for the DISK: a hand-over
+// from one disk to the other flushes it (`win_unit`), since both images start at LBA 0. A disk
+// that is read alone keeps its whole window; two disks read alternately each pay a fresh run
+// (docs/trade-candidates.md T76). With slot D empty the tag is always 0 and nothing here moves.
 
 `default_nettype none
 
@@ -106,6 +116,9 @@ module pc9821_block_share (
     // header sector at LBA 0 neither fills the window nor moves the sequential-read run (a
     // raw image's first guest access then keeps the exact miss it had before HDI support).
     input  wire        a_req_window,
+    // Which disk's image the request is for: 0 = slot A (hps_io slot 0), 1 = slot D (slot 3).
+    // Sampled with the request pulse, like a_req_lba.
+    input  wire        a_req_unit,
     output wire        a_req_done,
     output wire        a_req_error,
     // The disk's block path is busy: its request is queued or the engine is serving it. The
@@ -128,6 +141,19 @@ module pc9821_block_share (
     output wire        a_sd_wr,
     input  wire        a_sd_ack,
     output wire [15:0] a_sd_buff_din,
+
+    // ---------------------------------------------------------------- image slot D: the second disk
+    // hps_io slot 3. Its requests are the A port's with a_req_unit = 1; only the host side and
+    // the image record are its own.
+    input  wire        d_img_mounted,
+    input  wire        d_img_readonly,
+    input  wire [63:0] d_img_size,
+    output wire [31:0] d_sd_lba,
+    output wire [ 5:0] d_sd_blk_cnt,
+    output wire        d_sd_rd,
+    output wire        d_sd_wr,
+    input  wire        d_sd_ack,
+    output wire [15:0] d_sd_buff_din,
 
     // ---------------------------------------------------------------- image slot B: the floppy
     input  wire        b_img_mounted,
@@ -180,7 +206,7 @@ module pc9821_block_share (
 
     // ---------------------------------------------------------------- the one host channel
     // Shared by both slots, exactly as hps_io presents it: one bus for the whole core, not a
-    // per-slot array -- z486_mister.sv:874 (wire [12:0] sd_buff_addr;) and the three wires
+    // per-slot array -- z486_mister.sv:978 (wire [12:0] sd_buff_addr;) and the three wires
     // beside it.
     input  wire        sd_buff_wr,
     input  wire [12:0] sd_buff_addr,
@@ -240,11 +266,15 @@ module pc9821_block_share (
   // an output port (docs/policies.md, the power-up rule).
   /* verilator lint_off PROCASSINIT */  // the power-up value, kept by Quartus on an internal register
   reg a_readonly_r = 1'b1;
+  reg d_readonly   = 1'b1;
   /* verilator lint_on PROCASSINIT */
+  // Slot D's image record (the second disk), the disk slot's own rule.
+  reg [31:0] d_capacity;
   assign a_readonly = a_readonly_r;
   initial begin
     a_mounted  = 1'b0;
     a_capacity = 32'd0;
+    d_capacity = 32'd0;
     b_readonly = 1'b1;
     b_capacity = 17'd0;
     c_readonly = 1'b1;
@@ -261,6 +291,10 @@ module pc9821_block_share (
       a_mounted  <= (a_img_size >= 64'd512);
       a_readonly_r <= a_img_readonly;
       a_capacity <= (|a_img_size[63:41]) ? 32'hFFFFFFFF : a_img_size[40:9];
+    end
+    if (d_img_mounted) begin
+      d_readonly <= d_img_readonly;
+      d_capacity <= (|d_img_size[63:41]) ? 32'hFFFFFFFF : d_img_size[40:9];
     end
     if (b_img_mounted) begin
       b_readonly <= b_img_readonly;
@@ -285,7 +319,7 @@ module pc9821_block_share (
 
   reg [1:0]  arb;
   reg        owner;        // 1 = the floppy, 0 = the hard disk: the DEVICE the engine serves
-  reg        owner_slot;   // which of the floppy's two images (valid when owner is 1)
+  reg        owner_slot;   // which of the device's two images: FDD0/FDD1, or disk A/D
   reg        last_owner;   // who owned last, so the next grant alternates
   reg        eng_owner;    // whose image the engine's metadata latch holds (device)
   reg        eng_slot;     // and which of the floppy's two images it holds
@@ -303,7 +337,7 @@ module pc9821_block_share (
   // switch between the two floppy drives loads the right image into the engine exactly as a
   // switch between the disk and the floppy does.
   // {device, slot}: 00 = the hard disk (A), 10 = FDD0 (B), 11 = FDD1 (C).
-  wire [1:0] grant_sel = grant_b_now ? {1'b1, b_pend_slot} : 2'd0;
+  wire [1:0] grant_sel = grant_b_now ? {1'b1, b_pend_slot} : {1'b0, a_pend_unit};
 
   // One-deep request queues. A device's request is TAKEN here (never refused) and served in its
   // turn; a pulse that arrives while that device's own entry is still waiting is dropped, which
@@ -312,6 +346,7 @@ module pc9821_block_share (
   // floppy for `bready`.
   reg        a_pend;
   reg        a_pend_write;
+  reg        a_pend_unit;  // the queued disk request's image: 0 = slot A, 1 = slot D
   reg [31:0] a_pend_lba;
   reg        b_pend;
   reg        b_pend_write; // the queued B request is a block WRITE-BACK
@@ -370,17 +405,17 @@ module pc9821_block_share (
   // the share hands the device the NEW metadata. `bio_img_mounted` is asserted in ARB_META
   // regardless (below), so this only picks the load's source, never whether there is one.
   wire        md_mount    = owner_sel[1] ? (owner_sel[0] ? c_img_mounted  : b_img_mounted)
-                                         : a_img_mounted;
+                                         : (owner_sel[0] ? d_img_mounted  : a_img_mounted);
   /* verilator lint_off UNUSEDSIGNAL */   // [8:0]: only the disk slot's floor rule reads the size; the floppy ceiling is b/c_cap_d
   wire [63:0] md_size     = owner_sel[1] ? (owner_sel[0] ? c_img_size     : b_img_size)
-                                         : a_img_size;
+                                         : (owner_sel[0] ? d_img_size     : a_img_size);
   /* verilator lint_on UNUSEDSIGNAL */
   wire        md_readonly = owner_sel[1] ? (owner_sel[0] ? c_img_readonly : b_img_readonly)
-                                         : a_img_readonly;
+                                         : (owner_sel[0] ? d_img_readonly : a_img_readonly);
   wire [31:0] md_capacity = owner_sel[1] ? (owner_sel[0] ? {15'd0, c_capacity} : {15'd0, b_capacity})
-                                         : a_capacity;
+                                         : (owner_sel[0] ? d_capacity : a_capacity);
   wire        md_latch_ro = owner_sel[1] ? (owner_sel[0] ? c_readonly     : b_readonly)
-                                         : a_readonly;
+                                         : (owner_sel[0] ? d_readonly     : a_readonly);
   wire        md_inplace  = md_mount;
 
   wire bio_img_mounted;
@@ -402,7 +437,13 @@ module pc9821_block_share (
   // - which is what `img_mounted` on slot A means, mount or eject. A floppy mount does not
   // invalidate it: the tag above is what keeps the two media apart there.
 
-  wire bio_win_flush  = a_img_mounted;
+  // With the second disk the window holds the blocks of the disk the engine last served for
+  // the disk port (`win_unit`): a replacement of THAT image flushes it, and so does the hand-over
+  // to the other disk (ARB_META with a disk owner of the other unit), whose LBAs overlap.
+  reg  win_unit;
+  wire win_unit_change = (arb == ARB_META) && !owner && (owner_slot != win_unit);
+  wire bio_win_flush  = (a_img_mounted && !win_unit) || (d_img_mounted && win_unit) ||
+                        win_unit_change;
 
   assign bio_img_mounted  = (arb == ARB_META) | md_inplace;
   // {23'd0, capacity, 9'd0} inverts pc9821_block_io's own rule exactly: bits [63:41] are zero
@@ -468,10 +509,14 @@ module pc9821_block_share (
   // granted before a request is handed over and released only when the engine is idle, so a
   // fetch in flight and its `sd_ack` always belong to the same slot. A floppy request names its
   // own image through `eng_slot`, so exactly one of the three slots' request pins is ever driven.
-  assign a_sd_lba     = !eng_owner ? bio_sd_lba     : 32'd0;
-  assign a_sd_blk_cnt = !eng_owner ? bio_sd_blk_cnt : 6'd0;
-  assign a_sd_rd      = !eng_owner ? bio_sd_rd      : 1'b0;
-  assign a_sd_wr      = !eng_owner ? bio_sd_wr      : 1'b0;
+  assign a_sd_lba     = (!eng_owner && !eng_slot) ? bio_sd_lba     : 32'd0;
+  assign a_sd_blk_cnt = (!eng_owner && !eng_slot) ? bio_sd_blk_cnt : 6'd0;
+  assign a_sd_rd      = (!eng_owner && !eng_slot) ? bio_sd_rd      : 1'b0;
+  assign a_sd_wr      = (!eng_owner && !eng_slot) ? bio_sd_wr      : 1'b0;
+  assign d_sd_lba     = (!eng_owner &&  eng_slot) ? bio_sd_lba     : 32'd0;
+  assign d_sd_blk_cnt = (!eng_owner &&  eng_slot) ? bio_sd_blk_cnt : 6'd0;
+  assign d_sd_rd      = (!eng_owner &&  eng_slot) ? bio_sd_rd      : 1'b0;
+  assign d_sd_wr      = (!eng_owner &&  eng_slot) ? bio_sd_wr      : 1'b0;
   assign b_sd_lba     = (eng_owner && !eng_slot) ? bio_sd_lba     : 32'd0;
   assign b_sd_blk_cnt = (eng_owner && !eng_slot) ? bio_sd_blk_cnt : 6'd0;
   assign b_sd_rd      = (eng_owner && !eng_slot) ? bio_sd_rd      : 1'b0;
@@ -480,12 +525,13 @@ module pc9821_block_share (
   assign c_sd_blk_cnt = (eng_owner &&  eng_slot) ? bio_sd_blk_cnt : 6'd0;
   assign c_sd_rd      = (eng_owner &&  eng_slot) ? bio_sd_rd      : 1'b0;
   assign c_sd_wr      = (eng_owner &&  eng_slot) ? bio_sd_wr      : 1'b0;
-  assign bio_sd_ack   = eng_owner ? (eng_slot ? c_sd_ack : b_sd_ack) : a_sd_ack;
+  assign bio_sd_ack   = eng_owner ? (eng_slot ? c_sd_ack : b_sd_ack) : (eng_slot ? d_sd_ack : a_sd_ack);
   // The owner's buffer, which the host reads in the write direction (hps_io samples the
   // acknowledged slot's sd_buff_din, so every slot sees the engine's one value).
   assign a_sd_buff_din = bio_sd_buff_din;
   assign b_sd_buff_din = bio_sd_buff_din;
   assign c_sd_buff_din = bio_sd_buff_din;
+  assign d_sd_buff_din = bio_sd_buff_din;
 
   // The write direction's read address, to both devices' buffers: hps_io's sd_buff_addr.
   assign a_buf_rd_addr = bio_buf_rd_addr;
@@ -528,6 +574,8 @@ module pc9821_block_share (
       a_pend       <= 1'b0;
       a_pend_write <= 1'b0;
       a_pend_lba   <= 32'd0;
+      a_pend_unit  <= 1'b0;
+      win_unit     <= 1'b0;
       b_pend       <= 1'b0;
       b_pend_write <= 1'b0;
       b_pend_lba   <= 16'd0;
@@ -547,6 +595,7 @@ module pc9821_block_share (
         a_pend       <= 1'b1;
         a_pend_write <= a_req_write;
         a_pend_lba   <= a_req_lba;
+        a_pend_unit  <= a_req_unit;
       end
       if (b_req_read && !b_pend) begin
         b_pend       <= 1'b1;
@@ -572,11 +621,11 @@ module pc9821_block_share (
           // The grant. The engine is idle here - ownership is only released below when it is -
           // so the request it is handed is the one it accepts.
           owner       <= grant_b_now;
-          // The floppy's image tag is only meaningful when the floppy owns the engine, so it is
-          // gated on the grant: a disk grant then leaves `eng_sel` exactly 2'd0 (the disk's own
-          // value), and a back-to-back disk transfer does NOT pay a metadata reload because a
-          // stale floppy slot was still latched beside it.
-          owner_slot  <= grant_b_now && b_pend_slot;
+          // The image tag follows the granted device: the floppy's slot for a floppy grant, the
+          // disk's unit for a disk grant (0 with no second disk, so a disk grant leaves `eng_sel`
+          // exactly 2'd0 and a back-to-back disk transfer does NOT pay a metadata reload because
+          // a stale floppy slot was still latched beside it).
+          owner_slot  <= grant_b_now ? b_pend_slot : a_pend_unit;
           last_owner  <= grant_b_now;
           grant_lba   <= grant_b_now ? {16'd0, b_pend_lba} : a_pend_lba;
           grant_write <= grant_b_now ? b_pend_write : a_pend_write;
@@ -594,6 +643,7 @@ module pc9821_block_share (
           eng_owner  <= owner;
           eng_slot   <= owner_slot;
           eng_loaded <= 1'b1;
+          if (!owner) win_unit <= owner_slot;   // the window is now this disk's (flushed above)
           arb        <= ARB_REQ;
         end
 

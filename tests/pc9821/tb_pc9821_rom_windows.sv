@@ -53,6 +53,7 @@ module tb_pc9821_rom_windows;
   reg        ide_ram_gate = 1;
   reg        bios_ram_gate = 0;
   reg        top_shadow_en = 0;          // reads stay on the pack: the window's ROM layer
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg  [1:0] ems_state = 2'd0;
   reg  [7:0] win0_sel = 8'h08;
   reg [31:0] pack_base = 32'h0000_0000;
@@ -108,11 +109,15 @@ module tb_pc9821_rom_windows;
   wire [31:0] mem_accepts, mem_beats;
 
   // ==== DUT ====
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (
+      .mode2_16color(mode2_16color),
       .scan_dot_ce(1'b0), .scan_dot_act(1'b1),
       .clk(clk), .reset(reset), .top_bank(top_bank),
       .ems_state(ems_state), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00), .ide_ram_gate(ide_ram_gate),
-      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en),
+      .bios_ram_gate(bios_ram_gate), .top_shadow_en(top_shadow_en), .soft_reboot(soft_reboot),
       .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08), .sys16m_en(1'b0),
       .pack_base(pack_base), .guest_ram_bytes(guest_ram_bytes),
       .gvram_access_page(gvram_access_page),

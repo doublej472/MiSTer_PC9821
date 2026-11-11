@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OPNA_TIMERS:
-// The PC-9801-86's two hardware timers actually fire, at the rate the machine's master clock implies, and reach the guest both ways a driver can use them: the overflow flag appears in the 0x188 status read, and the board's IRQ line asserts; the periods are measured in clk cycles against the YM2608's own formula at this board's 7.9872 MHz master clock, and two ratio checks assume no clock at all. It also proves where that IRQ LANDS: the board's factory-default INT5 is IRQ12 (the slave 8259's IR4, vector 0x14), so the timer line is wired to the slave - not the master IRQ5 - and an INTA cycle answers vector 0x14. PMD - the driver Touhou's sound runs through - drives playback from Timer B and effects from Timer A, both as interrupts, so "the timer registers exist" is not the property that matters; "an interrupt arrives at the right rate and the flag says so" is.
+// The PC-9801-86's two hardware timers actually fire, at the rate the machine's master clock implies, and reach the guest both ways a driver can use them: the overflow flag appears in the 0x188 status read, and the board's IRQ line asserts; the periods are measured in clk cycles against the YM2608's own formula at this board's 7.9872 MHz master clock, and two ratio checks assume no clock at all. It also proves where that IRQ LANDS: the board's factory-default INT5 is IRQ12 (the slave 8259's IR4, vector 0x14), so the timer line is wired to the slave - not the master IRQ5 - and an INTA cycle answers vector 0x14. Register 0x29 does not gate the Timer A interrupt: with 0x29 = 00 or 02 Timer A still interrupts at its own period, as the Xe10 does (docs/probes/YM29-XE10.TXT). PMD - the driver Touhou's sound runs through - drives playback from Timer B and effects from Timer A, both as interrupts, so "the timer registers exist" is not the property that matters; "an interrupt arrives at the right rate and the flag says so" is.
 //
 // ==== DUT ====
 // The board glue pc9821_opna driven at its own host port, so every access goes
@@ -270,7 +270,7 @@ module tb_pc9821_opna_timers;
     repeat (40) @(posedge clk);
     @(negedge clk); reset = 0;
     // The glue stretches the chip's reset over 16 clk&cen cycles
-    // (pc9821_opna.sv:114-127, `rst_cnt <= 5'd16;`); let it finish before any register access.
+    // (pc9821_opna.sv:120-133, `rst_cnt <= 5'd16;`); let it finish before any register access.
     repeat (2000) @(posedge clk);
 
     // ---- 1. nothing has fired and no IRQ is up --------------------------
@@ -409,6 +409,35 @@ module tb_pc9821_opna_timers;
       fail("Timer B's flag did not clear on a 0x27 write with bit 5 set");
     if (irq !== 1'b0)
       fail("the IRQ stayed up after Timer B's flag was cleared");
+
+    // ---- 9b. register 0x29 does NOT gate the Timer A interrupt ------------
+    // The machine, measured with tools/hwprobe/ym29 on an Xe10 with the -86 board:
+    // Timer A (NA=0x200) interrupted 21 times per 0.2 s window with 0x29 written 1F,
+    // 03, 02 and 00 alike (docs/probes/YM29-XE10.TXT `IRQ  v29=02 n=21` and
+    // `IRQ  v29=00 n=21`, decoder verdict NO-GATE). NEC's -86 SOUND.ROM writes
+    // 0x29 = 00 and then waits for that interrupt. So with 0x29 = 00, and again with 02
+    // (Timer A's bit 0 clear, bit 1 set), a Timer A started with its 0x27 IRQ enable
+    // must raise the line at its own period. The control value 1F was measured in
+    // section 6 (the reset value), so only the two values the capture separates
+    // from it are run here.
+    stop_and_clear;
+    sound_o(8'h29, 8'h00);
+    repeat (200) @(posedge clk);    // 0x29 is a queued flag-class write; let it drain
+    sound_o(8'h24, 8'hF0);          // 64 counts, as in section 6
+    sound_o(8'h25, 8'h00);
+    measure_start_to_irq(8'h05, 3000000, n_cycles);
+    check_period(n_cycles, exp_a, "Timer A 64 counts with 0x29 = 00 (YM29-XE10: n=21)");
+    read_status(st);
+    if (st[0] !== 1'b1)
+      fail("Timer A's overflow flag is not set with 0x29 = 00");
+    stop_and_clear;
+    sound_o(8'h29, 8'h02);
+    repeat (200) @(posedge clk);
+    measure_start_to_irq(8'h05, 3000000, n_cycles);
+    check_period(n_cycles, exp_a, "Timer A 64 counts with 0x29 = 02 (YM29-XE10: n=21)");
+    stop_and_clear;
+    sound_o(8'h29, 8'h1F);          // back to the reset value
+    repeat (200) @(posedge clk);
 
     // ---- 10. the timer IRQ reaches the slave 8259 as IRQ12, vector 0x14 ------
     // The board's factory-default DIP setting INT5 is IRQ12 (the slave's IR4), and PMD

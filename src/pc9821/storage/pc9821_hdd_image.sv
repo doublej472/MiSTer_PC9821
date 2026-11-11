@@ -85,6 +85,16 @@
 // re-sends img_mounted, so clearing the parsed offset there would turn the disk back into a
 // raw image with a 4096-byte header in front of the guest's partition table. Only an eject
 // (img_mounted with a sub-sector size) or a replacement mount clears it.
+//
+// TWO DRIVES, ONE DETECTOR. The second hard disk (hps_io slot 3, bank 1's master when the OSD
+// puts a disk there) is served by this same module: each drive keeps its own image record (size,
+// read-only flag, state, offset, capacity, a pending probe and its kind), and the one probe engine
+// and its header/footer captures are lent to one drive at a time. Mounts are rare and hps_io
+// delivers them one slot at a time; a mount that arrives while the other drive's probe is in
+// flight is held as that drive's pending probe and runs next. A guest request carries the drive
+// it is for (`req_unit`, pc9821_ata's `block_unit`), is offset by THAT drive's header and goes to
+// the engine tagged with it (`a_req_unit`). Drive 0's behaviour, its cycles included, is the
+// one-drive module's whenever slot 3 holds no image.
 
 `default_nettype none
 
@@ -95,6 +105,9 @@ module pc9821_hdd_image (
     // ---------------------------------------------------------------- the host's image event
     // hps_io slot 0's pulse and registers, the same ones pc9821_block_share receives.
     input  wire        img_mounted,
+    // hps_io slot 3's pulse (the second hard disk); img_readonly/img_size are hps_io's shared
+    // registers, valid with whichever slot's pulse is high.
+    input  wire        img_mounted1,
     input  wire        img_readonly,
     input  wire [63:0] img_size,
 
@@ -102,12 +115,16 @@ module pc9821_hdd_image (
     // pc9821_ata's block contract: one-cycle req_read/req_write pulses in, one req_done
     // pulse per request with req_error beside it (pc9821_ata.sv clears block_read/
     // block_write at the top of its clocked block).
-    output reg         mounted,
+    output wire        mounted,
     output wire        readonly,
-    output reg  [31:0] capacity,
+    output wire [31:0] capacity,
+    output wire        mounted1,
+    output wire        readonly1,
+    output wire [31:0] capacity1,
     input  wire        req_read,
     input  wire        req_write,
     input  wire [31:0] req_lba,
+    input  wire        req_unit,     // which drive the request is for (sampled with the pulse)
     output reg         req_done,
     output reg         req_error,
     output wire        busy,
@@ -123,6 +140,8 @@ module pc9821_hdd_image (
     // window belongs to the disk's image, and the probe must not put its sector 0 in it (a raw
     // image then keeps the exact first-access miss it had before HDI support existed).
     output wire        a_req_window,
+    // Which drive's image the engine request is for: 0 = slot 0, 1 = slot 3.
+    output wire        a_req_unit,
     input  wire        a_req_done,
     input  wire        a_req_error,
     input  wire        a_buf_we,
@@ -134,24 +153,28 @@ module pc9821_hdd_image (
                    H_PROBE = 2'd1,   // mounted, header sector not read/validated yet
                    H_READY = 2'd2;   // mount complete: offset and capacity are latched
 
-  reg [1:0]  state;
+  // Per drive (index 0 = slot 0, 1 = slot 3).
+  reg [1:0]  state [0:1];
   // The image size, kept as what every test below reads of it: bits [40:0] and whether any of
   // [63:41] is set (a size that does not fit the 41-bit byte range a 32-bit sector count names).
-  reg [40:0] size_lo;
-  reg        size_hi;
+  reg [40:0] size_lo_r [0:1];
+  reg  [1:0] size_hi_r;
   // The header's sectors, 0..2048 (HeaderSize is at most 1 MiB and a multiple of 512).
-  reg [11:0] hdr_off;
-  // One deep each way: the probe the detector owes the engine, and the guest request the
-  // engine owes a completion. They are never in flight together.
-  reg        probe_pending;
+  reg [11:0] hdr_off [0:1];
+  // One deep each way: the probe the detector owes the engine (per drive), and the guest
+  // request the engine owes a completion. A probe and a request are never in flight together.
+  reg  [1:0] probe_pending;
   reg        probe_busy;
+  reg        probe_unit;     // the drive the probe in flight belongs to
   // 0 = the front probe (HDI header at LBA 0), 1 = the tail probe (fixed-VHD footer at the
   // image's last sector). A mount restarts at the front.
-  reg        probe_kind;
+  reg  [1:0] probe_kind;
   reg        ata_pend;
   reg        ata_pend_write;
   reg [31:0] ata_pend_lba;
+  reg        ata_pend_unit;
   reg        ata_inflight;
+  reg        out_unit;
   reg        out_window;
   reg        out_read;
   reg        out_write;
@@ -188,27 +211,41 @@ module pc9821_hdd_image (
   // readonly's power-up 1 sits on an internal register: Quartus ignores a power-up value on an
   // output port (docs/policies.md, the power-up rule).
   /* verilator lint_off PROCASSINIT */  // the power-up value, kept by Quartus on an internal register
-  reg readonly_r = 1'b1;
+  reg [1:0] readonly_r = 2'b11;
   /* verilator lint_on PROCASSINIT */
-  assign readonly = readonly_r;
+  reg [1:0]  mounted_r;
+  reg [31:0] capacity_r [0:1];
+  assign readonly  = readonly_r[0];
+  assign readonly1 = readonly_r[1];
+  assign mounted   = mounted_r[0];
+  assign mounted1  = mounted_r[1];
+  assign capacity  = capacity_r[0];
+  assign capacity1 = capacity_r[1];
   initial begin
-    state            = H_IDLE;
-    size_lo          = 41'd0;
-    size_hi          = 1'b0;
-    hdr_off          = 12'd0;
-    probe_pending    = 1'b0;
+    state[0]         = H_IDLE;
+    state[1]         = H_IDLE;
+    size_lo_r[0]     = 41'd0;
+    size_lo_r[1]     = 41'd0;
+    size_hi_r        = 2'b00;
+    hdr_off[0]       = 12'd0;
+    hdr_off[1]       = 12'd0;
+    probe_pending    = 2'b00;
     probe_busy       = 1'b0;
-    probe_kind       = 1'b0;
+    probe_unit       = 1'b0;
+    probe_kind       = 2'b00;
     ata_pend         = 1'b0;
     ata_pend_write   = 1'b0;
     ata_pend_lba     = 32'd0;
+    ata_pend_unit    = 1'b0;
     ata_inflight     = 1'b0;
+    out_unit         = 1'b0;
     out_window       = 1'b1;
     out_read         = 1'b0;
     out_write        = 1'b0;
     out_lba          = 32'd0;
-    mounted          = 1'b0;
-    capacity         = 32'd0;
+    mounted_r        = 2'b00;
+    capacity_r[0]    = 32'd0;
+    capacity_r[1]    = 32'd0;
     req_done         = 1'b0;
     req_error        = 1'b0;
     vhd_sum          = 32'd0;
@@ -240,6 +277,13 @@ module pc9821_hdd_image (
                      (h_cyls != 16'd0) && h_cyls_hi_z;
 
   wire hdr_valid = h_res0_z && h_res1_z && hdr_size_ok && hdr_sec_ok && hdr_geom_ok;
+
+  // THE DRIVE THE SIZE TESTS READ: the probe's while one is in flight (its verdict), else the
+  // drive whose probe starts next (its tail LBA). Drive 0 first when both wait.
+  wire       start_unit = !probe_pending[0];
+  wire       cur_unit   = probe_busy ? probe_unit : start_unit;
+  wire [40:0] size_lo   = size_lo_r[cur_unit];
+  wire        size_hi   = size_hi_r[cur_unit];
 
   // The raw image's capacity is pc9821_block_io's own rule, unchanged: floor(size/512),
   // saturating when the size does not fit 41 bits.
@@ -293,8 +337,11 @@ module pc9821_hdd_image (
   assign a_req_write  = out_write;
   assign a_req_lba    = out_lba;
   assign a_req_window = out_window;
+  assign a_req_unit   = out_unit;
 
-  assign busy = probe_pending || probe_busy || ata_pend || ata_inflight;
+  assign busy = (|probe_pending) || probe_busy || ata_pend || ata_inflight;
+  // A mount pulse per drive.
+  wire [1:0] mnt = {img_mounted1, img_mounted};
 
   always @(posedge clk) begin
     // The two one-cycle request outputs to the engine, cleared unless an arm below sets them.
@@ -309,42 +356,44 @@ module pc9821_hdd_image (
       // A probe that was in flight is re-issued from the front (the engine's state was reset
       // under it).
       if (probe_busy) begin
-        probe_pending <= 1'b1;
-        probe_kind    <= 1'b0;
+        probe_pending[probe_unit] <= 1'b1;
+        probe_kind[probe_unit]    <= 1'b0;
       end
       probe_busy   <= 1'b0;
       ata_pend     <= 1'b0;
       ata_inflight <= 1'b0;
     end else begin
-      // ---- mount / eject ----
-      if (img_mounted) begin
-        size_lo  <= img_size[40:0];
-        size_hi  <= |img_size[63:41];
-        readonly_r <= img_readonly;
-        if (img_size < 64'd512) begin
-          // Eject, the sub-sector unmount every consumer in this core uses: no image.
-          state         <= H_IDLE;
-          mounted       <= 1'b0;
-          capacity      <= 32'd0;
-          hdr_off       <= 12'd0;
-          probe_pending <= 1'b0;
-          // A request still queued here was issued against the image that is gone; answer it
-          // with the error an ejected medium produces. An in-flight request is completed by
-          // the engine's own eject abort (pc9821_block_io.sv's `eject`).
-          if (ata_pend) begin
-            ata_pend  <= 1'b0;
-            req_done  <= 1'b1;
-            req_error <= 1'b1;
+      // ---- mount / eject, per drive ----
+      for (int u = 0; u < 2; u = u + 1) begin
+        if (mnt[u]) begin
+          size_lo_r[u]  <= img_size[40:0];
+          size_hi_r[u]  <= |img_size[63:41];
+          readonly_r[u] <= img_readonly;
+          if (img_size < 64'd512) begin
+            // Eject, the sub-sector unmount every consumer in this core uses: no image.
+            state[u]         <= H_IDLE;
+            mounted_r[u]     <= 1'b0;
+            capacity_r[u]    <= 32'd0;
+            hdr_off[u]       <= 12'd0;
+            probe_pending[u] <= 1'b0;
+            // A request still queued here was issued against the image that is gone; answer
+            // it with the error an ejected medium produces. An in-flight request is completed
+            // by the engine's own eject abort (pc9821_block_io.sv's `eject`).
+            if (ata_pend && (ata_pend_unit == (u != 0))) begin
+              ata_pend  <= 1'b0;
+              req_done  <= 1'b1;
+              req_error <= 1'b1;
+            end
+          end else begin
+            // A mount (or a replacement): not ready until the front (and, if not an HDI,
+            // tail) probe has run.
+            state[u]         <= H_PROBE;
+            mounted_r[u]     <= 1'b0;
+            capacity_r[u]    <= 32'd0;
+            hdr_off[u]       <= 12'd0;
+            probe_pending[u] <= 1'b1;
+            probe_kind[u]    <= 1'b0;
           end
-        end else begin
-          // A mount (or a replacement): not ready until the front (and, if not an HDI, tail)
-          // probe has run.
-          state         <= H_PROBE;
-          mounted       <= 1'b0;
-          capacity      <= 32'd0;
-          hdr_off       <= 12'd0;
-          probe_pending <= 1'b1;
-          probe_kind    <= 1'b0;
         end
       end
 
@@ -353,7 +402,7 @@ module pc9821_hdd_image (
       // plus the running byte sum of the whole footer, with the checksum field (bytes 64-67 =
       // words 32/33) excluded from the sum before it is one's-complemented.
       if (a_buf_we && probe_busy) begin
-        if (!probe_kind) begin
+        if (!probe_kind[probe_unit]) begin
           case (a_buf_addr)
             8'd0:  h_res0_z      <= (a_buf_data == 16'd0);
             8'd1:  h_res1_z      <= (a_buf_data == 16'd0);
@@ -397,15 +446,17 @@ module pc9821_hdd_image (
         end
       end
 
-      // ---- the mount probe ----
-      if (probe_pending && !probe_busy && !ata_inflight && (state == H_PROBE)) begin
+      // ---- the mount probe: the engine is lent to one drive's probe at a time ----
+      if ((|probe_pending) && !probe_busy && !ata_inflight && (state[start_unit] == H_PROBE)) begin
         out_read      <= 1'b1;
         out_write     <= 1'b0;
-        out_lba       <= probe_kind ? tail_lba : 32'd0;
+        out_lba       <= probe_kind[start_unit] ? tail_lba : 32'd0;
         out_window    <= 1'b0;
+        out_unit      <= start_unit;
         probe_busy    <= 1'b1;
-        probe_pending <= 1'b0;
-        if (probe_kind) vhd_sum <= 32'd0;
+        probe_unit    <= start_unit;
+        probe_pending[start_unit] <= 1'b0;
+        if (probe_kind[start_unit]) vhd_sum <= 32'd0;
       end
 
       // ---- take a guest request (one deep) ----
@@ -413,57 +464,59 @@ module pc9821_hdd_image (
         ata_pend       <= 1'b1;
         ata_pend_write <= req_write;
         ata_pend_lba   <= req_lba;
+        ata_pend_unit  <= req_unit;
       end
 
-      // ---- hand a guest request to the engine, offset by the HDI header ----
-      if (ata_pend && !ata_inflight && !probe_busy && !probe_pending &&
-          (state == H_READY)) begin
+      // ---- hand a guest request to the engine, offset by its drive's HDI header ----
+      if (ata_pend && !ata_inflight && !probe_busy && !(|probe_pending) &&
+          (state[ata_pend_unit] == H_READY)) begin
         out_write         <= ata_pend_write;
         out_read          <= !ata_pend_write;
-        out_lba           <= ata_pend_lba + {20'd0, hdr_off};
+        out_lba           <= ata_pend_lba + {20'd0, hdr_off[ata_pend_unit]};
         out_window        <= 1'b1;
+        out_unit          <= ata_pend_unit;
         ata_inflight      <= 1'b1;
         ata_pend          <= 1'b0;
       end
 
       // ---- the engine's one completion ----
-      // A mount in the completing cycle replaces the image the probe's sector came from, so
-      // that completion's format verdict is ignored and the restart above runs instead. A
-      // guest request's completion is still forwarded: the ATA is waiting for it in
-      // X_WAIT_BLOCK (or X_DRAIN) whichever image the engine served it from.
+      // A mount of the probed drive in the completing cycle replaces the image the probe's
+      // sector came from, so that completion's format verdict is ignored and the restart above
+      // runs instead. A guest request's completion is still forwarded: the ATA is waiting for
+      // it in X_WAIT_BLOCK (or X_DRAIN) whichever image the engine served it from.
       if (a_req_done) begin
         if (probe_busy) begin
           probe_busy <= 1'b0;
-          if (!img_mounted && (state == H_PROBE) && !probe_pending) begin
-            if (!probe_kind) begin
+          if (!mnt[probe_unit] && (state[probe_unit] == H_PROBE) && !probe_pending[probe_unit]) begin
+            if (!probe_kind[probe_unit]) begin
               if (hdr_valid && !a_req_error) begin
                 // HDI: the front header decides; the tail is never read.
-                hdr_off  <= h_hsize[20:9];
-                capacity <= hdr_cap;
-                mounted  <= 1'b1;
-                state    <= H_READY;
+                hdr_off[probe_unit]    <= h_hsize[20:9];
+                capacity_r[probe_unit] <= hdr_cap;
+                mounted_r[probe_unit]  <= 1'b1;
+                state[probe_unit]      <= H_READY;
               end else if (tail_ok) begin
                 // Not an HDI: read the last sector for a fixed-VHD footer.
-                probe_kind    <= 1'b1;
-                probe_pending <= 1'b1;
+                probe_kind[probe_unit]    <= 1'b1;
+                probe_pending[probe_unit] <= 1'b1;
               end else begin
                 // Too small/unaligned to hold a footer: the raw image.
-                hdr_off  <= 12'd0;
-                capacity <= raw_cap;
-                mounted  <= 1'b1;
-                state    <= H_READY;
+                hdr_off[probe_unit]    <= 12'd0;
+                capacity_r[probe_unit] <= raw_cap;
+                mounted_r[probe_unit]  <= 1'b1;
+                state[probe_unit]      <= H_READY;
               end
             end else begin
               if (vhd_ok && !a_req_error) begin
-                hdr_off  <= 12'd0;                    // a fixed VHD's data starts at 0
-                capacity <= v_cur_lo[40:9];
+                hdr_off[probe_unit]    <= 12'd0;                 // a fixed VHD's data starts at 0
+                capacity_r[probe_unit] <= v_cur_lo[40:9];
               end else begin
                 // Dynamic/differencing or a bad footer: the raw image, as before.
-                hdr_off  <= 12'd0;
-                capacity <= raw_cap;
+                hdr_off[probe_unit]    <= 12'd0;
+                capacity_r[probe_unit] <= raw_cap;
               end
-              mounted <= 1'b1;
-              state   <= H_READY;
+              mounted_r[probe_unit] <= 1'b1;
+              state[probe_unit]     <= H_READY;
             end
           end
         end else if (ata_inflight) begin

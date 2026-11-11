@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Port 0x09A8 bit 0 switches the raster to the PC-9821's separate 31 kHz dot clock, and the guest sees the Xe10's own rates both ways: with clk_sys at 80 MHz, the real pc9821_iobus (0x09A8's latch, written and read through its CPU port), pc9821_dot_ce and pc9821_crtc wired as pc9821_system wires them, and the master GDC programmed with the exact sequence tools/hwprobe/crt31k sends (HSB.EXE IGDC:31's: RESET, VSYNC master, SYNC 10 4E 47 0C 07 0D 90 89, PITCH, ZOOM, SCROLL), the VSYNC status bit (the probe's own method) rises at 70.0669 Hz and the hsync at 31.460 kHz - the capture's frame and line rates, docs/probes/CRT31K.TXT `RUN frames=70 ticks=306930` with the ARTIC calibrated by the same file's 24 kHz rows, within 3 ppm - with 0x09A8 reading back 01; writing 0x09A8 = 00 and the BIOS 24 kHz SYNC table brings back the capture's 24 kHz rows (56.42 Hz, 24.82 kHz, the `24K (restored)` row within 3 ppm) and 0x09A8 reads 00; and the monitor range follows the bit: an 784-dot line (x = 98 characters) runs unclamped while 0x09A8 bit 0 is set and is clamped to 800 dots while it is clear (NP2kai io/gdc.c gdcclk[2] minx 92 against gdcclk[1] minx 100) and the BIOS 640 x 480 block (NP2kai bios/bios18.c gdcmastersync[3]) runs VGA's 800 x 525 at the same clock (59.92 Hz). FAIL-FIRST: before the 31 kHz dot clock 0x09A8 is a read-back latch only, so the 31 kHz block runs at the 21.05 MHz dot clock (58.61 Hz, 26.32 kHz) and the 784-dot line is clamped to 800 in both states.
+// Port 0x09A8 bit 0 switches the raster to the PC-9821's separate 31 kHz dot clock, and the guest sees the Xe10's own rates both ways: with clk_sys at 80 MHz, the real pc9821_iobus (0x09A8's latch, written and read through its CPU port), pc9821_dot_ce and pc9821_crtc wired as pc9821_system wires them, and the master GDC programmed with the exact sequence tools/hwprobe/crt31k sends (HSB.EXE IGDC:31's: RESET, VSYNC master, SYNC 10 4E 47 0C 07 0D 90 89, PITCH, ZOOM, SCROLL), the VSYNC status bit (the probe's own method) rises at 70.0669 Hz and the hsync at 31.460 kHz - the capture's frame and line rates, docs/probes/CRT31K.TXT `RUN frames=70 ticks=306930` with the ARTIC calibrated by the same file's 24 kHz rows, within 3 ppm - with 0x09A8 reading back 01; writing 0x09A8 = 00 and the BIOS 24 kHz SYNC table brings back the capture's 24 kHz rows (56.42 Hz, 24.82 kHz, the `24K (restored)` row within 3 ppm) and 0x09A8 reads 00; and an 784-dot line (x = 98 characters) runs unclamped both while 0x09A8 bit 0 is set (NP2kai io/gdc.c gdcclk[2] minx 92, which clamps an x = 91 line to 736 dots) and while it is clear (the real Xe10 runs x = 90 at 24 kHz, docs/probes/KIT2-XE10-TXTMODE.TXT:36, below gdcclk[1]'s minx 100) and the BIOS 640 x 480 block (NP2kai bios/bios18.c gdcmastersync[3]) runs VGA's 800 x 525 at the same clock (59.92 Hz). FAIL-FIRST: before the 31 kHz dot clock 0x09A8 is a read-back latch only, so the 31 kHz block runs at the 21.05 MHz dot clock (58.61 Hz, 26.32 kHz) and the 784-dot line is clamped to 800 in both states.
 //
 // THE EXPECTED VALUES ARE THE CAPTURE'S (AGENTS.md "Evidence"), recomputed here from its raw rows the
 // way tools/hwprobe/crt31k/crt31k_decode.py does: frame Hz = 307200 x frames / ticks, dot Hz = frame Hz
@@ -35,7 +35,10 @@ module tb_pc9821_crt31k;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   wire        beep_mute;
   wire [1:0]  beep_vol;   // 0x871E bits [3:2], the beeper volume (see pc9821_iobus)
 
@@ -81,6 +84,7 @@ module tb_pc9821_crt31k;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -99,6 +103,7 @@ module tb_pc9821_crt31k;
 
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   wire        fdc_irq;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
 
@@ -127,7 +132,8 @@ module tb_pc9821_crt31k;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -149,8 +155,10 @@ module tb_pc9821_crt31k;
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
 
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SYS_CLOCK_HZ(SYS_HZ)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
 
   // ---- the master GDC: pc9821_crtc on the device bus, decoded as pc9821_system's gdc_cs does for
@@ -343,6 +351,10 @@ module tb_pc9821_crt31k;
     master_program(64'h10_4E_47_04_07_0D_90_89);      // hfp2 = 1: 80 + 7 + 1 + 7 + 3 = 98
     measure(2, 3, fr, ln);
     expect_line_dots(ln, d31_cap, 784, "31K, x = 98: unclamped (NP2kai gdcclk[2] minx 92)");
+    // ...and x = 91 (the h back porch field 0) is below that range's floor: 92 characters, 736 dots
+    master_program(64'h10_4E_47_04_00_0D_90_89);      // 80 + 7 + 1 + 0 + 3 = 91
+    measure(2, 3, fr, ln);
+    expect_line_dots(ln, d31_cap, 736, "31K, x = 91: clamped to minx 92 (NP2kai gdcclk[2])");
 
     // ---- the BIOS 640 x 480 block (NP2kai bios/bios18.c gdcmastersync[3] `31-480:20`, which INT 18h
     // AH=30h programs with 0x09A8 bit 0 set): 800 x 525, VGA 640 x 480's geometry, at the 31 kHz clock ----
@@ -360,10 +372,13 @@ module tb_pc9821_crt31k;
     rd1(16'h09A8, b);
     if (b !== 8'h00) begin $display("FAIL: 0x09A8 restored reads %02x, want 00 (CRT31K.TXT `RESTORE 09A8 was=00 now=00`)", b); errors++; end
 
-    // ---- the 24 kHz range clamps the same 784-dot block to 800 (gdcclk[1] minx 100) ----
+    // ---- the 24 kHz range runs the same 784-dot block unclamped too: NP2kai's gdcclk[1] minx 100
+    // would hold it at 800, but the real Xe10 runs x = 90 at 24 kHz as a 720-dot line
+    // (docs/probes/KIT2-XE10-TXTMODE.TXT:36 `FRAME 16 VSYNC ticks=000120F1 lines=01B8`,
+    // tb_pc9821_gdc_sync_raster case 4), so x = 98 is above the machine's floor ----
     master_program(64'h10_4E_47_04_07_0D_90_89);
     measure(2, 3, fr, ln);
-    expect_line_dots(ln, d24_cap, 800, "24K, x = 98: clamped to minx 100 (NP2kai gdcclk[1])");
+    expect_line_dots(ln, d24_cap, 784, "24K, x = 98: unclamped (the Xe10 runs x = 90, KIT2-XE10-TXTMODE.TXT:36)");
 
     // ==== VERDICT ====
     if (errors != 0) $fatal(1, "TB_PC9821_CRT31K: %0d check(s) failed", errors);

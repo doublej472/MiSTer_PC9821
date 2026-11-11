@@ -502,9 +502,13 @@ always @(posedge clk) begin : memory_mapped_registers
                                 end else begin
                                     // Reset all flags
                                     // this lasts a single clock cycle
+                                    // LOCAL CHANGE (flag-reset seam, this repository):
+                                    // the timer A/B part of this reset is the board
+                                    // glue's, applied at the guest's bus write through
+                                    // jt12_top's host_clr_tmr (pc9821_opna.sv); this
+                                    // queued copy resets only the ADPCM flags, in order
+                                    // behind the ADPCM-B writes queued before it.
                                     flag_ctl    <= 7'h7F;
-                                    clr_flag_A  <= 1'b1;
-                                    clr_flag_B  <= 1'b1;
                                 end
     					    end
                             default:;

@@ -13,13 +13,13 @@ decides it:
                       (tools/profile_gen.py, derive_sdram_phase); an explicit value overrides
   trace_en            TRACE_EN (the instruction trace ring)
   perf_log_en         PERF_LOG_EN (the serial console's performance-log telemetry)
-  io_latency_profile  IO_LATENCY_PROFILE (0 = min bus, 1/2 = the faithful class table)
   mpu_en              MPU_EN, and with it CONF_STR_HEADER (the UART/MIDI OSD declaration)
   cdrom_en            CDROM_EN, and with it CONF_STR_CD + HPS_VDNUM (the CD-ROM's OSD
                       slot 4 and its Eject on status[11]); ON in every preset
                       since 2026-10-10, --no-cdrom the opt-out
-  cdrom_audio_en      CDROM_AUDIO_EN: the CD drive's CD-DA player (needs cdrom_en; --no-cdrom
-                      drops it unless --cdrom-audio asks for it, which is then refused)
+  cdrom_audio_en      CDROM_AUDIO_EN, and with it CONF_STR_CD_VOL (the OSD Audio page's "CD audio"):
+                      the CD drive's CD-DA player (needs cdrom_en; --no-cdrom drops it unless
+                      --cdrom-audio asks for it, which is then refused)
   cdrom_log_en        CDROM_LOG_EN: the CD drive's command log on the debug UART (a debug instrument;
                       needs cdrom_en, and is refused with trace_en or perf_log_en, which share that
                       UART arm)
@@ -39,6 +39,12 @@ decides it:
   dbg_sdram_trcd      SDRAM_DBG_TRCD_TRP: tRCD/tRP forced to N cycles (--dbg-sdram-trcd-cycles N;
                       0 = derived from clk_sys, every preset). With dbg_sdram_cl2 these are the
                       100 MHz CL2 test point that separates a tRCD/tRP cause from an I/O window one
+  gdc_write_pace_ns   GDC_WRITE_PACE_NS: the graphics GDC's WRITE walk paced to N ns per unit
+                      (--gdc-write-pace N; 0 = unpaced, every preset). The Xe10 takes ~1.40 us a
+                      word (GDCTIME WDAT_N rows); an A/B build for the owner's pacing decision
+  gdc_fig_pace_ns     GDC_FIG_PACE_NS: the figure engine's step paced to N ns per dot
+                      (--gdc-fig-pace N; 0 = today's 14 dot clocks a step, every preset; the
+                      Xe10's GDCTIME LINE_N rows give ~1.40 us a dot)
   alsa_en             the framework's HPS (Linux) audio input; off = VERILOG_MACRO MISTER_DISABLE_ALSA
   vga_dbl_en          VIDEO_DBL_EN: the analog line doubler (24.8 -> 49.7 kHz, OSD "Analog video")
   sdram_dq_ddio       SDRAM_DQ_DDIO: the SDRAM read capture as an instantiated IOE input DDIO cell
@@ -59,15 +65,15 @@ decides it:
                       name/value pair is checked by Quartus itself (quartus_sh's
                       set_global_assignment, in the container) when the configuration is applied
 
-The five named PROFILES below are presets of that value. Any field of a preset can be
+The four named PROFILES below are presets of that value. Any field of a preset can be
 overridden on the command line or from a profile file (JSON, or TOML), and --custom starts
 from base's values under the name 'custom'. Applying a configuration:
 
   * rewrites the top level's localparams, every one top_localparams() lists: CLOCK_RATE_HZ,
-    TRACE_EN, PERF_LOG_EN, IO_LATENCY_PROFILE, MPU_EN, CONF_STR_HEADER, SDRAM_CLK_DDIO,
+    TRACE_EN, PERF_LOG_EN, MPU_EN, CONF_STR_HEADER, SDRAM_CLK_DDIO,
     SDRAM_DQ_DDIO, SDRAM_OUT_DDIO, SDRAM_PHASE_DYN, SDRAM_DBG_CL, SDRAM_DBG_TRCD_TRP, CDROM_EN,
-    CONF_STR_CD, HPS_VDNUM, CDROM_AUDIO_EN, CDROM_LOG_EN, VIDEO_DBL_EN, CONF_STR_VIDEO and every
-    DBG_* instrument parameter;
+    CONF_STR_CD, CONF_STR_BANK1, CONF_STR_CD_VOL, HPS_VDNUM, CDROM_AUDIO_EN, CDROM_LOG_EN, VIDEO_DBL_EN, CONF_STR_VIDEO,
+    GDC_WRITE_PACE_NS, GDC_FIG_PACE_NS and every DBG_* instrument parameter;
   * rewrites the qsf's managed block: the production SPEED fit stack with the configured
     technique, the framework feature macros (MISTER_DISABLE_ALSA for a feature that is off;
     MISTER_DISABLE_YC is always set - the composite/S-Video encoder is TV-only and the TV converter
@@ -80,7 +86,6 @@ from base's values under the name 'custom'. Applying a configuration:
 
     ./build_profile.py base                       # 90 MHz clk_sys, SDRAM on clk_sys - the default, shipping build
     ./build_profile.py trace                      # base + trace ring + perf log, AREA fit (debug)
-    ./build_profile.py iofaithful                 # base + the FAITHFUL I/O class table
     ./build_profile.py mediumoc                   # 100 MHz clk_sys and SDRAM (past timing closure)
     ./build_profile.py heavyoc                    # 120 MHz clk_sys and SDRAM (at the SDRAM's limit)
     ./build_profile.py base --trace
@@ -142,14 +147,21 @@ PIXEL_HZ = 21_052_632
 CLK_SYS_MAX_HZ = 133_000_000
 SDRAM_PART_LIMIT_HZ = 120_000_000
 # The split-clock configuration's fields, removed on 2026-10-09.
-# The OSD's "CD audio volume" field, which CONF_STR_CD carries in a build with the CD drive's
-# audio player. Position 0 is 0 dB, the unity level shipped before the field existed (the owner's
+# The OSD Audio page's "CD audio" field, which CONF_STR_CD_VOL carries in a build with the CD
+# drive's audio player (the field that was "CD audio volume" on the main page: the same bits and
+# list, so a saved config keeps its level). Position 0 is 0 dB, the unity level shipped before the field existed (the owner's
 # choice, 2026-10-31: the clipping that had prompted a -6 dB default was a wrong-rail clamp in the
 # output FIR, tb_pc9821_audio_out_sat, not a level problem); NP2kai's default CD-DA level,
 # davolume 128/255 = -6 dB, stays a step. The list descends in 2 dB steps and ends at Off (the
 # owner's order, 2026-10-31). pc9821_osd maps each position to pc9821_audio_volume's
 # gain code, and tools/check_osd_contract.py holds the two together.
-CD_VOLUME_FIELD = "O[66:64],CD audio volume,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"
+CD_VOLUME_FIELD = "P2O[66:64],CD audio,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"
+# The OSD's "IDE bank 1" field (status[67]), which CONF_STR_BANK1 carries in every build with the
+# CD drive: bank 1's master is the CD-ROM (entry 0, the stock layout) or the second hard disk
+# (slot 3). A build without the CD has no field (its bank 1 can only hold the second disk).
+IDE_BANK1_FIELD = "O[67],IDE bank 1,CD-ROM,HDD2;"
+# The second hard disk's Mount and Eject (hps_io slot 3, status[7]), in every build.
+HDD2_ENTRIES = "S3,IMGHDIVHD,Mount HDD2;T[7],Eject HDD2;"
 RETIRED_FIELDS = ("sdram_hz", "sdram_mhz", "sdram_sync")
 RETIRED_LOCALPARAMS = ("SDRAM_RATE_HZ", "SDRAM_SYNC")
 # SDRAM_DQ_DDIO's path from the top level to the cell it selects (sdram.v DQ_IN_DDIO): each file
@@ -170,6 +182,17 @@ DBG_TIMING_WIRING = (
     ("src/memory/sdram_sync_bridge.sv", ".DBG_CL(DBG_CL)"),
     ("src/memory/sdram_sync_bridge.sv", ".DBG_TRCD_TRP(DBG_TRCD_TRP)"),
 )
+# The graphics GDC's draw pacing to pc9821_gdc2 (WRITE_PACE_NS / FIG_PACE_NS): two hops, or the
+# engine builds its unpaced default whatever the record says.
+GDC_PACE_WIRING = (
+    (TOP_NAME, ".GDC_WRITE_PACE_NS(GDC_WRITE_PACE_NS)"),
+    (TOP_NAME, ".GDC_FIG_PACE_NS(GDC_FIG_PACE_NS)"),
+    ("src/pc9821/core/pc9821_system.sv", ".WRITE_PACE_NS(GDC_WRITE_PACE_NS)"),
+    ("src/pc9821/core/pc9821_system.sv", ".FIG_PACE_NS(GDC_FIG_PACE_NS)"),
+)
+# The pace a --gdc-*-pace value may take, in ns: 0 (unpaced) or a period between these.
+GDC_PACE_MIN_NS = 100
+GDC_PACE_MAX_NS = 100_000
 
 
 # sdram.v's timing table and its elaboration checks, at the grade z486_mister.sv builds (-7,
@@ -303,9 +326,6 @@ class Config:
     trace_en: bool = False
     # Rewrites PERF_LOG_EN: the serial console's watchdog/PRF/GFX telemetry. 'trace' only.
     perf_log_en: bool = False
-    # Rewrites IO_LATENCY_PROFILE, which pc9821_system forwards into pc9821_iobus. 0 is the min
-    # profile (the shipped fast bus); 1/2 the faithful bus. The unselected table const-folds.
-    io_latency_profile: int = 0
     # Rewrites MPU_EN (and CONF_STR_HEADER, which follows it). ON in every preset except 'trace'
     # (MIDI by default once it fits). Measured on 11a1e82c, seeds 2-5: base
     # + MPU + ALSA 4,105 LABs mean / clk_sys -4.85 ns vs base 4,105 / -5.09; base + MPU alone
@@ -379,6 +399,12 @@ class Config:
     # SDC's CL2 tAC at any clock, so a 100 MHz CL2 build is the pre-cutover structure.
     dbg_sdram_cl2: bool = False
     dbg_sdram_trcd: int = 0
+    # Rewrite GDC_WRITE_PACE_NS / GDC_FIG_PACE_NS (pc9821_gdc2 WRITE_PACE_NS / FIG_PACE_NS): the
+    # graphics GDC's draw pacing in ns per WRITE unit / figure dot. 0 in every preset (today's
+    # unpaced WRITE and 14-dot-clock figure step; the default is the owner's decision, todo item
+    # 149) and recorded only when set. The Xe10's GDCTIME rows give ~1401 ns for both.
+    gdc_write_pace_ns: int = 0
+    gdc_fig_pace_ns: int = 0
     # The managed qsf block's OPTIMIZATION_TECHNIQUE. AREA in every preset since 2026-10-12
     # (docs/trade-candidates.md T40): on the storage-pass tree, seeds 2-7 per side, AREA placed
     # 38,947 ALMs / 4,170 LABs mean vs SPEED's 39,337 / 4,181, clk_sys slack mean -7.23 /
@@ -427,24 +453,52 @@ class Config:
 
     @property
     def conf_str_cd(self) -> str:
-        """z486_mister.sv's CONF_STR_CD: the HDD's Eject, plus the CD-ROM's Mount and Eject.
+        """z486_mister.sv's CONF_STR_CD: the HDD's Eject, the second hard disk's Mount and Eject,
+        plus the CD-ROM's Mount and Eject.
 
-        The OSD lists each drive's Mount directly followed by its Eject, HDD, CD-ROM, FDD1,
-        FDD2, so the CD's pair sits between "S0,IMGHDIVHD,Mount HDD;" and "S1,...,Mount FDD1;". A
+        The OSD lists each drive's Mount directly followed by its Eject, HDD, HDD2, CD-ROM, FDD1,
+        FDD2, so the HDD2 and CD pairs sit between "S0,IMGHDIVHD,Mount HDD;" and
+        "S1,...,Mount FDD1;". HDD2 is hps_io slot 3 in every build; its Eject is status[7], a bit
+        no CONF_STR revision ever declared, so no saved config can hold it set. A
         profile-rewritten LINE for the same reason as conf_str_header: a string ternary on
         CDROM_EN would be NUL-padded on the high side. Never empty (an empty Verilog string is a
         NUL byte), so the HDD's always-present Eject leads it. status[11] was only ever a T
         trigger (the removed second disk's Eject), so reusing it cannot meet a saved option value.
-        With the CD drive's audio player (cdrom_audio_en) the line also carries the "CD audio
-        volume" field (status[66:64], decoded by pc9821_osd; bits no field has ever used), so a
-        build without CD-DA does not offer a control with nothing to act on.
+        The IDE bank 1 field is not here: it is a setting, not a drive action, so it leads the
+        group below the drives (conf_str_bank1).
         """
-        line = "T[8],Eject HDD;"
+        line = "T[8],Eject HDD;" + HDD2_ENTRIES
         if self.cdrom_en:
-            line += "S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;"
-            if self.cdrom_audio_en:
-                line += CD_VOLUME_FIELD
+            line += "S4,ISOPCDBIN,Mount CD-ROM;T[11],Eject CD-ROM;"
         return line
+
+    @property
+    def conf_str_bank1(self) -> str:
+        """z486_mister.sv's CONF_STR_BANK1: the separator that closes the drives block, then,
+        with the CD drive, the "IDE bank 1" field (status[67]: CD-ROM or HDD2 as bank 1's master,
+        a drive-layout setting, so the first one below the drives, the owner's order of
+        2026-11-01). A rewritten line for the same reason as CONF_STR_CD; it STARTS WITH the
+        drives block's closing separator, so it is never empty (an empty Verilog string is a
+        NUL byte).
+        """
+        line = "-;"
+        if self.cdrom_en:
+            line += IDE_BANK1_FIELD
+        return line
+
+    @property
+    def conf_str_cd_vol(self) -> str:
+        """z486_mister.sv's CONF_STR_CD_VOL: with the CD drive's audio player, the OSD Audio
+        page's last field, "CD audio" (status[66:64], decoded by pc9821_osd; P2, after the
+        PC-9801-86 and Beeper levels, the owner's order), then the separator that closes the
+        root menu's page group. A build without CD-DA does not offer a control with nothing to
+        act on, and its Audio page keeps the other two levels. A rewritten line for the same
+        reason as CONF_STR_CD; it ENDS WITH the page group's separator, so it is never empty.
+        """
+        line = ""
+        if self.cdrom_en and self.cdrom_audio_en:
+            line += CD_VOLUME_FIELD
+        return line + "-;"
 
     @property
     def conf_str_video(self) -> str:
@@ -467,8 +521,8 @@ class Config:
 
     @property
     def hps_vdnum(self) -> int:
-        """hps_io's VDNUM: 0 HDD, 1-2 FDD; with the CD, 4 CD and slot 3 an unused, tied-off index."""
-        return 5 if self.cdrom_en else 3
+        """hps_io's VDNUM: 0 HDD, 1-2 FDD, 3 HDD2 (every build); with the CD, 4 CD."""
+        return 5 if self.cdrom_en else 4
 
     @property
     def sdram_clk_ddio(self) -> bool:
@@ -503,7 +557,6 @@ class Config:
             "sdram_phase_source": source,
             "trace_en": self.trace_en,
             "perf_log_en": self.perf_log_en,
-            "io_latency_profile": self.io_latency_profile,
             "mpu_en": self.mpu_en,
             "cdrom_en": self.cdrom_en,
             "cdrom_audio_en": self.cdrom_audio_en,
@@ -524,6 +577,10 @@ class Config:
             rec["dbg_sdram_cl2"] = True
         if self.dbg_sdram_trcd:
             rec["dbg_sdram_trcd"] = self.dbg_sdram_trcd
+        if self.gdc_write_pace_ns:
+            rec["gdc_write_pace_ns"] = self.gdc_write_pace_ns
+        if self.gdc_fig_pace_ns:
+            rec["gdc_fig_pace_ns"] = self.gdc_fig_pace_ns
         if self.qsf_set:
             rec["qsf_set"] = dict(self.qsf_set)
         if self.dbg:
@@ -536,11 +593,12 @@ class Config:
     def knobs(self) -> tuple:
         """Everything that reaches the build, for comparing configurations."""
         return (self.clk_sys_hz, self.phase(), self.trace_en,
-                self.perf_log_en, self.io_latency_profile, self.mpu_en, self.cdrom_en,
+                self.perf_log_en, self.mpu_en, self.cdrom_en,
                 self.cdrom_audio_en, self.cdrom_log_en, self.alsa_en, self.fit_technique,
                 self.qsf_set, self.dbg, self.vga_dbl_en, self.hdmi_rclk, self.hdmi_rclk_q2,
                 self.sdram_dq_ddio, self.sdram_out_ddio, self.sdram_phase_dyn,
-                self.dbg_sdram_cl2, self.dbg_sdram_trcd)
+                self.dbg_sdram_cl2, self.dbg_sdram_trcd, self.gdc_write_pace_ns,
+                self.gdc_fig_pace_ns)
 
     def validate(self) -> list[str]:
         problems = []
@@ -551,8 +609,6 @@ class Config:
                             f"{CLK_SYS_MIN_HZ // 10**6}..{CLK_SYS_MAX_HZ // 10**6} MHz: it is also "
                             "the SDRAM controller's clock, and sdram.v's timing derivation tops out "
                             "at 133 MHz")
-        if self.io_latency_profile not in (0, 1, 2):
-            problems.append(f"io_latency_profile {self.io_latency_profile} is not 0, 1 or 2")
         if self.clk_sys_hz <= PIXEL_HZ:
             problems.append(f"clk_sys {self.clk_sys_hz:_} Hz cannot carry the {PIXEL_HZ:_} Hz dot "
                             "enable (pc9821_dot_ce); the analog converters run on the video PLL's "
@@ -572,6 +628,11 @@ class Config:
                 problems.append(f"sdram.v refuses this timing table at {self.clk_sys_hz:_} Hz"
                                 + (f" with tRCD/tRP forced to {self.dbg_sdram_trcd}"
                                    if self.dbg_sdram_trcd else "") + f": {why}")
+        for key in ("gdc_write_pace_ns", "gdc_fig_pace_ns"):
+            ns = getattr(self, key)
+            if ns != 0 and not GDC_PACE_MIN_NS <= ns <= GDC_PACE_MAX_NS:
+                problems.append(f"{key} {ns} is not 0 (unpaced) or {GDC_PACE_MIN_NS}.."
+                                f"{GDC_PACE_MAX_NS} ns per unit")
         if self.fit_technique not in FIT_TECHNIQUES:
             problems.append(f"fit_technique {self.fit_technique!r} is not one of {FIT_TECHNIQUES}")
         # The CD drive's two options are folded into CDROM_AUDIO_EN / CDROM_LOG_EN as ANDs (see
@@ -675,19 +736,29 @@ GLOBAL_SIGNAL_LINE_RE = re.compile(r"^\s*set_instance_assignment\s+-name\s+GLOBA
 #   snoop      --dbg-snoop LO:HI   its memory snoop: every CPU write into [LO, HI) and every read
 #                                  beat from it (physical addresses, hex)
 #   gdc        --dbg-gdc           pc9821_gdc_log: the display programming (alias --gdc-log)
+#   fdc        --dbg-fdc           pc9821_fdc_log: the floppy controller's port traffic, its interrupt
+#                                  line and the DMA channel-2 programming
 #   trig       --dbg-trig SPEC     its frozen instruction trace and the trigger that freezes it:
 #                                  pc:CS:EIP (first issue there), wr:ADDR (first CPU write covering
-#                                  that byte) or reload:ADDR (a nonzero 16-bit word written after a
-#                                  zero one - the pn-stall stub-header reload)
+#                                  that byte), reload:ADDR (a nonzero 16-bit word written after a
+#                                  zero one - the pn-stall stub-header reload) or io:PORT[:VAL] (the
+#                                  first CPU OUT of VAL to PORT, of any byte without VAL; packed
+#                                  into TRIG_ADDR as {7'b0, any, PORT[15:0], VAL[7:0]})
 #   trig2      --dbg-trig2 LO:HI   a second stage: the trigger only arms it, and the first CPU write
 #                                  into [LO, HI) after it freezes the trace
 #   arm_s      --dbg-arm-s N       nothing triggers before N seconds of uptime (boot traffic)
 #   post       --dbg-post N        issues recorded after the final trigger (default 32)
+#   last_ms    --dbg-last-ms N     the LAST occurrence instead of the first: every match re-arms,
+#                                  and the capture of the latest one is dumped after N ms with no
+#                                  further match (single stage; pc, wr or io; 0 = off, the default)
+#   trace_aw   --dbg-trace-aw N    the trace ring holds 2^N issues (4..12, default 9; the LAST mode
+#                                  keeps two such banks): a deeper capture costs M10K blocks only
 #   sample_ms  --dbg-sample-ms N   the sampler's period in ms (1..255, default 10)
-DBG_FLAGS = ("cpu", "gdc")
-DBG_VALUES = ("snoop", "trig", "trig2", "sample_ms", "arm_s", "post")
-DBG_DEFAULTS = {"sample_ms": 10, "arm_s": 0, "post": 32}
-DBG_KINDS = {"pc": 1, "wr": 2, "reload": 3}
+DBG_FLAGS = ("cpu", "gdc", "fdc")
+DBG_VALUES = ("snoop", "trig", "trig2", "sample_ms", "arm_s", "post", "last_ms", "trace_aw")
+DBG_DEFAULTS = {"sample_ms": 10, "arm_s": 0, "post": 32, "last_ms": 0, "trace_aw": 9}
+DBG_KINDS = {"pc": 1, "wr": 2, "reload": 3, "io": 4}
+DBG_IO_ANY = 1 << 24      # io:PORT without a byte: TRIG_ADDR[24] (pc9821_dbg_cpu io_hit)
 
 
 def _hex(text: str, what: str) -> int:
@@ -709,12 +780,13 @@ def parse_dbg_range(text, what: str) -> tuple[int, int]:
 
 
 def parse_dbg_trig(text) -> tuple[str, int, int]:
-    """'pc:CS:EIP' | 'wr:ADDR' | 'reload:ADDR' (hex) -> (kind name, cs, address)."""
+    """'pc:CS:EIP' | 'wr:ADDR' | 'reload:ADDR' | 'io:PORT[:VAL]' (hex) -> (kind name, cs, address);
+    io packs {any, PORT, VAL} into the address (DBG_IO_ANY when VAL is left out)."""
     parts = str(text).strip().lower().split(":")
     kind = parts[0]
     if kind not in DBG_KINDS:
         raise SystemExit(f"--dbg-trig {text!r}: the kind is one of {', '.join(DBG_KINDS)} "
-                         "(pc:CS:EIP, wr:ADDR, reload:ADDR)")
+                         "(pc:CS:EIP, wr:ADDR, reload:ADDR, io:PORT[:VAL])")
     if kind == "pc":
         if len(parts) != 3:
             raise SystemExit(f"--dbg-trig {text!r}: pc takes CS:EIP (pc:CS:EIP, hex)")
@@ -722,6 +794,14 @@ def parse_dbg_trig(text) -> tuple[str, int, int]:
         if not 0 <= cs <= 0xFFFF or not 0 <= addr <= 0xFFFFFFFF:
             raise SystemExit(f"--dbg-trig {text!r}: CS is 16 bits and EIP 32")
         return kind, cs, addr
+    if kind == "io":
+        if len(parts) not in (2, 3):
+            raise SystemExit(f"--dbg-trig {text!r}: io takes PORT or PORT:VAL (io:PORT[:VAL], hex)")
+        port = _hex(parts[1], "--dbg-trig PORT")
+        val = _hex(parts[2], "--dbg-trig VAL") if len(parts) == 3 else None
+        if not 0 <= port <= 0xFFFF or (val is not None and not 0 <= val <= 0xFF):
+            raise SystemExit(f"--dbg-trig {text!r}: PORT is 16 bits and VAL 8")
+        return kind, 0, (port << 8) | (DBG_IO_ANY if val is None else val)
     if len(parts) != 2:
         raise SystemExit(f"--dbg-trig {text!r}: {kind} takes one address ({kind}:ADDR, hex)")
     addr = _hex(parts[1], "--dbg-trig ADDR")
@@ -749,7 +829,13 @@ def normalize_dbg(items) -> tuple[tuple[str, object], ...]:
             out[key] = f"{lo:#x}:{hi:#x}"
         elif key == "trig":
             kind, cs, addr = parse_dbg_trig(value)
-            out[key] = f"pc:{cs:#x}:{addr:#x}" if kind == "pc" else f"{kind}:{addr:#x}"
+            if kind == "pc":
+                out[key] = f"pc:{cs:#x}:{addr:#x}"
+            elif kind == "io":
+                port = (addr >> 8) & 0xFFFF
+                out[key] = f"io:{port:#x}" if addr & DBG_IO_ANY else f"io:{port:#x}:{addr & 0xFF:#x}"
+            else:
+                out[key] = f"{kind}:{addr:#x}"
         else:
             try:
                 number = int(value)
@@ -767,11 +853,14 @@ def dbg_param_values(dbg: dict) -> dict:
     kind, cs, addr = parse_dbg_trig(dbg["trig"]) if "trig" in dbg else ("", 0, 0)
     return {
         "gdc": int(bool(dbg.get("gdc"))), "cpu": int(bool(dbg.get("cpu"))),
+        "fdc": int(bool(dbg.get("fdc"))),
         "sample_ms": dbg.get("sample_ms", DBG_DEFAULTS["sample_ms"]),
         "snoop_en": int("snoop" in dbg), "snoop_lo": lo, "snoop_hi": hi & 0xFFFFFFFF if hi < 1 << 32 else 0xFFFFFFFF,
         "trig_kind": DBG_KINDS.get(kind, 0), "trig_addr": addr, "trig_cs": cs,
         "trig2_lo": lo2, "trig2_hi": hi2 & 0xFFFFFFFF if hi2 < 1 << 32 else 0xFFFFFFFF,
         "arm_s": dbg.get("arm_s", DBG_DEFAULTS["arm_s"]), "post": dbg.get("post", DBG_DEFAULTS["post"]),
+        "last_ms": dbg.get("last_ms", DBG_DEFAULTS["last_ms"]),
+        "trace_aw": dbg.get("trace_aw", DBG_DEFAULTS["trace_aw"]),
     }
 
 
@@ -786,13 +875,19 @@ def dbg_problems(config) -> list[str]:
                         "would cut a record in two: build the instruments without them")
     if "trig2" in dbg and "trig" not in dbg:
         problems.append("dbg: trig2 (a second stage) needs trig (the first)")
-    for key, lo, hi in (("sample_ms", 1, 255), ("arm_s", 0, 1023), ("post", 0, 65535)):
+    for key, lo, hi in (("sample_ms", 1, 255), ("arm_s", 0, 1023), ("post", 0, 65535),
+                        ("last_ms", 0, 3_600_000), ("trace_aw", 4, 12)):
         if key in dbg and not lo <= dbg[key] <= hi:
             problems.append(f"dbg: {key} {dbg[key]} is outside {lo}..{hi}")
     if "sample_ms" in dbg and "cpu" not in dbg:
         problems.append("dbg: sample_ms means something only with the sampler (cpu)")
-    if ("arm_s" in dbg or "post" in dbg) and "trig" not in dbg:
-        problems.append("dbg: arm_s / post mean something only with a trigger (trig)")
+    if ("arm_s" in dbg or "post" in dbg or "last_ms" in dbg or "trace_aw" in dbg) and "trig" not in dbg:
+        problems.append("dbg: arm_s / post / last_ms / trace_aw mean something only with a trigger (trig)")
+    if "last_ms" in dbg and "trig" in dbg:
+        if "trig2" in dbg:
+            problems.append("dbg: last_ms (the last occurrence) is single-stage: it does not take trig2")
+        if str(dbg["trig"]).startswith("reload:"):
+            problems.append("dbg: last_ms takes a pc, wr or io trigger, not reload")
     return problems
 
 
@@ -801,6 +896,7 @@ def dbg_localparams(config) -> list[tuple[str, str, str]]:
     p = config.dbg_params
     spec = [
         ("DBG_GDC_EN", "", f"1'b{p['gdc']}"),
+        ("DBG_FDC_EN", "", f"1'b{p['fdc']}"),
         ("DBG_CPU_EN", "", f"1'b{p['cpu']}"),
         ("DBG_SAMPLE_MS", "", f"{p['sample_ms']}"),
         ("DBG_SNOOP_EN", "", f"1'b{p['snoop_en']}"),
@@ -813,6 +909,8 @@ def dbg_localparams(config) -> list[tuple[str, str, str]]:
         ("DBG_TRIG2_HI", "[31:0] ", f"32'h{p['trig2_hi']:08x}"),
         ("DBG_ARM_S", "", f"{p['arm_s']}"),
         ("DBG_POST", "", f"{p['post']}"),
+        ("DBG_LAST_MS", "", f"{p['last_ms']}"),
+        ("DBG_TRACE_AW", "", f"{p['trace_aw']}"),
     ]
     out = []
     for name, width, value in spec:
@@ -1016,15 +1114,6 @@ PROFILES: dict[str, Config] = {
         alsa_en=False,
         fit_technique="AREA",
     ),
-    # The I/O-latency profile: IDENTICAL to base in clock, PLL and fit settings, so the only
-    # difference is the I/O class table (IO_LATENCY_PROFILE 2 prices every class at the
-    # machine's measured time, docs/probes/IO.TXT; 1 holds back the EGC even-read class).
-    "iofaithful": Config(
-        name="iofaithful",
-        description="90 MHz clk_sys, SDRAM on clk_sys (identical to base) + the FAITHFUL I/O class table",
-        clk_sys_hz=_BASE_HZ,
-        io_latency_profile=2,
-    ),
 }
 
 
@@ -1034,10 +1123,10 @@ PROFILES: dict[str, Config] = {
 
 PROFILE_FILE_KEYS = {
     "name", "description", "preset", "clk_sys_hz", "clk_sys_mhz",
-    "sdram_phase_ps", "trace_en", "perf_log_en", "io_latency_profile", "mpu_en",
+    "sdram_phase_ps", "trace_en", "perf_log_en", "mpu_en",
     "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "fit_technique", "qsf_set",
     "dbg", "vga_dbl_en", "hdmi_rclk", "hdmi_rclk_q2", "sdram_dq_ddio", "sdram_out_ddio",
-    "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd",
+    "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd", "gdc_write_pace_ns", "gdc_fig_pace_ns",
 }
 
 
@@ -1060,8 +1149,6 @@ def add_override_args(parser: argparse.ArgumentParser) -> None:
                    default=None, help="TRACE_EN (the instruction trace ring)")
     g.add_argument("--perf-log", dest="perf_log_en", action=argparse.BooleanOptionalAction,
                    default=None, help="PERF_LOG_EN (the serial performance log)")
-    g.add_argument("--io-latency", dest="io_latency_profile", type=int, choices=(0, 1, 2),
-                   help="IO_LATENCY_PROFILE")
     g.add_argument("--mpu", dest="mpu_en", action=argparse.BooleanOptionalAction, default=None,
                    help="MPU_EN (and the MIDI CONF_STR header)")
     g.add_argument("--cdrom", dest="cdrom_en", action=argparse.BooleanOptionalAction,
@@ -1074,10 +1161,13 @@ def add_override_args(parser: argparse.ArgumentParser) -> None:
                    help="debug: the CPU sampler (CS:EIP, INTA counts, PIC state, VSYNC) on the debug UART")
     g.add_argument("--dbg-gdc", "--gdc-log", dest="dbg_gdc", action=argparse.BooleanOptionalAction,
                    default=None, help="debug: the display programming (both GDCs) on the debug UART")
+    g.add_argument("--dbg-fdc", dest="dbg_fdc", action=argparse.BooleanOptionalAction, default=None,
+                   help="debug: the floppy controller's ports, interrupt and DMA channel 2 on the debug UART")
     g.add_argument("--dbg-snoop", dest="dbg_snoop", metavar="LO:HI",
                    help="debug: every CPU write and read beat in the physical window [LO, HI) (hex)")
     g.add_argument("--dbg-trig", dest="dbg_trig", metavar="SPEC",
-                   help="debug: freeze the instruction trace on pc:CS:EIP, wr:ADDR or reload:ADDR (hex)")
+                   help="debug: freeze the instruction trace on pc:CS:EIP, wr:ADDR, reload:ADDR or "
+                        "io:PORT[:VAL] (the first CPU OUT of VAL to PORT; hex)")
     g.add_argument("--dbg-trig2", dest="dbg_trig2", metavar="LO:HI",
                    help="debug: a second stage - the first CPU write into [LO, HI) after --dbg-trig")
     g.add_argument("--dbg-sample-ms", dest="dbg_sample_ms", type=int, metavar="N",
@@ -1086,6 +1176,11 @@ def add_override_args(parser: argparse.ArgumentParser) -> None:
                    help="debug: no trigger fires before N seconds of uptime")
     g.add_argument("--dbg-post", dest="dbg_post", type=int, metavar="N",
                    help="debug: issues recorded after the final trigger (default 32)")
+    g.add_argument("--dbg-last-ms", dest="dbg_last_ms", type=int, metavar="N",
+                   help="debug: capture the LAST trigger match instead of the first, dumped after "
+                        "N ms with no further match")
+    g.add_argument("--dbg-trace-aw", dest="dbg_trace_aw", type=int, metavar="N",
+                   help="debug: the instruction trace ring holds 2^N issues (4..12, default 9)")
     g.add_argument("--alsa", dest="alsa_en", action=argparse.BooleanOptionalAction, default=None,
                    help="the framework's HPS audio input (off = MISTER_DISABLE_ALSA; the "
                         "composite/S-Video encoder is always off - it is TV-only)")
@@ -1114,6 +1209,12 @@ def add_override_args(parser: argparse.ArgumentParser) -> None:
                         "clock (the pre-cutover 100 MHz CL2 structure); a measurement build")
     g.add_argument("--dbg-sdram-trcd-cycles", dest="dbg_sdram_trcd", type=int, metavar="N",
                    help="debug: SDRAM_DBG_TRCD_TRP, tRCD and tRP forced to N cycles (0 = derived)")
+    g.add_argument("--gdc-write-pace", dest="gdc_write_pace_ns", type=int, metavar="NS",
+                   help="GDC_WRITE_PACE_NS: the graphics GDC's WRITE walk at NS ns per unit (0 = "
+                        "unpaced, every preset; the Xe10 is ~1401)")
+    g.add_argument("--gdc-fig-pace", dest="gdc_fig_pace_ns", type=int, metavar="NS",
+                   help="GDC_FIG_PACE_NS: the figure engine at NS ns per dot (0 = 14 dot clocks a "
+                        "step, every preset; the Xe10 is ~1401)")
     g.add_argument("--fit-technique", choices=FIT_TECHNIQUES, help="OPTIMIZATION_TECHNIQUE")
     g.add_argument("--qsf-set", action="append", metavar="NAME=VALUE",
                    help="a fitter/synthesis qsf assignment over the SPEED stack (repeatable; "
@@ -1129,9 +1230,10 @@ def override_argv(ns: argparse.Namespace) -> list[str]:
     for flag, attr in (("--profile-file", "profile_file"), ("--name", "name"),
                        ("--clk-sys-mhz", "clk_sys_mhz"), ("--clk-sys-hz", "clk_sys_hz"),
                        ("--sdram-phase-ps", "sdram_phase_ps"),
-                       ("--io-latency", "io_latency_profile"),
                        ("--fit-technique", "fit_technique"),
-                       ("--dbg-sdram-trcd-cycles", "dbg_sdram_trcd")):
+                       ("--dbg-sdram-trcd-cycles", "dbg_sdram_trcd"),
+                       ("--gdc-write-pace", "gdc_write_pace_ns"),
+                       ("--gdc-fig-pace", "gdc_fig_pace_ns")):
         value = getattr(ns, attr, None)
         if value is not None:
             out += [flag, str(Path(value).resolve()) if attr == "profile_file" else str(value)]
@@ -1210,10 +1312,11 @@ def resolve_config(preset_name: str | None, ns: argparse.Namespace) -> Config:
         take("clk_sys_hz", pg.hz_from_mhz_arg(data["clk_sys_mhz"]))
     if "sdram_phase_ps" in data:
         fields["sdram_phase_ps"] = _phase_value(data["sdram_phase_ps"])
-    for key in ("trace_en", "perf_log_en", "io_latency_profile", "mpu_en",
+    for key in ("trace_en", "perf_log_en", "mpu_en",
                 "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "fit_technique",
                 "vga_dbl_en", "hdmi_rclk", "hdmi_rclk_q2", "sdram_dq_ddio", "sdram_out_ddio",
-                "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd"):
+                "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd", "gdc_write_pace_ns",
+                "gdc_fig_pace_ns"):
         take(key, data.get(key))
     # qsf_set merges name by name: the preset's, then the file's table, then each --qsf-set.
     qsf_set = dict(preset.qsf_set)
@@ -1227,10 +1330,11 @@ def resolve_config(preset_name: str | None, ns: argparse.Namespace) -> Config:
         fields["clk_sys_hz"] = pg.hz_from_mhz_arg(ns.clk_sys_mhz)
     if getattr(ns, "sdram_phase_ps", None) is not None:
         fields["sdram_phase_ps"] = _phase_value(ns.sdram_phase_ps)
-    for key in ("trace_en", "perf_log_en", "io_latency_profile", "mpu_en",
+    for key in ("trace_en", "perf_log_en", "mpu_en",
                 "cdrom_en", "cdrom_audio_en", "cdrom_log_en", "alsa_en", "fit_technique",
                 "vga_dbl_en", "hdmi_rclk", "hdmi_rclk_q2", "sdram_dq_ddio", "sdram_out_ddio",
-                "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd"):
+                "sdram_phase_dyn", "dbg_sdram_cl2", "dbg_sdram_trcd", "gdc_write_pace_ns",
+                "gdc_fig_pace_ns"):
         take(key, getattr(ns, key, None))
     qsf_set.update(parse_qsf_set_args(getattr(ns, "qsf_set", None)))
     fields["qsf_set"] = normalize_qsf_set(qsf_set)
@@ -1273,7 +1377,7 @@ def config_from_record(record: dict, description: str = "") -> Config:
         # they are not fields any more, and agreement() reports such a record as retired.
         name=record["name"], description=description, clk_sys_hz=record["clk_sys_hz"],
         sdram_phase_ps=phase, trace_en=record["trace_en"],
-        perf_log_en=record["perf_log_en"], io_latency_profile=record["io_latency_profile"],
+        perf_log_en=record["perf_log_en"],
         mpu_en=record["mpu_en"], fit_technique=record["fit_technique"],
         # Records written before these fields existed mean the defaults they had then.
         cdrom_en=record.get("cdrom_en", False),
@@ -1296,6 +1400,9 @@ def config_from_record(record: dict, description: str = "") -> Config:
         sdram_phase_dyn=record.get("sdram_phase_dyn", False),
         dbg_sdram_cl2=record.get("dbg_sdram_cl2", False),
         dbg_sdram_trcd=record.get("dbg_sdram_trcd", 0),
+        # A record without these keys is an unpaced build (the only one before they existed).
+        gdc_write_pace_ns=record.get("gdc_write_pace_ns", 0),
+        gdc_fig_pace_ns=record.get("gdc_fig_pace_ns", 0),
         # A record written before this field existed was a build whose DQ capture was packed.
         sdram_dq_ddio=record.get("sdram_dq_ddio", False),
         # Likewise its output registers.
@@ -1442,9 +1549,6 @@ def top_localparams(config: Config) -> list[tuple[str, str, str]]:
          f"localparam TRACE_EN = 1'b{int(config.trace_en)};"),
         ("PERF_LOG_EN", r"^localparam[ \t]+PERF_LOG_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
          f"localparam PERF_LOG_EN = 1'b{int(config.perf_log_en)};"),
-        ("IO_LATENCY_PROFILE",
-         r"^localparam[ \t]+\[1:0\][ \t]+IO_LATENCY_PROFILE[ \t]*=[ \t]*2'd[0-3];[ \t]*$",
-         f"localparam [1:0] IO_LATENCY_PROFILE = 2'd{config.io_latency_profile};"),
         ("MPU_EN", r"^localparam[ \t]+MPU_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
          f"localparam MPU_EN = 1'b{int(config.mpu_en)};"),
         ("SDRAM_CLK_DDIO", r"^localparam[ \t]+SDRAM_CLK_DDIO[ \t]*=[ \t]*1'b[01];[ \t]*$",
@@ -1460,6 +1564,12 @@ def top_localparams(config: Config) -> list[tuple[str, str, str]]:
         ("SDRAM_DBG_TRCD_TRP",
          r"^localparam[ \t]+integer[ \t]+SDRAM_DBG_TRCD_TRP[ \t]*=[ \t]*[0-9]+;[ \t]*$",
          f"localparam integer SDRAM_DBG_TRCD_TRP = {config.dbg_sdram_trcd};"),
+        ("GDC_WRITE_PACE_NS",
+         r"^localparam[ \t]+integer[ \t]+GDC_WRITE_PACE_NS[ \t]*=[ \t]*[0-9_]+;[ \t]*$",
+         f"localparam integer GDC_WRITE_PACE_NS = {config.gdc_write_pace_ns};"),
+        ("GDC_FIG_PACE_NS",
+         r"^localparam[ \t]+integer[ \t]+GDC_FIG_PACE_NS[ \t]*=[ \t]*[0-9_]+;[ \t]*$",
+         f"localparam integer GDC_FIG_PACE_NS = {config.gdc_fig_pace_ns};"),
         ("CONF_STR_HEADER", r'^localparam[ \t]+CONF_STR_HEADER[ \t]*=[ \t]*"[^"]*";[ \t]*$',
          f'localparam CONF_STR_HEADER = "{config.conf_str_header}";'),
         ("CDROM_EN", r"^localparam[ \t]+CDROM_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
@@ -1470,6 +1580,10 @@ def top_localparams(config: Config) -> list[tuple[str, str, str]]:
          f"localparam CDROM_LOG_EN = 1'b{int(config.cdrom_en and config.cdrom_log_en and not config.perf_log_en)};"),
         ("CONF_STR_CD", r'^localparam[ \t]+CONF_STR_CD[ \t]*=[ \t]*"[^"]*";[ \t]*$',
          f'localparam CONF_STR_CD = "{config.conf_str_cd}";'),
+        ("CONF_STR_BANK1", r'^localparam[ \t]+CONF_STR_BANK1[ \t]*=[ \t]*"[^"]*";[ \t]*$',
+         f'localparam CONF_STR_BANK1 = "{config.conf_str_bank1}";'),
+        ("CONF_STR_CD_VOL", r'^localparam[ \t]+CONF_STR_CD_VOL[ \t]*=[ \t]*"[^"]*";[ \t]*$',
+         f'localparam CONF_STR_CD_VOL = "{config.conf_str_cd_vol}";'),
         ("HPS_VDNUM", r"^localparam[ \t]+HPS_VDNUM[ \t]*=[ \t]*[0-9]+;[ \t]*$",
          f"localparam HPS_VDNUM = {config.hps_vdnum};"),
         ("VIDEO_DBL_EN", r"^localparam[ \t]+VIDEO_DBL_EN[ \t]*=[ \t]*1'b[01];[ \t]*$",
@@ -1523,7 +1637,7 @@ def describe(config: Config, rb: dict | None = None) -> str:
             f"SDRAM_CLK phase {phase} ps ({source}; PLL actual {actual} ps), "
             f"I/O model worst {worst[0]:+.3f} ns ({worst[2]} @ {worst[1]}), "
             f"TRACE_EN {int(config.trace_en)} PERF_LOG_EN {int(config.perf_log_en)} "
-            f"IO_LATENCY_PROFILE {config.io_latency_profile} MPU_EN {int(config.mpu_en)} SDRAM_CLK_DDIO {int(config.sdram_clk_ddio)} "
+            f"MPU_EN {int(config.mpu_en)} SDRAM_CLK_DDIO {int(config.sdram_clk_ddio)} "
             f"SDRAM_DQ_DDIO {int(config.sdram_dq_ddio)} SDRAM_OUT_DDIO {int(config.sdram_out_ddio)} "
             f"CDROM_EN {int(config.cdrom_en)} "
             f"CDROM_AUDIO_EN {int(config.cdrom_en and config.cdrom_audio_en)} "
@@ -1535,6 +1649,8 @@ def describe(config: Config, rb: dict | None = None) -> str:
             + (" SDRAM_PHASE_DYN 1 (measurement build)" if config.sdram_phase_dyn else "")
             + (" SDRAM_DBG_CL 2" if config.dbg_sdram_cl2 else "")
             + (f" SDRAM_DBG_TRCD_TRP {config.dbg_sdram_trcd}" if config.dbg_sdram_trcd else "")
+            + (f" GDC_WRITE_PACE_NS {config.gdc_write_pace_ns}" if config.gdc_write_pace_ns else "")
+            + (f" GDC_FIG_PACE_NS {config.gdc_fig_pace_ns}" if config.gdc_fig_pace_ns else "")
             + (" qsf_set " + ",".join(f"{n}={v}" for n, v in config.qsf_set)
                if config.qsf_set else "")
             + (" dbg " + ",".join(f"{n}={v}" for n, v in config.dbg) if config.dbg else ""))
@@ -1655,6 +1771,11 @@ def agreement(root: Path, *, require_generated: bool = False) -> list[str]:
         if len(re.findall(re.escape(hop).replace(r"\(", r"\(\s*").replace(r"\)", r"\s*\)"), text)) != 1:
             problems.append(f"{root / name} does not pass `{hop}` down exactly once: a "
                             "measurement override would silently build the derived timing")
+    for name, hop in GDC_PACE_WIRING:
+        text = (root / name).read_text()
+        if len(re.findall(re.escape(hop).replace(r"\(", r"\(\s*").replace(r"\)", r"\s*\)"), text)) != 1:
+            problems.append(f"{root / name} does not pass `{hop}` down exactly once: a paced "
+                            "build would silently build the unpaced graphics GDC")
 
     sdc = root / SDC_NAME
     if sdc.exists():
@@ -1828,10 +1949,6 @@ def selftest() -> int:
     def _(root, cfg):
         sub(root / TOP_NAME, "PERF_LOG_EN = 1'b0;", "PERF_LOG_EN = 1'b1;")
 
-    @plant("top level: IO_LATENCY_PROFILE disagrees with the record")
-    def _(root, cfg):
-        sub(root / TOP_NAME, "IO_LATENCY_PROFILE = 2'd0;", "IO_LATENCY_PROFILE = 2'd2;")
-
     @plant("top level: MPU_EN flipped without its header")
     def _(root, cfg):
         sub(root / TOP_NAME, "MPU_EN = 1'b1;", "MPU_EN = 1'b0;")
@@ -1956,6 +2073,10 @@ def selftest() -> int:
     def _(root, cfg):
         sub(root / TOP_NAME, "DBG_GDC_EN = 1'b0;", "DBG_GDC_EN = 1'b1;")
 
+    @plant("top level: DBG_FDC_EN on in a build whose record has no debug instruments")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "DBG_FDC_EN = 1'b0;", "DBG_FDC_EN = 1'b1;")
+
     @plant("top level: DBG_SNOOP_HI disagrees with the record's snoop window", tree="dbg")
     def _(root, cfg):
         sub(root / TOP_NAME, "DBG_SNOOP_HI = 32'h0002fc00;", "DBG_SNOOP_HI = 32'h0002fe00;")
@@ -1986,36 +2107,63 @@ def selftest() -> int:
 
     @plant("top level: HPS_VDNUM disagrees with CDROM_EN", tree="nocd")
     def _(root, cfg):
-        sub(root / TOP_NAME, "HPS_VDNUM = 3;", "HPS_VDNUM = 5;")
+        sub(root / TOP_NAME, "HPS_VDNUM = 4;", "HPS_VDNUM = 5;")
+
+    @plant("top level: the no-CD build's HPS_VDNUM back to 3 (no HDD2 slot)", tree="nocd")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "HPS_VDNUM = 4;", "HPS_VDNUM = 3;")
 
     @plant("top level: the default CD build's HPS_VDNUM back to 3 (no slot 4)")
     def _(root, cfg):
         sub(root / TOP_NAME, "HPS_VDNUM = 5;", "HPS_VDNUM = 3;")
 
-    @plant("top level: CONF_STR_CD gains the retired second disk's entry", tree="nocd")
+    nocd_line = '"T[8],Eject HDD;' + HDD2_ENTRIES + '";'
+
+    @plant("top level: CONF_STR_CD lost the second disk's entries", tree="nocd")
     def _(root, cfg):
-        sub(root / TOP_NAME, '"T[8],Eject HDD;";', '"T[8],Eject HDD;S3,IMGHDIVHD,Mount HDD1;";')
+        sub(root / TOP_NAME, nocd_line, '"T[8],Eject HDD;";')
 
     @plant("top level: the CD-ROM's Eject offered in a build without the CD", tree="nocd")
     def _(root, cfg):
-        sub(root / TOP_NAME, '"T[8],Eject HDD;";', '"T[8],Eject HDD;T[11],Eject CD-ROM;";')
+        sub(root / TOP_NAME, nocd_line, '"T[8],Eject HDD;' + HDD2_ENTRIES + 'T[11],Eject CD-ROM;";')
 
-    cd_line = '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;' + CD_VOLUME_FIELD + '";'
+    @plant("top level: the IDE bank 1 field offered in a build without the CD", tree="nocd")
+    def _(root, cfg):
+        sub(root / TOP_NAME, 'CONF_STR_BANK1 = "-;";', 'CONF_STR_BANK1 = "-;' + IDE_BANK1_FIELD + '";')
+
+    cd_line = '"T[8],Eject HDD;' + HDD2_ENTRIES + 'S4,ISOPCDBIN,Mount CD-ROM;T[11],Eject CD-ROM;";'
+    cd_vol_line = 'CONF_STR_CD_VOL = "' + CD_VOLUME_FIELD + '-;";'
+    bank1_line = 'CONF_STR_BANK1 = "-;' + IDE_BANK1_FIELD + '";'
 
     @plant("top level: a CD build whose CD line lost the CD-ROM's Eject")
     def _(root, cfg):
-        sub(root / TOP_NAME, cd_line,
-            '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;' + CD_VOLUME_FIELD + '";')
+        sub(root / TOP_NAME, cd_line, '"T[8],Eject HDD;' + HDD2_ENTRIES + 'S4,ISOPCDBIN,Mount CD-ROM;";')
 
     @plant("top level: a CD build whose CD line lost the CD-ROM's slot")
     def _(root, cfg):
-        sub(root / TOP_NAME, cd_line,
-            '"T[8],Eject HDD;T[11],Eject CD-ROM;' + CD_VOLUME_FIELD + '";')
+        sub(root / TOP_NAME, cd_line, '"T[8],Eject HDD;' + HDD2_ENTRIES + 'T[11],Eject CD-ROM;";')
 
-    @plant("top level: a CD-audio build whose CD line lost the CD audio volume field")
+    @plant("top level: a CD-audio build whose CD_VOL line lost the CD audio field")
     def _(root, cfg):
-        sub(root / TOP_NAME, cd_line,
-            '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;";')
+        sub(root / TOP_NAME, cd_vol_line, 'CONF_STR_CD_VOL = "-;";')
+
+    @plant("top level: a CD-audio build whose CD_VOL line lost the page group's separator")
+    def _(root, cfg):
+        sub(root / TOP_NAME, cd_vol_line, 'CONF_STR_CD_VOL = "' + CD_VOLUME_FIELD + '";')
+
+    @plant("top level: a CD build whose BANK1 line lost the IDE bank 1 field")
+    def _(root, cfg):
+        sub(root / TOP_NAME, bank1_line, 'CONF_STR_BANK1 = "-;";')
+
+    @plant("top level: the CD audio field moved back onto the main page beside IDE bank 1")
+    def _(root, cfg):
+        sub(root / TOP_NAME, bank1_line,
+            'CONF_STR_BANK1 = "-;' + IDE_BANK1_FIELD + CD_VOLUME_FIELD.replace("P2O", "O") + '";')
+        sub(root / TOP_NAME, cd_vol_line, 'CONF_STR_CD_VOL = "-;";')
+
+    @plant("top level: the CD audio field offered in a build without the CD", tree="nocd")
+    def _(root, cfg):
+        sub(root / TOP_NAME, 'CONF_STR_CD_VOL = "-;";', 'CONF_STR_CD_VOL = "' + CD_VOLUME_FIELD + '-;";')
 
     @plant("qsf: the technique row edited by hand")
     def _(root, cfg):
@@ -2187,6 +2335,24 @@ def selftest() -> int:
         sub(root / TOP_NAME, "localparam integer SDRAM_DBG_TRCD_TRP = 0;",
             "localparam integer SDRAM_DBG_TRCD_TRP = 3;")
 
+    @plant("top level: GDC_WRITE_PACE_NS set without the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "localparam integer GDC_WRITE_PACE_NS = 0;",
+            "localparam integer GDC_WRITE_PACE_NS = 1400;")
+
+    @plant("top level: GDC_FIG_PACE_NS set without the record")
+    def _(root, cfg):
+        sub(root / TOP_NAME, "localparam integer GDC_FIG_PACE_NS = 0;",
+            "localparam integer GDC_FIG_PACE_NS = 1400;")
+
+    @plant("wiring: the WRITE pace dropped at pc9821_system (pc9821_gdc2 would build unpaced)")
+    def _(root, cfg):
+        sub(root / "src/pc9821/core/pc9821_system.sv", ".WRITE_PACE_NS(GDC_WRITE_PACE_NS),", "")
+
+    @plant("wiring: the figure pace dropped at the top level (pc9821_system would build unpaced)")
+    def _(root, cfg):
+        sub(root / TOP_NAME, ".GDC_FIG_PACE_NS(GDC_FIG_PACE_NS),", "")
+
     @plant("wiring: the tRCD/tRP override dropped at the bridge (sdram.v would build the derived value)")
     def _(root, cfg):
         sub(root / "src/memory/sdram_sync_bridge.sv", ".DBG_TRCD_TRP(DBG_TRCD_TRP)", "")
@@ -2261,7 +2427,7 @@ def selftest() -> int:
     # clock moves the SDRAM with it.
     contract_parser = argparse.ArgumentParser(add_help=False)
     add_override_args(contract_parser)
-    want_hz = {"base": 90_000_000, "trace": 90_000_000, "iofaithful": 90_000_000,
+    want_hz = {"base": 90_000_000, "trace": 90_000_000,
                "mediumoc": 100_000_000, "heavyoc": 120_000_000}
     if set(want_hz) != set(PROFILES):
         print(f"SELFTEST FAIL: preset contract names {sorted(want_hz)}, PROFILES has "
@@ -2318,6 +2484,37 @@ def selftest() -> int:
     for name, preset in PROFILES.items():
         if preset.dbg_sdram_cl2 or preset.dbg_sdram_trcd:
             print(f"SELFTEST FAIL: preset {name} overrides the SDRAM timing table")
+            failures += 1
+        if preset.gdc_write_pace_ns or preset.gdc_fig_pace_ns:
+            print(f"SELFTEST FAIL: preset {name} paces the graphics GDC (the default is unpaced)")
+            failures += 1
+    if "gdc_write_pace_ns" in PROFILES["base"].record() or "gdc_fig_pace_ns" in PROFILES["base"].record():
+        print("SELFTEST FAIL: the base record names a GDC pace (it must appear only when set)")
+        failures += 1
+    got_cfg = resolve_config("base", contract_parser.parse_args(
+        ["--gdc-write-pace", "1400", "--gdc-fig-pace", "1401"]))
+    lines = {n: l for n, _, l in top_localparams(got_cfg)}
+    rec = config_from_record(got_cfg.record())
+    if (lines["GDC_WRITE_PACE_NS"] != "localparam integer GDC_WRITE_PACE_NS = 1400;"
+            or lines["GDC_FIG_PACE_NS"] != "localparam integer GDC_FIG_PACE_NS = 1401;"
+            or got_cfg.name != "custom" or rec.gdc_write_pace_ns != 1400
+            or rec.gdc_fig_pace_ns != 1401
+            or override_argv(contract_parser.parse_args(["--gdc-write-pace", "1400"]))
+            != ["--gdc-write-pace", "1400"]):
+        print("SELFTEST FAIL: base --gdc-write-pace 1400 --gdc-fig-pace 1401 does not write, "
+              "record and pass on both paces")
+        failures += 1
+    else:
+        print("selftest: base --gdc-write-pace 1400 --gdc-fig-pace 1401 writes, records and passes on both paces")
+    for argv in (["--gdc-write-pace", "50"], ["--gdc-fig-pace", "-1"],
+                 ["--gdc-write-pace", "200000"]):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                resolve_config("base", contract_parser.parse_args(argv))
+        except SystemExit:
+            print(f"selftest: base {' '.join(argv)} is refused")
+        else:
+            print(f"SELFTEST FAIL: base {' '.join(argv)} is accepted")
             failures += 1
     got_cfg = resolve_config(None, contract_parser.parse_args(
         ["--custom", "--clk-sys-mhz", "100", "--dbg-sdram-cl2", "--dbg-sdram-trcd-cycles", "3",
@@ -2385,8 +2582,15 @@ def selftest() -> int:
     for argv, want in ((["base", "--dbg-snoop", "2fa00:2fc00"], {"snoop_en": 1, "snoop_lo": 0x2fa00, "snoop_hi": 0x2fc00}),
                        (["base", "--dbg-trig", "pc:f800:1234"], {"trig_kind": 1, "trig_cs": 0xf800, "trig_addr": 0x1234}),
                        (["base", "--dbg-trig", "wr:1002", "--dbg-post", "100"], {"trig_kind": 2, "trig_addr": 0x1002, "post": 100}),
+                       (["base", "--dbg-trig", "io:92:0F", "--dbg-post", "500"], {"trig_kind": 4, "trig_addr": 0x920F, "post": 500, "last_ms": 0}),
+                       (["base", "--dbg-trig", "io:4be", "--dbg-last-ms", "3000"], {"trig_kind": 4, "trig_addr": 0x104BE00, "last_ms": 3000}),
+                       (["base", "--dbg-trig", "pc:fd80:1a82"], {"trig_kind": 1, "trig_cs": 0xfd80, "trig_addr": 0x1a82, "trace_aw": 9}),
+                       (["base", "--dbg-trig", "pc:28:c101f26a", "--dbg-last-ms", "8000", "--dbg-post", "4095",
+                         "--dbg-trace-aw", "12"], {"trig_kind": 1, "trig_cs": 0x28, "trig_addr": 0xc101f26a,
+                                                   "last_ms": 8000, "post": 4095, "trace_aw": 12}),
                        (["base", "--dbg-cpu", "--dbg-sample-ms", "5"], {"cpu": 1, "sample_ms": 5}),
-                       (["base", "--gdc-log"], {"gdc": 1})):
+                       (["base", "--gdc-log"], {"gdc": 1}),
+                       (["base", "--dbg-fdc", "--dbg-cpu"], {"fdc": 1, "cpu": 1})):
         got_cfg = resolve_config(argv[0], contract_parser.parse_args(argv[1:]))
         bad = {k: (got_cfg.dbg_params[k], v) for k, v in want.items() if got_cfg.dbg_params[k] != v}
         if bad:
@@ -2398,7 +2602,12 @@ def selftest() -> int:
                  ["base", "--perf-log", "--dbg-cd"], ["base", "--trace", "--dbg-cd"],
                  ["base", "--no-cdrom", "--cdrom-audio"], ["base", "--no-cdrom", "--dbg-cd"],
                  ["base", "--dbg-snoop", "2000:1000"], ["base", "--dbg-trig", "jump:1"],
-                 ["base", "--dbg-sample-ms", "5"], ["base", "--dbg-post", "9"]):
+                 ["base", "--dbg-sample-ms", "5"], ["base", "--dbg-post", "9"],
+                 ["base", "--dbg-trig", "io:10000:0"], ["base", "--dbg-trig", "io:92:100"],
+                 ["base", "--dbg-last-ms", "100"], ["base", "--dbg-trig", "reload:1000", "--dbg-last-ms", "100"],
+                 ["base", "--dbg-trace-aw", "10"], ["base", "--dbg-trig", "pc:28:1000", "--dbg-trace-aw", "13"],
+                 ["base", "--dbg-trig", "pc:28:1000", "--dbg-trace-aw", "3"],
+                 ["base", "--dbg-trig", "wr:1000", "--dbg-trig2", "2000:3000", "--dbg-last-ms", "100"]):
         try:
             with contextlib.redirect_stderr(io.StringIO()):
                 resolve_config(argv[0], contract_parser.parse_args(argv[1:]))
@@ -2446,7 +2655,8 @@ def selftest() -> int:
             root = Path(tmp) / "tree"
             shutil.rmtree(root, ignore_errors=True)
             root.mkdir()
-            for name in (TOP_NAME, QSF_NAME, SDRAM_V, *(n for n, _ in DQ_DDIO_WIRING)):
+            for name in (TOP_NAME, QSF_NAME, SDRAM_V, *(n for n, _ in DQ_DDIO_WIRING),
+                         *(n for n, _ in GDC_PACE_WIRING)):
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(PROJECT_DIR / name, root / name)
             (root / pg.VCLK_PKG).parent.mkdir(parents=True, exist_ok=True)

@@ -64,6 +64,11 @@
 //   model. The sector's file offset is the plain ((((C*2+H) * sects) + R-1) << (7 + N)) of
 //   fdd_read_xdf (:352-355, headersize 0 in these rows), and a read with N != the
 //   geometry's N fails with NP2kai's 0xC0 (ND) (:341-343).
+//   FDI (Anex86): a raw body behind a 32-byte self-describing header, read by NP2kai's raw
+//   reader at the raw offset plus headersize (fdd_xdf.c fdd_set_fdi). Its geometry comes from
+//   the header instead of the size rows, and only headers that are a whole number of 512-byte
+//   blocks are served (the library's are 4096); see the FDI header section for the acceptance
+//   rules and what is left to tools/fdconv.py.
 //
 // THE SEAM (see pc9821_fdc's port comment for the controller's side). A request is a
 // one-cycle `req` pulse naming the drive's (C,H,R,N) - or, with req_hdr, the ordinal of
@@ -82,9 +87,9 @@
 // is the level the controller waits on before pulsing `req`.
 //
 // BLOCK GRANULARITY. One 512-byte block buffer is the whole cache: the D88 walk and the
-// sector data are both forward-only, so one block is enough, and consecutive LBAs hit the
-// shared block adapter's read-ahead window (8 sectors per handshake, 16 KiB, the same window
-// the hard disk reads through) instead of paying the measured ~4600 clk_sys per handshake.
+// sector data are both forward-only, so one block is enough. Every block is its own HPS
+// handshake (the measured ~4600 clk_sys each): the shared adapter's read-ahead window is the
+// hard disk's, and pc9821_block_share.sv:36 says "the floppy's requests never use it at all".
 //
 // THE BLOCK ADAPTER IS NOT OURS ANY MORE (docs/trade-candidates.md T9): one
 // pc9821_block_io engine is SHARED by the two floppy drives and pc9821_ata, arbitrated by
@@ -131,7 +136,7 @@ module pc9821_fdd_media (
     input  wire        img1_mounted,
     input  wire [63:0] img1_size,
     // THE MOUNT'S READ-ONLY FLAG. It is ONE bit for both slots because hps_io holds one
-    // register, "valid only for active bit in img_mounted" (sys/hps_io.sv:129), so it is
+    // register, "valid only for active bit in img_mounted" (sys/hps_io.sv:144), so it is
     // latched PER DRIVE at that drive's own mount pulse - exactly as img_size is, and for the
     // same reason. It is the MiSTer stand-in for the first term of NP2kai's protect condition,
     // `(attr & 1) || (fdd->inf.d88.head.protect & 0x10) || (ro)` (diskimage/fd/fdd_d88.c:306):
@@ -273,6 +278,7 @@ module pc9821_fdd_media (
 );
 
   initial present = 2'b00;
+  initial writeprotect = 2'b00;   // no medium at power-up, so nothing is protected
   initial chg = 2'b00;
 
   // ---------------------------------------------------------------- the HPS side
@@ -366,12 +372,16 @@ module pc9821_fdd_media (
   // is all the 32-bit forms ever decided with those upper bits.
   reg  [21:0] fd_size [0:1];        // [u] the D88 header's declared image extent {BIG, bytes[20:0]}
   reg  [ 1:0] is_d88;               // [u] the image parsed as a D88 (else a raw body)
-  reg  [ 7:0] raw_tracks [0:1];     // [u] half-tracks (raw): 154..160, so a byte names the whole range
-  reg  [ 7:0] raw_sects  [0:1];     // [u] sectors per track (raw): the row's own 8..26
+  reg  [ 7:0] raw_tracks [0:1];     // [u] half-tracks (raw): 154..160 (an FDI: 2..254), so a byte names the whole range
+  reg  [ 7:0] raw_sects  [0:1];     // [u] sectors per track (raw): the row's own 8..26 (an FDI: 1..255)
   reg  [ 1:0] cls_2dd;              // [u] the medium is a 2D/2DD one (D88 major 0/1, raw DD rows)
   reg  [ 1:0] cls_rpm1;             // [u] a raw 1.44 MB row (fdd_xdf.c rpm 1: HD4, DMF)
   reg  [ 1:0] cls_minor;            // [u] a D88 2HD whose fd_type minor is non-zero (rpm either)
   reg  [ 7:0] raw_n      [0:1];     // [u] N of the raw geometry: 1..3 (256..1024-byte sectors)
+  // [u] THE RAW BODY'S FILE OFFSET IN 512-BYTE BLOCKS: an FDI's headersize >> 9 (FDI below),
+  // ZERO for every other image (ST_PARSE clears it for a D88 and a size-table row), so the
+  // one add in ST_SEEK that applies it is a no-op for them.
+  reg  [11:0] raw_hblk   [0:1];
   reg  [ 1:0] mnt_req;              // [u] a mount arrived and has not been walked yet
   // [u] the img_size that came WITH that mount, ENCODED AS {the high half is non-zero, the low
   // 32-bit word}. Those are the only two facts either reader uses - ST_PARSE's gate on whether the
@@ -390,7 +400,7 @@ module pc9821_fdd_media (
 
   // ---------------------------------------------------------------- the mount EVENT [u]
   // hps_io's img_mounted is not one cycle wide: it is set by the `'h1c` image-selection
-  // transaction's data strobe and cleared only when that transaction ends (sys/hps_io.sv:318
+  // transaction's data strobe and cleared only when that transaction ends (sys/hps_io.sv:334
   // "img_mounted <= 0;" under `~io_enable`, :461 the set), so it is a LEVEL for as many clk_sys
   // cycles as the HPS takes to finish the command. A mount is therefore its RISING EDGE (the
   // same reading pc9821_disk_change_reset takes of the HDD slots), so a held level is one
@@ -549,23 +559,24 @@ module pc9821_fdd_media (
   // A MOUNT IS A TUPLE - the pulse AND the size that came with it - AND IT IS LATCHED, not
   // lost. pc9821_system wires this module's reset as `reset || !cpu_run`,
   // and cpu_run is LOW for the whole firmware-pack download, while the HPS mounts an image
-  // (MGL delay ~1 s) BEFORE the pack finishes (~4 s). hps_io's img_mounted is a SINGLE-CYCLE
-  // pulse (z486_mister wires img_mounted[1] into this drive's slot and img_mounted[2] into the
-  // other's), so before this latch the pulse was taken into the reset branch and discarded
+  // (MGL delay ~1 s) BEFORE the pack finishes (~4 s). hps_io's img_mounted is a LEVEL held for
+  // the 'h1c transaction (the mount EVENT note above; this module takes its rising edge,
+  // `mnt_ev`) (z486_mister wires img_mounted[1] into this drive's slot and img_mounted[2] into the
+  // other's), so before this latch the edge was taken into the reset branch and discarded
   // with it: the guest booted with no floppy however the image was listed. mnt_req[u]
   // remembers that a mount for drive u arrived while the module was held, and the FSM applies
   // it - and only then - on the first cycle after the release.
   //
   // THE SIZE IS LATCHED WITH IT, because hps_io holds ONE img_size for whichever slot mounted
-  // LAST (sys/hps_io.sv:130 "size of image in bytes") and EVERY slot reads it (z486_mister
+  // LAST (sys/hps_io.sv:145 "size of image in bytes") and EVERY slot reads it (z486_mister
   // wires it into the disk's .img_size and into BOTH floppy slots). Deferring the pulse and
   // then sampling the LIVE size would parse this medium with another slot's size;
   // pc9821_block_share - the adapter these fetches go through - latches each slot's size at
   // the same pulse for the same reason. Two slots can have their pulses outstanding at once
   // (the MGL lists both floppies before the pack download finishes), so the size is per drive
-  // and the walk uses the one that came with ITS mount. There is no img_readonly to latch: it
-  // stopped being a port of this module when the shared adapter took the slot metadata (T9),
-  // and the medium is write-protected by construction.
+  // and the walk uses the one that came with ITS mount. img_readonly is latched beside it, per
+  // drive (`mnt_ro`), for the same reason: ST_PARSE computes the drive's `writeprotect` from
+  // it, and the medium is writable unless that flag or a D88 header protect bit says not.
   //
   // A WALK STARTS WHEN THE ENGINE IS IDLE, and that is a rule rather than an optimisation:
   // a mount for drive 1 that landed while drive 0's sector was streaming would otherwise
@@ -584,7 +595,7 @@ module pc9821_fdd_media (
   // entry at the walk's START, so an OSD Reset mid-walk (mount an image, then select
   // Reset) would abort the walk with its pulse already spent - and nothing would ever
   // re-announce the image, because hps_io pulses img_mounted from the HPS's
-  // image-selection transaction alone (sys/hps_io.sv:461, the `'h1c` handler) and an OSD
+  // image-selection transaction alone (sys/hps_io.sv:490, the `'h1c` handler) and an OSD
   // Reset is a STATUS bit write, not a mount. The latch block below therefore RE-ARMS the
   // drive whose walk the reset is aborting (`walking` names the two states a walk lives in),
   // so the walk re-runs after the release. That is idempotent by construction: a walk re-reads
@@ -673,6 +684,93 @@ module pc9821_fdd_media (
 
   // mount parse
   reg [10:0] mcnt;         // byte index into the 0x2B0-byte header
+
+  // ---------------------------------------------------------------- the FDI header
+  // AN ANEX86 FDI IS A RAW BODY BEHIND A SELF-DESCRIBING HEADER, and NP2kai reads it with the
+  // raw reader (diskimage/fd/fdd_xdf.c fdd_set_fdi, :164-273, registers fdd_read_xdf/
+  // fdd_write_xdf/fdd_readid_common). Its header is FDIHDR (:76-86): eight little-endian
+  // 32-bit fields, `dummy`, `fddtype`, `headersize`, `fddsize`, `sectorsize`, `sectors`,
+  // `surfaces`, `cylinders` at bytes 0, 4, 8, ... 28. NP2kai's acceptance, transcribed:
+  //   * sectorsize a power of two with `(size & 0x7f80)` set (128..16384), sectors 1..255,
+  //     surfaces exactly 2, cylinders 1..127 (:212-216);
+  //   * the file size EXACTLY `headersize + (size * sectors * surfaces * cylinders)` (:217);
+  //   * `fddtype & 0xf0` (the low byte's high nibble only) one of 0x10/0x70/0xf0 (2DD),
+  //     0x30/0xb0 (2HD at rpm 1, the 1.44 MB mode), 0x50/0xd0 (2D) or 0x90 (2HD); any other
+  //     fails (:228-251). `dummy` and `fddsize` are not tested.
+  // The geometry is then a raw one: tracks = cylinders * 2, the sector count, N = log2(size)
+  // - 7 (:252-259), and every sector is read at fdd_read_xdf's raw offset PLUS headersize
+  // (`seekp += fdd->inf.xdf.headersize;`, :356; the write path :408). So the core serves an
+  // FDI through the RAW path unchanged, with the drive's geometry registers loaded from the
+  // header instead of a size row and the block index offset by the header (raw_hblk).
+  // NP2kai picks the reader from the file EXTENSION (diskimage/fddfile.c :131-132 `.fdi` ->
+  // FTYPE_FDI); there is no file name at this seam, so the header itself is the test, taken
+  // AFTER the D88 test (an FDI is never a D88 here: its bytes 0x1C..0x1F are `cylinders`, below
+  // the D88 extent floor of 688) and BEFORE the size rows (a header whose every field and the
+  // exact size equation hold is an FDI; a raw boot sector does not pass it - its 0x18..0x1B
+  // are the BPB's sectors-per-track and heads, never the LE32 value 2).
+  // WHAT THE CORE TAKES OF NP2kai's ACCEPTANCE, AND WHAT IT LEAVES TO tools/fdconv.py:
+  //   * headersize must be a whole number of 512-byte blocks and below 2 MiB:
+  //     the body then starts on a host block boundary, so the block adapter, the byte stream
+  //     and the write-back are the raw path's own and only the block INDEX moves. The
+  //     library's FDIs all carry 4096; an FDI with another header is refused (present = 0)
+  //     and tools/fdconv.py converts it.
+  //   * sectorsize 256, 512 or 1024 (N 1..3, the raw path's N range); 128 and 2048..16384
+  //     are refused (tools/fdconv.py writes those as D88).
+  //   * the 2D types (0x50/0xd0) are refused: NP2kai mounts them but can never read one,
+  //     because its raw reader requires CTRL_FDMEDIA == the disk type and CTRL_FDMEDIA is only
+  //     ever 2HD or 2DD (io/fdc.c :1187-1192; diskimage/fddfile.c fdd_seeksector_common), so
+  //     a mounted-but-unreadable medium becomes a not-ready one here.
+  //   * the size equation is NP2kai's, without its 32-bit wrap (a headersize that wraps the
+  //     sum names data past the end of the file, which nothing could read).
+  // HOW IT IS TESTED, cheaply: the header's fields arrive in the D88 walk's first 32 bytes
+  // (ST_MNT streams 0x2B0 bytes of every image), each byte is tested as it lands into one
+  // sticky flag (fdi_ok), and the size equation is checked IN 512-BYTE BLOCKS, where it needs
+  // no multiplier: one cylinder (two tracks) is `sectors << (N - 1)` blocks for N 1..3, so
+  // fdi_acc starts at the header's block count and adds that step once per cylinder - one add
+  // per streamed byte after byte 0x1F (fdi_cnt counts the cylinders down, at most 127 of the
+  // walk's 656 remaining bytes) - and ST_PARSE compares it with the file size in blocks.
+  // WHAT IT COSTS (tools/res_exp_map.py, this module as top, production settings): 775 -> 884
+  // ALMs and 561 -> 618 registers, no DSP and no new RAM; about 23 ALMs of that are the
+  // header's block offset (raw_hblk and ST_SEEK's add), the rest this test.
+  reg         fdi_ok;      // every header byte so far is one this core's FDI test accepts
+  reg  [ 1:0] fdi_ty;      // {2DD, rpm 1} from fddtype's high nibble (2HD at 360 rpm = 2'b00)
+  reg  [ 6:0] fdi_cnt;     // cylinders still to add into fdi_acc
+  reg  [12:0] fdi_acc;     // header + body so far, in blocks; bit 12 = past 2 MiB (sticky: no add)
+  // One cylinder in blocks: 2 * sectors * (128 << N) / 512 = sectors << (N - 1).
+  wire [ 7:0] fdi_s    = raw_sects[mnt_u];
+  wire [ 9:0] fdi_step = (raw_n[mnt_u] == RAW_N1) ? {2'd0, fdi_s} :
+                         (raw_n[mnt_u] == RAW_N3) ? {fdi_s, 2'd0} : {1'b0, fdi_s, 1'b0};
+  // The test of the header byte landing at mcnt (bytes 0..31; any later byte passes).
+  reg         fdi_byte_ok;
+  always @(*) begin
+    fdi_byte_ok = 1'b1;
+    if (mcnt[10:5] == 6'd0)
+      case (mcnt[4:0])
+        5'd4:  fdi_byte_ok = (cur_byte[7:4] == 4'h1) || (cur_byte[7:4] == 4'h7) ||
+                             (cur_byte[7:4] == 4'hF) || (cur_byte[7:4] == 4'h3) ||
+                             (cur_byte[7:4] == 4'hB) || (cur_byte[7:4] == 4'h9);
+        // headersize below 2 MiB. Its bits 8:0 need no test of their own: the body is a whole
+        // number of blocks, so the file is block-aligned exactly when the header is, and
+        // fdi_valid requires the file to be.
+        5'd10: fdi_byte_ok = (cur_byte[7:5] == 3'd0);
+        5'd16: fdi_byte_ok = (cur_byte == 8'h00);                  // sectorsize 256/512/1024
+        5'd17: fdi_byte_ok = (cur_byte == 8'h01) || (cur_byte == 8'h02) || (cur_byte == 8'h04);
+        5'd20: fdi_byte_ok = (cur_byte != 8'h00);                  // sectors 1..255
+        5'd24: fdi_byte_ok = (cur_byte == 8'h02);                  // surfaces == 2
+        5'd28: fdi_byte_ok = (cur_byte != 8'h00) && !cur_byte[7];  // cylinders 1..127
+        5'd0, 5'd1, 5'd2, 5'd3, 5'd5, 5'd6, 5'd7,                  // dummy, fddtype[31:8]
+        5'd8, 5'd9,                                                // headersize[15:0]
+        5'd12, 5'd13, 5'd14, 5'd15:                                // fddsize: untested
+               fdi_byte_ok = 1'b1;
+        default: fdi_byte_ok = (cur_byte == 8'h00);                // the fields' upper bytes
+      endcase
+  end
+  // The whole test, read in ST_PARSE: every byte passed and header + body equals the file to
+  // the byte (the size in whole blocks, below 2 MiB). Every cylinder has been added by then:
+  // fdi_cnt loads at byte 28 and drains by byte 32 + 127, long before the walk's last byte.
+  wire        fdi_valid = fdi_ok && !fdi_acc[12] &&
+                          !mnt_size[mnt_u][21] && (mnt_size[mnt_u][8:0] == 9'd0) &&
+                          (fdi_acc[11:0] == mnt_size[mnt_u][20:9]);
   // THE TRACK TABLE'S WORD-IN-PROGRESS. Its entries are 4-byte little-endian words that arrive
   // one BYTE per clock, and writing them with a variable part-select (`trackp[i][sel +: 8]`) is
   // exactly what Quartus's HDL reader refuses: `Warning (10999): can't infer memory for variable
@@ -714,6 +812,13 @@ module pc9821_fdd_media (
   // every track look like a zero-sector track, so the walk gave up on its first mismatch.
   wire [15:0] hdr_sectors = {hb[5], hb[4]};
   wire [15:0] hdr_size    = {hb[15], hb[14]};
+  // THE PER-SECTOR RPM TEST of a 2HD D88 whose fd_type minor is non-zero: NP2kai's rpmcheck
+  // (diskimage/fd/fdd_d88.c, `if (sec->rpm_flg != rpm) return(FAILURE);`) accepts a header
+  // only when its rpm_flg (byte 13, d88head.h `rpm 0:1.2 1:1.44`) equals the drive's 0x04BE
+  // bit, in the data search (searchsector_d88, beside C/H/R/N) and in the READ ID walk
+  // (fdd_readid_d88). Every other class's rpm test is the medium-wide mode_ok above
+  // (rpmcheck's 2D/2DD and minor-0 arms). tb_pc9821_fdd_media_d88 D20.
+  wire        hdr_rpm_ok  = !cls_minor[req_u] || (hb[13] == {7'd0, rq_rpm});
   // THE SECTOR'S FILE BYTE COUNT IS BOUNDED BY THE IMAGE, not only by the header's own
   // `size` field. A malformed or truncated D88
   // whose header claims more than the declared extent holds would otherwise let consume()
@@ -928,11 +1033,14 @@ module pc9821_fdd_media (
       // with no img_mounted pulse ever coming again, `ready` (st == ST_READY) never rising and
       // the mounted image dead to the guest (tb_pc9821_fdd_mount_reset's R1 arm).
       st           <= (|present) ? ST_READY : ST_NONE;
-      // NO MEDIUM, NO PROTECT: the flag is the MOUNTED MEDIUM's state, so a drive that has never
-      // been walked (or whose medium was ejected) reports 0, not "protected". That matters because
-      // SENSE DRIVE STATUS reads the bit directly: a drive with no diskette has nothing to write
-      // to, so claiming WP would be inventing a property of a medium that is not there.
-      writeprotect <= 2'b00;
+      // `writeprotect` IS NOT IN THIS RESET DOMAIN, like `present` (below): it is a property of
+      // the MOUNTED MEDIUM, set once by ST_PARSE and cleared only where the medium goes away (a
+      // walk starting, a mount edge, power-up). NP2kai sets it once at the mount,
+      // diskimage/fd/fdd_d88.c:306 "fdd->protect = ((attr & 1) || (fdd->inf.d88.head.protect &
+      // 0x10) || (ro));", and nothing short of an eject clears it. The walk that computes it is
+      // never re-run after a reset (the parse survives), so clearing it here dropped the WP of
+      // a protected medium that stayed present across an OSD Reset or Load BIOS ROM
+      // (tb_pc9821_fdd_mount_reset R1X/R5/R6).
       bready       <= 1'b0;
       bwant        <= 1'b0;
       rbusy        <= 1'b0;
@@ -991,7 +1099,7 @@ module pc9821_fdd_media (
       // they belong to before any request that drive serves. `present` - and with it the
       // parsed container/geometry above - is the guest's "a disk is in this drive"
       // (pc9821_fdc's media_present) and must SURVIVE a core reset: hps_io pulses img_mounted
-      // only when the HPS selects an image (sys/hps_io.sv:461) and never re-announces one
+      // only when the HPS selects an image (sys/hps_io.sv:490) and never re-announces one
       // across an OSD Reset, so clearing `present` here is what unmounted a floppy the user
       // had mounted the moment they hit Reset (tb_pc9821_fdd_mount_reset). mnt_req/mnt_size
       // are deliberately NOT reset either: a mount landing while the module is held is
@@ -1127,6 +1235,31 @@ module pc9821_fdd_media (
                 if (mcnt[9:2] == 8'd8) tp0 <= {tp_big | (|cur_byte), tp_w};
               end
             end
+            // THE FDI HEADER (see its section): every byte into the sticky test, the geometry
+            // fields straight into the walked drive's raw registers (nothing reads them until
+            // ST_PARSE sets `present`, which walk_en cleared), and one cylinder per byte into
+            // the size sum. Each register below has one write per cycle: the mcnt arms are
+            // disjoint (fdi_acc at 9/10 and from 32, fdi_cnt at 28 and from 32).
+            fdi_ok <= ((mcnt == 11'd0) || fdi_ok) && fdi_byte_ok;
+            if (mcnt == 11'd4)
+              fdi_ty <= {(cur_byte[7:4] == 4'h1) || (cur_byte[7:4] == 4'h7) || (cur_byte[7:4] == 4'hF),
+                         (cur_byte[7:4] == 4'h3) || (cur_byte[7:4] == 4'hB)};
+            if (mcnt == 11'd9) begin                  // headersize[15:9] (bits 8:0: fdi_valid)
+              raw_hblk[mnt_u][6:0] <= cur_byte[7:1];
+              fdi_acc[6:0]         <= cur_byte[7:1];
+            end
+            if (mcnt == 11'd10) begin                 // headersize[20:16]
+              raw_hblk[mnt_u][11:7] <= cur_byte[4:0];
+              fdi_acc[12:7]         <= {1'b0, cur_byte[4:0]};
+            end
+            if (mcnt == 11'd17)                       // sectorsize 0x100/0x200/0x400 -> N 1/2/3
+              raw_n[mnt_u] <= cur_byte[2] ? RAW_N3 : (cur_byte[1] ? RAW_N2 : RAW_N1);
+            if (mcnt == 11'd20) raw_sects[mnt_u] <= cur_byte;
+            if (mcnt == 11'd28) fdi_cnt <= cur_byte[6:0];
+            if ((mcnt[10:5] != 6'd0) && (fdi_cnt != 7'd0)) begin
+              fdi_cnt <= fdi_cnt - 7'd1;
+              if (!fdi_acc[12]) fdi_acc <= fdi_acc + {3'd0, fdi_step};
+            end
             if (mcnt == 11'h2AF) st <= ST_PARSE;
             mcnt <= mcnt + 11'd1;
           end
@@ -1143,9 +1276,26 @@ module pc9821_fdd_media (
               // mount flag standing in for the file attribute. Bit 4 is the only bit the D88
               // spec defines in that byte.
               writeprotect[mnt_u] <= fd_protect[4] | mnt_ro[mnt_u];
+              raw_hblk[mnt_u] <= 12'd0;
               st             <= ST_READY;
+            end else if (fdi_valid) begin
+              // AN FDI (its section above): a raw medium whose sector count, N and header
+              // offset the walk already loaded from the header; tracks = cylinders * 2
+              // (fdd_xdf.c :254 `fdd->inf.xdf.tracks = (UINT8)(cylinders * 2);`), and
+              // `cylinders` is the LE32 at byte 0x1C, the very bytes the walk latched as the
+              // D88 fd_size (a 1..127 value, its low seven bits). The class is fddtype's
+              // (:228-251), a raw body has no protect field, so the mount's flag decides.
+              is_d88[mnt_u]       <= 1'b0;
+              writeprotect[mnt_u] <= mnt_ro[mnt_u];
+              cls_2dd[mnt_u]      <= fdi_ty[1];
+              cls_rpm1[mnt_u]     <= fdi_ty[0];
+              cls_minor[mnt_u]    <= 1'b0;
+              raw_tracks[mnt_u]   <= {walk_fdsz[6:0], 1'b0};
+              present[mnt_u]      <= 1'b1;
+              st                  <= ST_READY;
             end else begin
               is_d88[mnt_u]  <= 1'b0;
+              raw_hblk[mnt_u] <= 12'd0;     // a size-table row is a headerless body
               // A raw body carries no protect field, so the mount's flag is its whole answer.
               writeprotect[mnt_u] <= mnt_ro[mnt_u];
               cls_2dd[mnt_u]   <= 1'b0;
@@ -1291,9 +1441,14 @@ module pc9821_fdd_media (
               aerr <= 1'b1;
               st   <= ST_READY;
             end else begin
-              blk_lba  <= seek_off[24:9];   // 16 bits: bounded by D88_MAX_EXTENT, and (raw) by
-                                            // the widest row's extent RAW_MAX_EXTENT; both
-                                            // are guarded above
+              // 16 bits: bounded by D88_MAX_EXTENT, and (raw) by the widest row's extent
+              // RAW_MAX_EXTENT; both are guarded above. An FDI's body starts raw_hblk blocks
+              // in (zero for every other image), and its whole file is below 2 MiB (fdi_valid),
+              // so its block index is below 4096 too. The bounds above stay on the BODY offset
+              // (a raw request inside the header's geometry is inside the body, which the size
+              // equation put inside the file), and img_left counts from the body offset too:
+              // the raw stream never reads it (only the D88 walk does).
+              blk_lba  <= seek_off[24:9] + {4'd0, raw_hblk[req_u]};
               foff     <= {1'b0, seek_off[8:0]};
               img_left <= (is_d88[req_u] ? fd_size[req_u][20:0] : mnt_size[req_u][20:0]) - seek_off[20:0];
               bready   <= 1'b0;
@@ -1324,10 +1479,12 @@ module pc9821_fdd_media (
             if (hi[4]) begin
               // All 16 bytes are in hb. A data match is (c,h,r,n) equal, exactly
               // searchsector_d88's test (fdd_d88.c:232-236); the READ ID walk instead
-              // takes the req_idx-th header (fdd_readid_d88, :513-518).
-              if ((!rq_hdr && (hb[0] == rq_c) && (hb[1] == rq_h) &&
-                   (hb[2] == rq_r) && (hb[3] == rq_n)) ||
-                  (rq_hdr && (seen == rq_idx))) begin
+              // takes the req_idx-th header (fdd_readid_d88, :513-518). Both also require
+              // the header's rpm test (hdr_rpm_ok, above); a READ ID ordinal that fails it
+              // is no ID, as the crcn-th test in fdd_readid_d88 never matches again.
+              if (((!rq_hdr && (hb[0] == rq_c) && (hb[1] == rq_h) &&
+                    (hb[2] == rq_r) && (hb[3] == rq_n)) ||
+                   (rq_hdr && (seen == rq_idx))) && hdr_rpm_ok) begin
                 if (!rq_wr && (rq_mf == hb[6][6])) begin
                   // the header matched in the other recording mode: no sector (the
                   // searchsector_d88 `break` above the port note)

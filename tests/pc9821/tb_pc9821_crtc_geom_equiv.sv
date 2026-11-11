@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The CRTC's registered raster geometry (V1-a: the clamped totals registered from the SYNC block as it arrives on the frame-boundary edge the copy of the block uses, and every derived compare operand - HACTIVE, the HSYNC/VSYNC bounds, the frame-end/walk-slot bounds - registered every clk_sys from them, one clk_sys behind, so every raster compare reads a register) is cycle-for-cycle identical to the pre-change module (pc9821_crtc_ref.sv, the module as of ad9ed84c): over tens of frames of random, default-perturbed and clamp-extreme SYNC blocks (every field at zero and at its maximum, cr past the line, lf of 0/1/1024, an all-zero blanking), with the block's last byte landing one cycle before, ON and one cycle after the frame-boundary edge, random command/MODE/CRTC/palette/text-RAM traffic, irregular pixel_ce, and machine resets mid-frame, right after a SYNC write and on the frame-boundary edge, every one of the module's 57 outputs (hs/vs/de, o_htotal/o_vtotal/o_vbp, the frame and snapshot strobes, the vsync IRQ and status bits, the text fetch and render ports, the palette ports, io_dout) matches on every clk_sys cycle - with the text-modes lane's three stated exceptions: the stimulus keeps the CRTC render registers, CSRFORM's LR and the PRAM partition lengths at their power-on values (the domain where the text line sequencer IS the old 16-line grid; beyond it tb_pc9821_text_modes holds NP2kai's maketext), the kanji row cache's bank NAME (jc_rd_bank) is not compared, and the text fetch/render ports are compared on active lines below 511 (a taller frame now fetches rows 32-35 instead of truncating them).
+// The CRTC's registered raster geometry (V1-a: the clamped totals registered from the SYNC block as it arrives on the frame-boundary edge the copy of the block uses, and every derived compare operand - HACTIVE, the HSYNC/VSYNC bounds, the frame-end/walk-slot bounds - registered every clk_sys from them, one clk_sys behind, so every raster compare reads a register) is cycle-for-cycle identical to the pre-change module (pc9821_crtc_ref.sv, the module as of ad9ed84c): over tens of frames of random, default-perturbed and clamp-extreme SYNC blocks (every field at zero and at its maximum, cr past the line, lf of 0/1/1024, an all-zero blanking), with the block's last byte landing one cycle before, ON and one cycle after the frame-boundary edge, random command/MODE/CRTC/palette/text-RAM traffic, irregular pixel_ce, and machine resets mid-frame, right after a SYNC write and on the frame-boundary edge, every one of the module's 57 outputs (hs/vs/de, o_htotal/o_vtotal/o_vbp, the frame and snapshot strobes, the vsync IRQ and status bits, the text fetch and render ports, the palette ports, io_dout) matches on every clk_sys cycle - with the text-modes lane's three stated exceptions: the stimulus keeps the CRTC render registers, CSRFORM's LR and the PRAM partition lengths at their power-on values (the domain where the text line sequencer IS the old 16-line grid; beyond it tb_pc9821_text_modes holds NP2kai's maketext), the kanji row cache's bank NAME (jc_rd_bank) is not compared, and the text fetch/render ports are compared on active lines below 511 (a taller frame now fetches rows 32-35 instead of truncating them); and gfx_dig is compared against the reference's live digital palette registers rather than its frame-boundary copy (the digital palette now reaches the screen at once, as on the real Xe10); and the Xe10 kit-2 exceptions (the TXTMODE /D captures): a block whose raw x is below 100 has its C/R byte raised to x = 100 (the shipped module's 24 kHz x floor is the machine's 90, docs/probes/KIT2-XE10-TXTMODE.TXT:36, where the reference clamps at 100), every block is followed by PITCH = its own C/R byte (a SYNC block's C/R byte now loads the pitch) and the pitch family (o_v_pitch, dbg_pitch, o_v_row0_stale, the text fetch/render ports) is compared only from two lines after the two modules' pitch registers and copies agree again, and the text fetch/render ports only while the shipped module's last cell is the reference's fixed 79/39 (a block at least 80 cells wide) and from two lines after.
 
 // The reference is the pre-change TEXT, not a model of the hardware: this bench proves the
 // restructure did not change behaviour. The raster's hardware behaviour itself is pinned by
@@ -75,7 +75,6 @@ module tb_pc9821_crtc_geom_equiv;
   wire [3:0] d_pal_wr_idx, r_pal_wr_idx;
   wire [1:0] d_pal_wr_chan, r_pal_wr_chan;
   wire [3:0] d_pal_wr_data, r_pal_wr_data;
-  wire d_pal_commit, r_pal_commit;
   wire d_pal256_wr_en, r_pal256_wr_en;
   wire [7:0] d_pal256_wr_idx, r_pal256_wr_idx;
   wire [1:0] d_pal256_wr_chan, r_pal256_wr_chan;
@@ -110,7 +109,7 @@ module tb_pc9821_crtc_geom_equiv;
       .text_colour(d_text_colour), .pix_dot(d_pix_dot), .pix_h_active(d_pix_h_active),
       .pix_v_active(d_pix_v_active), .gfx_odd_line(d_gfx_odd_line), .gfx_mode16(d_gfx_mode16),
       .gfx_dig(d_gfx_dig), .pal_wr_en(d_pal_wr_en), .pal_wr_idx(d_pal_wr_idx),
-      .pal_wr_chan(d_pal_wr_chan), .pal_wr_data(d_pal_wr_data), .pal_commit(d_pal_commit),
+      .pal_wr_chan(d_pal_wr_chan), .pal_wr_data(d_pal_wr_data),
       .pal256_wr_en(d_pal256_wr_en), .pal256_wr_idx(d_pal256_wr_idx),
       .pal256_wr_chan(d_pal256_wr_chan), .pal256_wr_data(d_pal256_wr_data),
       .gfx_pegc_256(d_gfx_pegc_256), .gfx_pegc_256e(d_gfx_pegc_256e), .hs_out(d_hs_out),
@@ -137,7 +136,7 @@ module tb_pc9821_crtc_geom_equiv;
       .text_colour(r_text_colour), .pix_dot(r_pix_dot), .pix_h_active(r_pix_h_active),
       .pix_v_active(r_pix_v_active), .gfx_odd_line(r_gfx_odd_line), .gfx_mode16(r_gfx_mode16),
       .gfx_dig(r_gfx_dig), .pal_wr_en(r_pal_wr_en), .pal_wr_idx(r_pal_wr_idx),
-      .pal_wr_chan(r_pal_wr_chan), .pal_wr_data(r_pal_wr_data), .pal_commit(r_pal_commit),
+      .pal_wr_chan(r_pal_wr_chan), .pal_wr_data(r_pal_wr_data),
       .pal256_wr_en(r_pal256_wr_en), .pal256_wr_idx(r_pal256_wr_idx),
       .pal256_wr_chan(r_pal256_wr_chan), .pal256_wr_data(r_pal256_wr_data),
       .gfx_pegc_256(r_gfx_pegc_256), .gfx_pegc_256e(r_gfx_pegc_256e), .hs_out(r_hs_out),
@@ -164,8 +163,41 @@ module tb_pc9821_crtc_geom_equiv;
   always @(posedge clk_sys)
     if (r_pix_v_active && r_o_vline >= 10'd511) tall_prev <= 1'b1;
     else if (r_o_vline == 10'd0 && r_o_hdot == 10'd16) tall_prev <= 1'b0;
+  // THE XE10 KIT-2 CHANGES (the TXTMODE /D captures) are the next two exceptions.
+  // (1) A SYNC block's C/R byte now loads the text pitch, as on the real Xe10
+  // (docs/probes/KIT2-XE10-TXTMODE.TXT; tb_pc9821_text_modes P1-P6), where the reference keeps the
+  // PITCH command's. The bench follows every block with PITCH = the block's own C/R byte, so the
+  // two pitches agree again once that command lands; between the C/R byte and it, and until the
+  // scanout's copies (v_pitch, the row-0 stale flag) and the fetch pipeline behind them have caught
+  // up - two raster lines after the last difference - the pitch family (o_v_pitch, dbg_pitch,
+  // o_v_row0_stale and the text fetch/render ports) is not compared.
+  // (2) The text fetch wraps to the next line at HACTIVE's last cell instead of a fixed column 79
+  // (the machine draws an AW 64/78 row's own first word in column 0), so the text fetch/render
+  // ports are not compared while the shipped module's last cell is not the reference's 79/39 (a
+  // block narrower than 80 cells), nor for two lines after. And the 24 kHz x floor is the machine's
+  // 90, not NP2kai's 100 (KIT2-XE10-TXTMODE.TXT:36, tb_pc9821_gdc_sync_raster case 4): make_block
+  // keeps every block's x at 100 or above, where the two floors agree.
+  wire p_diff = (dut.pitch != ref0.pitch) || (dut.v_pitch != ref0.v_pitch) ||
+                (d_o_v_row0_stale != r_o_v_row0_stale);
+  wire lc_diff = (dut.s_lc80_r != 7'd79) || (dut.s_lc40_r != 6'd39);
+  reg [1:0] p_tail = 2'd0, lc_tail = 2'd0;
+  wire line_tick = pixel_ce && (r_o_hdot == r_o_htotal - 10'd1);
+  always @(posedge clk_sys) begin
+    if (p_diff) p_tail <= 2'd3; else if (line_tick && p_tail != 2'd0) p_tail <= p_tail - 2'd1;
+    if (lc_diff) lc_tail <= 2'd3; else if (line_tick && lc_tail != 2'd0) lc_tail <= lc_tail - 2'd1;
+  end
+  wire p_cmp  = !p_diff && (p_tail == 2'd0);
+  wire lc_cmp = !lc_diff && (lc_tail == 2'd0);
   wire fetch_cmp = r_pix_v_active && (r_o_vline < 10'd511) &&
-                   !(tall_prev && r_o_vline == 10'd0 && r_o_hdot < 10'd16);
+                   !(tall_prev && r_o_vline == 10'd0 && r_o_hdot < 10'd16) && p_cmp && lc_cmp;
+  wire [7:0] dm_o_v_pitch = p_cmp ? d_o_v_pitch : 8'd0;
+  wire [7:0] rm_o_v_pitch = p_cmp ? r_o_v_pitch : 8'd0;
+  wire [7:0] dm_dbg_pitch = p_cmp ? d_dbg_pitch : 8'd0;
+  wire [7:0] rm_dbg_pitch = p_cmp ? r_dbg_pitch : 8'd0;
+  wire dm_o_v_row0_stale = p_cmp ? d_o_v_row0_stale : 1'b0;
+  wire rm_o_v_row0_stale = p_cmp ? r_o_v_row0_stale : 1'b0;
+  integer text_cmp_cycles = 0;
+  always @(posedge clk_sys) if (fetch_cmp) text_cmp_cycles = text_cmp_cycles + 1;
   wire [7:0] dm_o_tram_vid_q = fetch_cmp ? d_o_tram_vid_q : 8'd0;
   wire [7:0] rm_o_tram_vid_q = fetch_cmp ? r_o_tram_vid_q : 8'd0;
   wire [10:0] dm_ank_rd_addr = fetch_cmp ? d_ank_rd_addr : 11'd0;
@@ -182,9 +214,14 @@ module tb_pc9821_crtc_geom_equiv;
   wire [0:0] rm_text_cell = fetch_cmp ? r_text_cell : 1'd0;
   wire [11:0] dm_text_colour = fetch_cmp ? d_text_colour : 12'd0;
   wire [11:0] rm_text_colour = fetch_cmp ? r_text_colour : 12'd0;
-  localparam integer OW = 276;
-  wire [OW-1:0] d_all = {d_io_dout, d_gdc_ff2_state, d_tram_cpu_dout, dm_o_tram_vid_q, dm_ank_rd_addr, 2'b00 /* jc_rd_bank: see the note */, dm_jc_rd_cell, dm_jc_rd_word, dm_cg_ram_vid_addr, d_o_v_pitch, d_o_v_col40, d_o_v_sad, d_o_v_row0_stale, d_o_vline, d_o_hdot, d_o_htotal, d_o_vtotal, d_o_vbp, d_o_frame_end, d_o_cfg_snap, d_o_cfg_pending, d_o_display_page, d_o_stat_blank, d_o_stat_vsync, d_vsync_active, d_vsync_edge, d_vsync_irq, d_disp_on, d_gfx_access_page, d_gfx_egc_gate, d_dbg_sad, d_dbg_pitch, d_dbg_col40, d_dbg_disp, dm_text_opaque, dm_text_cell, dm_text_colour, d_pix_dot, d_pix_h_active, d_pix_v_active, d_gfx_odd_line, d_gfx_mode16, d_gfx_dig, d_pal_wr_en, d_pal_wr_idx, d_pal_wr_chan, d_pal_wr_data, d_pal_commit, d_pal256_wr_en, d_pal256_wr_idx, d_pal256_wr_chan, d_pal256_wr_data, d_gfx_pegc_256, d_gfx_pegc_256e, 1'b0 /* hs_out: see below */, 1'b0 /* vs_out: see below */, d_de_out};
-  wire [OW-1:0] r_all = {r_io_dout, r_gdc_ff2_state, r_tram_cpu_dout, rm_o_tram_vid_q, rm_ank_rd_addr, 2'b00 /* jc_rd_bank: see the note */, rm_jc_rd_cell, rm_jc_rd_word, rm_cg_ram_vid_addr, r_o_v_pitch, r_o_v_col40, r_o_v_sad, r_o_v_row0_stale, r_o_vline, r_o_hdot, r_o_htotal, r_o_vtotal, r_o_vbp, r_o_frame_end, r_o_cfg_snap, r_o_cfg_pending, r_o_display_page, r_o_stat_blank, r_o_stat_vsync, r_vsync_active, r_vsync_edge, r_vsync_irq, r_disp_on, r_gfx_access_page, r_gfx_egc_gate, r_dbg_sad, r_dbg_pitch, r_dbg_col40, r_dbg_disp, rm_text_opaque, rm_text_cell, rm_text_colour, r_pix_dot, r_pix_h_active, r_pix_v_active, r_gfx_odd_line, r_gfx_mode16, r_gfx_dig, r_pal_wr_en, r_pal_wr_idx, r_pal_wr_chan, r_pal_wr_data, r_pal_commit, r_pal256_wr_en, r_pal256_wr_idx, r_pal256_wr_chan, r_pal256_wr_data, r_gfx_pegc_256, r_gfx_pegc_256e, 1'b0 /* hs_out: see below */, 1'b0 /* vs_out: see below */, r_de_out};
+  // gfx_dig is compared against the reference's LIVE digital palette bytes, not its own
+  // gfx_dig port: the reference copies them into a frame-boundary snapshot, and the shipped
+  // module now sends them out live because the real Xe10 takes a digital palette write at once
+  // (docs/probes/XE10T-XE10-RASTER.TXT:28 `P RASTER DTOGGLE frames=283`; tb_pc9821_raster_palette).
+  wire [31:0] r_gfx_dig_live = {ref0.dig_a8, ref0.dig_aa, ref0.dig_ac, ref0.dig_ae};
+  localparam integer OW = 275;
+  wire [OW-1:0] d_all = {d_io_dout, d_gdc_ff2_state, d_tram_cpu_dout, dm_o_tram_vid_q, dm_ank_rd_addr, 2'b00 /* jc_rd_bank: see the note */, dm_jc_rd_cell, dm_jc_rd_word, dm_cg_ram_vid_addr, dm_o_v_pitch, d_o_v_col40, d_o_v_sad, dm_o_v_row0_stale, d_o_vline, d_o_hdot, d_o_htotal, d_o_vtotal, d_o_vbp, d_o_frame_end, d_o_cfg_snap, d_o_cfg_pending, d_o_display_page, d_o_stat_blank, d_o_stat_vsync, d_vsync_active, d_vsync_edge, d_vsync_irq, d_disp_on, d_gfx_access_page, d_gfx_egc_gate, d_dbg_sad, dm_dbg_pitch, d_dbg_col40, d_dbg_disp, dm_text_opaque, dm_text_cell, dm_text_colour, d_pix_dot, d_pix_h_active, d_pix_v_active, d_gfx_odd_line, d_gfx_mode16, d_gfx_dig, d_pal_wr_en, d_pal_wr_idx, d_pal_wr_chan, d_pal_wr_data, d_pal256_wr_en, d_pal256_wr_idx, d_pal256_wr_chan, d_pal256_wr_data, d_gfx_pegc_256, d_gfx_pegc_256e, 1'b0 /* hs_out: see below */, 1'b0 /* vs_out: see below */, d_de_out};
+  wire [OW-1:0] r_all = {r_io_dout, r_gdc_ff2_state, r_tram_cpu_dout, rm_o_tram_vid_q, rm_ank_rd_addr, 2'b00 /* jc_rd_bank: see the note */, rm_jc_rd_cell, rm_jc_rd_word, rm_cg_ram_vid_addr, rm_o_v_pitch, r_o_v_col40, r_o_v_sad, rm_o_v_row0_stale, r_o_vline, r_o_hdot, r_o_htotal, r_o_vtotal, r_o_vbp, r_o_frame_end, r_o_cfg_snap, r_o_cfg_pending, r_o_display_page, r_o_stat_blank, r_o_stat_vsync, r_vsync_active, r_vsync_edge, r_vsync_irq, r_disp_on, r_gfx_access_page, r_gfx_egc_gate, r_dbg_sad, rm_dbg_pitch, r_dbg_col40, r_dbg_disp, rm_text_opaque, rm_text_cell, rm_text_colour, r_pix_dot, r_pix_h_active, r_pix_v_active, r_gfx_odd_line, r_gfx_mode16, r_gfx_dig_live /* gfx_dig: see the note */, r_pal_wr_en, r_pal_wr_idx, r_pal_wr_chan, r_pal_wr_data, r_pal256_wr_en, r_pal256_wr_idx, r_pal256_wr_chan, r_pal256_wr_data, r_gfx_pegc_256, r_gfx_pegc_256e, 1'b0 /* hs_out: see below */, 1'b0 /* vs_out: see below */, r_de_out};
 
   // hs_out is OUT of the equivalence since 2026-10-15: the horizontal porches moved deliberately
   // to the uPD7220 field map (HFP 8*(hfp+1), HS 8*(hs+1), the back porch the rest; MAME
@@ -253,8 +290,9 @@ module tb_pc9821_crtc_geom_equiv;
 
   reg [7:0] blk [0:7];
   // A block of class k: 0 random, 1 the default with one field perturbed, 2 clamp extremes.
+  integer x_floor_moves = 0;
   task automatic make_block(input integer k);
-    integer f;
+    integer f, x_raw;
     begin
       blk[0] = 8'h10; blk[1] = 8'h4e; blk[2] = 8'h07; blk[3] = 8'h25;
       blk[4] = 8'h07; blk[5] = 8'h07; blk[6] = 8'h90; blk[7] = 8'h65;
@@ -275,6 +313,15 @@ module tb_pc9821_crtc_geom_equiv;
                    blk[5] = 8'hFF; blk[6] = 8'hFF; blk[7] = 8'hFF; end
           default: begin blk[1] = 8'h00; blk[6] = 8'h40; blk[7] = 8'h02; end  // narrow, 576 lf
         endcase
+      end
+      // x at or above 100 (exception 2 above): a block whose raw x is below 100 is clamped to 90
+      // or runs unclamped in the shipped module, to 100 in the reference, so its C/R byte is
+      // raised by the distance (the line then runs at gdcclk[1]'s floor in both). The floor
+      // itself is tb_pc9821_gdc_sync_raster's (and tools/equiv/crtc_geom.sv's, for every block).
+      x_raw = blk[1] + 2 + (blk[2] & 8'h1F) + (blk[3] >> 2) + (blk[4] & 8'h3F) + 3;
+      if (x_raw < 100) begin
+        blk[1] = blk[1] + (100 - x_raw);
+        x_floor_moves = x_floor_moves + 1;
       end
     end
   endtask
@@ -311,6 +358,10 @@ module tb_pc9821_crtc_geom_equiv;
         end
         edge_lands = edge_lands + 1;
       end
+      // PITCH = the block's C/R byte, so the reference's pitch meets the one the block loaded
+      // into the shipped module (exception 1 above).
+      wr(8'h62, 8'h47);
+      wr(8'h60, blk[1]);
       syncs = syncs + 1;
     end
   endtask
@@ -391,13 +442,13 @@ module tb_pc9821_crtc_geom_equiv;
       wait_frames(1);
     end
     if (frames < 30 || syncs < 36 || edge_lands < 20 || resets < 8 || clamp_blocks < 10 ||
-        hs_edges < 10000 || vs_edges < 30)
-      $fatal(1, "TB_PC9821_CRTC_GEOM_EQUIV: coverage short: frames %0d syncs %0d edge-lands %0d resets %0d clamp %0d hs %0d vs %0d",
-             frames, syncs, edge_lands, resets, clamp_blocks, hs_edges, vs_edges);
+        hs_edges < 10000 || vs_edges < 30 || text_cmp_cycles < 2000000)
+      $fatal(1, "TB_PC9821_CRTC_GEOM_EQUIV: coverage short: frames %0d syncs %0d edge-lands %0d resets %0d clamp %0d hs %0d vs %0d text-compared cycles %0d",
+             frames, syncs, edge_lands, resets, clamp_blocks, hs_edges, vs_edges, text_cmp_cycles);
     if (errors != 0) $fatal(1, "TB_PC9821_CRTC_GEOM_EQUIV: %0d mismatching cycles of %0d", errors, cycles);
     $display("TB_PC9821_CRTC_GEOM_EQUIV: PASS");
-    $display("NOTE crtc_geom_equiv: %0d cycles, %0d frames, %0d blocks (%0d at the edge, %0d clamp), %0d resets, %0d hs / %0d vs pulses, identical",
-             cycles, frames, syncs, edge_lands, clamp_blocks, resets, hs_edges, vs_edges);
+    $display("NOTE crtc_geom_equiv: %0d cycles, %0d frames, %0d blocks (%0d at the edge, %0d clamp, %0d raised to x 100), %0d resets, %0d hs / %0d vs pulses, %0d text-compared cycles, identical",
+             cycles, frames, syncs, edge_lands, clamp_blocks, x_floor_moves, resets, hs_edges, vs_edges, text_cmp_cycles);
     $finish;
   end
 

@@ -71,15 +71,12 @@ module pc9821_dmac (
     //   * A WRITE HAS NO RESPONSE: it completes at the accept, so only the read path
     //     waits for mem_resp_valid.
     output reg  [31:0] mem_addr,
-    // THE VIDEO-WINDOW CLASS OF mem_addr, registered with it: [0] = the address is in a graphics
-    // plane window (the first MiB, 0xA8000-0xBFFFF or 0xE0000-0xE7FFF), [1] = it is in
-    // 0xB0000-0xBFFFF (the part an EMS window can claim) OR in the text RAM 0xA0000-0xA3FFF.
-    // The two [1] cases never overlap and only the B block sets [0] too, so 2'b10 names the
-    // text RAM and 2'b11 the B block. pc9821_memory_subsystem routes such a byte to the GVRAM
-    // or the text RAM; computing the address compare here, at the load of the address it
-    // describes, keeps it out of the subsystem's request mux (a zero-cycle cut: same edge,
-    // same value as decoding mem_addr).
-    output reg  [1:0]  mem_gvwin,
+    // THE ADDRESS mem_addr LOADS NEXT, and the cycle it loads (mem_load: mem_addr takes
+    // mem_addr_nx at this clock edge). pc9821_memory_subsystem decodes the byte's route from
+    // these and registers it on the same edge as mem_addr, so the decode is not in series with
+    // the request's accept (dma_ready reaches the CPU's snoop input combinationally).
+    output wire [31:0] mem_addr_nx,
+    output wire        mem_load,
     output wire        mem_we,
     output wire [3:0]  mem_be,
     output reg  [31:0] mem_din,
@@ -108,12 +105,6 @@ module pc9821_dmac (
   localparam [4:0] R_CLEARMSK  = 5'd14;
   localparam [4:0] R_ALLMSK    = 5'd15;
   localparam [4:0] R_BOUND     = 5'd20;
-
-  function automatic [1:0] gvwin(input [31:14] a);   // the window compare needs no bit below 14
-    gvwin = { (a[31:16] == 16'h000B) || (a[31:14] == 18'h00028),
-              (a[31:20] == 12'd0) && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB) ||
-                                       (a[19:15] == 5'b11100)) };
-  endfunction
 
   // Per-channel state. NP2kai stores the live register and the value it was programmed
   // with (adrs/adrsorg, leng/lengorg) but NEVER reads the _org pair - it has no
@@ -325,7 +316,6 @@ module pc9821_dmac (
       cur_byte  <= 8'h00;
       mem_req   <= 1'b0;
       mem_addr  <= 32'd0;
-      mem_gvwin <= 2'b00;
       mem_din   <= 32'd0;
       dout      <= 8'hFF;
       for (i = 0; i < 4; i = i + 1) begin
@@ -481,8 +471,7 @@ module pc9821_dmac (
           if (ch_mode[cur][3:2] == 2'b10 || ch_mode[cur][3:2] == 2'b11) begin
             // Memory to port: read memory first, then strobe the device with the byte in S_DEV.
             mem_req  <= 1'b1;
-            mem_addr <= {1'b0, ch_addr[cur]};
-            mem_gvwin <= gvwin({1'b0, ch_addr[cur][30:14]});
+            mem_addr <= mem_addr_nx;
             state    <= S_MEM;
           end else begin
             // Verify and port-to-memory both strobe: a verify channel consumes a byte without
@@ -520,8 +509,7 @@ module pc9821_dmac (
           // Replicated across all four lanes; see the port comment. mem_be selects one lane,
           // so this is correct regardless of lane order.
           mem_din   <= {4{dev_din}};
-          mem_addr  <= {1'b0, ch_addr[cur]};
-          mem_gvwin <= gvwin({1'b0, ch_addr[cur][30:14]});
+          mem_addr  <= mem_addr_nx;
           mem_req   <= 1'b1;
           state     <= S_MEM;
         end
@@ -585,6 +573,12 @@ module pc9821_dmac (
 
   // One byte, one lane, chosen by the address's low bits so a byte access reaches the right
   // byte of the backend's 32-bit word - consistent with its rule that addr[1:0] is ignored.
+
+  // The two mem_addr loads below: S_FIRST of a memory-to-port channel (mode bits 3:2 = 10/11)
+  // and S_DEV of a port-to-memory one.
+  assign mem_addr_nx = {1'b0, ch_addr[cur]};
+  assign mem_load    = ((state == S_FIRST) && ch_mode[cur][3]) ||
+                       ((state == S_DEV) && !(cur_read || cur_verify));
 
   assign mem_be = (mem_addr[1:0] == 2'd0) ? 4'b0001 :
                   (mem_addr[1:0] == 2'd1) ? 4'b0010 :

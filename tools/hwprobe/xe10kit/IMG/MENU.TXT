@@ -1,0 +1,12 @@
+XE10 KIT - run these in A:\KIT, in order (all details: A:\KIT\RUNLIST.TXT)
+  1  RUN0                       right after switching on
+  2  RUNMPU, then RUNMPU BYTES  MPU card -> SC-88 Pro: watch and listen
+  3  RUNRB1 (reboots by itself), then RUNRB2
+  4  SETUP: memory switch keep, GDC 5 MHz, 20 lines -> RUNP6A, RESET, RUNP6B
+  5  SETUP: floppy disk mode auto (1M)           -> RUNS F3
+  6  (optional) SETUP: floppy auto (640K)        -> RUNS F1
+  7  (optional) SETUP: floppy 640K               -> RUNS F0
+  8  SETUP: floppy back, sound used               -> RUNSND (listen)
+  9  (optional) -86 board removed                 -> RUNS SNX
+ 10  SETUP: everything back as found              -> RUNS END
+ Bring back every A:\KIT\*.TXT. Each SETUP change is followed by a reboot.

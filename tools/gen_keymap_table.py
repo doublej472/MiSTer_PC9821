@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate README.md's keyboard table from pc9821_kbd.sv's translate(), so the two cannot drift.
+"""Generate the keyboard table of docs/user/input.md from pc9821_kbd.sv's translate(), so the two cannot drift.
 
-WHAT IT WRITES. The block between `<!-- keymap:begin -->` and `<!-- keymap:end -->` in README.md:
+WHAT IT WRITES. The block between `<!-- keymap:begin -->` and `<!-- keymap:end -->` in docs/user/input.md:
 a markdown table with one row per PC key that matters (each key whose PC-98 key differs from its
 own label, every PC-98 special key, the keys only one layout maps) and the PC-98 key it gives in
 each OSD Keyboard layout, plus one summary row for the keys that give the PC-98 key of their own
@@ -17,7 +17,7 @@ layout change. And every set-2 code translate() maps must be a PC key this table
 mapping cannot go undocumented.
 
 Usage:
-  tools/gen_keymap_table.py           rewrite README.md's block
+  tools/gen_keymap_table.py           rewrite docs/user/input.md's block
   tools/gen_keymap_table.py --check   exit 1 when the block, remap_slot() or PC_KEYS disagree
   tools/gen_keymap_table.py --print   print the block
 """
@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 KBD = ROOT / "src/pc9821/input/pc9821_kbd.sv"
-README = ROOT / "README.md"
+DOC = ROOT / "docs/user/input.md"
 BEGIN, END = "<!-- keymap:begin -->", "<!-- keymap:end -->"
 
 # PC-98 key number -> the name shown (NP2kai keystat.tbl names; the symbol keys show what the BIOS
@@ -213,30 +213,30 @@ def main(argv: list[str]) -> int:
     if "--print" in argv:
         print(block)
         return 0
-    readme = README.read_text()
-    if BEGIN not in readme or END not in readme:
-        problems.append(f"README.md has no {BEGIN} ... {END} block")
-        new = readme
+    doc = DOC.read_text()
+    if BEGIN not in doc or END not in doc:
+        problems.append(f"docs/user/input.md has no {BEGIN} ... {END} block")
+        new = doc
     else:
-        head, rest = readme.split(BEGIN, 1)
+        head, rest = doc.split(BEGIN, 1)
         new = head + block + rest.split(END, 1)[1]
     if "--check" in argv:
-        if new != readme:
-            problems.append("README.md's keyboard table is stale: run tools/gen_keymap_table.py")
+        if new != doc:
+            problems.append("docs/user/input.md's keyboard table is stale: run tools/gen_keymap_table.py")
         for p in problems:
             print("FAIL:", p)
-        print("KEYMAP TABLE: " + ("FAIL" if problems else "PASS (README table, remap_slot and "
+        print("KEYMAP TABLE: " + ("FAIL" if problems else "PASS (input.md table, remap_slot and "
                                   "PC_KEYS agree with translate())"))
         return 1 if problems else 0
     if problems:
         for p in problems:
             print("FAIL:", p)
         return 1
-    if new != readme:
-        README.write_text(new)
-        print("wrote README.md's keyboard table")
+    if new != doc:
+        DOC.write_text(new)
+        print("wrote docs/user/input.md's keyboard table")
     else:
-        print("README.md's keyboard table is current")
+        print("docs/user/input.md's keyboard table is current")
     return 0
 
 

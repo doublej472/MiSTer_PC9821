@@ -59,29 +59,29 @@
   "bench": "ata",
   "file": "src/pc9821/storage/pc9821_ata.sv",
   "why": "CHECK POWER MODE count 0x80",
-  "from": "                  sector_count <= 8'hFF;",
-  "to": "                  sector_count <= 8'h80;"
+  "from": "          sector_count <= 8'hFF;",
+  "to": "          sector_count <= 8'h80;"
  },
  {
   "bench": "ata",
   "file": "src/pc9821/storage/pc9821_ata.sv",
   "why": "WRITE SECTORS ignores readonly",
-  "from": "                  if (readonly || (!drive_head[6] && !chs_valid) ||\n                      !range_ok)\n                    abort_command(4'd7);\n                  else\n                    begin_block_write(requested_lba, data_count, 8'd1);",
-  "to": "                  if ((!drive_head[6] && !chs_valid) ||\n                      !range_ok)\n                    abort_command(4'd7);\n                  else\n                    begin_block_write(requested_lba, data_count, 8'd1);"
+  "from": "          if (act_readonly || (!drive_head[6] && !chs_valid) ||\n              !range_ok)\n            abort_command(4'd7);\n          else\n            begin_block_write(requested_lba, data_count, 8'd1);",
+  "to": "          if ((!drive_head[6] && !chs_valid) ||\n              !range_ok)\n            abort_command(4'd7);\n          else\n            begin_block_write(requested_lba, data_count, 8'd1);"
  },
  {
   "bench": "ata_conform",
   "file": "src/pc9821/storage/pc9821_ata.sv",
   "why": "DEVICE RESET reports 0x01 not ABRT",
-  "from": "                  error_reg     <= ATA_ERR_ABRT;\n                  sector_count  <= 8'd1;",
-  "to": "                  error_reg     <= 8'h01;\n                  sector_count  <= 8'd1;"
+  "from": "          error_reg     <= ATA_ERR_ABRT;\n          sector_count  <= 8'd1;",
+  "to": "          error_reg     <= 8'h01;\n          sector_count  <= 8'd1;"
  },
  {
   "bench": "ata_conform",
   "file": "src/pc9821/storage/pc9821_ata.sv",
   "why": "READ NATIVE MAX cyl low wrong byte",
-  "from": "                  cylinder_low  <= capacity[15:8];",
-  "to": "                  cylinder_low  <= capacity[7:0];"
+  "from": "          cylinder_low  <= act_capacity[15:8];",
+  "to": "          cylinder_low  <= act_capacity[7:0];"
  },
  {
   "bench": "ata_datapath",
@@ -115,8 +115,8 @@
   "bench": "ata_identify",
   "file": "src/pc9821/storage/pc9821_ata.sv",
   "why": "IDENTIFY word 60 capacity-1",
-  "from": "        8'd60: identify_word = capacity[15:0];",
-  "to": "        8'd60: identify_word = capacity[15:0] - 16'd1;"
+  "from": "        8'd60: identify_word = act_capacity[15:0];",
+  "to": "        8'd60: identify_word = act_capacity[15:0] - 16'd1;"
  },
  {
   "bench": "ata_identify",
@@ -315,6 +315,41 @@
   "to": "    bios_set_eff <= bios_set;"
  },
  {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "memory-switch hold follows the OSD live",
+  "from": "    if (reset) msw_hold_eff <= msw_hold;",
+  "to": "    msw_hold_eff <= msw_hold;"
+ },
+ {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "port 0x31 bit 4 ignores the hold",
+  "from": "  wire [7:0] sdip_seed_a3 = sdip_odd7({sdip_img_a3[6], ~msw_hold_eff, sdip_img_a3[4:0]});",
+  "to": "  wire [7:0] sdip_seed_a3 = sdip_odd7({sdip_img_a3[6], 1'b1, sdip_img_a3[4:0]});"
+ },
+ {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the hold lands on the wrong bit of port 0x31",
+  "from": "  wire [7:0] dip2_reg    = {~gdc_strap_eff, 2'b11, ~msw_hold_eff, text20_eff, 3'b011};",
+  "to": "  wire [7:0] dip2_reg    = {~gdc_strap_eff, 2'b11, text20_eff, ~msw_hold_eff, 3'b011};"
+ },
+ {
+  "bench": "bios_select",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "GDC-clock strap follows the OSD live",
+  "from": "    if (reset) gdc_strap_eff <= gdc_clock_5m;",
+  "to": "    gdc_strap_eff <= gdc_clock_5m;"
+ },
+ {
+  "bench": "msw_switch",
+  "file": "src/pc9821/core/pc9821_text_mem.sv",
+  "why": "Boot order 640K seeds the wrong nibble",
+  "from": "      3'd1:    msw_fdd_nib = 4'd2;   // entry 1 -> nibble 0x20 (NP2kai bios.c:254's 640 KB case)",
+  "to": "      3'd1:    msw_fdd_nib = 4'd3;   // entry 1 -> nibble 0x20 (NP2kai bios.c:254's 640 KB case)"
+ },
+ {
   "bench": "block_io",
   "file": "src/pc9821/storage/pc9821_block_io.sv",
   "why": "short transfer not reported as error",
@@ -436,9 +471,9 @@
  {
   "bench": "cg_read_path",
   "file": "src/pc9821/video/pc9821_cg.sv",
-  "why": "CG-1: the Xe (model_xe=1) computed sum-check byte is 0x66, not the Xe dump's 0x68",
-  "from": "    cg_record_cksum = model_xe ? 8'h68 : 8'h67;",
-  "to": "    cg_record_cksum = model_xe ? 8'h66 : 8'h67;"
+  "why": "CG-1: the computed sum-check byte is off by two, not the as-found 0x65 / 0x66",
+  "from": "    cg_record_cksum = 8'd0 - (8'h8E + cg_record_row(4'd2, model_xe) + cg_record_row(4'd3, model_xe));",
+  "to": "    cg_record_cksum = 8'd0 - (8'h90 + cg_record_row(4'd2, model_xe) + cg_record_row(4'd3, model_xe));"
  },
  {
   "bench": "cpu_reset_gate",
@@ -485,23 +520,23 @@
  {
   "bench": "dma_gvram",
   "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
-  "why": "the DMA byte's class lock never engages: the route is the live mode decode for the whole request",
-  "from": "      dma_cls_lock_q <= dma_valid && !dma_ready;",
-  "to": "      dma_cls_lock_q <= 1'b0;"
+  "why": "the DMA byte's route is never frozen at its address load: it is the live mode decode for the whole request",
+  "from": "    end else if (dma_load) begin",
+  "to": "    end else begin"
  },
  {
   "bench": "dma_gvram",
   "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
-  "why": "the frozen class follows the live decode every cycle (latched but not held)",
-  "from": "      if (!dma_cls_lock_q) dma_gvram_q <= dma_gvram_live;",
-  "to": "      dma_gvram_q <= dma_gvram_live;"
+  "why": "the route is not replaced at the next load, so a byte keeps an earlier byte's class",
+  "from": "      dma_cls      <= dma_cls_live;",
+  "to": "      dma_cls      <= dma_cls | dma_cls_live;"
  },
  {
   "bench": "dma_gvram",
   "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
-  "why": "the lock is held past the accept, so the next byte keeps the previous byte's class",
-  "from": "      dma_cls_lock_q <= dma_valid && !dma_ready;",
-  "to": "      dma_cls_lock_q <= dma_valid || dma_cls_lock_q;"
+  "why": "the registered plane index is lost: every plane byte lands in plane B",
+  "from": "      dma_gv_plane <= dma_map_plane;",
+  "to": "      dma_gv_plane <= 2'd0;"
  },
  {
   "bench": "dmac",
@@ -598,8 +633,8 @@
   "bench": "ems",
   "file": "src/pc9821/core/pc9821_iobus.sv",
   "why": "every 0x043F write moves EMS state",
-  "from": "                end else if (lane_wdata[7:4] == 4'h2) begin\n                  // The low nibble",
-  "to": "                end else begin\n                  // The low nibble"
+  "from": "      (lane_wdata[7:4] == 4'h2) ? ((lane_wdata[3:0] == 4'h0) ? 2'd0 :",
+  "to": "      1'b1 ? ((lane_wdata[3:0] == 4'h0) ? 2'd0 :"
  },
  {
   "bench": "fdc_conform",
@@ -626,15 +661,36 @@
   "bench": "fdc_read",
   "file": "src/pc9821/storage/pc9821_fdc.sv",
   "why": "EOT reached one sector late",
-  "from": "          if (x_tc || (x_r == x_eot)) begin",
-  "to": "          if (x_tc || (x_r == x_eot + 8'd1)) begin"
+  "from": "  wire       stp_eot  = (x_r == x_eot);",
+  "to": "  wire       stp_eot  = (x_r == x_eot + 8'd1);"
  },
  {
   "bench": "fdc_read",
   "file": "src/pc9821/storage/pc9821_fdc.sv",
   "why": "EOT end leaves C unchanged",
-  "from": "              x_c <= x_c + 8'd1;      // (x_h",
-  "to": "              x_c <= x_c;      // (x_h"
+  "from": "  wire [7:0] stp_c    = stp_cinc ? (x_c + 8'd1) : x_c;",
+  "to": "  wire [7:0] stp_c    = stp_cinc ? x_c : x_c;"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "DMA TC result leaves C unchanged (NP2kai's TC arm; the machine answers C+1 at EOT)",
+  "from": "            res1 <= 8'h00;\n            x_c <= stp_c;",
+  "to": "            res1 <= 8'h00;\n            x_c <= x_c;"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "MT never flips the head at EOT",
+  "from": "  wire       stp_flip = stp_eot && x_mt;",
+  "to": "  wire       stp_flip = stp_eot && 1'b0;"
+ },
+ {
+  "bench": "fdd_write",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a write's terminal count does not end the command",
+  "from": "          if (x_tc || stp_cinc) begin",
+  "to": "          if (stp_cinc) begin"
  },
  {
   "bench": "fdd_media_d88",
@@ -688,9 +744,9 @@
  {
   "bench": "fdd_write",
   "file": "src/pc9821/storage/pc9821_fdc.sv",
-  "why": "DMA TC result R not forced to 1",
-  "from": "            res1 <= 8'h00;\n            x_r <= 8'h01;",
-  "to": "            res1 <= 8'h00;\n            x_r <= x_r;"
+  "why": "DMA TC result R forced to 1 (NP2kai's TC arm) instead of the end-of-sector step",
+  "from": "            x_r <= stp_r;\n            res_len",
+  "to": "            x_r <= 8'h01;\n            res_len"
  },
  {
   "bench": "fdd_write",
@@ -724,8 +780,8 @@
   "bench": "gameport_np2",
   "file": "src/pc9821/core/pc9821_device_select.sv",
   "why": "decode answers 16 addresses",
-  "from": "assign gameport_cs = (addr[15:3] == 13'h0290);",
-  "to": "assign gameport_cs = (addr[15:4] == 12'h148);"
+  "from": "assign gameport_cs = GAMEPORT_118 && (addr[15:3] == 13'h0290);",
+  "to": "assign gameport_cs = GAMEPORT_118 && (addr[15:4] == 12'h148);"
  },
  {
   "bench": "gameport_np2",
@@ -817,6 +873,34 @@
   "why": "the parser hold covers figures only (a WRITE behind a walking WRITE takes the stale cursor)",
   "from": "  wire cf_hold_w = fig_pend || d_fig || pend_valid || (d_state != D_IDLE);",
   "to": "  wire cf_hold_w = fig_pend || d_fig;"
+ },
+ {
+  "bench": "gdc2_pace",
+  "file": "src/pc9821/video/pc9821_gdc2.sv",
+  "why": "WRITE pacing compiled out (the default build's unpaced walk)",
+  "from": "  localparam W_PACED = (WRITE_PACE_NS != 0);",
+  "to": "  localparam W_PACED = 1'b0;"
+ },
+ {
+  "bench": "gdc2_pace",
+  "file": "src/pc9821/video/pc9821_gdc2.sv",
+  "why": "figure pacing compiled out (the default 14-dot-clock step)",
+  "from": "  localparam F_PACED = (FIG_PACE_NS != 0);",
+  "to": "  localparam F_PACED = 1'b0;"
+ },
+ {
+  "bench": "gdc2_pace",
+  "file": "src/pc9821/video/pc9821_gdc2.sv",
+  "why": "the pace period derived from a fixed 50 MHz instead of SYS_FREQ (a clk_sys count, not real time)",
+  "from": "  localparam longint DEN_RAW = longint'(PERIOD_NS) * longint'(SYS_FREQ);",
+  "to": "  localparam longint DEN_RAW = longint'(PERIOD_NS) * 64'd50_000_000;"
+ },
+ {
+  "bench": "gdc2_pace",
+  "file": "src/pc9821/video/pc9821_gdc2.sv",
+  "why": "the last WRITE unit returns to idle without waiting out its period",
+  "from": "  wire        d_unit_end_w = W_PACED ? ((d_state == D_WPACE) && w_pace_ce) : d_wr_done_w;",
+  "to": "  wire        d_unit_end_w = W_PACED ? ((d_state == D_WPACE) && (w_pace_ce || (d_left == 16'd0))) : d_wr_done_w;"
  },
  {
   "bench": "gdc2_figure_xe10",
@@ -1074,8 +1158,8 @@
   "bench": "hdi_img",
   "file": "src/pc9821/storage/pc9821_hdd_image.sv",
   "why": "VHD capacity not reduced: the footer's sector stays in the guest-visible size",
-  "from": "                capacity <= v_cur_lo[40:9];",
-  "to": "                capacity <= raw_cap;"
+  "from": "                capacity_r[probe_unit] <= v_cur_lo[40:9];",
+  "to": "                capacity_r[probe_unit] <= raw_cap;"
  },
  {
   "bench": "hdi_img",
@@ -1088,8 +1172,8 @@
   "bench": "hdi_img",
   "file": "src/pc9821/storage/pc9821_hdd_image.sv",
   "why": "offset applied when it should not be (a raw image shifts by 8 sectors too)",
-  "from": "        out_lba           <= ata_pend_lba + {20'd0, hdr_off};",
-  "to": "        out_lba           <= ata_pend_lba + {20'd0, hdr_off} + 32'd8;"
+  "from": "        out_lba           <= ata_pend_lba + {20'd0, hdr_off[ata_pend_unit]};",
+  "to": "        out_lba           <= ata_pend_lba + {20'd0, hdr_off[ata_pend_unit]} + 32'd8;"
  },
  {
   "bench": "hdi_img",
@@ -1102,15 +1186,15 @@
   "bench": "hdi_img",
   "file": "src/pc9821/storage/pc9821_hdd_image.sv",
   "why": "capacity not reduced: the header's sectors stay in the guest-visible size",
-  "from": "                capacity <= hdr_cap;",
-  "to": "                capacity <= raw_cap;"
+  "from": "                capacity_r[probe_unit] <= hdr_cap;",
+  "to": "                capacity_r[probe_unit] <= raw_cap;"
  },
  {
   "bench": "hdi_img",
   "file": "src/pc9821/storage/pc9821_hdd_image.sv",
   "why": "the mount probe fills the disk's read-ahead window like a guest read",
-  "from": "        out_lba       <= probe_kind ? tail_lba : 32'd0;\n        out_window    <= 1'b0;",
-  "to": "        out_lba       <= probe_kind ? tail_lba : 32'd0;\n        out_window    <= 1'b1;"
+  "from": "        out_lba       <= probe_kind[start_unit] ? tail_lba : 32'd0;\n        out_window    <= 1'b0;",
+  "to": "        out_lba       <= probe_kind[start_unit] ? tail_lba : 32'd0;\n        out_window    <= 1'b1;"
  },
  {
   "bench": "text_modes",
@@ -1234,9 +1318,23 @@
  {
   "bench": "gfx_palette",
   "file": "src/pc9821/video/pc9821_gfx_palette.sv",
-  "why": "analog palette copy stops one entry short",
-  "from": "      if (cp_cnt == 5'd16) cp_busy <= 1'b0;",
-  "to": "      if (cp_cnt == 5'd15) cp_busy <= 1'b0;"
+  "why": "an R write (0xAC) lands in the neighbouring entry",
+  "from": "      else if (wchan == 2'd1) disp[widx][11:8] <= wdata;   // 0xAC red",
+  "to": "      else if (wchan == 2'd1) disp[widx ^ 4'd1][11:8] <= wdata;   // 0xAC red"
+ },
+ {
+  "bench": "raster_palette",
+  "file": "src/pc9821/video/pc9821_gfx_palette.sv",
+  "why": "a B write (0xAE) lands in the green nibble",
+  "from": "      else                    disp[widx][3:0]  <= wdata;   // 0xAE blue",
+  "to": "      else                    disp[widx][7:4]  <= wdata;   // 0xAE blue"
+ },
+ {
+  "bench": "raster_palette",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "analogue palette writes taken only in the vertical blank (a frame-deferred model)",
+  "from": "  assign pal_wr_en   = io_wr && mode2_16color && !mode2_256col &&",
+  "to": "  assign pal_wr_en   = io_wr && mode2_16color && !mode2_256col && (vline >= 10'd400) &&"
  },
  {
   "bench": "grcg_ops",
@@ -1332,9 +1430,79 @@
  {
   "bench": "io_latency_profile",
   "file": "src/pc9821/core/pc9821_iobus.sv",
-  "why": "faithful PIT write time too short",
-  "from": "64'd861  + 64'd999_999_999) / 64'd1_000_000_000);  // 8253 write",
-  "to": "64'd400  + 64'd999_999_999) / 64'd1_000_000_000);  // 8253 write"
+  "why": "the Xe10 table charges the capture on the bus alone (no CPU share taken off)",
+  "from": "  localparam [15:0] IO_XE10_CPU_CYC = 16'd8;",
+  "to": "  localparam [15:0] IO_XE10_CPU_CYC = 16'd0;"
+ },
+ {
+  "bench": "io_latency_profile",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "a 16-bit access pays two classes in Xe10 (the per-lane sum)",
+  "from": "  wire [3:0] xe10_pair_hi = {hold_walk[2] & pending_be[2], 1'b0, hold_walk[0] & pending_be[0], 1'b0};",
+  "to": "  wire [3:0] xe10_pair_hi = 4'b0000;"
+ },
+ {
+  "bench": "io_latency_profile",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the I/O timing input is ignored (Fast always)",
+  "from": "      if (!xe10) begin\n        // ---- Fast: the smallest waits the firmware needs, not the floor -------",
+  "to": "      if (1'b1) begin\n        // ---- Fast: the smallest waits the firmware needs, not the floor -------"
+ },
+ {
+  "bench": "io_latency_profile",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the Xe10 default read at IO.TXT's 823 ns instead of XE10T's 791.5",
+  "from": "64'd792  + 64'd999_999_999) / 64'd1_000_000_000);  // default read",
+  "to": "64'd823  + 64'd999_999_999) / 64'd1_000_000_000);  // default read"
+ },
+ {
+  "bench": "io_latency_profile",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x64/0xA4 writes fall back to the default write class",
+  "from": "          16'h007C, 16'h007E, 16'h0064,\n          16'h00A4:            io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_SLOW_R;",
+  "to": "          16'h007C, 16'h007E:  io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_SLOW_R;"
+ },
+ {
+  "bench": "io_latency_profile",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the pipelined Xe10 hold forgets one of the two cycles it spends",
+  "from": "                       - 12'd2 - 12'(IO_XE10_CPU_CYC) - 12'd2;",
+  "to": "                       - 12'd2 - 12'(IO_XE10_CPU_CYC) - 12'd1;"
+ },
+ {
+  "bench": "sysclk_invariance",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the Xe10 EGC file even read at a clk_sys count, not a time",
+  "from": "  localparam [15:0] IO_NS_EGCF_HI = 16'((SYS_CLOCK_HZ * 64'd5990 + 64'd999_999_999) / 64'd1_000_000_000);",
+  "to": "  localparam [15:0] IO_NS_EGCF_HI = 16'd300;"
+ },
+ {
+  "bench": "io_5f",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x5F write blocks instead of being posted (charged on its own access)",
+  "from": "          16'h0071, 16'h0073, 16'h0075, 16'h0077,\n          16'h3FD9, 16'h3FDB, 16'h3FDD, 16'h3FDF: io_access_cycles = wr ? IO_PIT_HOLD",
+  "to": "          16'h005F:            io_access_cycles = 16'(IO_POST_5F);\n          16'h0071, 16'h0073, 16'h0075, 16'h0077,\n          16'h3FD9, 16'h3FDB, 16'h3FDD, 16'h3FDF: io_access_cycles = wr ? IO_PIT_HOLD"
+ },
+ {
+  "bench": "io_5f",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the posted write's bus time is not waited for",
+  "from": "            if ((post_5f == 12'd0) && !(device_port && request_write && device_wr_wait))",
+  "to": "            if (!(device_port && request_write && device_wr_wait))"
+ },
+ {
+  "bench": "io_5f",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the posted write's period is one clk long",
+  "from": "    else if (post_5f_load)  post_5f <= IO_POST_5F - 12'd2;",
+  "to": "    else if (post_5f_load)  post_5f <= IO_POST_5F - 12'd1;"
+ },
+ {
+  "bench": "io_5f",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the posted write's bus time is the old IO.TXT 1621 ns",
+  "from": "  localparam [11:0] IO_POST_5F = 12'((SYS_CLOCK_HZ * 64'd1744 + 64'd999_999_999) / 64'd1_000_000_000);",
+  "to": "  localparam [11:0] IO_POST_5F = 12'((SYS_CLOCK_HZ * 64'd1621 + 64'd999_999_999) / 64'd1_000_000_000);"
  },
  {
   "bench": "iobus",
@@ -1360,23 +1528,16 @@
  {
   "bench": "iobus",
   "file": "src/pc9821/core/pc9821_iobus.sv",
-  "why": "0x2x other nibble = identity",
-  "from": "                               (lane_wdata[3:0] == 4'h2) ? 2'd1 : 2'd2;",
-  "to": "                               (lane_wdata[3:0] == 4'h2) ? 2'd1 : 2'd0;"
+  "why": "0x2x other nibble from the page = identity",
+  "from": "                                   (ems_state == 2'd0)       ? 2'd0 : 2'd2) :",
+  "to": "                                   (ems_state == 2'd0)       ? 2'd0 : 2'd0) :"
  },
  {
   "bench": "irq_withdraw",
   "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
   "why": "IRQ9 not withdrawn",
-  "from": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h02)) slave (",
-  "to": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h00)) slave ("
- },
- {
-  "bench": "irq_withdraw",
-  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
-  "why": "IRQ15 withdrawn too",
-  "from": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h02)) slave (",
-  "to": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h82)) slave ("
+  "from": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (",
+  "to": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h98), .WD_UNMASKED(8'h10)) slave ("
  },
  {
   "bench": "kbd",
@@ -1596,6 +1757,69 @@
   "to": "              uart_mode <= 1'b0;"
  },
  {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "no re-raise on an enqueue onto a non-empty queue",
+  "from": "rq_repoke <= (rq_push || rq_pop) && !rq_empty",
+  "to": "rq_repoke <= rq_pop && !rq_empty"
+ },
+ {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "no re-raise on a read that leaves a byte",
+  "from": "rq_repoke <= (rq_push || rq_pop) && !rq_empty",
+  "to": "rq_repoke <= rq_push && !rq_empty"
+ },
+ {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "the line ignores the dip (level of the queue)",
+  "from": "assign irq  = !rq_empty && !rq_repoke;",
+  "to": "assign irq  = !rq_empty;"
+ },
+ {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "0xD0 running status: the data byte at index 1 advances the index to 1, not 2 (the pre-fix core)",
+  "from": "msg_pos <= d_idx + 2'd1;",
+  "to": "msg_pos <= msg_pos + 2'd1;"
+ },
+ {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "BUSY ignores the parked byte, the queue count alone (the pre-fix core): a polled writer overwrites the byte parked in the 0x3F burst's first cycles",
+  "from": "wire tx_busy_level = (tx_cnt >= 7'd16) || pend_valid;",
+  "to": "wire tx_busy_level = (tx_cnt >= 7'd16);"
+ },
+ {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "the 0xFF that leaves UART mode is ACKed again (NP2kai's answer, the pre-fix core; the MPU-401 manual and the Xe10's MPU-PC98 do not ACK it, todo item 173)",
+  "from": "wire cmd_ack     = cmd_wr && !uart_mode;",
+  "to": "wire cmd_ack     = cmd_wr && (!uart_mode || (din == 8'hFF));"
+ },
+ {
+  "bench": "mpu",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "the parked byte outranks the 0xFF/0x3F burst: a polled byte reaches the line inside the all-notes-off run, out of order",
+  "from": "  wire       tx_push_burst = burst_on && tx_room;\n  wire       tx_push_snd   = !burst_on && snd_on && tx_room;\n  wire       tx_push_pend  = !burst_on && !snd_on && pend_valid && tx_room;",
+  "to": "  wire       tx_push_burst = burst_on && tx_room && !pend_valid;\n  wire       tx_push_snd   = !burst_on && snd_on && tx_room;\n  wire       tx_push_pend  = !snd_on && pend_valid && tx_room;"
+ },
+ {
+  "bench": "mpu_probe",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "0xD0 running status: the data byte at index 1 advances the index to 1, not 2 (the pre-fix core)",
+  "from": "msg_pos <= d_idx + 2'd1;",
+  "to": "msg_pos <= msg_pos + 2'd1;"
+ },
+ {
+  "bench": "mpu_probe",
+  "file": "src/pc9821/core/pc9821_mpu.sv",
+  "why": "the 0xFF that leaves UART mode is ACKed again (NP2kai's answer, the pre-fix core; the MPU-401 manual and the Xe10's MPU-PC98 do not ACK it, todo item 173)",
+  "from": "wire cmd_ack     = cmd_wr && !uart_mode;",
+  "to": "wire cmd_ack     = cmd_wr && (!uart_mode || (din == 8'hFF));"
+ },
+ {
   "bench": "open_bus",
   "file": "src/pc9821/core/pc9821_open_bus.sv",
   "why": "write gets a response",
@@ -1678,6 +1902,34 @@
   "why": "no rhythm key-off on extension drop",
   "from": "wire        ext_drop      = ext_prev && !extend;",
   "to": "wire        ext_drop      = 1'b0;"
+ },
+ {
+  "bench": "opna_rhythm_level",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "rhythm key and levels drain at the short gap again",
+  "from": "                     (!bank && ((sel == 8'h10) || ((sel >= 8'h18) && (sel <= 8'h1D))));",
+  "to": "                     1'b0;"
+ },
+ {
+  "bench": "opna_rhythm_level",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "only the rhythm key is held, not the instrument levels",
+  "from": "((sel == 8'h10) || ((sel >= 8'h18) && (sel <= 8'h1D)))",
+  "to": "(sel == 8'h10)"
+ },
+ {
+  "bench": "opna_rhythm_level",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the last instrument level (0x1D) drains at the short gap",
+  "from": "(sel <= 8'h1D)",
+  "to": "(sel <= 8'h1C)"
+ },
+ {
+  "bench": "opna_rhythm_level",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the instrument levels are held, the rhythm key is not",
+  "from": "((sel == 8'h10) || ((sel >= 8'h18) && (sel <= 8'h1D)))",
+  "to": "((sel >= 8'h18) && (sel <= 8'h1D))"
  },
  {
   "bench": "opna_port",
@@ -1799,11 +2051,25 @@
   "to": "else if( cen && zero && load && overflow ) flag<=1'b1;"
  },
  {
+  "bench": "opna_timers",
+  "file": "src/opna/jt12/hdl/jt12_top.v",
+  "why": "0x29 bit 0 gates the Timer A IRQ again",
+  "from": "(flag_A&host_tmr[2]&flag_mask[0])",
+  "to": "(flag_A&host_tmr[2]&flag_mask[0]&irq_mask[0])"
+ },
+ {
+  "bench": "opna_regs",
+  "file": "src/opna/jt12/hdl/jt12_top.v",
+  "why": "0x29 bit 1 gates the Timer B IRQ again",
+  "from": "(flag_B&host_tmr[3]&flag_mask[1])",
+  "to": "(flag_B&host_tmr[3]&flag_mask[1]&irq_mask[1])"
+ },
+ {
   "bench": "opna_wrq",
   "file": "src/opna/pc9821_opna.sv",
-  "why": "0x188 BUSY ignores the write queue",
-  "from": "2'b00: io_dout = op_dout | {wrq_busy, 7'b0};",
-  "to": "2'b00: io_dout = op_dout;"
+  "why": "0x188 BUSY ignores the write queue's back-pressure",
+  "from": "2'b00: io_dout = {wrq_busy, op_dout[6:0]};",
+  "to": "2'b00: io_dout = {1'b0, op_dout[6:0]};"
  },
  {
   "bench": "opna_wrq",
@@ -1811,6 +2077,20 @@
   "why": "stretched FM writes drained too fast",
   "from": "localparam integer DRAIN_GAP = 216;",
   "to": "localparam integer DRAIN_GAP = 8;"
+ },
+ {
+  "bench": "opna_busy",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "0x188 BUSY shows the chip's own 24 us busy flag",
+  "from": "2'b00: io_dout = {wrq_busy, op_dout[6:0]};",
+  "to": "2'b00: io_dout = op_dout | {wrq_busy, 7'b0};"
+ },
+ {
+  "bench": "opna_busy",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "BUSY covers the queue and its drain",
+  "from": "wire                wrq_busy = wrq_half || ext_inj_busy;",
+  "to": "wire                wrq_busy = (wrq_cnt != 0) || (dr_state != 2'd0) || ext_inj_busy;"
  },
  {
   "bench": "osd",
@@ -1897,6 +2177,20 @@
   "to": "            data_out <= {data_hold_clk_in[DATA_WIDTH-1:DATA_WIDTH/2], data_in[DATA_WIDTH/2-1:0]};"
  },
  {
+  "bench": "audio_level_cdc",
+  "file": "src/common/cdc_vector_handshake_continuous.sv",
+  "why": "the destination samples the live source word instead of the held one (the pre-fix raw crossing)",
+  "from": "            data_out <= data_hold_clk_in;",
+  "to": "            data_out <= data_in;"
+ },
+ {
+  "bench": "audio_level_cdc",
+  "file": "src/common/cdc_vector_handshake_continuous.sv",
+  "why": "the destination loads on every CLK_AUDIO edge, not only on the handshake's new_value",
+  "from": "        if (new_value_clk_out)",
+  "to": "        if (1'b1)"
+ },
+ {
   "bench": "pcm86_fifo",
   "file": "src/pcm86/pc9821_pcm86.sv",
   "why": "0xA46A reset 0x33",
@@ -1930,6 +2224,20 @@
   "why": "full write FIFO drops instead of stalling",
   "from": "assign      wr_wait = fifo_full;",
   "to": "assign      wr_wait = 1'b0;"
+ },
+ {
+  "bench": "pcm86_fifo",
+  "file": "src/pcm86/pc9821_pcm86.sv",
+  "why": "0xA46C back to NP2kai's 0x00 (BA46C v=EE)",
+  "from": "      P_DATA:   io_dout = 8'hEE;",
+  "to": "      P_DATA:   io_dout = 8'h00;"
+ },
+ {
+  "bench": "pcm86_fifo",
+  "file": "src/pcm86/pc9821_pcm86.sv",
+  "why": "the spare ports back to NP2kai's 0x00 (BA462 v=FF)",
+  "from": "      P_SPARE0, P_SPARE1, P_SPARE2: io_dout = 8'hFF;",
+  "to": "      P_SPARE0, P_SPARE1, P_SPARE2: io_dout = 8'h00;"
  },
  {
   "bench": "pcm86_irqmask",
@@ -2422,6 +2730,20 @@
   "to": "  wire ge_mv  = 1'b0;"
  },
  {
+  "bench": "win0_out_of_range",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "window 0 below page 8 aliases conventional memory again",
+  "from": "  wire            win0_hole_page = (win0_sel[7:3] == 5'd0);",
+  "to": "  wire            win0_hole_page = 1'b0;"
+ },
+ {
+  "bench": "win0_out_of_range",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "the hole stops at page 04 (page 06 aliases)",
+  "from": "  wire            win0_hole_page = (win0_sel[7:3] == 5'd0);",
+  "to": "  wire            win0_hole_page = (win0_sel[7:2] == 6'd0);"
+ },
+ {
   "bench": "z486_tlb_window",
   "file": "src/z486/paging_tlb.sv",
   "why": "way 2 hits without its valid bit",
@@ -2712,8 +3034,8 @@
   "bench": "fdc_read",
   "file": "src/pc9821/storage/pc9821_fdc.sv",
   "why": "PIO read MSR between bytes loses CB (0x40, not 0x50)",
-  "from": "((nd && !xfer_now) ? 8'h50 : 8'hD0)",
-  "to": "((nd && !xfer_now) ? 8'h40 : 8'hD0)"
+  "from": "(!nd ? 8'h10 : xfer_now ? 8'hD0 : 8'h50)",
+  "to": "(!nd ? 8'h10 : xfer_now ? 8'hD0 : 8'h40)"
  },
  {
   "bench": "readback_sysports",
@@ -2730,11 +3052,67 @@
   "to": "mask      <= 4'h0;      // every channel masked at reset"
  },
  {
-  "bench": "atapi",
-  "file": "src/pc9821/storage/pc9821_atapi.sv",
-  "why": "0x0433 does not report the bank-1 drive as connected",
-  "from": "16'h0433: io_dout = 8'h02;",
-  "to": "16'h0433: io_dout = 8'h00;"
+  "bench": "readback_ata",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "0x0433 reports the two banks' interrupts in each other's bit",
+  "from": "16'h0433: io_dout = {6'd0, bank1_intrq, bank0_intrq};",
+  "to": "16'h0433: io_dout = {6'd0, bank0_intrq, bank1_intrq};"
+ },
+ {
+  "bench": "readback_ata",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "0x0432 reads bit 1 back without bit 5",
+  "from": "channel_reg[1] & channel_reg[5], channel_reg[0]};",
+  "to": "channel_reg[1], channel_reg[0]};"
+ },
+ {
+  "bench": "readback_ata",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "0x074E reads 00 with the slave selected",
+  "from": "16'h074E: io_dout = slave_sel ? 8'h0F : 8'h00;",
+  "to": "16'h074E: io_dout = 8'h00;"
+ },
+ {
+  "bench": "readback_ata",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "0x0432 with bit 6 set reads the NP2kai-style masked byte (40), not FF",
+  "from": "  wire [7:0] c432_rd = channel_reg[6] ? 8'hFF :",
+  "to": "  wire [7:0] c432_rd = 1'b0 ? 8'hFF :"
+ },
+ {
+  "bench": "readback_ata",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "with 0x0432 bit 2 set the task file reads the bank's registers",
+  "from": "  wire tf_b2_echo = channel_reg[2] &&",
+  "to": "  wire tf_b2_echo = 1'b0 &&"
+ },
+ {
+  "bench": "readback_ata",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the bit-2 task file answers a constant 00 instead of the 0x0432 read-back (07's row reads 01)",
+  "from": "      io_dout = c432_rd;   // see tf_b2_echo",
+  "to": "      io_dout = 8'h00;   // see tf_b2_echo"
+ },
+ {
+  "bench": "readback_gdc",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "0x6A echoes the mode bits (NP2kai gdc_i6a) instead of the machine's 00",
+  "from": "5'd4:  io_dout_r = 8'h00;",
+  "to": "5'd4:  io_dout_r = {4'b0000, mode2_wren, mode2_egc, 1'b0, mode2_16color};"
+ },
+ {
+  "bench": "readback_sysports",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x6C latches the low nibble instead of bits 7-4",
+  "from": "hit[HX_006C]: border_6c  <= lane_wdata[7:4];",
+  "to": "hit[HX_006C]: border_6c  <= lane_wdata[3:0];"
+ },
+ {
+  "bench": "readback_sysports",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x6C reads its low nibble as ones",
+  "from": "hit[HX_006C]: lane_rdata = {border_6c, 4'h0};",
+  "to": "hit[HX_006C]: lane_rdata = {border_6c, 4'hF};"
  },
  {
   "bench": "line_doubler",
@@ -2754,8 +3132,8 @@
   "bench": "opna_port",
   "file": "src/pc9821/core/pc9821_iobus.sv",
   "why": "plat-tmg IO-a: a device read that waited in S_DEVWAIT lands its byte in lane 0 instead of the held lane",
-  "from": "            read_data[{lane, 3'b000} +: 8] <= lane_rdata;",
-  "to": "            read_data[7:0] <= lane_rdata;"
+  "from": "          if (!device_rd_hold) begin\n            read_data[{lane, 3'b000} +: 8] <= lane_rdata;",
+  "to": "          if (!device_rd_hold) begin\n            read_data[7:0] <= lane_rdata;"
  },
  {
   "bench": "cache_flush",
@@ -2950,8 +3328,8 @@
   "bench": "atapi",
   "file": "src/pc9821/storage/pc9821_atapi.sv",
   "why": "end of play reported when fetched, not when played",
-  "from": "&& daplaypos >= dacurpos) || !is_pcd))",
-  "to": ") || !is_pcd))"
+  "from": "&& daplaypos >= dacurpos) || !is_pcd ||",
+  "to": ") || !is_pcd ||"
  },
  {
   "bench": "atapi",
@@ -3061,7 +3439,7 @@
  {
   "bench": "crt31k",
   "file": "src/pc9821/video/pc9821_crtc.sv",
-  "why": "the 31 kHz monitor range never selected (minx stays 100)",
+  "why": "the 31 kHz monitor range never selected (minx stays the 24 kHz floor, 90)",
   "from": "      minx  = c31 ? CLK31_MINX : CLK_MINX;",
   "to": "      minx  = CLK_MINX;"
  },
@@ -3139,8 +3517,36 @@
   "bench": "irq_withdraw",
   "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
   "why": "the keyboard's unmasked acking read no longer withdraws IRQ1",
-  "from": ".WD_UNMASKED(8'h03)) master (",
-  "to": ".WD_UNMASKED(8'h01)) master ("
+  "from": ".WD_UNMASKED(8'h83)) master (",
+  "to": ".WD_UNMASKED(8'h81)) master ("
+ },
+ {
+  "bench": "irq_withdraw",
+  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
+  "why": "IRQ11 keeps the pure edge latch while masked (no FDC withdraw)",
+  "from": "  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (",
+  "to": "  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h92), .WD_UNMASKED(8'h10)) slave ("
+ },
+ {
+  "bench": "irq_withdraw",
+  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
+  "why": "the master holds IR7 when the slave's request goes away (CASC m_off=00)",
+  "from": "  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'hC3),\n               .WD_UNMASKED(8'h83)) master (",
+  "to": "  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'h43),\n               .WD_UNMASKED(8'h03)) master ("
+ },
+ {
+  "bench": "irq_withdraw",
+  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
+  "why": "the slave holds an unmasked IRQ12 request (CASC_DEV s_irr1=80)",
+  "from": "  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (",
+  "to": "  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h00)) slave ("
+ },
+ {
+  "bench": "irq_withdraw",
+  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
+  "why": "the masked IRQ15 request is held (CASC_CTL s_irr1=00)",
+  "from": "  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (",
+  "to": "  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h1A), .WD_UNMASKED(8'h10)) slave ("
  },
  {
   "bench": "kbd_pace",
@@ -3258,22 +3664,113 @@
   "bench": "osd_cd_volume",
   "file": "src/pc9821/core/pc9821_osd.sv",
   "why": "the CD audio volume default is 0 dB (the owner's unity, the pre-field level), not NP2kai's -6 dB",
-  "from": "      3'd0:    cd_volume_code = 5'd31;  // entry 0 ->  0 dB  <- the DEFAULT (unity)",
-  "to": "      3'd0:    cd_volume_code = 5'd28;  // entry 0 ->  0 dB  <- the DEFAULT (unity)"
+  "from": "      3'd0:    level_code = 5'd31;  // entry 0 ->  0 dB  <- the DEFAULT (unity)",
+  "to": "      3'd0:    level_code = 5'd28;  // entry 0 ->  0 dB  <- the DEFAULT (unity)"
  },
  {
   "bench": "osd_cd_volume",
   "file": "src/pc9821/core/pc9821_osd.sv",
   "why": "CD audio volume Off leaks the quietest gain step instead of muting",
-  "from": "      default: cd_volume_code = 5'd0;   // entry 7 -> Off (exact mute)",
-  "to": "      default: cd_volume_code = 5'd1;   // entry 7 -> Off (exact mute)"
+  "from": "      default: level_code = 5'd0;   // entry 7 -> Off (exact mute)",
+  "to": "      default: level_code = 5'd1;   // entry 7 -> Off (exact mute)"
  },
  {
   "bench": "osd_cd_volume",
   "file": "src/pc9821/core/pc9821_osd.sv",
   "why": "a build without CD audio still opens the CD channel",
-  "from": "    if (!CD_AUDIO_EN) cd_volume_code = 5'd0;   // no CD-DA player: the channel stays muted",
-  "to": "    if (1'b0) cd_volume_code = 5'd0;   // no CD-DA player: the channel stays muted"
+  "from": "  assign cd_volume_code   = CD_AUDIO_EN ? level_code(osd_cd_volume) : 5'd0;",
+  "to": "  assign cd_volume_code   = level_code(osd_cd_volume);"
+ },
+ {
+  "bench": "osd_audio_levels",
+  "file": "src/pc9821/core/pc9821_osd.sv",
+  "why": "the PC-9801-86 field reads the Beeper's position",
+  "from": "  assign snd86_level_code = level_code(osd_snd86_level);",
+  "to": "  assign snd86_level_code = level_code(osd_beep_level);"
+ },
+ {
+  "bench": "osd_audio_levels",
+  "file": "src/pc9821/core/pc9821_osd.sv",
+  "why": "the Beeper field's decode is gated by CD_AUDIO_EN like the CD's",
+  "from": "  assign beep_level_code  = level_code(osd_beep_level);",
+  "to": "  assign beep_level_code  = CD_AUDIO_EN ? level_code(osd_beep_level) : 5'd0;"
+ },
+ {
+  "bench": "osd_audio_levels",
+  "file": "src/pc9821/core/pc9821_osd.sv",
+  "why": "the -6 dB step misnames its gain code (27 = -8 dB)",
+  "from": "      3'd3:    level_code = 5'd28;  // entry 3 -> -6 dB (NP2kai's CD-DA default)",
+  "to": "      3'd3:    level_code = 5'd27;  // entry 3 -> -6 dB (NP2kai's CD-DA default)"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the -86 level replaces vol_voice instead of adding to it",
+  "from": "wire [4:0] vol_86_l = gain_series(vol_voice_l, snd86_level_a);",
+  "to": "wire [4:0] vol_86_l = snd86_level_a;"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "cross-talk: the Beeper's level scales the CD as well",
+  "from": "                 vol_cd_l_a,   vol_cd_r_a,",
+  "to": "                 gain_series(vol_cd_l_a, beep_level_a), gain_series(vol_cd_r_a, beep_level_a),"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "cross-talk: the CD code sets the -86 slot's level",
+  "from": "wire [4:0] vol_86_r = gain_series(vol_voice_r, snd86_level_a);",
+  "to": "wire [4:0] vol_86_r = gain_series(vol_voice_r, vol_cd_r_a);"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the beeper's -6 dB step takes the -8 dB gain",
+  "from": "        5'd28:   beep_gain_q16 = 17'h0804E; //  -6 dB",
+  "to": "        5'd28:   beep_gain_q16 = 17'h065EA; //  -6 dB"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the beeper's Off leaks the -60 dB step",
+  "from": "        default: beep_gain_q16 = 17'h00000; // Off (code 0): exact silence",
+  "to": "        default: beep_gain_q16 = 17'h00042; // Off (code 0): exact silence"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the beeper level is not applied (ladder at 0 dB whatever the level)",
+  "from": "wire [16:0] beep_gain = beep_gain_q16(beep_level_a);",
+  "to": "wire [16:0] beep_gain = 17'h10000;"
+ },
+ {
+  "bench": "audio_levels",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the beeper product drops its upper ladder bit",
+  "from": "                      + (beep_vol[1] ? {beep_gain, 1'b0} : 18'd0);",
+  "to": "                      + (beep_vol[1] ? {1'b0, beep_gain} : 18'd0);"
+ },
+ {
+  "bench": "audio_mix_equiv",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the -86 level crosses uninverted: power-up mutes the board",
+  "from": "    .data_in ({~snd86_level, vol_cd_l, vol_cd_r, ~beep_level}),",
+  "to": "    .data_in ({snd86_level, vol_cd_l, vol_cd_r, ~beep_level}),"
+ },
+ {
+  "bench": "audio_mix_equiv",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the series of two 0 dB codes lands one step down (-2 dB at the defaults)",
+  "from": "        gain_series = (s <= 6'd31) ? 5'd0 : 5'(s - 6'd31);",
+  "to": "        gain_series = (s <= 6'd32) ? 5'd0 : 5'(s - 6'd32);"
+ },
+ {
+  "bench": "audio_level_cdc",
+  "file": "src/pc9821/audio/pc9821_audio_mix.sv",
+  "why": "the beeper field decoded from the CD's bits",
+  "from": "wire [4:0] beep_level_a  = ~level_audio[4:0];",
+  "to": "wire [4:0] beep_level_a  = ~level_audio[9:5];"
  },
  {
   "bench": "pegc_480",
@@ -3334,37 +3831,30 @@
  {
   "bench": "fdc_2dd_bank",
   "file": "src/pc9821/storage/pc9821_fdc.sv",
-  "why": "the FDD-mode switch follows the live input, not the reset latch",
-  "from": "    if (reset) dip_fixed_q <= dip_fixed;",
-  "to": "    dip_fixed_q <= dip_fixed;"
- },
- {
-  "bench": "fdc_2dd_bank",
-  "file": "src/pc9821/storage/pc9821_fdc.sv",
   "why": "0x00BE bit 2 stuck at Fixed",
-  "from": "{5'b11111, dip_fixed_q, chgreg[1:0]}",
-  "to": "{5'b11111, 1'b1, chgreg[1:0]}"
+  "from": "{4'b1111, ~fd_640k, ~fd_auto, chgreg[1:0]}",
+  "to": "{4'b1111, ~fd_640k, 1'b1, chgreg[1:0]}"
  },
  {
   "bench": "readback_sysports",
   "file": "src/pc9821/storage/pc9821_fdc.sv",
   "why": "0x00BE bits 7:3 read NP2kai's F8 pattern with bit 2 clear",
-  "from": "{5'b11111, dip_fixed_q, chgreg[1:0]}",
-  "to": "{5'b11111, 1'b0, chgreg[1:0]}"
+  "from": "{4'b1111, ~fd_640k, ~fd_auto, chgreg[1:0]}",
+  "to": "{4'b1111, ~fd_640k, 1'b0, chgreg[1:0]}"
  },
  {
   "bench": "dma_gvram",
   "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
   "why": "every DMA byte goes to the backend (the SDRAM hole under the planes)",
-  "from": "  wire        dma_valid_be  = dma_valid && !dma_gvram && !dma_tvram;",
-  "to": "  wire        dma_valid_be  = dma_valid && !dma_tvram;"
+  "from": "  wire        dma_gvram     = dma_cls[1];",
+  "to": "  wire        dma_gvram     = 1'b0;"
  },
  {
   "bench": "dma_tram",
   "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
   "why": "every text-RAM DMA byte goes to the backend (the SDRAM under the window)",
-  "from": "  wire        dma_tvram     = dma_gvwin[1] && !dma_gvwin[0];",
-  "to": "  wire        dma_tvram     = 1'b0;"
+  "from": "  assign      dma_tvram     = dma_cls[0];",
+  "to": "  assign      dma_tvram     = 1'b0;"
  },
  {
   "bench": "dma_tram",
@@ -3381,18 +3871,18 @@
   "to": "          dma_dout <= tram_dout;"
  },
  {
-  "bench": "dma_vram",
-  "file": "src/pc9821/core/pc9821_dmac.sv",
+  "bench": "dma_tram",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
   "why": "the text RAM 0xA0000-0xA3FFF missing from the DMA address class",
-  "from": "(a[31:14] == 18'h00028)",
-  "to": "(a[31:14] == 18'h00029)"
+  "from": "  wire dma_tram_win   = !dma_w0 && !(|dma_d[31:20]) && (dma_d[19:16] == 4'hA) && !dma_d[15];",
+  "to": "  wire dma_tram_win   = !dma_w0 && !(|dma_d[31:20]) && (dma_d[19:16] == 4'h9) && !dma_d[15];"
  },
  {
-  "bench": "dma_vram",
-  "file": "src/pc9821/core/pc9821_dmac.sv",
+  "bench": "dma_gvram",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
   "why": "the A8000 plane window missing from the DMA address class",
-  "from": "((a[19:15] == 5'b10101) ||",
-  "to": "((a[19:15] == 5'b10111) ||"
+  "from": "                              dma_map_gvram, dma_tvram_live};",
+  "to": "                              dma_map_gvram && (dma_addr[19:15] != 5'b10101), dma_tvram_live};"
  },
  {
   "bench": "sdram_strict",
@@ -3461,8 +3951,8 @@
   "bench": "pit_irq_reprogram",
   "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
   "why": "IRQ0 dropped from the master WD_UNMASKED: the masked-only withdraw keeps a phantom IRQ0 through a channel-0 mode-0 reprogram",
-  "from": ".WD_UNMASKED(8'h03)) master (",
-  "to": ".WD_UNMASKED(8'h02)) master ("
+  "from": ".WD_UNMASKED(8'h83)) master (",
+  "to": ".WD_UNMASKED(8'h82)) master ("
  },
  {
   "bench": "grcg_tile_order",
@@ -3867,8 +4357,8 @@
   "bench": "mpu_system",
   "file": "src/pc9821/core/pc9821_system.sv",
   "why": "pc9821_iobus instance drops MPU_EN (the shipped defect: the card is built but never selected)",
-  "from": ".IDE_UNIT2_PRESENT(CDROM_EN), .MPU_EN(MPU_EN), .SDRAM_PHASE_DYN",
-  "to": ".IDE_UNIT2_PRESENT(CDROM_EN), .SDRAM_PHASE_DYN"
+  "from": ".MPU_EN(MPU_EN), .SDRAM_PHASE_DYN",
+  "to": ".SDRAM_PHASE_DYN"
  },
  {
   "bench": "mpu_system",
@@ -3923,7 +4413,7 @@
   "bench": "atapi",
   "file": "src/pc9821/storage/pc9821_atapi.sv",
   "why": "a mount's stop forgets NP2kai's lead (0x14 reports the heard sector, not dacurpos)",
-  "from": "          da_lead   <= (dacurpos != play_next);\n        end\n      end else if (player_pos_cmd) begin",
+  "from": "          da_lead   <= stop_lead;\n        end\n      end else if (player_pos_cmd) begin",
   "to": "          da_lead   <= 1'b0;\n        end\n      end else if (player_pos_cmd) begin"
  },
  {
@@ -3951,8 +4441,64 @@
   "bench": "atapi",
   "file": "src/pc9821/storage/pc9821_atapi.sv",
   "why": "a PAUSE forgets NP2kai's lead (the paused report drops to the heard sector)",
-  "from": "          da_lead   <= (dacurpos != play_next);\n        end else begin",
+  "from": "          da_lead   <= stop_lead;\n        end else begin",
   "to": "          da_lead   <= 1'b0;\n        end else begin"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a stop's da_lead ignores a fetch completing in its own cycle (the pre-fix pre-advance dacurpos; C26)",
+  "from": "  wire        stop_lead = (dacurpos + (audio_adv ? {17'd0, e_nsec} : 20'd0)) != play_next;",
+  "to": "  wire        stop_lead = dacurpos != play_next;"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a mount also stops a PAUSED play, which NP2kai keeps (C27)",
+  "from": "        if (daflag == DA_PLAY) begin",
+  "to": "        if (daflag == DA_PLAY || daflag == DA_PAUSE) begin"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a play with no medium ends 0x13, not NP2kai's 0x14 (the pre-fix end-of-play arm; C29)",
+  "from": "          daflag <= loaded ? DA_DONE : DA_ERR;",
+  "to": "          daflag <= DA_DONE;"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a raw MODE1 sector served from its first byte, not its user data at +16 (C28)",
+  "from": "                    : (e_l * 32'd2352 + (is_raw ? (raw_m2 ? 32'd24 : 32'd16)",
+  "to": "                    : (e_l * 32'd2352 + (is_raw ? (raw_m2 ? 32'd24 : 32'd0)"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a raw MODE2 form 1 sector served at +16, over its subheader (C28)",
+  "from": "                    : (e_l * 32'd2352 + (is_raw ? (raw_m2 ? 32'd24 : 32'd16)",
+  "to": "                    : (e_l * 32'd2352 + (is_raw ? (raw_m2 ? 32'd16 : 32'd16)"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a size that is not a whole number of 2352-byte sectors taken as raw (C28)",
+  "from": "  wire       raw_size_ok = rd_ok && rd_n == 5'd0 && rd_r == 8'd0;",
+  "to": "  wire       raw_size_ok = rd_ok && rd_n == 5'd0;"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a raw image keeps the ISO capacity size / 2048 (C28)",
+  "from": "        if (raw_sync && raw_size_ok) begin is_raw <= 1'b1; iso_cap <= rd_q[19:0]; end",
+  "to": "        if (raw_sync && raw_size_ok) begin is_raw <= 1'b1; end"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "the sync's last word misread, so no raw image is recognised (C28)",
+  "from": "          10'd5: raw_sync <= raw_sync && (sd_buff_dout == 16'h00FF);",
+  "to": "          10'd5: raw_sync <= raw_sync && (sd_buff_dout == 16'hFF00);"
  },
  {
   "bench": "hdi_img",
@@ -3974,5 +4520,2063 @@
   "why": "HDI capacity from the file size, not NP2kai's cylinders x heads x sectors (padding becomes guest LBAs)",
   "from": "  wire [31:0] hdr_cap      = (geom_sectors < file_secs) ? geom_sectors : file_secs;",
   "to": "  wire [31:0] hdr_cap      = file_secs;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the DMA backend address is the physical address (no EMS page, no PEGC bank, no window 0)",
+  "from": "  assign mem_addr = owner_is_load ? load_addr : (dma_owns ? dma_be_addr : buf_mem_addr);",
+  "to": "  assign mem_addr = owner_is_load ? load_addr : (dma_owns ? dma_addr : buf_mem_addr);"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the DMA backend address follows the live map under a held byte (a bank write moves the payload)",
+  "from": "  assign mem_addr = owner_is_load ? load_addr : (dma_owns ? dma_be_addr : buf_mem_addr);",
+  "to": "  assign mem_addr = owner_is_load ? load_addr : (dma_owns ? dma_map_addr : buf_mem_addr);"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "no open-bus class for a DMA byte: unmapped EMS, PEGC not-connected and the hole reach the backend",
+  "from": "  wire        dma_null      = dma_cls[3];",
+  "to": "  wire        dma_null      = 1'b0;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "no PEGC register-file route for a DMA byte at 0xE0000 in 256-colour mode",
+  "from": "  wire        dma_pegr      = dma_cls[2];",
+  "to": "  wire        dma_pegr      = 1'b0;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the register-file port is never handed to the DMA",
+  "from": "    else if (peg_idle && !peg_req) peg_dma_q <= dma_valid_pr;",
+  "to": "    else if (peg_idle && !peg_req) peg_dma_q <= 1'b0;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "window 0 does not move a DMA address",
+  "from": "      .win0_sel(win0_sel), .win0_sel_moved(win0_sel_moved),   // the CPU's own window 0",
+  "to": "      .win0_sel(win0_sel), .win0_sel_moved(1'b0),   // the CPU's own window 0"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "window 0 at 0x0A moves a DMA byte onto the text RAM (QEMU's overlay, not the machine's RAM page)",
+  "from": "  wire dma_tram_win   = !dma_w0 && !(|dma_d[31:20]) && (dma_d[19:16] == 4'hA) && !dma_d[15];",
+  "to": "  wire dma_tram_win   = !(|dma_d[31:20]) && (dma_d[19:16] == 4'hA) && !dma_d[15];"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the external snoop names the window's own address, not the moved one",
+  "from": "      dma_snoop_q  <= dma_d;",
+  "to": "      dma_snoop_q  <= dma_addr_nx;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "an open-bus DMA read answers 0x00 rather than 0xFF",
+  "from": "dma_nl_resp_q ? 32'hFFFF_FFFF : mem_dout;",
+  "to": "dma_nl_resp_q ? 32'h0000_0000 : mem_dout;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the 15 MiB mirror is not applied to a DMA address",
+  "from": "  wire        dma_mirror = sys16m_en && !(|dma_addr_nx[31:24]) && (dma_addr_nx[23:16] >= 8'hFA);",
+  "to": "  wire        dma_mirror = 1'b0;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the 15-16 MiB hole is missing from the DMA open-bus class",
+  "from": "                         (dma_map_absent || dma_map_pegc_nc || dma_map_e_nc || dma_map_ems_ob || dma_s16_hole ||",
+  "to": "                         (dma_map_absent || dma_map_pegc_nc || dma_map_e_nc || dma_map_ems_ob ||"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI body read without the header offset",
+  "from": "              blk_lba  <= seek_off[24:9] + {4'd0, raw_hblk[req_u]};",
+  "to": "              blk_lba  <= seek_off[24:9];"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI header bits 16..20 dropped",
+  "from": "              raw_hblk[mnt_u][11:7] <= cur_byte[4:0];",
+  "to": "              raw_hblk[mnt_u][11:7] <= 5'd0;"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI one cylinder short (cylinder 80 unreachable)",
+  "from": "              raw_tracks[mnt_u]   <= {walk_fdsz[6:0], 1'b0};",
+  "to": "              raw_tracks[mnt_u]   <= {walk_fdsz[6:0], 1'b0} - 8'd2;"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI size equation not tested",
+  "from": "                          (fdi_acc[11:0] == mnt_size[mnt_u][20:9]);",
+  "to": "                          1'b1;"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI cylinder step wrong for 1024-byte sectors",
+  "from": "(raw_n[mnt_u] == RAW_N3) ? {fdi_s, 2'd0} : {1'b0, fdi_s, 1'b0};",
+  "to": "(raw_n[mnt_u] == RAW_N3) ? {1'b0, fdi_s, 1'b0} : {1'b0, fdi_s, 1'b0};"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI surfaces not tested",
+  "from": "        5'd24: fdi_byte_ok = (cur_byte == 8'h02);                  // surfaces == 2",
+  "to": "        5'd24: fdi_byte_ok = 1'b1;                  // surfaces == 2"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI header alignment not tested",
+  "from": "                          !mnt_size[mnt_u][21] && (mnt_size[mnt_u][8:0] == 9'd0) &&",
+  "to": "                          !mnt_size[mnt_u][21] &&"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI 2D type accepted",
+  "from": "                             (cur_byte[7:4] == 4'hB) || (cur_byte[7:4] == 4'h9);",
+  "to": "                             (cur_byte[7:4] == 4'hB) || (cur_byte[7:4] == 4'h9) || (cur_byte[7:4] == 4'h5);"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI 2DD fddtype read as 2HD",
+  "from": "              fdi_ty <= {(cur_byte[7:4] == 4'h1) || (cur_byte[7:4] == 4'h7) || (cur_byte[7:4] == 4'hF),",
+  "to": "              fdi_ty <= {(cur_byte[7:4] == 4'h7) || (cur_byte[7:4] == 4'hF),"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI 1.44 MB fddtype read at rpm 0",
+  "from": "                         (cur_byte[7:4] == 4'h3) || (cur_byte[7:4] == 4'hB)};",
+  "to": "                         (cur_byte[7:4] == 4'hB)};"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI test never re-armed after a refused image",
+  "from": "            fdi_ok <= ((mcnt == 11'd0) || fdi_ok) && fdi_byte_ok;",
+  "to": "            fdi_ok <= fdi_ok && fdi_byte_ok;"
+ },
+ {
+  "bench": "fdd_media_fdi",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "FDI accepted on its header bytes alone (a raw row with an FDI-like header read as FDI)",
+  "from": "            end else if (fdi_valid) begin",
+  "to": "            end else if (fdi_ok) begin"
+ },
+ {
+  "bench": "ems",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x24 written from the identity unmaps the window",
+  "from": "                                   (ems_state == 2'd0)       ? 2'd0 : 2'd2) :",
+  "to": "                                   (ems_state == 2'd0)       ? 2'd2 : 2'd2) :"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x534 soft reset keeps the BIOS top mapped (the reboot loop)",
+  "from": "                a20_enable      <= 1'b0;\n                top_bank        <= BANK_ITF;\n",
+  "to": "                a20_enable      <= 1'b0;\n"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "out 0xF0 also maps the ITF (would break the SHUT0-clear resume through the BIOS top)",
+  "from": "                cpu_reset_req <= 1'b1;\n                a20_enable <= 1'b0;\n              end\n              hit[HX_00F2]",
+  "to": "                cpu_reset_req <= 1'b1;\n                a20_enable <= 1'b0;\n                top_bank <= BANK_ITF;\n              end\n              hit[HX_00F2]"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x534 reboot keeps the DOS session memory-map latches (only the bank moves)",
+  "from": "                top_bank        <= BANK_ITF;\n                rom_gate_ide    <= 1'b1;\n                bios_ram_gate   <= 1'b0;\n                ide_ram_gate    <= 1'b0;\n                pci_d8_select   <= 8'hFC;\n                win0_sel        <= 8'h08;\n                win0_sel_moved  <= 1'b0;\n                win1_sel        <= 8'h0A;\n                top_shadow_en   <= 1'b0;\n",
+  "to": "                top_bank        <= BANK_ITF;\n"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x534 reboot does not pulse soft_reboot",
+  "from": "                soft_reboot <= 1'b1;\n",
+  "to": "                soft_reboot <= 1'b0;\n"
+ },
+ {
+  "bench": "shadow_romsum",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the reboot strobe does not clear the shadow-dirty flag (ROM SUM ERROR after a software reboot)",
+  "from": "    if (reset || soft_reboot) fw_shadow_dirty <= 1'b0;",
+  "to": "    if (reset) fw_shadow_dirty <= 1'b0;"
+ },
+ {
+  "bench": "ide_layout",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the software reboot does not reset the IDE devices (the re-POST finds no disk)",
+  "from": "wire ide_dev_rst_n = !(reset || !cpu_run || soft_reboot);",
+  "to": "wire ide_dev_rst_n = !(reset || !cpu_run);"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x24 written from the identity unmaps the window",
+  "from": "                                   (ems_state == 2'd0)       ? 2'd0 : 2'd2) :",
+  "to": "                                   (ems_state == 2'd0)       ? 2'd2 : 2'd2) :"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x534 back to QEMU's 0xEC (B0534 v=7E)",
+  "from": "      cpu_mode_strap <= 8'h7E;",
+  "to": "      cpu_mode_strap <= 8'hEC;"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x9894 ignores every write (the pre-kit-2 strap)",
+  "from": "              hit[HX_9894]: if (lane_wdata[7:4] == 4'h0) r9894_b3 <= lane_wdata[3];",
+  "to": "              hit[HX_9894]: ;"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x9892 latches bit 3 from any write (F0 and AA would set it)",
+  "from": "              hit[HX_9892]: if (lane_wdata[7:4] == 4'h0) r9892_b3 <= lane_wdata[3];",
+  "to": "              hit[HX_9892]: r9892_b3 <= lane_wdata[3];"
+ },
+ {
+  "bench": "iobus",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "bit 3 is sticky: a 00 write does not clear it",
+  "from": "              hit[HX_9894]: if (lane_wdata[7:4] == 4'h0) r9894_b3 <= lane_wdata[3];",
+  "to": "              hit[HX_9894]: if (lane_wdata[7:4] == 4'h0) r9894_b3 <= r9894_b3 | lane_wdata[3];"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "TERM_PLUS high byte 0x00 instead of 0xFF (W0040 w1=FF00)",
+  "from": "term_hi = (c == TERM_PLUS) ? 8'hFF : 8'h00;",
+  "to": "term_hi = (c == TERM_PLUS) ? 8'h00 : 8'h00;"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "TERM_MINUS high byte 0x08 (NP2kai's ext08) instead of 0x00 (W0020 w1=00FF)",
+  "from": "term_hi = (c == TERM_PLUS) ? 8'hFF : 8'h00;",
+  "to": "term_hi = (c == TERM_PLUS) ? 8'hFF : 8'h08;"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x0C00 qualifier dropped",
+  "from": "if (p[11:10] == 2'b00) begin",
+  "to": "if (1'b1) begin"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "a dword's second word is not paired (W0060 d=00FF0004)",
+  "from": "wire       term_head2 = !cpu_write && cpu_be[2] && cpu_be[3];",
+  "to": "wire       term_head2 = 1'b0;"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x7C back in the 0x00 class (NP2kai minus_term; W007C w1=FFFF)",
+  "from": "          8'h7C:                                 xe10_term_class = TERM_PLUS;",
+  "to": "          8'h7C:                                 xe10_term_class = TERM_MINUS;"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x00 terminated: in ax,00h stops toggling the DMAC flip-flop (D0000)",
+  "from": "          8'h20, 8'h22, 8'h26,\n",
+  "to": "          8'h00, 8'h20, 8'h22, 8'h26,\n"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x70 splits: in ax,70h reads the PIT's 0x71 (P0070)",
+  "from": "          8'h70, 8'h72, 8'h74, 8'h76, 8'h7A,\n",
+  "to": "          8'h72, 8'h74, 8'h76, 8'h7A,\n"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "a terminated lane is still fetched",
+  "from": "            pending_be <= access_be_walk & ~term_tail;",
+  "to": "            pending_be <= access_be_walk;"
+ },
+ {
+  "bench": "iobus_word_term",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x24 back in the 00-term class (NP2kai minus_term)",
+  "from": "          8'h20, 8'h22, 8'h26,",
+  "to": "          8'h20, 8'h22, 8'h24, 8'h26,"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "no CG class for a DMA byte: it reaches the backend under the window",
+  "from": "  wire  [5:0] dma_cls_live = {dma_cg_live, dma_map_fw_store, dma_null_live, dma_map_pegc_reg && !dma_null_live,",
+  "to": "  wire  [5:0] dma_cls_live = {1'b0, dma_map_fw_store, dma_null_live, dma_map_pegc_reg && !dma_null_live,"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_window_responder.sv",
+  "why": "the responder ignores the DMA's CG route (the byte goes to the text RAM)",
+  "from": "        S_IDLE: if (dma_valid && dma_route_cg) begin",
+  "to": "        S_IDLE: if (1'b0) begin"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_window_responder.sv",
+  "why": "a DMA CG byte's position drops the address's low two bits",
+  "from": "          byte_index <= {2'b00, dma_addr[1:0]};",
+  "to": "          byte_index <= 4'd0;"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_window_responder.sv",
+  "why": "a DMA CG read answers before the port's byte (no capture step)",
+  "from": "          dma_dout <= byte_dout;\n          dma_resp_valid <= 1'b1;\n          state <= S_HOLD;\n        end\n\n        // One cycle only",
+  "to": "          dma_dout <= 8'h00;\n          dma_resp_valid <= 1'b1;\n          state <= S_HOLD;\n        end\n\n        // One cycle only"
+ },
+ {
+  "bench": "memory_map",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "window 0 at 0x0A decodes the plane windows (QEMU's overlay)",
+  "from": "  wire [DV_W-1:0] dv_mv  = win0_ram_page  ? (dv_mv_dec & ~17'h00074) :",
+  "to": "  wire [DV_W-1:0] dv_mv  = 1'b0 ? (dv_mv_dec & ~17'h00074) :"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "window 0 at 0x0A decodes the plane windows (QEMU's overlay)",
+  "from": "  wire [DV_W-1:0] dv_mv  = win0_ram_page  ? (dv_mv_dec & ~17'h00074) :",
+  "to": "  wire [DV_W-1:0] dv_mv  = 1'b0 ? (dv_mv_dec & ~17'h00074) :"
+ },
+ {
+  "bench": "memory_subsystem",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "window 0 at 0x0A takes the text RAM/CG/gap routes",
+  "from": "  wire tram_window = !win0_moved && !(|route_addr[31:20]) && (route_addr[19:16] == 4'hA) && !route_addr[15];",
+  "to": "  wire tram_window = !(|route_addr[31:20]) && (route_addr[19:16] == 4'hA) && !route_addr[15];"
+ },
+ {
+  "bench": "memmap_ref",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "window 0 at 0x0A takes the text RAM/CG/gap routes",
+  "from": "  wire tram_window = !win0_moved && !(|route_addr[31:20]) && (route_addr[19:16] == 4'hA) && !route_addr[15];",
+  "to": "  wire tram_window = !(|route_addr[31:20]) && (route_addr[19:16] == 4'hA) && !route_addr[15];"
+ },
+ {
+  "bench": "pegc",
+  "file": "src/pc9821/video/pc9821_pegc.sv",
+  "why": "the bank registers round-trip bits 7-6 (NP2kai's full byte)",
+  "from": "          mio1[lane] <= {2'b00, cpu_din[lane*8 +: 6]};   // bits 5-0 (header: DMAROUTE-XE10 P4)",
+  "to": "          mio1[lane] <= cpu_din[lane*8 +: 8];   // bits 5-0 (header: DMAROUTE-XE10 P4)"
+ },
+ {
+  "bench": "pegc",
+  "file": "src/pc9821/video/pc9821_pegc.sv",
+  "why": "0xE0005/0xE0007 store and read back their bytes",
+  "from": "        if (cpu_be[lane] && (req_addr[14:2] == 13'd1) && (lane[0] == 1'b0))",
+  "to": "        if (cpu_be[lane] && (req_addr[14:2] == 13'd1))"
+ },
+ {
+  "bench": "memory_map",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "the E plane decoded in the digital mode (the 16-colour gate dropped)",
+  "from": "  wire        gvram_inten  = dv[3] && mode2_16color;",
+  "to": "  wire        gvram_inten  = dv[3];"
+ },
+ {
+  "bench": "memory_map",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "the digital-mode E slot not named for the open-bus responder",
+  "from": "  assign      e_plane_nc   = dv[3] && dv[16] && !pegc_256 && !mode2_16color;",
+  "to": "  assign      e_plane_nc   = 1'b0;"
+ },
+ {
+  "bench": "memory_map",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "window 0 below page 8 aliases conventional memory again",
+  "from": "  wire            win0_hole_page = (win0_sel[7:3] == 5'd0);",
+  "to": "  wire            win0_hole_page = 1'b0;"
+ },
+ {
+  "bench": "memmap_ref",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "the E plane decoded in the digital mode (the 16-colour gate dropped)",
+  "from": "  wire        gvram_inten  = dv[3] && mode2_16color;",
+  "to": "  wire        gvram_inten  = dv[3];"
+ },
+ {
+  "bench": "memory_subsystem",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "the E plane decoded in the digital mode (the 16-colour gate dropped)",
+  "from": "  wire        gvram_inten  = dv[3] && mode2_16color;",
+  "to": "  wire        gvram_inten  = dv[3];"
+ },
+ {
+  "bench": "memory_subsystem",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the digital-mode E slot not routed to the open-bus responder",
+  "from": "(map_absent_area || map_pegc_nc || map_e_plane_nc || map_ems_open_bus || sys16m_hole ||",
+  "to": "(map_absent_area || map_pegc_nc || map_ems_open_bus || sys16m_hole ||"
+ },
+ {
+  "bench": "e_plane_mode",
+  "file": "src/pc9821/core/pc9821_memory_map.sv",
+  "why": "the E plane decoded in the digital mode (the 16-colour gate dropped)",
+  "from": "  wire        gvram_inten  = dv[3] && mode2_16color;",
+  "to": "  wire        gvram_inten  = dv[3];"
+ },
+ {
+  "bench": "e_plane_mode",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the digital-mode E slot not routed to the open-bus responder",
+  "from": "(map_absent_area || map_pegc_nc || map_e_plane_nc || map_ems_open_bus || sys16m_hole ||",
+  "to": "(map_absent_area || map_pegc_nc || map_ems_open_bus || sys16m_hole ||"
+ },
+ {
+  "bench": "e_plane_mode",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the map reads the wrong FF2 bit (mode1[7], not the 16-colour select)",
+  "from": "    .mode2_16color(gdc_ff2_state[3]),",
+  "to": "    .mode2_16color(gdc_ff2_state[2]),"
+ },
+ {
+  "bench": "e_plane_mode",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the map held in the 16-colour mode whatever 0x6A says",
+  "from": "    .mode2_16color(gdc_ff2_state[3]),",
+  "to": "    .mode2_16color(1'b1),"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/video/pc9821_pegc.sv",
+  "why": "the bank registers round-trip bits 7-6 (NP2kai's full byte)",
+  "from": "          mio1[lane] <= {2'b00, cpu_din[lane*8 +: 6]};   // bits 5-0 (header: DMAROUTE-XE10 P4)",
+  "to": "          mio1[lane] <= cpu_din[lane*8 +: 8];   // bits 5-0 (header: DMAROUTE-XE10 P4)"
+ },
+ {
+  "bench": "opna_flagsync",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the guest's timer flag reset waits in the queue (no early reset)",
+  "from": "wire [1:0]          host_clr_pls = ({2{tmr_rst_27}} & io_din[5:4]) | {2{all_rst_110}};",
+  "to": "wire [1:0]          host_clr_pls = 2'b00;"
+ },
+ {
+  "bench": "opna_flagsync",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the queued 0x27 copy keeps its reset bits (a late second reset)",
+  "from": "wire [7:0]          wrq_din      = tmr_rst_27 ? (io_din & 8'hCF) : io_din;",
+  "to": "wire [7:0]          wrq_din      = io_din;"
+ },
+ {
+  "bench": "opna_flagsync",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "no extended-bank write is flag-class (ADPCM-B status reads never wait)",
+  "from": "    is_flag_register = bank ? ((sel == 8'h00) || (sel == 8'h08) || (sel == 8'h10))",
+  "to": "    is_flag_register = bank ? 1'b0 && ((sel == 8'h00) || (sel == 8'h08) || (sel == 8'h10))"
+ },
+ {
+  "bench": "opna_flagsync",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the hold ends at the flag-class pop, before the chip shows it",
+  "from": "  wire                flg_pend = (flg_cnt != 0) || flg_fly;",
+  "to": "  wire                flg_pend = (flg_cnt != 0);"
+ },
+ {
+  "bench": "opna_flagsync",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "BUSY only at a full queue",
+  "from": "  wire                wrq_half = wrq_cnt[WRQ_BITS] || wrq_cnt[WRQ_BITS-1];   // >= 64 words",
+  "to": "  wire                wrq_half = wrq_cnt[WRQ_BITS];   // >= 64 words"
+ },
+ {
+  "bench": "opna_flagsync",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the drain gap back at the bare scan (150 cen), inside the chip's busy",
+  "from": "localparam integer DRAIN_GAP = 216;",
+  "to": "localparam integer DRAIN_GAP = 150;"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
+  "why": "IRQ12 back to the pure edge latch (slave WD_MASK 0x8A, WD_UNMASKED 0x00)",
+  "from": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (",
+  "to": "pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h8A), .WD_UNMASKED(8'h00)) slave ("
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/pc9821/interrupts/pc9821_pic.sv",
+  "why": "no falling-edge withdraw at all",
+  "from": "  wire    [7:0] ir_wd_eff = ir_fall & ((WD_MASK & imr) | WD_UNMASKED);",
+  "to": "  wire    [7:0] ir_wd_eff = ir_fall & 8'h00;"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "register 0x10 echoes its select with the extension closed (NP2kai s.data)",
+  "from": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h22) || (sel == 8'h29) ||",
+  "to": "    reads_ff_closed = (sel[7:0] == 8'h11) || (sel == 8'h22) || (sel == 8'h29) ||"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the guest's 0x25 (NA bits 1-0) never reaches the timer: a 1-count start runs 4 counts",
+  "from": "        8'h25:   tmr_na[1:0] <= io_din[1:0];",
+  "to": "        8'h25:   tmr_na[1:0] <= tmr_na[1:0];"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the guest's 0x26 loses bit 0: a 1-count timer B start runs 2 counts",
+  "from": "        8'h26:   tmr_nb      <= io_din;",
+  "to": "        8'h26:   tmr_nb      <= io_din & 8'hFE;"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the timer registers act at the queue's drain (jt12_mmr's latches), not the guest's write",
+  "from": "  wire [21:0]         host_tmr     = {tmr_na, tmr_nb, tmr_ctl};",
+  "to": "  wire [21:0]         host_tmr     = {u_opna.u_jt08.u_jt12.value_A, u_opna.u_jt08.u_jt12.value_B, u_opna.u_jt08.u_jt12.enable_irq_B, u_opna.u_jt08.u_jt12.enable_irq_A, u_opna.u_jt08.u_jt12.load_B, u_opna.u_jt08.u_jt12.load_A};"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "0x27's CH3-mode bits dropped from the queued copy (never reach the chip)",
+  "from": "wire [7:0]          wrq_din      = tmr_rst_27 ? (io_din & 8'hCF) : io_din;",
+  "to": "wire [7:0]          wrq_din      = tmr_rst_27 ? (io_din & 8'h0F) : io_din;"
+ },
+ {
+  "bench": "opna_xe10_rows",
+  "file": "src/opna/jt12/hdl/jt12_timers.v",
+  "why": "a 0x27 write with a reset bit restarts the running count",
+  "from": "    load_l <= load;",
+  "to": "    load_l <= load && !clr_flag;"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "only 0x10 of the rhythm bank reads FF with the extension closed (0x11-0x1F echo the select)",
+  "from": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h22) || (sel == 8'h29) ||",
+  "to": "    reads_ff_closed = (sel == 8'h10) || (sel == 8'h22) || (sel == 8'h29) ||"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "0x22 echoes its select with the extension closed",
+  "from": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h22) || (sel == 8'h29) ||",
+  "to": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h29) ||"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "0x29 echoes its select (and its written value) with the extension closed",
+  "from": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h22) || (sel == 8'h29) ||",
+  "to": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h22) ||"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the 0x110 Timer-B mask no longer holds the flag (the vendored one-shot reset alone)",
+  "from": "  wire [1:0]          host_clr_tmr = host_clr_pls | {tmr_mask_b, tmr_mask_a};",
+  "to": "  wire [1:0]          host_clr_tmr = host_clr_pls | {1'b0, tmr_mask_a};"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the mask never drops once set (0x110 <- 00 leaves the flag held clear)",
+  "from": "    else if (flagctl_wr) tmr_mask_b <= io_din[1];",
+  "to": "    else if (flagctl_wr) tmr_mask_b <= tmr_mask_b | io_din[1];"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "the 0x110 Timer-A mask no longer holds the flag (the vendored one-shot reset alone)",
+  "from": "  wire [1:0]          host_clr_tmr = host_clr_pls | {tmr_mask_b, tmr_mask_a};",
+  "to": "  wire [1:0]          host_clr_tmr = host_clr_pls | {tmr_mask_b, 1'b0};"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "0xB4-0xB7 echo their select with the extension closed",
+  "from": "                      (sel[7:2] == 6'b1011_01);",
+  "to": "                      1'b0;"
+ },
+ {
+  "bench": "opna_kit1",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "0xB0-0xB7 read FF with the extension closed (0xB0-0xB3 echo on the machine)",
+  "from": "                      (sel[7:2] == 6'b1011_01);",
+  "to": "                      (sel[7:3] == 5'b1011_0);"
+ },
+ {
+  "bench": "opna_regs",
+  "file": "src/opna/pc9821_opna.sv",
+  "why": "register 0x10 echoes its select with the extension closed (NP2kai s.data, not the machine's FF)",
+  "from": "    reads_ff_closed = (sel[7:4] == 4'h1) || (sel == 8'h22) || (sel == 8'h29) ||",
+  "to": "    reads_ff_closed = (sel[7:0] == 8'h11) || (sel == 8'h22) || (sel == 8'h29) ||"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the digital-mode E slot not routed to the DMA's open-bus class (a DMA byte reaches the plane)",
+  "from": "(dma_map_absent || dma_map_pegc_nc || dma_map_e_nc || dma_map_ems_ob || dma_s16_hole ||",
+  "to": "(dma_map_absent || dma_map_pegc_nc || dma_map_ems_ob || dma_s16_hole ||"
+ },
+ {
+  "bench": "dma_route",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the DMA's map held in the 16-colour mode whatever 0x6A says",
+  "from": "      .mode2_16color(mode2_16color), .e_plane_nc(dma_map_e_nc),",
+  "to": "      .mode2_16color(1'b1), .e_plane_nc(dma_map_e_nc),"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the 6-frame (100 ms) delay of NP2kai's OSASK workaround instead of the 1.024 ms poll",
+  "from": "localparam integer POLL_CYCLES   = int'((64'(SYS_CLOCK_HZ) * 64'(POLL_FDC_CLKS)) / 64'(FDC_CLOCK_HZ));",
+  "to": "localparam integer POLL_CYCLES   = SYS_CLOCK_HZ / 10;"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the interrupt at once, with no poll interval (a 1 us interval)",
+  "from": "localparam integer POLL_FDC_CLKS = 8192;",
+  "to": "localparam integer POLL_FDC_CLKS = 8;"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the release arms the poll only with the motor bit (NP2kai's condition, not the machine's)",
+  "from": "wire       rst_rel  = dor_wr && ctrlreg[7] && !din[7];",
+  "to": "wire       rst_rel  = dor_wr && ctrlreg[7] && !din[7] && din[3];"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the poll runs while bit 7 holds the reset",
+  "from": "      poll_arm <= 1'b0;\n      poll_cnt <= POLL_W'(POLL_CYCLES - 1);\n    end else if (rst_rel) begin",
+  "to": "      poll_arm <= din[3];\n      poll_cnt <= POLL_W'(POLL_CYCLES - 1);\n    end else if (rst_rel) begin"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the poll is not skipped inside a command",
+  "from": "wire       poll_idle = (st == ST_IDLE) && (x_st == X_IDLE) && !(cs && wr && (addr == A_DATA));",
+  "to": "wire       poll_idle = 1'b1;"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "every poll re-posts the AI (not one per reset)",
+  "from": "      poll_arm <= !rst_poll;",
+  "to": "      poll_arm <= 1'b1;"
+ },
+ {
+  "bench": "fdc_log",
+  "file": "src/pc9821/storage/pc9821_fdc_log.sv",
+  "why": "every MSR read logged (no change filter)",
+  "from": "wire msr_new  = msr_rd && (!msr_seen || (io_data != msr_last));",
+  "to": "wire msr_new  = msr_rd;"
+ },
+ {
+  "bench": "fdc_log",
+  "file": "src/pc9821/storage/pc9821_fdc_log.sv",
+  "why": "a coincident interrupt edge is dropped",
+  "from": "if (irq_edge) begin q_irq <= 1'b1;",
+  "to": "if (irq_edge && !io_stb) begin q_irq <= 1'b1;"
+ },
+ {
+  "bench": "fdc_log",
+  "file": "src/pc9821/storage/pc9821_fdc_log.sv",
+  "why": "LOST not counted for a full ring",
+  "from": "wire drop_e   = e_want && rst_n && !take_e;",
+  "to": "wire drop_e   = e_want && rst_n && !take_e && room;"
+ },
+ {
+  "bench": "fdc_log",
+  "file": "src/pc9821/storage/pc9821_fdc_log.sv",
+  "why": "the read flag of a control-register access lost",
+  "from": "e_b = {!io_wr, 4'd0, ctl};",
+  "to": "e_b = {1'b0, 4'd0, ctl};"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "bank 1's disk gives the ATA no interface (bank 1 floats with HDD2 selected)",
+  "from": "wire bank_has_interface = !channel_reg[0] || mounted1;",
+  "to": "wire bank_has_interface = !channel_reg[0];"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "every request is tagged as bank 0's disk (bank 1 reads slot 0's image)",
+  "from": "assign block_unit = act_bank;",
+  "to": "assign block_unit = 1'b0;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the exchange leaves the sector count shared between the banks",
+  "from": "sector_count       <= idle_sector_count;   idle_sector_count  <= sector_count;",
+  "to": ""
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the exchange leaves nIEN shared between the banks",
+  "from": "irq_disable        <= idle_nien;           idle_nien          <= irq_disable;",
+  "to": ""
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the idle bank's pending interrupt is dropped from the IDE line",
+  "from": "assign irq = (irq_pend && !irq_disable) || (idle_irq && !idle_nien);",
+  "to": "assign irq = irq_pend && !irq_disable;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the selected bank that is not live answers the live bank's registers",
+  "from": "    end else if (!aux_port && !sel_live) begin",
+  "to": "    end else if (1'b0) begin"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "IDENTIFY words 60/61 report bank 0's capacity at either bank",
+  "from": "        8'd60: identify_word = act_capacity[15:0];",
+  "to": "        8'd60: identify_word = capacity[15:0];"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the CD drive stays on the bus with HDD2 on bank 1",
+  "from": "    .io_wr(device_io_wr && ata_cs && !ide_bank1_hdd_eff),",
+  "to": "    .io_wr(device_io_wr && ata_cs),"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "port 0xF0 bit 6 follows the CD build whatever bank 1 holds",
+  "from": "assign ide_unit2_present = ide_bank1_hdd_eff ? hdd2_mounted : CDROM_EN;",
+  "to": "assign ide_unit2_present = CDROM_EN;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the IDE bank 1 field applies mid-run instead of at the platform reset",
+  "from": "always @(posedge clk_sys) if (reset || !cpu_run) ide_bank1_hdd_eff <= ide_bank1_hdd;",
+  "to": "always @(posedge clk_sys) ide_bank1_hdd_eff <= ide_bank1_hdd;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the second image reaches the ATA whatever the field says (HDD2 shadows the CD)",
+  "from": "wire ata_mounted1 = ide_bank1_hdd_eff && hdd2_mounted;",
+  "to": "wire ata_mounted1 = hdd2_mounted;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_hdd_image.sv",
+  "why": "the detector forwards every guest request to slot 0",
+  "from": "        out_unit          <= ata_pend_unit;",
+  "to": "        out_unit          <= 1'b0;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_block_share.sv",
+  "why": "slot D's transfer is acknowledged by slot A's ack",
+  "from": "(eng_slot ? d_sd_ack : a_sd_ack);",
+  "to": "a_sd_ack;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_block_share.sv",
+  "why": "a hand-over between the two disks keeps the other disk's read-ahead window",
+  "from": "  wire win_unit_change = (arb == ARB_META) && !owner && (owner_slot != win_unit);",
+  "to": "  wire win_unit_change = 1'b0;"
+ },
+ {
+  "bench": "ide_bank1_hdd",
+  "file": "src/pc9821/storage/pc9821_block_share.sv",
+  "why": "a disk grant drops the disk's unit tag (slot D's requests go to slot A)",
+  "from": "          owner_slot  <= grant_b_now ? b_pend_slot : a_pend_unit;",
+  "to": "          owner_slot  <= grant_b_now && b_pend_slot;"
+ },
+ {
+  "bench": "disk_change_reset",
+  "file": "src/pc9821/core/pc9821_disk_change_reset.sv",
+  "why": "the second hard disk's mount no longer resets",
+  "from": "(hdd1_mounted & ~hdd1_mounted_d) |",
+  "to": "1'b0 |"
+ },
+ {
+  "bench": "disk_change_reset",
+  "file": "src/pc9821/core/pc9821_disk_change_reset.sv",
+  "why": "a change of the IDE bank 1 field no longer resets",
+  "from": "                      (ide_bank1_hdd ^ ide_bank1_hdd_d)) & pack_loaded;",
+  "to": "                      1'b0) & pack_loaded;"
+ },
+ {
+  "bench": "disk_change_reset",
+  "file": "src/pc9821/core/pc9821_disk_change_reset.sv",
+  "why": "only the CD-ROM -> HDD2 edge of the field resets",
+  "from": "                      (ide_bank1_hdd ^ ide_bank1_hdd_d)) & pack_loaded;",
+  "to": "                      (ide_bank1_hdd & ~ide_bank1_hdd_d)) & pack_loaded;"
+ },
+ {
+  "bench": "xe10_absent_ports",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x043B resets bit 2 set (the hole off)",
+  "from": "      sys16m_en_q  <= 1'b1;",
+  "to": "      sys16m_en_q  <= 1'b0;"
+ },
+ {
+  "bench": "xe10_absent_ports",
+  "file": "src/pc9821/core/pc9821_device_select.sv",
+  "why": "the -118 game port decoded on the Xe10",
+  "from": "assign gameport_cs = GAMEPORT_118 && (addr[15:3] == 13'h0290);",
+  "to": "assign gameport_cs = (addr[15:3] == 13'h0290);"
+ },
+ {
+  "bench": "xe10_absent_ports",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x0EE0 reads debug_status without DBG_STATUS_PORT",
+  "from": "lane_rdata = DBG_STATUS_PORT ? debug_status : 8'hFF;",
+  "to": "lane_rdata = debug_status;"
+ },
+ {
+  "bench": "calendar_xe10",
+  "file": "src/pc9821/rtc/pc9821_calendar.sv",
+  "why": "bit 7 does not gate the request (cfg=00 n=0 on the Xe10)",
+  "from": "                             (tick_now && tick_en) ? 16'(TICK_LOW_N) :",
+  "to": "                             tick_now ? 16'(TICK_LOW_N) :"
+ },
+ {
+  "bench": "calendar_xe10",
+  "file": "src/pc9821/rtc/pc9821_calendar.sv",
+  "why": "an unread request is held low after the tick (no pulse end: cfg=81 mode=N n=16 on the Xe10)",
+  "from": "                             (tick_low == 16'd1) ? 1'b1 : tick_line;",
+  "to": "                             (tick_low == 16'd1) ? tick_line : tick_line;"
+ },
+ {
+  "bench": "calendar_xe10",
+  "file": "src/pc9821/rtc/pc9821_calendar.sv",
+  "why": "no tick flag in bit 4 (N rows read 91 on the Xe10)",
+  "from": "  assign tick_dout = {tick_en, 2'b00, tick_flag, 2'b00, tick_rate};",
+  "to": "  assign tick_dout = {tick_en, 2'b00, 1'b0, 2'b00, tick_rate};"
+ },
+ {
+  "bench": "calendar_xe10",
+  "file": "src/pc9821/rtc/pc9821_calendar.sv",
+  "why": "the enable bit not read back (cfg=00 reads 10 on the Xe10)",
+  "from": "  assign tick_dout = {tick_en, 2'b00, tick_flag, 2'b00, tick_rate};",
+  "to": "  assign tick_dout = {1'b1, 2'b00, tick_flag, 2'b00, tick_rate};"
+ },
+ {
+  "bench": "calendar_xe10",
+  "file": "src/pc9821/rtc/pc9821_calendar.sv",
+  "why": "a 0x128 read lowers the line (undoc98 / NP2kai)",
+  "from": "  wire        tick_line_nx = tick_off_wr ? 1'b0 :",
+  "to": "  wire        tick_line_nx = (tick_off_wr || tick_rd) ? 1'b0 :"
+ },
+ {
+  "bench": "calendar_xe10",
+  "file": "src/pc9821/rtc/pc9821_calendar.sv",
+  "why": "the tick's low pulse is 20 us, longer than the machine's 1-2 ARTIC ticks",
+  "from": "  localparam integer TICK_LOW_N = (SYS_CLOCK_HZ / 200_000 > 0) ? SYS_CLOCK_HZ / 200_000 : 1;",
+  "to": "  localparam integer TICK_LOW_N = (SYS_CLOCK_HZ / 50_000 > 0) ? SYS_CLOCK_HZ / 50_000 : 1;"
+ },
+ {
+  "bench": "ata_drq_takeover",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "a command in a BSY-clear PIO data phase is ignored again",
+  "from": "(xfer_state != X_IDLE && !(pio_phase && io_din != 8'h00))) &&",
+  "to": "(xfer_state != X_IDLE)) &&"
+ },
+ {
+  "bench": "ata_drq_takeover",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "NOP takes over a data phase",
+  "from": "(xfer_state != X_IDLE && !(pio_phase && io_din != 8'h00))) &&",
+  "to": "(xfer_state != X_IDLE && !pio_phase)) &&"
+ },
+ {
+  "bench": "ata_drq_takeover",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "no deferral behind an in-flight read-ahead",
+  "from": "              if (takeover_defer) begin",
+  "to": "              if (1'b0) begin"
+ },
+ {
+  "bench": "ata_drq_takeover",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the drain completion never dispatches the deferred command",
+  "from": "        if (cmd_pend && !srst_wr_now) dispatch_command(cmd_pend_byte);",
+  "to": "        if (1'b0) dispatch_command(cmd_pend_byte);"
+ },
+ {
+  "bench": "ata_drq_takeover",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "SRST does not cancel the deferred command",
+  "from": "            if (srst_wr_now) cmd_pend <= 1'b0;",
+  "to": "            if (1'b0) cmd_pend <= 1'b0;"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a fetch completing after a disc change presents its sector",
+  "from": "&& !abort_now && rd_medchg)",
+  "to": "&& !abort_now && 1'b0)"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "a disc change under a READ is not remembered",
+  "from": "rd_medchg <= (rd_medchg && !exec_go) || (mount_edge && read_active);",
+  "to": "rd_medchg <= 1'b0;"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "the end of a data phase ignores an earlier disc change",
+  "from": "wire rd_fail = rd_medchg || mount_edge;",
+  "to": "wire rd_fail = mount_edge;"
+ },
+ {
+  "bench": "atapi",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "the CD keeps the bank-1 task-file read with 0x0432 bit 2 set",
+  "from": "  assign io_own = bank1 && tf_port && !bank_b2;",
+  "to": "  assign io_own = bank1 && tf_port;"
+ },
+ {
+  "bench": "boot0_load",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the loader stays on the platform reset, so status[0] drops every boot-ROM word",
+  "from": "      .clk(clk), .reset(reset && !pack_load_hold_r), .pack_base(pack_base),",
+  "to": "      .clk(clk), .reset(reset), .pack_base(pack_base),"
+ },
+ {
+  "bench": "boot0_load",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the hold falls with status[0], before the platform reset, and re-resets the SDRAM backend",
+  "from": "    pack_load_hold_r <= (hps_apply_reset && pack_dl_selected) || (pack_load_hold_r && reset);",
+  "to": "    pack_load_hold_r <= (hps_apply_reset && pack_dl_selected) || (pack_load_hold_r && hps_apply_reset);"
+ },
+ {
+  "bench": "boot0_load",
+  "file": "src/pc9821/core/pc9821_memory_subsystem.sv",
+  "why": "the hold never sets for the pack's own ioctl index",
+  "from": "  wire pack_dl_selected = ioctl_download && (ioctl_index == IOCTL_INDEX);",
+  "to": "  wire pack_dl_selected = ioctl_download && (ioctl_index != IOCTL_INDEX);"
+ },
+ {
+  "bench": "boot0_load",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "the hold does not leave pc9821_system, so the SDRAM backend stays in reset under status[0]",
+  "from": "    .cpu_run(cpu_run), .pack_load_hold(pack_load_hold),",
+  "to": "    .cpu_run(cpu_run), .pack_load_hold(),"
+ },
+ {
+  "bench": "fdd_media_d88",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "rpm_flg never read",
+  "from": "wire        hdr_rpm_ok  = !cls_minor[req_u] || (hb[13] == {7'd0, rq_rpm});",
+  "to": "wire        hdr_rpm_ok  = 1'b1;"
+ },
+ {
+  "bench": "fdd_media_d88",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "rpm_flg tested on a minor-0 2HD too",
+  "from": "wire        hdr_rpm_ok  = !cls_minor[req_u] || (hb[13] == {7'd0, rq_rpm});",
+  "to": "wire        hdr_rpm_ok  = (hb[13] == {7'd0, rq_rpm});"
+ },
+ {
+  "bench": "fdd_write",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a FORMAT that runs past the track's last sector answers IC0|NW (no end at the index)",
+  "from": "            res0 <= (x_r == 8'h01) ? (8'h40 | {5'd0, x_hd, x_us}) : {5'd0, x_hd, x_us};\n            res1 <= (x_r == 8'h01) ? 8'h02 : 8'h00;",
+  "to": "            res0 <= 8'h40 | {5'd0, x_hd, x_us};\n            res1 <= 8'h02;"
+ },
+ {
+  "bench": "fdc_readid_wait",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "READ ID answers at once (no ID-field wait)",
+  "from": "wire             idw_done = (idw_next >= idw_rev);",
+  "to": "wire             idw_done = 1'b1;"
+ },
+ {
+  "bench": "fdc_readid_wait",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the wait ignores the sector count (a whole revolution per READ ID)",
+  "from": "idw_hs <= (media_hs == 8'd0) ? 8'd1 : media_hs;",
+  "to": "idw_hs <= 8'd1;"
+ },
+ {
+  "bench": "fdc_readid_wait",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the wait is always the 360 rpm revolution (0x04BE's 300 rpm ignored)",
+  "from": "wire [REV_W:0]   idw_rev  = spin_360 ? (REV_W+1)'(REV_360) : (REV_W+1)'(REV_300);",
+  "to": "wire [REV_W:0]   idw_rev  = (REV_W+1)'(REV_360);"
+ },
+ {
+  "bench": "fdc_readid_wait",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the MSR shows RQM|DIO|CB while READ ID searches (the read-class data phase)",
+  "from": "A_MSR:  dout = ((x_st != X_IDLE)  ? (x_isid ? 8'h10 :",
+  "to": "A_MSR:  dout = ((x_st != X_IDLE)  ? (x_isid ? 8'hD0 :"
+ },
+ {
+  "bench": "fdc_readid_wait",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "READ ID's answer drops the header's R",
+  "from": "          res1 <= 8'h00;\n          res_len <= 3'd7;\n          res_pop <= 1'b0;\n          res_rel <= 1'b1;\n          res_irq <= 1'b1;\n          res_idx <= 3'd0;\n          st <= ST_RESULT;\n        end else begin\n          idw <= idw_next;",
+  "to": "          res1 <= 8'h00;\n          x_r <= 8'h00;\n          res_len <= 3'd7;\n          res_pop <= 1'b0;\n          res_rel <= 1'b1;\n          res_irq <= 1'b1;\n          res_idx <= 3'd0;\n          st <= ST_RESULT;\n        end else begin\n          idw <= idw_next;"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "no interrupt after a reset (the base behaviour)",
+  "from": "(rst_poll && drv_ready[gu]);",
+  "to": "(1'b0 && drv_ready[gu]);"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a drive that is not ready gets an AI too",
+  "from": "(rst_poll && drv_ready[gu]);",
+  "to": "(rst_poll);"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "any later control write cancels the reset's poll (the pre-fix arm)",
+  "from": "    end else if (rst_rel) begin\n      // Its fall, whatever the motor bit, restarts the interval.\n      poll_arm <= 1'b1;",
+  "to": "    end else if (dor_wr) begin\n      // Its fall, whatever the motor bit, restarts the interval.\n      poll_arm <= rst_rel;"
+ },
+ {
+  "bench": "fdc_reset_int",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "any later control write restarts the poll interval",
+  "from": "    end else if (rst_rel) begin\n      // Its fall, whatever the motor bit, restarts the interval.\n      poll_arm <= 1'b1;",
+  "to": "    end else if (dor_wr) begin\n      // Its fall, whatever the motor bit, restarts the interval.\n      poll_arm <= rst_rel | poll_arm;"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "164: the VFO period is 100 ms (undoc98's nominal, not the machine's 90.6 ms)",
+  "from": "int'((64'(SYS_CLOCK_HZ) * 64'd906) / 64'd10000);",
+  "to": "int'((64'(SYS_CLOCK_HZ) * 64'd1000) / 64'd10000);"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "164: the VFO output is a pulse, not held",
+  "from": "      vfo_q   <= (vfo_out || (vfo_run",
+  "to": "      vfo_q   <= (1'b0 || (vfo_run"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "164: TMSK does not gate the VFO",
+  "from": "                 (dor_wr ? din[2] : ctrlreg[2]);",
+  "to": "                 1'b1;"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "164: a re-trigger does not drop the VFO output",
+  "from": "      vfo_cnt <= VFO_W'(VFO_CYCLES - 1);\n      vfo_out <= 1'b0;\n      vfo_q   <= 1'b0;",
+  "to": "      vfo_cnt <= VFO_W'(VFO_CYCLES - 1);\n      vfo_out <= vfo_out;\n      vfo_q   <= vfo_q;"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "164: the VFO never reaches the INT line",
+  "from": "  assign irq = (int_q && |pend) || res_irq || vfo_q;",
+  "to": "  assign irq = (int_q && |pend) || res_irq;"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a masked expiry is lost (the fdc lane's model)",
+  "from": "      vfo_out <= vfo_out || (vfo_run && (vfo_cnt == {VFO_W{1'b0}}));",
+  "to": "      vfo_out <= vfo_q && (vfo_run && (vfo_cnt == {VFO_W{1'b0}}));"
+ },
+ {
+  "bench": "fdc_vfo",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the line does not take the held output (old vfo_q latch)",
+  "from": "      vfo_q   <= (vfo_out || (vfo_run",
+  "to": "      vfo_q   <= (vfo_q || (vfo_run"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "177: a DMA-mode read shows RQM|DIO in its data phase (NP2kai's D0, not the machine's 10)",
+  "from": "(!nd ? 8'h10 : xfer_now ? 8'hD0 : 8'h50)",
+  "to": "(!nd ? 8'hD0 : xfer_now ? 8'hD0 : 8'h50)"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "177: READ DATA claims its drive-busy bit (NP2kai's D1, not the machine's D0)",
+  "from": "above), then the first sector. No busy bit (`busy`'s note).\n",
+  "to": "above), then the first sector.\n              busy[cur_p0[1:0]] <= 1'b1;\n"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready data command defers its ST0 to SENSE INTERRUPT STATUS (no result phase)",
+  "from": "              exec_res <= 1'b1;\n",
+  "to": "              exec_res <= 1'b0;\n"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready READ ID answers NP2kai's IC0 without NR",
+  "from": "  wire [7:0] data_st0 = 8'h48 | {5'd0, cur_hd, cur_u};",
+  "to": "  wire [7:0] data_st0 = (cmd == 5'h0A) ? (8'h40 | {5'd0, cur_hd, cur_u}) : (8'h48 | {5'd0, cur_hd, cur_u});"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready READ DATA does not load the command's R",
+  "from": "                x_r <= cmds[3];\n                x_n <= cmds[4];\n              end\n              if (cmd_is_write(cmd) || (cmd == 5'h0D))",
+  "to": "                x_r <= x_r;\n                x_n <= cmds[4];\n              end\n              if (cmd_is_write(cmd) || (cmd == 5'h0D))"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready READ DATA answers after 40 us (outside the machine's 19.5 us)",
+  "from": "  localparam [15:0] NR_DATA_CYCLES = 16'(SYS_CLOCK_HZ / 100_000);   // 10 us",
+  "to": "  localparam [15:0] NR_DATA_CYCLES = 16'(SYS_CLOCK_HZ / 25_000);   // 10 us"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready READ ID answers after 10 us (before the machine's CB sample)",
+  "from": "  localparam [15:0] NR_RID_CYCLES  = 16'(SYS_CLOCK_HZ / 40_000);    // 25 us",
+  "to": "  localparam [15:0] NR_RID_CYCLES  = 16'(SYS_CLOCK_HZ / 100_000);    // 25 us"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready data command claims its drive-busy bit (the machine's MSR reads 10)",
+  "from": "              if (cmd_is_write(cmd) || (cmd == 5'h0D)) busy[cur_p0[1:0]] <= 1'b1;",
+  "to": "              busy[cur_p0[1:0]] <= 1'b1;"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "162: a read at EOT with no terminal count ends normally (NP2kai's C+1, R=1)",
+  "from": "        end else if (!x_wr && stp_cinc) begin",
+  "to": "        end else if (1'b0) begin"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "162: the EOT end without a terminal count answers no ST1 EN",
+  "from": "          res1 <= 8'h80;                        // ST1 EN",
+  "to": "          res1 <= 8'h00;                        // ST1 EN"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "162: the EOT end without a terminal count answers ST0 without IC0",
+  "from": "          res0 <= 8'h40 | {5'd0, x_hd, x_us};   // IC0 | hd<<2 | us\n          res1 <= 8'h80;",
+  "to": "          res0 <= 8'h00 | {5'd0, x_hd, x_us};   // IC0 | hd<<2 | us\n          res1 <= 8'h80;"
+ },
+ {
+  "bench": "fdd_write",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "162: a read at EOT with no terminal count ends normally (NP2kai's C+1, R=1)",
+  "from": "        end else if (!x_wr && stp_cinc) begin",
+  "to": "        end else if (1'b0) begin"
+ },
+ {
+  "bench": "fdc_conform",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready data command defers its ST0 to SENSE INTERRUPT STATUS (no result phase)",
+  "from": "              exec_res <= 1'b1;\n",
+  "to": "              exec_res <= 1'b0;\n"
+ },
+ {
+  "bench": "fdc_ready_change",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "176: a not-ready data command defers its ST0 to SENSE INTERRUPT STATUS (no result phase)",
+  "from": "              exec_res <= 1'b1;\n",
+  "to": "              exec_res <= 1'b0;\n"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the line driven from the status queue again (the base behaviour: a stranded status swallows later edges)",
+  "from": "  assign irq = (int_q && |pend) || res_irq || vfo_q;",
+  "to": "  assign irq = (|pend && (st != ST_EXEC)) || res_irq || vfo_q;"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a data-port access does not lower INT",
+  "from": "      int_q   <= (int_q & ~(int_acc | int_rst)) | int_set;",
+  "to": "      int_q   <= (int_q & ~int_rst) | int_set;"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a DOR reset does not lower INT",
+  "from": "      int_q   <= (int_q & ~(int_acc | int_rst)) | int_set;",
+  "to": "      int_q   <= (int_q & ~int_acc) | int_set;"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "clear-wins: an event in the cycle of a data-port access is lost",
+  "from": "      int_q   <= (int_q & ~(int_acc | int_rst)) | int_set;",
+  "to": "      int_q   <= (int_q | int_set) & ~(int_acc | int_rst);"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a ready change presented inside a command (no deferral)",
+  "from": "  wire       int_set   = int_done || ((int_rdy || int_def) && poll_idle);",
+  "to": "  wire       int_set   = int_done || int_rdy || int_def;"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a ready change that arrives inside a command is dropped",
+  "from": "      int_def <= (int_def & ~(poll_idle | int_rst)) | (int_rdy & ~poll_idle);",
+  "to": "      int_def <= 1'b0;"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a completion does not raise INT",
+  "from": "  wire       int_done  = (st == ST_EXEC) && (delay == 16'd0) && !exec_res;",
+  "to": "  wire       int_done  = 1'b0;"
+ },
+ {
+  "bench": "fdc_int_line",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the reset's drive poll does not raise INT",
+  "from": "  wire       int_rdy   = |(chg_ev | rdy_ai);                      // a ready change this cycle",
+  "to": "  wire       int_rdy   = |chg_ev;"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the I/O trigger ignores the byte",
+  "from": "(TRIG_ADDR[24] || lio_data == TRIG_ADDR[7:0]);",
+  "to": "(1'b1 || lio_data == TRIG_ADDR[7:0]);"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the I/O trigger fires on an IN as well",
+  "from": "  wire        io_hit  = lio_stb && lio_wr && ",
+  "to": "  wire        io_hit  = lio_stb && "
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the I/O trigger matches the latch level, not its strobe",
+  "from": "  wire        io_hit  = lio_stb && lio_wr && ",
+  "to": "  wire        io_hit  = lio_wr && "
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the I/O trigger compares only the low byte of the port",
+  "from": "lio_addr == TRIG_ADDR[23:8] &&",
+  "to": "lio_addr[7:0] == TRIG_ADDR[15:8] &&"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the last-occurrence mode ignores a match inside the previous one's POST",
+  "from": "      if (l_hit) begin\n        in_post <= 1'b1;",
+  "to": "      if (l_hit && !in_post) begin\n        in_post <= 1'b1;"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the last-occurrence dump takes the whole bank, stale entries included",
+  "from": "  wire [TRACE_AW:0]   d_total = IS_LAST ? cand_fill : D_FULL;",
+  "to": "  wire [TRACE_AW:0]   d_total = D_FULL;"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the last-occurrence mode keeps recording into the candidate's bank",
+  "from": "        rec_bank <= ~rec_bank; tr_wp",
+  "to": "        rec_bank <= rec_bank; tr_wp"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the commit does not restart the quiet time (it runs on from the previous capture)",
+  "from": "        in_post <= 1'b0; have_cand <= 1'b1; quiet <= 32'd0;",
+  "to": "        in_post <= 1'b0; have_cand <= 1'b1;"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the I/O match count counts matches before ARM_S",
+  "from": "if (TRIG_KIND == 4 && armed && !tr_frozen && io_hit) io_cnt",
+  "to": "if (TRIG_KIND == 4 && !tr_frozen && io_hit) io_cnt"
+ },
+ {
+  "bench": "dbg_trig_io",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the trigger record drops the last-occurrence mark",
+  "from": "  localparam [0:0]    TRG_LAST = IS_LAST ? 1'b1 : 1'b0;",
+  "to": "  localparam [0:0]    TRG_LAST = 1'b0;"
+ },
+ {
+  "bench": "dbg_trace_deep",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the PC trigger ignores CS (a V86 segment is not compared)",
+  "from": "  wire        pc_hit  = issue && cpu_cs == TRIG_CS && issue_eip == TRIG_ADDR;",
+  "to": "  wire        pc_hit  = issue && issue_eip == TRIG_ADDR;"
+ },
+ {
+  "bench": "dbg_trace_deep",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the PC trigger compares only the low 16 bits of EIP",
+  "from": "  wire        pc_hit  = issue && cpu_cs == TRIG_CS && issue_eip == TRIG_ADDR;",
+  "to": "  wire        pc_hit  = issue && cpu_cs == TRIG_CS && issue_eip[15:0] == TRIG_ADDR[15:0];"
+ },
+ {
+  "bench": "dbg_trace_deep",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the PC trigger compares only the low 15 bits of CS",
+  "from": "  wire        pc_hit  = issue && cpu_cs == TRIG_CS && issue_eip == TRIG_ADDR;",
+  "to": "  wire        pc_hit  = issue && cpu_cs[14:0] == TRIG_CS[14:0] && issue_eip == TRIG_ADDR;"
+ },
+ {
+  "bench": "dbg_trace_deep",
+  "file": "src/pc9821/core/pc9821_dbg_cpu.sv",
+  "why": "the LAST mode loses its second bank (one ring shared by the capture and the recording)",
+  "from": "  localparam integer TAW = TRACE_AW + (IS_LAST ? 1 : 0);",
+  "to": "  localparam integer TAW = TRACE_AW;"
+ },
+ {
+  "bench": "dbg_system",
+  "file": "src/pc9821/core/pc9821_system.sv",
+  "why": "DBG_TRACE_AW is not threaded to the trace module (it keeps its own 2^9 ring)",
+  "from": "        .LAST_MS(DBG_LAST_MS), .TRACE_AW(DBG_TRACE_AW)",
+  "to": "        .LAST_MS(DBG_LAST_MS)"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "the disk lamp follows BSY|DRQ again (every poll and IDENTIFY lights it)",
+  "from": "  assign xfer = block_in_flight;",
+  "to": "  assign xfer = block_in_flight | status_reg[7] | status_reg[3];"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/storage/pc9821_ata.sv",
+  "why": "a read-ahead not counted as a transfer (dark while the second sector is fetched)",
+  "from": "  assign xfer = block_in_flight;",
+  "to": "  assign xfer = block_in_flight && !prefetch_busy;"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "the CD lamp follows BSY|DRQ (TEST UNIT READY, INQUIRY and REQUEST SENSE light it)",
+  "from": "  assign xfer = (e_st != E_IDLE) && (e_kind == EK_DATA);   // see the port",
+  "to": "  assign xfer = ((e_st != E_IDLE) && (e_kind == EK_DATA)) | status[7] | status[3];   // see the port"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/storage/pc9821_atapi.sv",
+  "why": "the CD lamp counts only the stream, not the wait for the host",
+  "from": "  assign xfer = (e_st != E_IDLE) && (e_kind == EK_DATA);   // see the port",
+  "to": "  assign xfer = (e_st == E_STREAM) && (e_kind == EK_DATA);   // see the port"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/core/pc9821_disk_led.sv",
+  "why": "the CD drive left out of the access lamp",
+  "from": "  wire disk_xfer = ata_xfer | cd_xfer | fdd_xfer;",
+  "to": "  wire disk_xfer = ata_xfer | fdd_xfer;"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/core/pc9821_disk_led.sv",
+  "why": "the floppy left off LED_DISK (LED_USER only, the old wiring)",
+  "from": "  wire disk_xfer = ata_xfer | cd_xfer | fdd_xfer;",
+  "to": "  wire disk_xfer = ata_xfer | cd_xfer;"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/core/pc9821_disk_led.sv",
+  "why": "the hard disk drives the floppy lamp too",
+  "from": "      fdd_hold  <= fdd_xfer ? HOLD_W : (fdd_hold != '0) ? fdd_hold - 1'b1 : '0;",
+  "to": "      fdd_hold  <= (fdd_xfer | ata_xfer) ? HOLD_W : (fdd_hold != '0) ? fdd_hold - 1'b1 : '0;"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/core/pc9821_disk_led.sv",
+  "why": "the hold is not reloaded by new activity once it runs",
+  "from": "      disk_hold <= disk_xfer ? HOLD_W : (disk_hold != '0) ? disk_hold - 1'b1 : '0;",
+  "to": "      disk_hold <= (disk_xfer && disk_hold == '0) ? HOLD_W : (disk_hold != '0) ? disk_hold - 1'b1 : '0;"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/core/pc9821_disk_led.sv",
+  "why": "the hold halved",
+  "from": "  localparam integer HOLD = (CLK_HZ / 1000) * HOLD_MS;",
+  "to": "  localparam integer HOLD = (CLK_HZ / 1000) * HOLD_MS / 2;"
+ },
+ {
+  "bench": "disk_led",
+  "file": "src/pc9821/core/pc9821_disk_led.sv",
+  "why": "no hold at all (the lamp follows the transfers directly)",
+  "from": "      disk_lit  <= disk_xfer | (disk_hold != '0);",
+  "to": "      disk_lit  <= disk_xfer;"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the guest's 0x534 reboot does not re-seed the store",
+  "from": "  wire sdip_seed_start = (reset && !sdip_reset_d) || seed_src_moved || soft_reboot;",
+  "to": "  wire sdip_seed_start = (reset && !sdip_reset_d) || seed_src_moved;"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "a field changed inside the reset window does not re-run the walk",
+  "from": "  wire sdip_seed_start = (reset && !sdip_reset_d) || seed_src_moved || soft_reboot;",
+  "to": "  wire sdip_seed_start = (reset && !sdip_reset_d) || soft_reboot;"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "port 0x31 bit 3 ignores the Text lines field",
+  "from": "  wire [7:0] dip2_reg    = {~gdc_strap_eff, 2'b11, ~msw_hold_eff, text20_eff, 3'b011};",
+  "to": "  wire [7:0] dip2_reg    = {~gdc_strap_eff, 2'b11, ~msw_hold_eff, 1'b0, 3'b011};"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x871E seed ignores the memory-switch hold",
+  "from": "  wire [7:0] sdip_seed_a3 = sdip_odd7({sdip_img_a3[6], ~msw_hold_eff, sdip_img_a3[4:0]});",
+  "to": "  wire [7:0] sdip_seed_a3 = sdip_odd7({sdip_img_a3[6], 1'b1, sdip_img_a3[4:0]});"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the seed byte keeps the measured parity bit (an even 0x871E)",
+  "from": "    sdip_odd7 = {~(^d), d};",
+  "to": "    sdip_odd7 = {1'b0, d};"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the reset walk writes the power-up image, not the OSD seed",
+  "from": "sdip_seed_byte(sdip_seq_idx, sdip_seed_a3, sdip_seed_a2,\n                                                 sdip_seed_a1);",
+  "to": "sdip_powerup(sdip_seq_idx);"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "setup_cfg carries the measured 0x871E byte, not the OSD seed",
+  "from": "  assign setup_cfg = {sdip_seed_a2, sdip_seed_a3, dip2_reg};",
+  "to": "  assign setup_cfg = {sdip_seed_a2, sdip_img_a3, dip2_reg};"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the Text lines latch follows the OSD live",
+  "from": "    if (reset) text20_eff <= text_lines_20;",
+  "to": "    if (reset) text20_eff <= text20_eff;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 2 ignores the Text lines bit",
+  "from": "        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};",
+  "to": "        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, ~setup_cfg[4], 1'b1, 3'b100};"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 2 ignores the memory switch",
+  "from": "        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};",
+  "to": "        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, 1'b0, ~setup_cfg[3], 3'b100};"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the sum byte is the constant Xe10 0x65 (not recomputed)",
+  "from": "    cg_record_cksum = 8'd0 - (8'h8E + cg_record_row(4'd2, model_xe) + cg_record_row(4'd3, model_xe));",
+  "to": "    cg_record_cksum = model_xe ? 8'h66 : 8'h65;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 4 is the factory 0xCD (Sound used), not the Xe10 as found",
+  "from": "        4'd4:  cg_record_row = 8'hCF;   // the factory 0xCD with bit 1 set: Sound not used (above)",
+  "to": "        4'd4:  cg_record_row = 8'hCD;   // the factory 0xCD with bit 1 set: Sound not used (above)"
+ },
+ {
+  "bench": "cg_read_path",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 4 is the factory 0xCD (Sound used), not the Xe10 as found",
+  "from": "        4'd4:  cg_record_row = 8'hCF;   // the factory 0xCD with bit 1 set: Sound not used (above)",
+  "to": "        4'd4:  cg_record_row = 8'hCD;   // the factory 0xCD with bit 1 set: Sound not used (above)"
+ },
+ {
+  "bench": "cg_window",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the power-up record literal is the factory table (row 4 0xCD, sum 0x67)",
+  "from": "  localparam [111:0] CG_RECORD_INIT = 112'hff8a_86e5_55aa_0000_ffcf_810c_c104;",
+  "to": "  localparam [111:0] CG_RECORD_INIT = 112'hff8a_8667_55aa_0000_ffcd_818c_c104;"
+ },
+ {
+  "bench": "setup_osd",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x881E powers up as the factory 0xDC (Sound used), not the as-found 0x7C",
+  "from": "      5'd4:  sdip_powerup = 8'h7C;   // 0x88 -- bit 5 set: SETUP's Sound (the built-in codec) not used, as found;",
+  "to": "      5'd4:  sdip_powerup = 8'hDC;   // 0x88 -- bit 5 set: SETUP's Sound (the built-in codec) not used, as found;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the mirror's 0x871E cell is the constant measured byte",
+  "from": "        if (idx == 6'd29)      cg_restore_byte = setup_cfg[15:8];",
+  "to": "        if (idx == 6'd29)      cg_restore_byte = 8'h3E;"
+ },
+ {
+  "bench": "readback_sysports",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x9A8 bit 1 does not latch (NP2kai's one-bit width)",
+  "from": "                gdc_9a8_b1  <= lane_wdata[1];",
+  "to": "                gdc_9a8_b1  <= 1'b0;"
+ },
+ {
+  "bench": "irq_withdraw",
+  "file": "src/pc9821/interrupts/pc9821_interrupts.sv",
+  "why": "the master holds a masked IR6 (MPU) request after its line falls",
+  "from": "  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'hC3),",
+  "to": "  pc9821_pic #(.BASE_VEC(8'h08), .CASCADE_IRQ(7), .WD_MASK(8'h83),"
+ },
+ {
+  "bench": "gdc_text_regs",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "0x68 reads DISP back (NP2kai's gdc_i68)",
+  "from": "      5'd3:  io_dout_r = {1'b0, mode1[6:0]};",
+  "to": "      5'd3:  io_dout_r = mode1;"
+ },
+ {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "port 0x31 bit 4 ignores 0x871E writes (a strap constant)",
+  "from": "  wire [7:0] p31_rd = {p31_lat[7:5], sdip_msw_a, p31_lat[3:0]};",
+  "to": "  wire [7:0] p31_rd = {p31_lat[7:5], dip2_reg[4], p31_lat[3:0]};"
+ },
+ {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "a 0x851E write does not reach port 0x31",
+  "from": "    else if (sdip_guest_we && (sdip_bank_index == 5'd1)) p31_lat <= lane_wdata;",
+  "to": "    else if (sdip_guest_we && (sdip_bank_index == 5'd1)) p31_lat <= p31_lat;"
+ },
+ {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "bank A 0x851E stores the whole written byte",
+  "from": "  wire [7:0] sdip_wmask = (sdip_bank_index == 5'd1) ? 8'h10 : sdip_data_mask(sdip_index);",
+  "to": "  wire [7:0] sdip_wmask = (sdip_bank_index == 5'd1) ? 8'hFF : sdip_data_mask(sdip_index);"
+ },
+ {
+  "bench": "msw_hold",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "a machine reset leaves port 0x31 as the guest moved it",
+  "from": "    if (reset || soft_reboot) p31_lat <= dip2_reg;",
+  "to": "    if (soft_reboot) p31_lat <= dip2_reg;"
+ },
+ {
+  "bench": "floppy_mode",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x861E seed ignores the Floppy mode field",
+  "from": "  wire [7:0] sdip_seed_a2 = sdip_odd7({sdip_img_a2[6:2], fdmode_setup(fdmode_eff)});",
+  "to": "  wire [7:0] sdip_seed_a2 = sdip_img_a2;"
+ },
+ {
+  "bench": "floppy_mode",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the default position maps to 1M (the factory value) instead of Auto (1M)",
+  "from": "      2'd0:    fdmode_setup = 2'd3;   // Auto (1M) (the default)",
+  "to": "      2'd0:    fdmode_setup = 2'd2;   // Auto (1M) (the default)"
+ },
+ {
+  "bench": "floppy_mode",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "the 0x861E shadow does not follow the store",
+  "from": "    if (sdip_we && (sdip_waddr == 5'd2))  sdip_fd_a  <= sdip_wdata[1:0];",
+  "to": "    if (1'b0)  sdip_fd_a  <= sdip_wdata[1:0];"
+ },
+ {
+  "bench": "floppy_mode",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "0x00BE bit 3 is the constant 1 (NP2kai's | 8), so the BIOS writes 3 in every mode",
+  "from": "      A_CHGREG: dout = {4'b1111, ~fd_640k, ~fd_auto, chgreg[1:0]};",
+  "to": "      A_CHGREG: dout = {4'b1111, 1'b1, ~fd_auto, chgreg[1:0]};"
+ },
+ {
+  "bench": "floppy_mode",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "0x00BE bit 2 reads 0 whatever the field holds (the retired FDD mode field's Auto default)",
+  "from": "      A_CHGREG: dout = {4'b1111, ~fd_640k, ~fd_auto, chgreg[1:0]};",
+  "to": "      A_CHGREG: dout = {4'b1111, ~fd_640k, 1'b0, chgreg[1:0]};"
+ },
+ {
+  "bench": "floppy_mode",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x00BF reads the channel-group register",
+  "from": "      hit[HX_00BF]: lane_rdata = 8'hFF;",
+  "to": "      hit[HX_00BF]: lane_rdata = fdc_dout;"
+ },
+ {
+  "bench": "readback_sysports",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x00BF reads the channel-group register",
+  "from": "      hit[HX_00BF]: lane_rdata = 8'hFF;",
+  "to": "      hit[HX_00BF]: lane_rdata = fdc_dout;"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/core/pc9821_iobus.sv",
+  "why": "0x00BF reads the channel-group register",
+  "from": "      hit[HX_00BF]: lane_rdata = 8'hFF;",
+  "to": "      hit[HX_00BF]: lane_rdata = fdc_dout;"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "0xCC answers NP2kai's 0x74 (RDY bit set) in 640K mode",
+  "from": "      A_DOR:  dout = win_2dd ? {3'b011, sel_rdy, 4'b0100} : 8'h44;",
+  "to": "      A_DOR:  dout = win_2dd ? {3'b011, 1'b1, 4'b0100} : 8'h44;"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "0xCC bit 4 the constant 0 (the release candidate's reading)",
+  "from": "      A_DOR:  dout = win_2dd ? {3'b011, sel_rdy, 4'b0100} : 8'h44;",
+  "to": "      A_DOR:  dout = win_2dd ? {3'b011, 1'b0, 4'b0100} : 8'h44;"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the select never expires (no drive poll moves it)",
+  "from": "      sel_cnt <= cmd_idle ? sel_cnt - 1'b1 : POLL_W'(POLL_CYCLES - 1);",
+  "to": "      sel_cnt <= sel_cnt;"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "the pin shows unit 0 whatever unit the command named",
+  "from": "      sel_u   <= din[1:0];\n",
+  "to": "      sel_u   <= 2'd0;\n"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a controller reset leaves the select",
+  "from": "    if (reset || (dor_wr && din[7])) begin\n      sel_u",
+  "to": "    if (reset) begin\n      sel_u"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "0x04BE bit 4 set in 640K mode (NP2kai's constant FE)",
+  "from": "      A_REG144: dout = {3'b111, chgreg[0], 3'b111, rpm[reg144_sel]};",
+  "to": "      A_REG144: dout = {3'b111, 1'b1, 3'b111, rpm[reg144_sel]};"
+ },
+ {
+  "bench": "fdc_2dd_bank",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "0x04BE bit 4 keyed on 0xBE bit 1 (MAME) instead of the strap",
+  "from": "      A_REG144: dout = {3'b111, chgreg[0], 3'b111, rpm[reg144_sel]};",
+  "to": "      A_REG144: dout = {3'b111, chgreg[1], 3'b111, rpm[reg144_sel]};"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 3 ignores the floppy disk mode",
+  "from": "        4'd3:  cg_record_row = model_xe ? 8'h80 : {6'b100000, ~setup_cfg[17:16]};",
+  "to": "        4'd3:  cg_record_row = model_xe ? 8'h80 : 8'h81;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the restore leaves the mirror's 0x861E cell at the measured byte",
+  "from": "        else if (idx == 6'd28) cg_restore_byte = setup_cfg[23:16];",
+  "to": "        else if (1'b0) cg_restore_byte = setup_cfg[23:16];"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the mirror's 0x851E cell is the port's read-back 02, the core before the cell was composed (the ITF's POST copy then clears port 0x31 bit 5 and the IDE ROM detaches the hard disks)",
+  "from": "        else if (idx == 6'd27) cg_restore_byte = cg_mirror_851e;",
+  "to": "        else if (idx == 6'd27) cg_restore_byte = 8'h02;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 2 bit 7 is the constant factory 1 (GDC 5 MHz), the core before it followed the GDC clock: SETUP's GDC clock getter (BANK3@0x37A3) then reads 5 MHz on a 2.5 MHz machine",
+  "from": "        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};",
+  "to": "        4'd2:  cg_record_row = {1'b1, 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};"
+ },
+ {
+  "bench": "cg_read_path",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "record row 2 bit 7 is the constant factory 1 (GDC 5 MHz) on the 2.5 MHz configuration",
+  "from": "        4'd2:  cg_record_row = {~setup_cfg[7], 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};",
+  "to": "        4'd2:  cg_record_row = {1'b1, 2'b00, ~setup_cfg[4], ~setup_cfg[3], 3'b100};"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the mirror's 0x8B1E cell is the Xa7C9W capture's 7F, not the byte the Xe10's port holds (BF)",
+  "from": "      224'h9849_7f7f_bfff_7f7c_3e76_e37c_0000_0000_8080_8080_8080_8080_8080_808f;",
+  "to": "      224'h9849_7f7f_7fff_7f7c_3e76_e37c_0000_0000_8080_8080_8080_8080_8080_808f;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the mirror's bank-B 0x841E cell is 80, not the factory 8F the ports carry",
+  "from": "      224'h9849_7f7f_bfff_7f7c_3e76_e37c_0000_0000_8080_8080_8080_8080_8080_808f;",
+  "to": "      224'h9849_7f7f_bfff_7f7c_3e76_e37c_0000_0000_8080_8080_8080_8080_8080_8080;"
+ },
+ {
+  "bench": "fdd_mount_reset",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "the reset clears writeprotect again (the pre-fix reset branch)",
+  "from": "      st           <= (|present) ? ST_READY : ST_NONE;",
+  "to": "      st           <= (|present) ? ST_READY : ST_NONE;\n      writeprotect <= 2'b00;"
+ },
+ {
+  "bench": "fdd_mount_reset",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "the D88 header protect bit is ignored",
+  "from": "              writeprotect[mnt_u] <= fd_protect[4] | mnt_ro[mnt_u];",
+  "to": "              writeprotect[mnt_u] <= mnt_ro[mnt_u];"
+ },
+ {
+  "bench": "fdd_mount_reset",
+  "file": "src/pc9821/storage/pc9821_fdd_media.sv",
+  "why": "a D88 is always write-protected",
+  "from": "              writeprotect[mnt_u] <= fd_protect[4] | mnt_ro[mnt_u];",
+  "to": "              writeprotect[mnt_u] <= 1'b1;"
+ },
+ {
+  "bench": "setup_record",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the restore walk stops at the mirror (38 steps): the ITF's saved-table length survives a machine reset and the boot after installs the factory DIP image",
+  "from": "  localparam [5:0]   CG_RESTORE_LEN  = 6'd40;",
+  "to": "  localparam [5:0]   CG_RESTORE_LEN  = 6'd38;"
+ },
+ {
+  "bench": "raster_palette",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "a digital palette write (0xAE) is taken only in the vertical blank (a frame-deferred digital palette, as both references draw it)",
+  "from": "        5'd24:   if (!mode2_16color && !mode2_256col) dig_ae <= io_din;   // 0xAE, B",
+  "to": "        5'd24:   if (!mode2_16color && !mode2_256col && (vline >= 10'd400)) dig_ae <= io_din;   // 0xAE, B"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "a column below 0x20 wraps into a later row's slots (the address function alone, the core before the Xe10 CGX capture)",
+  "from": "  wire [6:0]  cg_ten7     = (cg_hi7 < 7'h20) ? 7'h20 : cg_hi7;",
+  "to": "  wire [6:0]  cg_ten7     = cg_hi7;"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "column 0x1F escapes the rule (the boundary one below the capture's)",
+  "from": "  wire [6:0]  cg_ten7     = (cg_hi7 < 7'h20) ? 7'h20 : cg_hi7;",
+  "to": "  wire [6:0]  cg_ten7     = (cg_hi7 < 7'h1F) ? 7'h20 : cg_hi7;"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the rule also takes column 0x21 to column 0x20",
+  "from": "  wire [6:0]  cg_ten7     = (cg_hi7 < 7'h20) ? 7'h20 : cg_hi7;",
+  "to": "  wire [6:0]  cg_ten7     = (cg_hi7 < 7'h22) ? 7'h20 : cg_hi7;"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "a one-byte code's even window page answers the user-CG dummy 0x8F (the core before the Xe10 CGX capture)",
+  "from": "    else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_FF;",
+  "to": "    else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_DUMMY;"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "a row 0x5C code's even window page answers the user-CG dummy 0x8F",
+  "from": "                                         : (cg_wide_ff ? CG_LOW_FF : CG_LOW_DUMMY);",
+  "to": "                                         : CG_LOW_DUMMY;"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "the user-CG class's even window page answers 0xFF like the ROM classes",
+  "from": "    if (cg_gaiji)          cg_win_byte_r = win_page ? cg_ram_q : CG_LOW_DUMMY;",
+  "to": "    if (cg_gaiji)          cg_win_byte_r = win_page ? cg_ram_q : CG_LOW_FF;"
+ },
+ {
+  "bench": "cg_read_path",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "a one-byte code's even window page answers the user-CG dummy 0x8F",
+  "from": "    else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_FF;",
+  "to": "    else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_DUMMY;"
+ },
+ {
+  "bench": "fdc_read",
+  "file": "src/pc9821/storage/pc9821_fdc.sv",
+  "why": "a ready SEEK/RECALIBRATE inherits the not-ready result flag (the Windows 95 B: regression)",
+  "from": "            exec_res <= 1'b0;   // completes through SENSE INTERRUPT STATUS",
+  "to": "            exec_res <= 1'b1;   // completes through SENSE INTERRUPT STATUS"
+ },
+ {
+  "bench": "cpu_clk",
+  "file": "src/pc9821/core/pc9821_cpu_clk.sv",
+  "why": "the block samples the throttle's enable unstaged (CPU edge a cycle early against cpu_ce)",
+  "from": "        assign ena_routed = ce_fall;",
+  "to": "        assign ena_routed = ce_next;"
+ },
+ {
+  "bench": "cpu_clk",
+  "file": "src/pc9821/core/pc9821_cpu_clk.sv",
+  "why": "the platform's cpu_ce is the throttle's unstaged enable (names the cycle before the CPU edge)",
+  "from": "assign ce = ce_q;",
+  "to": "assign ce = ce_next;"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "row 0x58's even window page answers row 0x5C's 0xFF (NP2kai's one 0x58-0x5F class; KIT2-XE10-CG2-USERCG.TXT:822 reads 0x8F)",
+  "from": "  wire       cg_wide_ff = (cg_lo7 == 7'h0C) || ((cg_lo7 >= 7'h59) && (cg_lo7 < 7'h60));",
+  "to": "  wire       cg_wide_ff = (cg_lo7 == 7'h0C) || ((cg_lo7 >= 7'h58) && (cg_lo7 < 7'h60));"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "row 0x0C's even window page answers the dummy 0x8F (KIT2-XE10-CG2-USERCG.TXT:806 reads 0xFF)",
+  "from": "  wire       cg_wide_ff = (cg_lo7 == 7'h0C) || ((cg_lo7 >= 7'h59) && (cg_lo7 < 7'h60));",
+  "to": "  wire       cg_wide_ff = (cg_lo7 == 7'h0D) || ((cg_lo7 >= 7'h59) && (cg_lo7 < 7'h60));"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "row 0x09's even window page answers the dummy 0x8F (KIT2-XE10-CG2-USERCG.TXT:758 reads 0xFF)",
+  "from": "    else if (cg_ver078)    cg_win_byte_r = !win_page ? (cg_row_09 ? CG_LOW_FF : CG_LOW_DUMMY)",
+  "to": "    else if (cg_ver078)    cg_win_byte_r = !win_page ? CG_LOW_DUMMY"
+ },
+ {
+  "bench": "cg_ten_low",
+  "file": "src/pc9821/video/pc9821_cg.sv",
+  "why": "row 0x09's odd window page with 0xA5 bit 5 clear answers the dummy 0x8F (KIT2-XE10-CG2-USERCG.TXT:758 W00O=6A0A, zeros)",
+  "from": "                                         : (cg_row_09 ? 8'h00 : CG_LOW_DUMMY);",
+  "to": "                                         : CG_LOW_DUMMY;"
+ },
+ {
+  "bench": "text_modes",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "a SYNC block leaves the pitch (NP2kai; the Xe10's TXTMODE P1 shears 2 cells a row)",
+  "from": "            if (sync_cnt == 3'd1) pitch <= {io_din[7:1], 1'b0};",
+  "to": "            if (1'b0) pitch <= {io_din[7:1], 1'b0};"
+ },
+ {
+  "bench": "text_modes",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "a SYNC block loads pitch = AW (MAME upd7220.cpp), not the C/R byte the Xe10 runs",
+  "from": "            if (sync_cnt == 3'd1) pitch <= {io_din[7:1], 1'b0};",
+  "to": "            if (sync_cnt == 3'd1) pitch <= {io_din[7:1], 1'b0} + 8'd2;"
+ },
+ {
+  "bench": "text_modes",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "the text fetch wraps at a fixed column 79: an AW 64/78 line draws the cell past its end in column 0",
+  "from": "  wire last_cell = v_col40 ? (adot[9:4] == s_lc40_r) : (adot[9:3] == s_lc80_r);",
+  "to": "  wire last_cell = v_col40 ? (adot[9:4] == s_lc40_r) : (adot[9:3] == 7'd79);"
+ },
+ {
+  "bench": "gdc_sync_raster",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "NP2kai's gdcclk[1] minx 100: an AW 64 block runs 800 dots, not the Xe10's 720",
+  "from": "  localparam [9:0] CLK_MINX = 10'd90, CLK_MAXX = 10'd112;",
+  "to": "  localparam [9:0] CLK_MINX = 10'd100, CLK_MAXX = 10'd112;"
+ },
+ {
+  "bench": "crt31k",
+  "file": "src/pc9821/video/pc9821_crtc.sv",
+  "why": "NP2kai's gdcclk[1] minx 100: x = 98 is clamped to 800 dots at 24 kHz",
+  "from": "  localparam [9:0] CLK_MINX = 10'd90, CLK_MAXX = 10'd112;",
+  "to": "  localparam [9:0] CLK_MINX = 10'd100, CLK_MAXX = 10'd112;"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "the tree before the Xe10 table: timing_xe10 is not read",
+  "from": "  wire [15:0] acc_hold  = timing_xe10_q ? acc_hold_x : acc_hold_fast;",
+  "to": "  wire [15:0] acc_hold  = acc_hold_fast;"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "Fast takes the Xe10 table (Fast no longer the pre-field periods)",
+  "from": "  wire [15:0] acc_hold  = timing_xe10_q ? acc_hold_x : acc_hold_fast;",
+  "to": "  wire [15:0] acc_hold  = acc_hold_x;"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "the RMW word ignores the raster (graphics line charged the blank's 256 ns)",
+  "from": "                                       : (gfx_scan_q ? GVRAM_X_RMW_GL   : GVRAM_X_RMW_BL))",
+  "to": "                                       : (gfx_scan_q ? GVRAM_X_RMW_BL   : GVRAM_X_RMW_BL))"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "the RMW dword charged one word's period",
+  "from": "                          ? (acc_gr_dw ? (gfx_scan_q ? GVRAM_X_RMW32_GL : GVRAM_X_RMW32_BL)",
+  "to": "                          ? (acc_gr_dw ? (gfx_scan_q ? GVRAM_X_RMW_GL : GVRAM_X_RMW_BL)"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "TDW charged the Fast GRCG period",
+  "from": "                          : (acc_gr_dw ? GVRAM_X_TDW32 : GVRAM_X_TDW);",
+  "to": "                          : (acc_gr_dw ? GVRAM_X_TDW32 : GVRAM_GR_HOLD);"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "the plain dword charged the word's period",
+  "from": "                           acc_wr ? ((c_be == 4'hF) ? GVRAM_X_WR32 : GVRAM_WR_HOLD) :",
+  "to": "                           acc_wr ? GVRAM_WR_HOLD :"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "the second pair of a TDW dword waits the period out (period + walk)",
+  "from": "  wire        gr_same_store = timing_xe10_q && cc_owns_grcg && cc_write &&",
+  "to": "  wire        gr_same_store = 1'b0 && cc_owns_grcg && cc_write &&"
+ },
+ {
+  "bench": "gvram_xe10_store",
+  "file": "src/pc9821/core/pc9821_gvram_arb.sv",
+  "why": "the graphics-line level is never latched",
+  "from": "      gfx_scan_q    <= gfx_scan_on;",
+  "to": "      gfx_scan_q    <= 1'b0;"
+ },
+ {
+  "bench": "irq_share",
+  "file": "src/pc9821/interrupts/pc9821_irq_share.sv",
+  "why": "the plain OR: no bubble, an event under the other source's level makes no edge",
+  "from": "  assign irq = (irq_a | irq_b) & ~bubble;",
+  "to": "  assign irq = (irq_a | irq_b);"
+ },
+ {
+  "bench": "irq_share",
+  "file": "src/pc9821/interrupts/pc9821_irq_share.sv",
+  "why": "only OPNA events are re-edged: a PCM event under the held OPNA line is lost",
+  "from": "  wire hidden  = (a_event & b_q) | (b_event & a_q);",
+  "to": "  wire hidden  = (a_event & b_q);"
+ },
+ {
+  "bench": "irq_share",
+  "file": "src/pc9821/interrupts/pc9821_irq_share.sv",
+  "why": "every event bubbles, also from a low line (two rises in one cycle drop the line)",
+  "from": "  wire hidden  = (a_event & b_q) | (b_event & a_q);",
+  "to": "  wire hidden  = a_event | b_event;"
+ },
+ {
+  "bench": "irq_share",
+  "file": "src/pc9821/interrupts/pc9821_irq_share.sv",
+  "why": "the hand-over case: a rise as the other source falls is judged by the other's present level, not the previous cycle's",
+  "from": "  wire hidden  = (a_event & b_q) | (b_event & a_q);",
+  "to": "  wire hidden  = (a_event & irq_b) | (b_event & irq_a);"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "Original fixed at 4:3 (the previous wiring)",
+  "from": "(tall ? 12'd4 : 12'd16)",
+  "to": "12'd4"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "480-line threshold off by one (481)",
+  "from": "localparam [11:0] TALL_LINES = 12'd480;",
+  "to": "localparam [11:0] TALL_LINES = 12'd481;"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "a line ending on the VS-rise enable is not counted into the closing frame",
+  "from": "wire [11:0] lines  = lcnt + {11'd0, de_fall};",
+  "to": "wire [11:0] lines  = lcnt;"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "the doubled picture is not halved",
+  "from": "wire [11:0] rows   = dbl ? {1'b0, lines[11:1]} : lines;",
+  "to": "wire [11:0] rows   = lines;"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "no two-frame agreement: one cut frame flips the shape",
+  "from": "wire        tall_n = (vs_rise && cls == cand) ? cls : tall;",
+  "to": "wire        tall_n = vs_rise ? cls : tall;"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "the shape follows the running count mid-frame",
+  "from": "wire        tall_n = (vs_rise && cls == cand) ? cls : tall;",
+  "to": "wire        tall_n = cls | ((vs_rise && cls == cand) ? cls : tall);"
+ },
+ {
+  "bench": "aspect",
+  "file": "src/pc9821/video/pc9821_aspect.sv",
+  "why": "Full Screen loses its 3:0 sentinel",
+  "from": "(ar == 3'd1) ? 12'd3 :",
+  "to": "(ar == 3'd1) ? 12'd0 :"
  }
 ]

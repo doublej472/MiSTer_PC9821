@@ -4,7 +4,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The IRQ line is level-until-ack exactly as NP2kai's ideio.c holds it: setintr raises and only ideio_i64e's pic_resetirq on a 0x064E status read lowers, so a deferred ISR's 0x0433 source-identification read must still see the 0x02 connect flag after a sector's last word parks the FSM in the read-ahead wait arm - dropping the level there loses the interrupt source and deadlocks READ MULTIPLE at the next block boundary. Pinned for the READ MULTIPLE (M=2) wait arm, the WRITE SECTORS per-sector commit, and command issue (NP2kai's command dispatch never lowers it): the level must never fall between a raise and its 0x064E ack.
+// The IRQ line is level-until-ack exactly as NP2kai's ideio.c holds it: setintr raises and only ideio_i64e's pic_resetirq on a 0x064E status read lowers, so a deferred ISR's 0x0433 source-identification read must still see bank 0's pending bit (0x01, the Xe10's 0x0433, docs/probes/KIT1-XE10-IDE1.TXT IRQ433 row) after a sector's last word parks the FSM in the read-ahead wait arm - dropping the level there loses the interrupt source and deadlocks READ MULTIPLE at the next block boundary. Pinned for the READ MULTIPLE (M=2) wait arm, the WRITE SECTORS per-sector commit, and command issue (NP2kai's command dispatch never lowers it): the level must never fall between a raise and its 0x064E ack.
 //
 // NP2kai is level-until-ack: setintr raises the line (ideio.c:216-221) and the ONLY
 // lowering is ideio_i64e's pic_resetirq on a 0x064E status read (ideio.c:1421-1432).
@@ -16,18 +16,14 @@
 // transfer. This bench defers the ISR past the block's sector words (the exact window
 // the read-ahead wait arm used to drop the line in) and asserts (a) the irq LINE never
 // falls before the 0x064E read and (b) the 0x0433 source-identification read answers
-// the CONNECT flag (0x02 while the selected bank has its drive) and is unmoved by the
-// ack - the port reports NP2kai's ideio_i433 connect
-// semantics, NOT an IRQ sample, so the level itself is the only pending-interrupt
-// observation - then that the ack, and only the ack, lowers it. The write path's per-sector commit
-  // HIERARCHY NOTE (the N1-vs-P5 divergence, capture-pending): an earlier warrant
-  // cited qemu-pc98's pc98_ide_aux_read (irq_levels & 0x03, the IRQ-bit form, 0x01 here)
-  // plus the machine's idle fingerprint 0433300 (idle reads 0x00). The port was
-  // adjudicated to NP2kai's ideio_i433 CONNECT semantics instead (0x02 while the
-  // selected bank has its drive), and per the reference hierarchy NP2kai outranks qemu, so
-  // this bench pins the CONNECT form. The tension with the idle fingerprint is the open question:
-  // one 2-state machine probe (0x0433 idle with a drive present, and during an IRQ)
-  // settles it and would let both citations be reconciled.
+// bank 0's pending bit (0x01) the whole time and 0x00 once the ack lands - the machine's
+// 0x0433 IS the interrupt sample (docs/probes/KIT1-XE10-IDE1.TXT:18, the IRQ433 row
+// `00 10 01 12 01 50 50 00`: 00 before the command, 01 twice while it pends, 00 after the
+// status read) - then that the ack, and only the ack, lowers it. The write path's per-sector commit
+  // The machine settled the old NP2kai-vs-qemu question: the 2-state probe (0x0433 idle with
+  // a drive present, and during an IRQ) is the IRQ433 row of KIT1-XE10-IDE1.TXT, and it reads
+  // the IRQ-bit form (qemu-pc98 pc98_ide_aux_read, irq_levels & 0x03), not NP2kai's
+  // ideio_i433 connect flag (0x02).
 // and the command-issue path have the same shape and are pinned the same way: NP2kai's
 // command dispatch never calls pic_resetirq either, so issuing a command must not
 // retract a level the guest has not acked.
@@ -260,15 +256,11 @@ module tb_pc9821_ata_irq_hold;
     while (dut.current_cylinders !== 16'd735) @(negedge clk);
     write_byte(16'h0432, 8'h00);
 
-    // The negative control the machine fingerprint (0433300) supports directly:
-    // 0x0433 is the DRIVE's connect state, not an IRQ-pending sample (readbacks.md P5,
-      // NP2kai ideio_i433), so it already reads the connect flag before any command: 0x02
-      // with this bench's drive present - which is exactly what discriminates it from the
-      // IRQ-form (0x00 here). The machine fingerprint 0433300's 0x00 was read at the machine's empty bank 0x00
-      // (no drive selected), which this same form answers 0x00.
+    // The negative control: with the drive present and nothing pending 0x0433 reads 00
+    // (KIT1-XE10-IDE1.TXT:18 pre433 = 00), so the 01 below is the interrupt, not the drive.
     read_byte(16'h0433, value);
-    if (value !== 8'h02)
-        fail("negative control: 0x0433 must read the connect flag 0x02 (drive present) before any command raises");
+    if (value !== 8'h00)
+        fail("negative control: 0x0433 must read 0x00 with nothing pending");
 
     // ---------------------------------------------------------------
     // A. READ MULTIPLE, M=2, four sectors (two blocks): the ISR is deferred past
@@ -297,8 +289,8 @@ module tb_pc9821_ata_irq_hold;
     drain_sector(LBA_BASE);
     if (!irq) fail("A: irq fell at a sector's last word before any 0x064E ack");
     read_byte(16'h0433, value);
-    if (value !== 8'h02)
-      fail("A: 0x0433 lost the connect flag in the deferral window");
+    if (value !== 8'h01)
+      fail("A: 0x0433 lost the pending bit in the deferral window");
 
     // Sector 1 is mid-block: no NEW raise, and the pending level must survive it
     // and its own wait arm untouched.
@@ -307,7 +299,7 @@ module tb_pc9821_ata_irq_hold;
     drain_sector(LBA_BASE + 32'd1);
     if (!irq) fail("A: irq fell at the mid-block sector's last word before any 0x064E ack");
     read_byte(16'h0433, value);
-    if (value !== 8'h02) fail("A: 0x0433 lost the connect flag across the mid-block sector");
+    if (value !== 8'h01) fail("A: 0x0433 lost the pending bit across the mid-block sector");
 
     // The deferred ISR finally services: the 0x064E status read is the ack, and
     // per NP2kai it is the ONLY thing that lowers the line.
@@ -315,7 +307,7 @@ module tb_pc9821_ata_irq_hold;
     ack_watch = 0;
     if (irq) fail("A: the 0x064E status read did not acknowledge the interrupt");
     read_byte(16'h0433, value);
-    if (value !== 8'h02) fail("A: 0x0433 moved with the ack - it is the connect flag, not an IRQ sample");
+    if (value !== 8'h00) fail("A: 0x0433 still reads the pending bit after the ack");
 
     // The stream continues to the second block's boundary - the raise a deadlocked
     // guest can never reach - and the cadence stays one raise per block.
@@ -356,7 +348,7 @@ module tb_pc9821_ata_irq_hold;
     // The second sector's commit must not retract the unacked level.
     if (!irq) fail("B: irq fell at the write commit before any 0x064E ack");
     read_byte(16'h0433, value);
-    if (value !== 8'h02) fail("B: 0x0433 lost the connect flag after the write commit");
+    if (value !== 8'h01) fail("B: 0x0433 lost the pending bit after the write commit");
     read_byte(16'h064E, value);         // the deferred ISR's ack
     ack_watch = 0;
     if (irq) fail("B: the 0x064E status read did not acknowledge the write interrupt");
@@ -383,7 +375,7 @@ module tb_pc9821_ata_irq_hold;
     write_byte(16'h064E, 8'h20);        // READ SECTORS, issued with the level pending
     if (!irq) fail("C: the command write retracted an unacked interrupt level");
     read_byte(16'h0433, value);
-    if (value !== 8'h02) fail("C: 0x0433 lost the connect flag across a command issue");
+    if (value !== 8'h01) fail("C: 0x0433 lost the pending bit across a command issue");
     read_byte(16'h064E, value);         // ack
     if (irq) fail("C: the 0x064E status read did not acknowledge");
     wait_drq;

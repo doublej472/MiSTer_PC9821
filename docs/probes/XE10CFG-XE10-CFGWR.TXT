@@ -1,0 +1,14 @@
+XE10CFG configuration stores (tools/hwprobe/xe10cfg)
+RT 0031 was=F3 wrote=0C got=F3 p31=F3 back=F3 p31=F3
+RT 871E was=3E wrote=1E got=1E p31=E3 back=3E p31=F3
+RT 851E was=02 wrote=12 got=12 p31=12 back=02 p31=12
+RT 881E was=7C wrote=DC got=DC p31=12 back=7C p31=12
+RT 8B1E was=BF wrote=7F got=7F p31=12 back=BF p31=12
+RT 09A8 was=00 wrote=FE got=02 p31=12 back=00 p31=12
+MODE68 before/after-0C 18 18
+DC000 1E8E was/gate/back FE FF FE
+DC000 asfound FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 
+DC000 gate81 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 
+DC000 marked FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 
+DC000 restored FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 
+XE10CFG DONE

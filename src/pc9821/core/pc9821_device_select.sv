@@ -14,7 +14,13 @@ module pc9821_device_select #(
     // Whether the run-time SDRAM_CLK phase instrument exists (z486_mister.sv's SDRAM_PHASE_DYN, a
     // TEST-ONLY build: build_profile.py --dbg-sdram-phase, off in every preset). With 0 `sdph_cs`
     // is a constant 0 and every other output is exactly what it was.
-    parameter SDRAM_PHASE_DYN = 1'b0
+    parameter SDRAM_PHASE_DYN = 1'b0,
+    // Whether a PC-9801-118's game port answers 0x1480-0x1487. The Xe10 has no -118 (its
+    // sound is the -86-class OPNA, whose joystick register 0x0E is the machine's own stick
+    // path, docs/probes/JOY.TXT), and NP2kai attaches the port only with that board
+    // (cbus/board118.c `iocore_attachinp(0x1480+i, gameport_i1480);`), so the Xe10 reads open
+    // bus there: 0, the default, makes `gameport_cs` a constant 0. 1 builds the -118 model.
+    parameter GAMEPORT_118 = 1'b0
 ) (
     input  [15:0] addr,
 
@@ -78,7 +84,7 @@ module pc9821_device_select #(
                     (addr == 16'h0A46A) || (addr == 16'h0A46C) ||
                     (addr == 16'h0A46E);
       // One high-bit equality covers the card's eight addresses: 0x1480-0x1487.
-    assign gameport_cs = (addr[15:3] == 13'h0290);
+    assign gameport_cs = GAMEPORT_118 && (addr[15:3] == 13'h0290);
       // The MPU-PC98II's two exact addresses, and only when the build has the card. MAME's
       // PC-9821 map lists the whole four-byte window 0xE0D0-0xE0D3 (as `<undefined>`,
       // pc9821.cpp:768), but NP2kai attaches two ports, and that divergence
@@ -96,7 +102,8 @@ module pc9821_device_select #(
       // 0x0060-0x006E: exactly the ports pc9821_crtc's port_code decodes there - the text GDC's
       // parameter and command ports, the VSYNC arm, both MODE FF registers and 0x6E. The even
       // lanes only: a word OUT to the GDC's pair reaches its odd half through the lane walk's
-      // own address, not as a separate device port (0x66/0x6C are decoded by nothing).
+      // own address, not as a separate device port (0x66 is decoded by nothing; 0x6C is a
+      // system port, pc9821_iobus's HX_006C latch).
     assign gdc_text_cs = (addr[15:8] == 8'h00) && (addr[7:4] == 4'h6) && !addr[0] &&
                          (addr[3:1] != 3'b011) && (addr[3:1] != 3'b110);
       // 0x0070-0x0077: the 8253 window. pit_cs above is the chip's own (odd) select; the even

@@ -54,15 +54,17 @@ module pc9821_text_mem (
 
   // ---- THE RESET SEED FOR THE TWO SWITCH CELLS ----------------------------------------
   //
-  // The machine's hardware switches are READ by the firmware and written by nothing. Every
-  // read of 0xA3FF2 in the dump masks the field (BANK7@0x5991 `mov ah,[es:0x3ff2] / and
-  // ah,0xF0`), and every read of 0xA3FEA masks bits 2:0 (BANK4@0x5C3C `mov al,[es:0x3fea]
-  // / and al,7 / inc al / shl al,1` = the base memory in 64 KB units, the same decode as
-  // NP2kai generic/np2info.c:113-120 and its bios.c:236 BIOS_FLAG1 fill); the ONLY writes to
-  // either cell in the whole ROM set are BANK0@0x1208 `and byte [es:0x3ff2],0x0F` and the
-  // ITF's own `or byte es:[0x3FEA],8` marker (BANK4@0x1D15) - both outside the fields above,
-  // which is why the two masks below keep their bits. The 0xA3FF2 nibble cannot be moved by
-  // the guest, so the core seeds it from the OSD at reset; the 0xA3FEA base-memory code is
+  // The machine's hardware switches are READ by the firmware: every read of 0xA3FF2 masks the
+  // field (BANK7@0x5991 `mov ah,[es:0x3ff2] / and ah,0xF0`, the FDD set-up; BANK7@0x7F80
+  // `mov ah,[es:0x3ff2]`, the bootstrap's boot device), and every read of 0xA3FEA masks bits 2:0
+  // (BANK4@0x5C3C `mov al,[es:0x3fea] / and al,7 / inc al / shl al,1` = the base memory in 64
+  // KB units, the same decode as NP2kai generic/np2info.c:113-120). The firmware's writes are
+  // the ITF's MEMORY-SWITCH INIT (BANK4@0x5B9A-0x5BD7: MSW1..7 = 48 05 04 00 01 &C0 00), its
+  // FPU marker `or byte [bx],0x8` on 0xA3FEA (BANK4@0x1D15-0x1D21), both only while port 0x31
+  // bit 4 (the init switch) is set, and the dormant PCI bank's `and byte [es:0x3ff2],0x0F`
+  // (BANK0@0x1208). So the core seeds the 0xA3FF2 nibble from the OSD at reset, and
+  // pc9821_iobus holds the init switch at HOLD whenever that nibble is not the default, or the
+  // init would overwrite it before the bootstrap reads it; the 0xA3FEA base-memory code is
   // FIXED at 640 KB (MSW_BASEM_CODE) because the machine has no way to change it.
   //
   // WHY A RESET-TIME WRITE AND NOT A READ-SIDE OVERRIDE. The cells are plain write-through
@@ -109,21 +111,13 @@ module pc9821_text_mem (
   // two 自動 variants differ in a bit the firmware's decode does not distinguish (its one
   // `jz` class), so position 0 is that class and is the MEASURED machine's nibble.
   //
-  // THE DIVERGENCE, STATED ONCE AND LOUDLY. The real Xe10 firmware does NOT use this nibble
-  // to choose a boot device: its boot helper compares only 0x20/0x40 and KEEPS the FDC's own
-  // reported mode for every other value (BANK7@0x599B-0x59A3 `cmp ah,0x20 / jz` / `cmp ah,0x40
-  // / jnz keep`), its SETUP's own item for the nibble is フロッピィディスクモード - FDD MODE -
-  // with the four values 640K/1M/自動（６４０Ｋ）/自動（１Ｍ） (BANK3@0x4a07-0x4b51), and the
-  // whole ROM set reads the cell in exactly two places (that boot helper and the
-  // switch-picture render at BANK7@0x7F80). NP2kai's own comment on its switch admits the
-  // reading is a stand-in: bios1b.c:883 `うぐぅ…本当はALレジスタの値から` ("it should really be
-  // from the AL register value") - on real hardware the caller passes the boot DEVICE in
-  // AL/AH (bios1b.c:843-875: codes 0x01-0x04 FDD, 0x0A/0x0B/0x0C HDD1/HDD2/SCSI). So on the
-  // machine positions 3..6 land in the same "keep the controller's FDD mode" class as
-  // position 0 and change no boot decision; they are offered because they are the primary
-  // software reference's legal switch positions, carrying its names, NOT because a captured
-  // Xe10 boots MO/SASI/SCSI from them. Whether the machine has ANY boot-order encoding is
-  // capture-pending (the SETUP item->cell map, todo item 99).
+  // THE MACHINE USES THE SAME CODES. Its bootstrap (BANK7@0x7F7B-0x7FBA) takes the nibble as
+  // the boot device: 0 tries devices 1..15 in turn, N tries device N only, passing AL = N to
+  // each option ROM's boot entry and to the FDD boot. The FDD boot (BIOS.ROM@0xF700C-0xF7046)
+  // answers 2 = the 640 KB drives and 1/4 = the 1 MB drives; the IDE ROM's boot entry
+  // (BANK3@0x07E5-0x0841) answers 0x0A = IDE drives 0x80/0x81, 0x0B = 0x82/0x83 and 0x06 = the
+  // ATAPI units; nothing on the Xe10 answers 0x0C (no SCSI ROM). A non-zero nibble therefore
+  // boots that device or nothing - no fallback.
   //
   // 0xA3FEA[2:0] is the BASE (CONVENTIONAL) MEMORY and it is HARDCODED to 640 KB, not a
   // knob: the size is (code + 1) * 128 KB (NP2kai generic/np2info.c:113-120; the ITF's own

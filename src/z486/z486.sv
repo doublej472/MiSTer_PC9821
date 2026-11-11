@@ -2341,22 +2341,18 @@ generate for (dbi = 0; dbi < 4; dbi = dbi + 1) begin : g_dr_fields
 end endgenerate
 wire [3:0] dr_exec_en = dr_enable & {dr_rw[3] == 2'b00, dr_rw[2] == 2'b00,
                                      dr_rw[1] == 2'b00, dr_rw[0] == 2'b00};
-// DR6.B0-B3 report every breakpoint whose DR/RW/LEN condition matched when a
-// #DB is generated, enabled by L/G or not (Intel486 PRM 11.2.3), and any #DB
-// source (TF single-step, an enabled breakpoint, a task-switch T-bit trap)
-// reports them.  The comparators sit on the microcode data path, so matching
-// needs breakpoint mode (direct load/RMW paths held off).  The mode is on
-// while any breakpoint is enabled or any DRn is programmed as a data
-// breakpoint (RWn = 01 or 11, RWn[0] set), enabled or not.  It is set by MOV
-// DR7 like an enable, so it is already on for the instruction after it.
-// Ordinary code (DR7 RW fields zero, the reset value) never pays for it; code
-// pays only while a debugger leaves a data breakpoint programmed but
-// disabled.  Qualifying it by TF instead would be cheaper still but racy: an
-// instruction stepped right after POPF sets TF can already be on a direct
-// path when the registered mode turns on.  Unenabled instruction breakpoints
-// (RWn = 00) are not reported.
-wire       dr_data_armed = DR7[28] | DR7[24] | DR7[20] | DR7[16];   // some RWn[0]
-assign db_mode_next = ENABLE_HW_BREAKPOINTS && (|dr_enable || dr_data_armed);
+// DR6.B0-B3 report the ENABLED breakpoints (L or G set) whose DR/RW/LEN
+// condition matched when a #DB is generated, and any #DB source (TF
+// single-step, an enabled breakpoint, a task-switch T-bit trap) reports
+// them.  AMD APM 24593 13.1.1.3: "A bit is set to 1 if the corresponding
+// address-breakpoint register detects an enabled breakpoint condition"; a
+// real Am486DX4 leaves the bit clear for a disabled match (CPUSUITE-XE10-
+// triage debug_bn_noenable data=00004000h).  The Intel486 PRM 11.2.3 sets
+// it, the Intel SDM's DR6 text says "may or may not".  The comparators sit
+// on the microcode data path, so matching needs breakpoint mode (direct
+// load/RMW paths held off), on while any breakpoint is enabled.  It is set by
+// MOV DR7 like an enable, so it is already on for the instruction after it.
+assign db_mode_next = ENABLE_HW_BREAKPOINTS && |dr_enable;
 always_ff @(posedge clk) begin
     if (!reset_n)
         db_mode_r <= 1'b0;
@@ -2393,9 +2389,10 @@ end
 // stalled operation only re-set the same sticky bits.
 wire db_data_access = mem_op_eligible && uc_data_busreq && uc_is_mem_busop &&
                       !mem_is_io && !uc_is_check_write;
-// B0-B3 for every matching breakpoint, enabled or not (486 DR6 semantics);
-// the trap needs an enabled one.  Cleared when the next instruction issues,
-// on a fault (the instruction did not complete) and when the trap is taken.
+// B0-B3 for every matching enabled data breakpoint (see above); the trap
+// takes one that is not an execute breakpoint.  Cleared when the next
+// instruction issues, on a fault (the instruction did not complete) and when
+// the trap is taken.
 reg  [3:0] db_data_hit_r;
 reg        db_data_trap_r;        // registered: keeps the trap off the issue cone
 assign db_data_trap = db_data_trap_r;
@@ -2403,7 +2400,7 @@ wire db_trap_taken = i_rni_delay && !stall && !frontend_fault && tf_trap_pending
                      !single_step;
 wire [3:0] db_data_hit_next = (!db_mode_r || any_fault || db_trap_taken) ? 4'd0 :
                               ((i_issue ? 4'd0 : db_data_hit_r) |
-                               (db_data_access ? db_data_match : 4'd0));
+                               (db_data_access ? (db_data_match & dr_enable) : 4'd0));
 always_ff @(posedge clk) begin
     if (!reset_n) begin
         db_data_hit_r <= 4'd0;
@@ -3787,7 +3784,7 @@ always_ff @(posedge clk) begin
     if (db_trap_taken && |db_data_hit_r)
         DR6[3:0] <= DR6[3:0] | db_data_hit_r;
     else if (ibp_fault_taken)
-        DR6[3:0] <= DR6[3:0] | ibp_match_r;
+        DR6[3:0] <= DR6[3:0] | (ibp_match_r & dr_exec_en);
 
     // Keep captures in the non-reset arm: old i_first/page_fault levels can
     // otherwise override reset on the very edge that clears those levels.
@@ -3935,9 +3932,15 @@ data_unit data_unit_inst (
     .interrupt_entry(interrupt_entry),
     .any_fault(any_fault_r),
     .clear_rf(clear_rf),
-    .set_rf(ibp_fault_taken),
+    // Every fault pushes RF=1 except a debug exception: an instruction
+    // breakpoint and the DR7.GD general detect push the EFLAGS image with
+    // RF=0 (a real Am486DX4, CPUSUITE-XE10: fault_rf_gd's GD frame has RF=0,
+    // and the ibp handlers that IRET without setting RF re-break forever;
+    // AMD APM 24593 8.2.2, "When a #DB exception occurs, the processor
+    // clears RFLAGS.RF to 0 in the rFLAGS image"; Intel SDM vol. 3 17.3.1.1,
+    // "except a debug exception generated in response to an instruction
+    // breakpoint").  The #DB body (943h) never passes the RF set at 899h.
     .fault_set_rf(uc_exec && ((uc_addr == UADDR_FAULT_SET_RF) ||
-                              (uc_addr == UADDR_DEBUG_GD_FAULT) ||
                               ((uc_addr == UADDR_FAULT_TSS_SKIP) && tss_access_flag))),
     .gate_detect(gate_detect_now),
     .flags_backup_active(flags_backup_active),

@@ -117,6 +117,7 @@ module tb_pc9821_memrange_correspondence;
   reg         ide_ram_gate = 1'b0;
   reg         bios_ram_gate = 1'b0;
   reg         top_shadow_en = 1'b0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg         fw_shadow_dirty = 1'b0;
   reg  [31:0] fw_shadow_base = 32'h0;
   reg  [1:0]  ems_state = 2'd0;
@@ -162,6 +163,10 @@ module tb_pc9821_memrange_correspondence;
   wire [31:0] cpu_addr_raw = cpu_addr;
   wire        xl_low20 = 1'b0;
   wire        xl_peg = 1'b0;
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
+  wire       e_plane_nc;
   pc9821_memory_map dut_map (.*);
 
   // ==== CHECKS ====

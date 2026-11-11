@@ -33,6 +33,9 @@
  * Run:   TXTMODE > TXTMODE.TXT     (from a freshly booted DOS prompt; press a key per state)
  *        TXTMODE /T                (timed: each state held 450 VSYNCs, ~8 s, for unattended
  *                                   screenshots - the core's regression runner uses this)
+ *        TXTMODE /D > TXTD.TXT      (no keys: the pitch steps P1-P7, states 3-7 with PITCH 80 and an
+ *                                   SSL sweep, each held and logged; txtmode_d.inc,
+ *                                   txtmode_decode.py; todo item 128)
  */
     .code16
     .intel_syntax noprefix
@@ -55,8 +58,11 @@ _start:
     mov     al, [si]
     and     al, 0xDF
     cmp     al, 'T'
-    jne     19f
+    jne     191f
     mov     byte ptr [timed], 1
+191:cmp     al, 'D'
+    jne     19f
+    mov     byte ptr [dmode], 1
 19: loop    18b
 0:
     /* The CRTC render registers as found (they read back on the Xe10, RDBACK.TXT:82-87). */
@@ -70,6 +76,10 @@ _start:
     stosb
     loop    1b
 
+    cmp     byte ptr [dmode], 0
+    je      22f
+    jmp     dmode_run
+22:
     call    fill_pattern
 
     /* ---- 1: 25 lines ---- */
@@ -216,10 +226,21 @@ gdc_wait:
 gdc_cmd:                                /* AL = command */
     call    gdc_wait
     out     0x62, al
-    ret
+    push    ax
+    mov     ah, 'C'
+    jmp     23f
 gdc_par:                                /* AL = parameter */
     call    gdc_wait
     out     0x60, al
+    push    ax
+    mov     ah, 'P'
+23: cmp     byte ptr [dmode_log], 0     /* /D records what it sends (txtmode_d.inc) */
+    je      24f
+    xchg    al, ah
+    call    ol_put
+    xchg    al, ah
+    call    ol_put
+24: pop     ax
     ret
 /* SI = 8 SYNC bytes: command 0x0F (SYNC, display on), then START (0x0D). */
 gdc_sync:
@@ -427,6 +448,8 @@ puthex8:                                /* AL */
     pop     ax
     ret
 
+.include "txtmode/txtmode_d.inc"
+
 s_banner:   .ascii "TXTMODE text row geometry states 1-7 (tools/hwprobe/txtmode)\r\n$"
 s_found:    .ascii "CRTC 70 72 74 76 78 7A as found: $"
 s_done:     .ascii "TXTMODE done: CRTC restored, 25 lines, one partition\r\n$"
@@ -452,4 +475,5 @@ pram_two:   .word 0, 160 << 4, 2000, 240 << 4, 0, 0, 0, 0
 pram_four:  .word 0, 80 << 4, 2000, 100 << 4, 800, 120 << 4, 2800, 100 << 4
 rattr:      .byte 0
 timed:      .byte 0
+dmode:      .byte 0
 rdig:       .word 0

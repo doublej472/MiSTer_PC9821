@@ -1,9 +1,9 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is the PER-STATE class -- an equipped drive with no diskette answers SE|NR = 0x28 to RECALIBRATE, which the BIOS's drive-present probe counts as PRESENT, and a unit whose READY is never asserted answers SE|IC0|NR = 0x68 and is not counted, with the guest's forced-ready strap adding EC (SE|IC0|EC = 0x70|unit for an unequipped unit, SE = 0x20 for an equipped one), while SEEK has NP2kai FDC_Seek's single not-ready class SE|IC0|NR = 0x68|unit even under forced ready -- READ ID's class is ND, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), its WP bit is the MOUNTED MEDIUM's protect state -- the D88 header's bit 4 OR the mount's read-only flag, never "media is present" -- the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the seven eight-parameter commands no target game issues (0x02/0x05/0x09/0x0C and the three SCANs 0x11/0x19/0x1D), the no-floppy model's deferral of the seven-byte result phase to SENSE INTERRUPT STATUS, its explicit ST_EXEC MSR, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (set fdc.c:562-563/300-302/111-113, cleared fdc.c:907-909) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454) -- FAIL-FIRST: the model answered 0x90/0xD0/0x80 only and 7 of the 12 new cases mismatched.
+// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is the PER-STATE class -- an equipped drive with no diskette answers SE|NR = 0x28 to RECALIBRATE, which the BIOS's drive-present probe counts as PRESENT, and a unit whose READY is never asserted answers SE|IC0|NR = 0x68 and is not counted, with the guest's forced-ready strap adding EC (SE|IC0|EC = 0x70|unit for an unequipped unit, SE = 0x20 for an equipped one), while SEEK has NP2kai FDC_Seek's single not-ready class SE|IC0|NR = 0x68|unit even under forced ready -- a data command on a drive with no diskette answers the seven-byte result with its interrupt and ST0 = IC0|NR (0x48|u, READ ID included, where NP2kai's READ ID answers ND) after an MSR of CB alone with no drive-busy bit - the real Xe10's NRID/NRRD rows (docs/probes/XE10T-XE10-FDC2C.TXT) - and SENSE INTERRUPT STATUS then answers 80, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), its WP bit is the MOUNTED MEDIUM's protect state -- the D88 header's bit 4 OR the mount's read-only flag, never "media is present" -- the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the seven eight-parameter commands no target game issues (0x02/0x05/0x09/0x0C and the three SCANs 0x11/0x19/0x1D), its explicit ST_EXEC MSR for FORMAT, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (set fdc.c:562-563/300-302/111-113, cleared fdc.c:907-909) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454) -- FAIL-FIRST: the model answered 0x90/0xD0/0x80 only and 7 of the 12 new cases mismatched.
 //
-// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is SE|IC0|NR (0x68) -- the drive-not-ready class qemu's PC-98 handler answers when no diskette is inserted -- so the BIOS's probe does not count an unusable drive, READ ID's class is ND, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the seven eight-parameter commands no target game issues (0x02/0x05/0x09/0x0C and the three SCANs 0x11/0x19/0x1D), the no-floppy model's deferral of the seven-byte result phase to SENSE INTERRUPT STATUS, its explicit ST_EXEC MSR, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (fdc.c:562-563/300-302/111-113 set, 907-909 clear) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454).
+// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is SE|IC0|NR (0x68) -- the drive-not-ready class qemu's PC-98 handler answers when no diskette is inserted -- so the BIOS's probe does not count an unusable drive, a data command on a drive with no diskette answers the seven-byte result with its interrupt and ST0 = IC0|NR (0x48|u, READ ID included, where NP2kai's READ ID answers ND) after an MSR of CB alone with no drive-busy bit - the real Xe10's NRID/NRRD rows (docs/probes/XE10T-XE10-FDC2C.TXT) - and SENSE INTERRUPT STATUS then answers 80, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the seven eight-parameter commands no target game issues (0x02/0x05/0x09/0x0C and the three SCANs 0x11/0x19/0x1D), its explicit ST_EXEC MSR for FORMAT, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (fdc.c:562-563/300-302/111-113 set, 907-909 clear) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454).
 
 module tb_pc9821_fdc_conform;
 
@@ -443,22 +443,24 @@ module tb_pc9821_fdc_conform;
     // ---- READ DATA (0x06): FDC_ReadData, 8 parameters -----------------------------
     // No media: FDC_DriveCheck fails -> stat = IC0|NR|hd<<2|us = 0x48, then
     // fdcsend_error7 delivers a SEVEN-byte result {ST0,ST1,ST2,C,H,R,N} and raises
-    // the interrupt. The model answers with no result phase and defers ST0 to SIS.
+    // the interrupt. THE MACHINE agrees on the shape and the bytes, and its MSR reads CB alone
+    // (10, no busy bit) before the result's D0: docs/probes/XE10T-XE10-FDC2C.TXT:59 (`NRRD
+    // da=90 ... msr0=10 msr_end=D0 ... sis=80 dmacnt=03FF nres=7 st0=48 st1=00`), so the MSR is
+    // the machine's here, not NP2kai's D1.
     reset_dut();
     cmd(8'h06); get_msr; check("read_data_msr_param", g_msr, 8'h90);
     for (i = 0; i < 8; i = i + 1) param(i == 3 ? 8'h01 : (i == 4 ? 8'h02 :
                                           (i == 5 ? 8'h08 : (i == 6 ? 8'h1B :
                                           (i == 7 ? 8'hFF : 8'h00)))));
-    get_msr; waive("read_data_msr_after_params", g_msr, 8'hD1);   // error7 result, fdc.c:111-113
-    waive("read_data_data_phase", ((g_msr & 8'h40) != 0) ? 8'd1 : 8'd0, 8'd1);
+    get_msr; check("read_data_msr_after_params", g_msr, 8'h10);    // NRRD msr0=10
     wait_irq(3000); check("read_data_irq", g_irq, 8'd1);
     get_result;
-    waive("read_data_result_len", g_len[7:0], 8'd7);
-    waive("read_data_st0", g_b0, 8'h48);
-    waive("read_data_st1", g_b1, 8'h00);
+    check("read_data_result_len", g_len[7:0], 8'd7);
+    check("read_data_st0", g_b0, 8'h48);
+    check("read_data_st1", g_b1, 8'h00);
     get_sis;
-    waive("read_data_sis_len", g_sislen[7:0], 8'd1);
-    waive("read_data_sis0", g_sis0, 8'h80);
+    check("read_data_sis_len", g_sislen[7:0], 8'd1);
+    check("read_data_sis0", g_sis0, 8'h80);
 
     // READ DATA with MF=1 (0x46): the low-five-bit local fix, still 8 parameters.
     reset_dut();
@@ -467,19 +469,22 @@ module tb_pc9821_fdc_conform;
     wait_irq(3000); check("read_data_mf_irq", g_irq, 8'd1);
 
     // ---- READ ID (0x0A): FDC_ReadID, 1 parameter ---------------------------------
-    // fdd_readid() fails with no image -> stat = us|(hd<<2)|IC0|ND (ND is ST1 bit 2),
-    // error7 -> 7-byte result {0x40,0x04,0x00,C,H,R,N} plus interrupt.
+    // NP2kai: fdd_readid() fails with no image -> stat = us|(hd<<2)|IC0|ND (ND is ST1 bit 2),
+    // error7 -> 7-byte result {0x40,0x04,0x00,C,H,R,N} plus interrupt. THE MACHINE keeps the
+    // shape but answers the not-ready class, ST0 = IC0|NR = 0x48|u with ST1 = 0, after an MSR of
+    // CB alone: docs/probes/XE10T-XE10-FDC2C.TXT:57 (`NRID da=90 ... msr0=10 msr_end=D0 ... sis=80
+    // dmacnt=FFFF nres=7 st0=48 st1=00`); the capture outranks NP2kai's bytes.
     reset_dut();
     cmd(8'h0A); param(8'h00);
-    get_msr; waive("readid_msr_after_params", g_msr, 8'hD1);   // error7 result, fdc.c:111-113
+    get_msr; check("readid_msr_after_params", g_msr, 8'h10);   // NRID msr0=10
     wait_irq(3000); check("readid_irq", g_irq, 8'd1);
     get_result;
-    waive("readid_result_len", g_len[7:0], 8'd7);
-    waive("readid_st0", g_b0, 8'h40);
-    waive("readid_st1", g_b1, 8'h04);
+    check("readid_result_len", g_len[7:0], 8'd7);
+    check("readid_st0", g_b0, 8'h48);                          // NRID st0=48 (NP2kai 0x40)
+    check("readid_st1", g_b1, 8'h00);                          // NRID st1=00 (NP2kai 0x04)
     get_sis;
-    waive("readid_sis_len", g_sislen[7:0], 8'd1);
-    waive("readid_sis0", g_sis0, 8'h80);
+    check("readid_sis_len", g_sislen[7:0], 8'd1);
+    check("readid_sis0", g_sis0, 8'h80);
 
     // ---- FORMAT / WRITE ID (0x0D): FDC_WriteID, 5 parameters ----------------------
     // get_hdus reads parameter 0; parameter 4 is the filler byte D. No media ->
@@ -490,11 +495,11 @@ module tb_pc9821_fdc_conform;
     get_msr; waive("format_msr_after_params", g_msr, 8'hD1);   // error7 result, fdc.c:111-113
     wait_irq(3000); check("format_irq", g_irq, 8'd1);
     get_result;
-    waive("format_result_len", g_len[7:0], 8'd7);
-    waive("format_st0", g_b0, 8'h48);
+    check("format_result_len", g_len[7:0], 8'd7);
+    check("format_st0", g_b0, 8'h48);
     get_sis;
-    waive("format_sis_len", g_sislen[7:0], 8'd1);
-    waive("format_sis0", g_sis0, 8'h80);
+    check("format_sis_len", g_sislen[7:0], 8'd1);
+    check("format_sis0", g_sis0, 8'h80);
 
     // The FORMAT data phase: with media, FDC_WriteID enters FDCEVENT_BUFRECV and the
     // guest feeds a 4-byte {C,H,R,N} block per sector (fdd_formating), SC of them. No
@@ -566,13 +571,13 @@ module tb_pc9821_fdc_conform;
     rd8(2'd1, g_b0);
     get_msr; check("busy_msr_sds_drained", g_msr, 8'h80);
 
-    // A command that defers its completion to SENSE INTERRUPT STATUS claims the
-    // drive at ACCEPTANCE, where NP2kai's fdcsend_error7 sets the bit in the
-    // no-media configuration (fdc.c:111-112); only the nibble is asserted here,
-    // the rest of that byte is the waived result/exec shape (F8/F3).
+    // NP2kai's fdcsend_error7 sets the drive's bit for a not-ready data command
+    // (fdc.c:111-112). THE MACHINE sets none for READ ID (or READ DATA): its MSR reads 10, not
+    // 11, straight after the command and D0 with the result (XE10T-XE10-FDC2C.TXT:57, `NRID da=90
+    // ... msr0=10 msr_end=D0`), the uPD765A datasheet's busy bits being seek-mode only.
     reset_dut();
     cmd(8'h0A); param(8'h00);
-    get_msr; check("busy_readid_accept_nib", {4'b0, g_msr[3:0]}, 8'h01);
+    get_msr; check("busy_readid_accept_nib", {4'b0, g_msr[3:0]}, 8'h00);
 
     // ---- MSR bit 5 NDM: the SPECIFY ND latch ------------------
     // NP2kai latches ND from SPECIFY's second parameter (fdc.c:265) and ORs

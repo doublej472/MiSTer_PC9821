@@ -9,7 +9,22 @@
 // no second video clock.
 `default_nettype none
 
-module pc9821_gdc2 (
+module pc9821_gdc2 #(
+    // clk_sys in Hz: the fixed-rate pace enables below derive real time from it.
+    parameter integer SYS_FREQ = 50_000_000,
+    // THE DRAW PACING, a COMPILE-TIME choice (build_profile.py's --gdc-write-pace and
+    // --gdc-fig-pace write it into z486_mister.sv, pc9821_system passes it down; no runtime
+    // mux). 0 = today's engine: a WRITE walks at clk_sys/GVRAM speed, a figure step takes
+    // FIG_PACE + 1 dot clocks. N = each WRITE unit / each figure step takes N ns of real time
+    // at any clk_sys (pc9821_gdc2_pace below). The Xe10's 2.5 MHz GDC takes 1.40 us for both:
+    // GDCTIME WDAT_N0001 26176 and WDAT_N0257 907235 mean milli-ticks of the 2.4576 MHz PIT,
+    // (907235 - 26176) / 256 = 3442 per word, and LINE_N1025 3551470 / LINE_N2049 7078352,
+    // (7078352 - 3551470) / 1024 = 3444 per dot (docs/probes/gdc-conformance/xe10-2.5MHz/
+    // GDCTIME.CSV), 1.4005 and 1.4014 us: 3.5 cycles of the 2.5 MHz GDC clock, 1400 ns. With
+    // the parameter 0 the paced branch const-folds away.
+    parameter integer WRITE_PACE_NS = 0,
+    parameter integer FIG_PACE_NS = 0
+) (
     input wire clk_sys,
     input wire rst_n_sys,
     input wire pixel_ce,
@@ -215,7 +230,8 @@ module pc9821_gdc2 (
   // 0xA8000, 1 = R, 2 = G, 3 = E) the map is GDC plane n -> lane n-1 (mod 4).
   localparam [2:0] D_IDLE = 3'd0, D_RD = 3'd1, D_RDW = 3'd2,
                    D_WR = 3'd3, D_NEXT = 3'd4,
-                   D_FSTEP = 3'd5, D_FADV = 3'd6;   // the figure engine's step and advance
+                   D_FSTEP = 3'd5, D_FADV = 3'd6,   // the figure engine's step and advance
+                   D_WPACE = 3'd7;   // a paced WRITE unit waits out its period (WRITE_PACE_NS)
   reg [2:0]  d_state;
   reg [15:0] d_left;      // units still to paint AFTER the current one: VECTW[1..2], i.e. NP2kai's leng - 1
                           // (leng is 1..65536; counting it down to 0 instead of 1 saves the +1 and a bit)
@@ -588,9 +604,41 @@ module pc9821_gdc2 (
   // `func[0] = _nop`; the Xe10's FIGD_PATTERN rows).
   wire        f_plot_w  = !((f_type == T_ARC) && (f_dm != 14'd0));
   wire        f_visit_w = f_plot_w && (d_color[0] || (d_plain_w && (d_rop == 2'd0)));
+  // ---- The draw pacing (WRITE_PACE_NS / FIG_PACE_NS; 0 = not built) ----
+  // Each paced kind has its own fixed-rate enable, restarted when its job starts, so a job's
+  // k-th period ends k x PACE_NS after the start at any clk_sys (the busy time is the
+  // device's, never a clk_sys count). The enable is a RATE, like pixel_ce, not an event:
+  // the engine looks at it only while it waits (D_WPACE, D_FADV), and a period that ends
+  // while a visit is still in flight is simply not the end of that unit. A restart can only
+  // come with the engine idle (d_load_w and f_start_w need D_IDLE), where nothing waits on
+  // the enable, and it suppresses that cycle's enable by definition (no unit is pending).
+  localparam W_PACED = (WRITE_PACE_NS != 0);
+  localparam F_PACED = (FIG_PACE_NS != 0);
+  wire w_pace_ce, f_pace_ce;
+  generate if (W_PACED) begin : g_wpace
+    pc9821_gdc2_pace #(.SYS_FREQ(SYS_FREQ), .PERIOD_NS(WRITE_PACE_NS)) u_wpace (
+        .clk_sys(clk_sys), .restart(d_load_w), .ce(w_pace_ce));
+  end else begin : g_wnopace
+    assign w_pace_ce = 1'b0;
+  end endgenerate
+  generate if (F_PACED) begin : g_fpace
+    pc9821_gdc2_pace #(.SYS_FREQ(SYS_FREQ), .PERIOD_NS(FIG_PACE_NS)) u_fpace (
+        .clk_sys(clk_sys), .restart(f_start_w), .ce(f_pace_ce));
+  end else begin : g_fnopace
+    assign f_pace_ce = 1'b0;
+  end endgenerate
+
   // A step advances ON a dot clock, FIG_PACE dot clocks after the previous one advanced:
-  // FIG_PACE + 1 dot clocks a step at any clk_sys.
-  wire        f_adv_go_w = (d_state == D_FADV) && (f_pace == 4'd0) && pixel_ce;
+  // FIG_PACE + 1 dot clocks a step at any clk_sys. Paced (FIG_PACE_NS), it advances on the
+  // figure's pace enable instead: step k ends k x FIG_PACE_NS after the start.
+  wire        f_adv_go_w = (d_state == D_FADV) &&
+                           (F_PACED ? f_pace_ce : ((f_pace == 4'd0) && pixel_ce));
+  // A WRITE unit ends when its store has been accepted (unpaced), or, paced, on the WRITE pace
+  // enable after that (D_WPACE): unit k ends k x WRITE_PACE_NS after the job's start, so
+  // DRAWING (status bit 3) stays set N x WRITE_PACE_NS for an N-unit WRITE and the bytes
+  // written behind it wait that long in the command FIFO (bit 1 FULL becomes reachable).
+  wire        d_wr_done_w = (d_state == D_WR) && mem_ready && !d_fig;
+  wire        d_unit_end_w = W_PACED ? ((d_state == D_WPACE) && w_pace_ce) : d_wr_done_w;
 
   integer i;
   always @(posedge clk_sys) begin
@@ -976,10 +1024,17 @@ module pc9821_gdc2 (
         mem_din   <= d_din_merge_w;
         d_state   <= D_WR;
       end
-      D_WR: if (mem_ready && d_fig) begin
+      // D_WPACE shares the unit's end with D_WR: unpaced the end is the store's acceptance
+      // (d_unit_end_w is d_wr_done_w and D_WPACE is never entered); paced, the acceptance
+      // moves to D_WPACE and the end is the pace enable there. One arm, so each register has
+      // one assignment per cycle (R1/R2).
+      D_WR, D_WPACE: if ((d_state == D_WR) && mem_ready && d_fig) begin
         mem_valid <= 1'b0;
         d_state   <= D_FADV;
-      end else if (mem_ready) begin
+      end else if (d_wr_done_w && !d_unit_end_w) begin
+        mem_valid <= 1'b0;
+        d_state   <= D_WPACE;
+      end else if (d_unit_end_w) begin
         mem_valid <= 1'b0;
         // Every painted unit advances the cursor one dot along the direction (the
         // advance block above), the last one included - the machine's CURD readback
@@ -1322,5 +1377,53 @@ module pc9821_gdc2 (
                    (io_addr == 8'hA2) ? gdc2_snd_q  : 8'hFF;
 
 endmodule
+
+// A fixed-rate enable for pc9821_gdc2's draw pacing: one clk_sys cycle in every PERIOD_NS ns of
+// real time, as an exact ratio at any clk_sys (ce fires NUM times every DEN clocks, NUM/DEN =
+// 1e9 / (PERIOD_NS x SYS_FREQ), reduced: 1/126 for 1400 ns at the shipped 90 MHz, 1/70 at
+// 50 MHz). `restart` (a job's start) zeroes the accumulator, so the k-th enable after it falls
+// k x PERIOD_NS later, to within one clk_sys. It lives in this file because it is pc9821_gdc2's
+// private half (built only when a pace is set).
+/* verilator lint_off DECLFILENAME */
+module pc9821_gdc2_pace #(
+    parameter integer SYS_FREQ = 50_000_000,
+    parameter integer PERIOD_NS = 1400
+) (
+    input  wire clk_sys,
+    input  wire restart,
+    output wire ce
+);
+  function automatic longint gcd(input longint a, input longint b);
+    longint x, y, t;
+    x = a;
+    y = b;
+    while (y != 0) begin
+      t = x % y;
+      x = y;
+      y = t;
+    end
+    return x;
+  endfunction
+
+  localparam longint NUM_RAW = 64'd1_000_000_000;
+  localparam longint DEN_RAW = longint'(PERIOD_NS) * longint'(SYS_FREQ);
+  localparam longint G       = gcd(NUM_RAW, DEN_RAW);
+  localparam longint NUM     = NUM_RAW / G;
+  localparam longint DEN     = DEN_RAW / G;
+  localparam integer W       = $clog2(DEN + NUM + 1);
+
+  // The period must be longer than one clk_sys. The guard is an instance of a module that does
+  // not exist, so such a configuration fails elaboration in every tool (as pc9821_dot_ce's).
+  generate if (NUM >= DEN) begin : g_too_fast
+    pc9821_gdc2_pace_period_needs_more_than_one_clk_sys too_fast ();
+  end endgenerate
+
+  reg  [W-1:0] acc = '0;
+  wire [W-1:0] sum = acc + W'(NUM);
+  assign ce = !restart && (sum >= W'(DEN));
+  always @(posedge clk_sys)
+    acc <= restart ? '0 : ce ? sum - W'(DEN) : sum;
+endmodule
+/* verilator lint_on DECLFILENAME */
 
 `default_nettype wire

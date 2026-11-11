@@ -6,6 +6,9 @@
 ;  - An instruction breakpoint on a branch target faults when the branch lands.
 ;  - An instruction breakpoint on an instruction that then page-faults: the
 ;    #PF frame carries RF=1, so restarting after the fault does not re-break.
+;  The instruction-breakpoint #DB pushes RF=0 (a real Am486DX4, CPUSUITE-XE10:
+;  a handler that does not set RF re-breaks forever; Intel SDM vol. 3
+;  17.3.1.1), so the #DB handler sets RF in its frame.
 BITS 32
 ORG 0
 CODE_BASE equ 0x10000
@@ -56,6 +59,7 @@ db_handler:
     xor eax, eax
     mov dr6, eax
     inc ebp
+    or dword [esp + 16], 0x10000      ; RF: resume a breakpointed instruction
     pop ebx
     pop eax
     iretd

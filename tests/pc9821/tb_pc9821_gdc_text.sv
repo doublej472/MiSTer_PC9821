@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GDC_TEXT:
-// The text GDC's character-generator paths: user CG RAM and the ANK fetch through the CG window including the row bit, the code register packing, and the tile/colour registers as readback. It also renders JIS kanji from the pack's FONT.ROM copy as a two-cell pair (left half then right half) at the dump's own address 0x1800 + (ku-0x21)*0xC00 + (ten-0x20)*0x20, with a spread of glyphs from the symbol, kana, level-1 and level-2 rows checked byte for byte against the dump, the pair's second cell drawing its half with no code of its own, and a pair never crossing a line. The GRCG's own mode/tile registers are no longer latched here (pc9821_grcg owns them and their four-plane write path, asserted by tb_pc9821_grcg.sv); what this bench still pins is the port-level fact that 0x7C/0x7E read 0xFF. No assertion here can see a colour swap in the pixel path. It also pins the port 0xA9 read answering the glyph byte of the code the guest just wrote rather than the previous code's asynchronous SDRAM block (the stale-glyph bug a driver's glyph loop hit). It also pins the CODE plane's 12-bit word index: with a display start (PRAM screen 0) of 0x1000 words - further than any word the boot configuration's 80x25 screen reaches - a plane holding one 2-byte code in every word and 0xE1 in every attribute byte must still fetch the code and draw the glyph, where a 13-bit code index reads the ATTRIBUTE plane as the code and the whole screen draws blank. It also pins the port-0xA4 display-page flip as an IMMEDIATE page-select: a write reaches the scan page on the next clk_sys wherever in the frame it lands - early on the last line, in the last dots before frame_end, and mid active region - because 0xA4 is a page-select mux outside the GDC (MAME/NP2kai/QEMU all apply it at the write, and the real-machine probe shows the tear), reversing an earlier frame-boundary latch. The machine-reset seed is pinned on this same record: pc9821_system re-seeds it from the iobus's reset-seed one-shot (one event for both configuration stores), and because pc9821_cg's own reset is clamped for the whole machine-reset window the walk must NOT be reset-held - a strobe landing INSIDE that window restores all 38 bytes (the 14-byte record first, then the mirror's 24) and is quiet within 40 clk_sys, so the record is whole before the CPU can leave its own reset and read the ITF's 0xFC681 marker (FAIL-FIRST: with the walk under `!rst_n_sys` the strobe is swallowed and the corrupt record survives the reset). It also pins the DIP PORT MIRROR at CG store 0x40..0x5B (code 0x0156), the 24 bytes BANK4@0xFC42D copies into the software-DIP ports during POST: bank A must sit at 0x50..0x5B and bank B at 0x40..0x4B - the swap the BANK3@0x2322 accessor helper encodes - each byte the machine DIP image of its row (bank A docs/probes/PORTS.TXT:258 (841E 7C 851E 02 861E 76 871E 3E), bank B the BANK4@0x4818 factory table), and every byte the ITF's odd-parity verify examines must satisfy it (FAIL-FIRST: the unseeded mirror is 24 even-parity zeroes, which that verify rejects at once); the same one restore walk re-seeds the mirror too, record first and whole within 40 clk_sys. With MODE FF1 bit 0 set, an ANK cell whose attribute has bit 4 draws its code as NP2kai's simple-graphics 2x4 block pattern (maketext.c's TXTATR_BG arm, font.c font_setchargraph, the NEC 0xF2 patch included) instead of the ANK glyph, and with bit 0 clear the same attribute bit is the vertical line again. It also renders the ver0.78 half-width rows (ku 0x29-0x2B): NP2kai draws those as a SINGLE cell, the grid slot's left half with no pair consumption (vram/maketext.c:280-296 leaves kanji2nd clear for kc 0x09-0x0B), checked raster for raster against FONT.ROM[0x7C20]'s own 'A' and against a tagged asymmetric glyph so a pair-consuming fix cannot pass (FAIL-FIRST: the pre-fix scanout drew nothing there).
+// The text GDC's character-generator paths: user CG RAM and the ANK fetch through the CG window including the row bit, the code register packing, and the tile/colour registers as readback. It also renders JIS kanji from the pack's FONT.ROM copy as a two-cell pair (left half then right half) at the dump's own address 0x1800 + (ku-0x21)*0xC00 + (ten-0x20)*0x20, with a spread of glyphs from the symbol, kana, level-1 and level-2 rows checked byte for byte against the dump, the pair's second cell drawing its half with no code of its own, and a pair never crossing a line. The GRCG's own mode/tile registers are no longer latched here (pc9821_grcg owns them and their four-plane write path, asserted by tb_pc9821_grcg.sv); what this bench still pins is the port-level fact that 0x7C/0x7E read 0xFF. No assertion here can see a colour swap in the pixel path. It also pins the port 0xA9 read answering the glyph byte of the code the guest just wrote rather than the previous code's asynchronous SDRAM block (the stale-glyph bug a driver's glyph loop hit). It also pins the CODE plane's 12-bit word index: with a display start (PRAM screen 0) of 0x1000 words - further than any word the boot configuration's 80x25 screen reaches - a plane holding one 2-byte code in every word and 0xE1 in every attribute byte must still fetch the code and draw the glyph, where a 13-bit code index reads the ATTRIBUTE plane as the code and the whole screen draws blank. It also pins the port-0xA4 display-page flip as an IMMEDIATE page-select: a write reaches the scan page on the next clk_sys wherever in the frame it lands - early on the last line, in the last dots before frame_end, and mid active region - because 0xA4 is a page-select mux outside the GDC (MAME/NP2kai/QEMU all apply it at the write, and the real-machine probe shows the tear), reversing an earlier frame-boundary latch. The machine-reset seed is pinned on this same record: pc9821_system re-seeds it from the iobus's reset-seed one-shot (one event for both configuration stores), and because pc9821_cg's own reset is clamped for the whole machine-reset window the walk must NOT be reset-held - a strobe landing INSIDE that window restores all 38 configuration bytes (the 14-byte record first, then the mirror's 24) within 40 clk_sys, so the record is whole before the CPU can leave its own reset and read the ITF's 0xFC681 marker, and then clears the ITF's saved-table length (store 0x400/0x401), quiet within 42 (FAIL-FIRST: with the walk under `!rst_n_sys` the strobe is swallowed and the corrupt record survives the reset). It also pins the DIP PORT MIRROR at CG store 0x40..0x5B (code 0x0156), the 24 bytes BANK4@0xFC42D copies into the software-DIP ports during POST: bank A must sit at 0x50..0x5B and bank B at 0x40..0x4B - the swap the BANK3@0x2322 accessor helper encodes - each byte the machine DIP image of its row (bank A docs/probes/PORTS.TXT:258 (841E 7C 851E 02 861E 76 871E 3E) except the 0x851E cell, which holds port 0x31's image E3 as the firmware's own writers compose it (BANK4@0x4839-0x4849), bank B the BANK4@0x4818 factory table), and every byte the ITF's odd-parity verify examines must satisfy it (FAIL-FIRST: the unseeded mirror is 24 even-parity zeroes, which that verify rejects at once); the same one restore walk re-seeds the mirror too, record first and whole within 40 clk_sys. With MODE FF1 bit 0 set, an ANK cell whose attribute has bit 4 draws its code as NP2kai's simple-graphics 2x4 block pattern (maketext.c's TXTATR_BG arm, font.c font_setchargraph, the NEC 0xF2 patch included) instead of the ANK glyph, and with bit 0 clear the same attribute bit is the vertical line again. A two-byte code outside FONT.ROM's grid draws BLANK, as both references' zero slot does (NP2kai font/fontv98.c and QEMU pc98-vga.c kanji_copy load only columns ten 0x20-0x7F of rows ku 0x21-0x7C): every cell 0x0120 (ten 0x01, the code three Zain Soft floppy games clear the text plane with under attribute 0xE1) and every cell 0x0421 draws nothing on all 16 rasters where the dump-offset arithmetic wrapped them onto the glyphs of ku 0x42 ten 0x41 and ku 0x43 ten 0x44, and such a code still consumes its right cell as a blank pair (NP2kai maketext.c kanji2nd), so an 'A' there is not drawn and a kanji after two blank pairs still draws both halves (FAIL-FIRST: the pre-fix scanout drew the wrapped glyph in every cell). It also renders the ver0.78 half-width rows (ku 0x29-0x2B): NP2kai draws those as a SINGLE cell, the grid slot's left half with no pair consumption (vram/maketext.c:280-296 leaves kanji2nd clear for kc 0x09-0x0B), checked raster for raster against FONT.ROM[0x7C20]'s own 'A' and against a tagged asymmetric glyph so a pair-consuming fix cannot pass (FAIL-FIRST: the pre-fix scanout drew nothing there).
 
 
 module tb_pc9821_gdc_text;
@@ -65,7 +65,6 @@ module tb_pc9821_gdc_text;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire [7:0]  r_out = text_opaque ? {text_colour[11:8], text_colour[11:8]} : 8'h00;
   wire [7:0]  g_out = text_opaque ? {text_colour[7:4],  text_colour[7:4]}  : 8'h00;
   wire [7:0]  b_out = text_opaque ? {text_colour[3:0],  text_colour[3:0]}  : 8'h00;
@@ -386,7 +385,10 @@ module tb_pc9821_gdc_text;
     // image and (2) reports every examined byte failing the ITF's own odd-parity verify -
     // the condition BANK4@0xFC7B2's repair and its SET THE SOFTWARE DIP-SWITCH screen
     // (BANK4@0xFC8DE) respond to.
-    mir_a[0]  = 8'h7C; mir_a[1]  = 8'h02; mir_a[2]  = 8'h76; mir_a[3]  = 8'h3E;
+    // Bank A row 1 (the 0x851E cell) is not the port's read-back 02: the firmware's writers
+    // store port 0x31's image there (BANK4@0x4839-0x4849), E3 for the dut's port-0x31 F3
+    // (pc9821_cg's CG_MIRROR_BYTES note; the Xa7C9W cell is 0x73, its GDC 5 MHz image).
+    mir_a[0]  = 8'h7C; mir_a[1]  = 8'hE3; mir_a[2]  = 8'h76; mir_a[3]  = 8'h3E;
     mir_a[4]  = 8'h7C; mir_a[5]  = 8'h7F; mir_a[6]  = 8'hFF; mir_a[7]  = 8'hBF;
     mir_a[8]  = 8'h7F; mir_a[9]  = 8'h7F; mir_a[10] = 8'h49; mir_a[11] = 8'h98;
     mir_b[0] = 8'h8F;
@@ -437,7 +439,9 @@ module tb_pc9821_gdc_text;
     write_io(8'h62, 8'h0D);
     io_addr = 8'h68;
     #1;
-    if (io_dout !== 8'h98) begin
+    // The Xe10 reads 0x18 here (bit 7 clear) with the display on:
+    // docs/probes/XE10CFG-XE10-CFGWR.TXT `MODE68 before/after-0C 18 18`.
+    if (io_dout !== 8'h18) begin
       $display("FAIL GDC mode read %02x", io_dout);
       errors = errors + 1;
     end
@@ -781,8 +785,14 @@ module tb_pc9821_gdc_text;
         errors = errors + 1;
       end
       repeat (24) @(posedge clk_sys);
+      // The record and the mirror (steps 0-37) are back 40 clk_sys in; the walk's last two steps
+      // clear the ITF's saved-table length (store 0x400/0x401, pc9821_cg's CG_RESTORE_LEN note),
+      // so the walk itself is quiet two cycles later.
+      repeat (2) @(posedge clk_sys);
       if (dut.u_cg.cg_rec_busy)
-        fail("the restore walk was still running 40 clk_sys after the strobe");
+        fail("the restore walk was still running 42 clk_sys after the strobe");
+      if (dut.u_cg.u_cg_ram.ram[13'h400] !== 8'h00 || dut.u_cg.u_cg_ram.ram[13'h401] !== 8'h00)
+        fail("the restore walk did not clear the ITF's saved-table length");
       wrong = 0;
       for (b = 0; b < 12; b = b + 1) begin
         if (dut.u_cg.u_cg_ram.ram[13'h050 + b] !== mir_a[b]) wrong = wrong + 1;
@@ -1133,6 +1143,100 @@ module tb_pc9821_gdc_text;
       errors = errors + wrong;
       if (wrong == 0)
         $display("  ver0.78 half-width rows: 2 glyphs x 16 rasters matched NP2kai's single-cell draw");
+    end
+
+    // ---- a two-byte code whose COLUMN is below 0x20 draws nothing ----
+    // FONT.ROM holds columns (ten) 0x20-0x7F of each row only (0x60 cells of 0x20 bytes, the
+    // 0xC00 row stride), so a column below 0x20 has no slot in the dump. Both references load
+    // exactly that range and leave the rest of the grid zero: NP2kai font/fontv98.c v98knjcpy
+    // (`for (j=0x20; j<0x80; j++)`) after font/font.c:146-151 zeroes the grid, and QEMU
+    // hw/display/pc98-vga.c kanji_copy (`for (j = 0x20; j < 0x80; j++)`) the same - so the
+    // scanout's `(kc & 0x7f7f) << 4` lands on an all-zero glyph and the cell is blank. The
+    // dump-offset arithmetic instead WRAPS a column below 0x20 into a later row: 0x0120
+    // (ku 0x40, ten 0x01) reads the slot of ku 0x42 ten 0x41, and 0x0421 (ku 0x41, ten 0x04)
+    // that of ku 0x43 ten 0x44. Three Zain Soft floppy games clear the text plane with 0x0120
+    // under a visible attribute (0xE1, captured from NP2kai's TRAM while it showed the menu
+    // clean), and the core covered their graphics with those wrapped glyphs. The wrap targets
+    // carry a tagged all-ones glyph here so any wrapped fetch lights dots. FAIL-FIRST: the
+    // pre-fix scanout draws 0xFF in both cells on every raster.
+    begin : check_ten_below_grid
+      reg [7:0] obs_a, obs_b;
+      integer s, wrong;
+      wrong = 0;
+      load_jis_glyph(8'h42, 8'h41, {256{1'b1}});
+      load_jis_glyph(8'h43, 8'h44, {256{1'b1}});
+      fill_jis_plane(8'h40, 8'h01, 8'h20, 8'h01);   // every cell 0x0120
+      spin_one_frame;
+      for (s = 0; s < 16; s = s + 1) begin
+        sample_pair(s[3:0], obs_a, obs_b);
+        if (obs_a !== 8'h00 || obs_b !== 8'h00) begin
+          $display("FAIL: code 0x0120 (ten 0x01) raster %0d: cell0=%02x cell1=%02x, want 00/00 (no FONT.ROM slot below ten 0x20)",
+                   s, obs_a, obs_b);
+          wrong = wrong + 1;
+        end
+      end
+      fill_jis_plane(8'h41, 8'h04, 8'h21, 8'h04);   // every cell 0x0421
+      spin_one_frame;
+      for (s = 0; s < 16; s = s + 1) begin
+        sample_pair(s[3:0], obs_a, obs_b);
+        if (obs_a !== 8'h00 || obs_b !== 8'h00) begin
+          $display("FAIL: code 0x0421 (ten 0x04) raster %0d: cell0=%02x cell1=%02x, want 00/00 (no FONT.ROM slot below ten 0x20)",
+                   s, obs_a, obs_b);
+          wrong = wrong + 1;
+        end
+      end
+      // Such a code still CONSUMES its right cell: NP2kai sets kanji2nd for every non-gaiji
+      // two-byte code outside the ver0.78 rows (vram/maketext.c:291-294) and draws that cell
+      // from the left cell's slot + 0x800 (:254-256), here the zero slot, whatever code the cell
+      // holds; QEMU pc98-vga.c's text loop does the same. The plane repeats [L, 0x0041 ('A', an
+      // all-ones ANK glyph in this bench), K, 0x0020, L, K, K, 0x0020] with K = 0x2110 (ku 0x30
+      // ten 0x21): cells 0-1 and 4-5 are blank pairs (neither the 'A' nor the K at cell 5 is
+      // drawn), and the kanji at cells 2-3 and 6-7 must draw both halves - at 6-7 only if the
+      // walker steps through the blank pair in step with the scanout (otherwise it pairs K at
+      // cell 5 and caches cell 6 as K's RIGHT half). L is 0x0120 (a column below the grid) and 0x2160
+      // (ku 0x80, a ROW below none of the dump: both references load rows ku 0x21-0x7C only,
+      // NP2kai v98knjcpy's `i` 0x01-0x5C, so its slot is zero too).
+      begin : blank_pair
+        reg [255:0] g;
+        reg [7:0] obs [0:7];
+        reg [7:0] want;
+        reg [15:0] lc;
+        integer k, c, v;
+        g = sp_glyph[3];
+        load_jis_glyph(8'h30, 8'h21, g);
+        for (v = 0; v < 2; v = v + 1) begin
+        lc = (v == 0) ? 16'h0120 : 16'h2160;
+        for (k = 0; k < 16'h1000; k = k + 1) begin
+          case (k[2:0])
+            3'd0, 3'd4: begin write_tram(k[13:0]*14'd2, lc[7:0]); write_tram(k[13:0]*14'd2 + 14'd1, lc[15:8]); end
+            3'd1: begin write_tram(k[13:0]*14'd2, 8'h41); write_tram(k[13:0]*14'd2 + 14'd1, 8'h00); end
+            3'd2, 3'd5, 3'd6: begin write_tram(k[13:0]*14'd2, 8'h10); write_tram(k[13:0]*14'd2 + 14'd1, 8'h21); end
+            default: begin write_tram(k[13:0]*14'd2, 8'h20); write_tram(k[13:0]*14'd2 + 14'd1, 8'h00); end
+          endcase
+          write_tram(14'h2000 + k[13:0]*14'd2, 8'hE1);
+        end
+        spin_one_frame;
+        for (s = 0; s < 16; s = s + 1) begin
+          while (dut.u_crtc.vline != s[8:0]) @(negedge clk_sys);
+          for (c = 0; c < 8; c = c + 1) obs[c] = 8'h00;
+          for (k = 0; k < 64; k = k + 1) begin
+            while (dut.u_crtc.hdot != k[9:0]) @(negedge clk_sys);
+            obs[k / 8][7 - (k % 8)] = (r_out != 0 || g_out != 0 || b_out != 0);
+          end
+          for (c = 0; c < 8; c = c + 1) begin
+            want = (c == 2 || c == 6) ? g[s*8 +: 8] : (c == 3 || c == 7) ? g[(16+s)*8 +: 8] : 8'h00;
+            if (obs[c] !== want) begin
+              $display("FAIL: blank pairs [%04x 0041] [%04x 2110] then kanji 2110, raster %0d cell %0d: %02x, want %02x",
+                       lc, lc, s, c, obs[c], want);
+              wrong = wrong + 1;
+            end
+          end
+        end
+        end
+      end
+      errors = errors + wrong;
+      if (wrong == 0)
+        $display("  columns below ten 0x20 (0x0120, 0x0421): blank on all 16 rasters; a blank pair (0x0120, 0x2160) consumes its right cell and the kanji after it draws whole");
     end
 
     // ---- the 0xA9 read answers the CURRENT code ----
@@ -1504,9 +1608,11 @@ module tb_pc9821_gdc_text;
       cg_record_restore = 1'b1;
       repeat (2) @(posedge clk_sys);
       cg_record_restore = 1'b0;
-      repeat (38) @(posedge clk_sys);
+      repeat (40) @(posedge clk_sys);
+      // 42 clk_sys: the 38 configuration bytes, then the saved-table length's two (pc9821_cg's
+      // CG_RESTORE_LEN note: the length's high byte is the one step past the CPU's release).
       if (dut.u_cg.cg_rec_busy)
-        fail("the CG restore walk was still running 40 clk_sys after the reset-window strobe");
+        fail("the CG restore walk was still running 42 clk_sys after the reset-window strobe");
       wrong = 0;
       for (r = 0; r < 14; r = r + 1)
         if (dut.u_cg.u_cg_ram.ram[13'h810 + r] !== cg_rec_powerup[r]) wrong = wrong + 1;
@@ -1518,8 +1624,9 @@ module tb_pc9821_gdc_text;
       if (dut.u_cg.u_cg_ram.ram[13'h818] !== 8'hAA || dut.u_cg.u_cg_ram.ram[13'h819] !== 8'h55)
         fail("the restored CG record lost the ITF's AA55 marker");
       // And the mirror the FC42D copy would deliver from: bank A row 1 (0x51) is the
-      // measured machine byte again, not the corrupting write.
-      if (dut.u_cg.u_cg_ram.ram[13'h051] !== 8'h02)
+      // OSD's port-0x31 image again (E3 for the dut's F3, pc9821_cg's CG_MIRROR_BYTES note),
+      // not the corrupting write.
+      if (dut.u_cg.u_cg_ram.ram[13'h051] !== 8'hE3)
         fail("the machine-reset seed did not restore the DIP mirror inside the reset window");
       rst_n_sys = 1'b1;
       repeat (4) @(posedge clk_sys);

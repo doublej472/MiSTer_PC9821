@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught. And the 0x871E software-DIP BEEPER VOLUME (bits [3:2]) actually scales the speaker amplitude: writing each code through the real I/O path yields the 0/1024/2048/3072 ladder through z486_mister's mirrored amplitude block - linear in the code with 0 = EXACT mute (NP2kai io/dipsw.c:44-57 sets BEEP_VOL from (value>>2)&3, sound/beepg.c:113-114 scales `samp *= vol`, sound/beepg.c:161-163 goes silent at 0), the unit pinned so code 2 - NP2kai's default 'Mid' (pccore.c:847) - is the historical 2,048, and the exported beep_vol port carries exactly the written bits.
+// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught. And the 0x871E software-DIP BEEPER VOLUME (bits [3:2]) actually scales the speaker amplitude: writing each code through the real I/O path yields the 0/1024/2048/3072 ladder through pc9821_audio_mix's own amplitude stage at the OSD Beeper level's 0 dB - linear in the code with 0 = EXACT mute (NP2kai io/dipsw.c:44-57 sets BEEP_VOL from (value>>2)&3, sound/beepg.c:113-114 scales `samp *= vol`, sound/beepg.c:161-163 goes silent at 0), the unit pinned so code 2 - NP2kai's default 'Mid' (pccore.c:847) - is the historical 2,048, and the exported beep_vol port carries exactly the written bits.
 //
 // TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught; and the exported beep_vol volume port carries the SELECTED bank's 0x871E bits, which is the other half of that register - 0x871E is bank A's sdip[3] with 0x8F1F bit 6 clear and bank B's sdip[15] with it set, so a bank-select write alone moves the volume and the two banks hold independent images, where a single mirror loaded only on the 0x871E write would answer bank A's code for both.
 //
@@ -87,6 +87,7 @@ module tb_pc9821_beeper;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -127,6 +128,7 @@ module tb_pc9821_beeper;
   // 0x043F EMS page register / window select (pc9821_iobus outputs).
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
   // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
@@ -139,7 +141,10 @@ module tb_pc9821_beeper;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -167,7 +172,8 @@ module tb_pc9821_beeper;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -188,8 +194,10 @@ module tb_pc9821_beeper;
   // instantiation and left unused.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) iobus (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   pc9821_pit #(.SYS_CLOCK_HZ(50_000_000)) pit (
       .clk(clk), .rst_n(~reset), .cs(pit_sel), .addr(pit_addr),
@@ -203,16 +211,23 @@ module tb_pc9821_beeper;
   // a single gate rather than pretending to test it.
   wire speaker = ~beep_mute & pit_out1;
 
-  // MIRROR of z486_mister.sv's speaker amplitude block, byte-for-byte the shipped
-  // block (status[19:18] is an UNDECLARED OSD field -> the 5'd0 shift below; vol_spk
-  // is pc9821_system.sv's hard-wired 2'd3, so spk_out is the raw sounding amplitude).
-  wire [1:0] vol_spk_mirror = 2'd3;
-  reg [16:0] spk_out;
-  always @(posedge clk) begin
-    reg [16:0] spk;
-    spk <= speaker ? ({15'd0, beep_vol} << (5'd10 + 5'd0)) : 17'd0;
-    spk_out <= spk >> ~vol_spk_mirror;
-  end
+  // THE SHIPPED AMPLITUDE STAGE: pc9821_audio_mix itself (the mix z486_mister.sv
+  // instantiates), at the OSD Beeper level's 0 dB (gain code 31, list position 0) and
+  // pc9821_system.sv's hard-wired vol_spk 2'd3, so its spk_out is the raw sounding
+  // amplitude. Both of its clocks are this bench's clk: the level word crosses on the
+  // same clock, and the tone is already on it.
+  /* verilator lint_off PINCONNECTEMPTY */
+  pc9821_audio_mix u_mix (
+      .clk_sys(clk), .clk_audio(clk),
+      .snd86_level(5'd31), .beep_level(5'd31), .vol_cd_l(5'd0), .vol_cd_r(5'd0),
+      .vol_master_l(5'd31), .vol_master_r(5'd31), .vol_voice_l(5'd31), .vol_voice_r(5'd31),
+      .vol_midi_l(5'd0), .vol_midi_r(5'd0), .vol_spk(2'd3), .vol_en_cd(2'b11),
+      .sample_86_l(20'd0), .sample_86_r(20'd0), .cdda_l(16'd0), .cdda_r(16'd0),
+      .speaker(speaker), .beep_vol(beep_vol),
+      .mix_dry_l(), .mix_dry_r(), .valid()
+  );
+  /* verilator lint_on PINCONNECTEMPTY */
+  wire [16:0] spk_out = u_mix.spk_out;
 
   integer errors = 0;
   integer i;

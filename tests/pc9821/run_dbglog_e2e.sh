@@ -6,7 +6,8 @@
 # (tools/bench.py), runs each with +DBGLOG_OUT so it writes what its UART captured, and requires
 # decode_dbglog.py to frame every byte (0 outside records) and to find the records the stimulus
 # drove: the CPU bench's trace (16 entries, then a stage-2 trigger), snoop events, samples and a
-# LOST record; the system bench's ALIVE record, samples and the forced OUT 0xA4.
+# LOST record; the system bench's ALIVE record, samples and the forced OUT 0xA4, the floppy
+# log's ALIVE and its forced FDC write, and the I/O trigger that write fires.
 #
 #   bash tests/pc9821/run_dbglog_e2e.sh        prints DBGLOG E2E: PASS
 set -euo pipefail
@@ -64,6 +65,13 @@ need(f"system: {s.skipped} byte(s) outside records", s.skipped <= 33)
 need("system: ALIVE, samples, one OUT 0xA4 = 01",
      cs[0x1F] >= 1 and cs[0x20] + cs[0x21] >= 4 and
      sum(1 for r in s.recs if r.type == 0x16 and r.f["port"] == 0xA4 and r.f["val"] == 1) == 1)
+need("system: the floppy log's ALIVE and one FDC write 0x92 = 03 (decoded as a SPECIFY byte)",
+     cs[0x5F] >= 1 and sum(1 for r in s.recs if r.type == 0x50 and r.f["a"] == 3) == 1 and
+     any("WR 92 <- 03" in d.fdc_line(r) for r in s.recs if r.type == 0x50))
+_, strg = d.trace_of(s)
+need("system: 2^DBG_TRACE_AW = 64 trace entries and the I/O trigger's record decodes as OUT 0x92 = 03, match 1",
+     cs[0x43] == 64 and strg is not None and strg["tag"] == 4 and strg["last"] == 0 and
+     "OUT port=0092 val=03 match #1" in d.trigger_text(strg))
 print("DBGLOG E2E:", "FAIL" if bad else "PASS (RTL bytes -> decode_dbglog.py)")
 sys.exit(1 if bad else 0)
 PY

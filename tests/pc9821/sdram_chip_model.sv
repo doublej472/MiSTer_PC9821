@@ -115,7 +115,7 @@ module sdram_chip_model #(
     endfunction
 
     // The MiSTer/XSDS tie: the chip's LDQM/UDQM are wired to the connector's A[11]/A[12]
-    // (docs/sdram-dqm-wiring.md). A WRITE captures the mask with its data, so the model samples
+    // (docs/sdram.md, "DQM wiring"). A WRITE captures the mask with its data, so the model samples
     // A[12:11] on the WRITE command edge; a masked-off byte keeps its stored value. Reads are
     // never masked by this core (A[12:11]=00 on READ), so the read side needs no DQM here.
     wire [1:0] wr_dqm = A[12:11];   // {UDQM, LDQM}, active high

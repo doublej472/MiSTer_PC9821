@@ -137,7 +137,7 @@ module tb_pc9821_fdc_mf;
   );
 
   // The two drives' image slots, wired as pc9821_system wires them: `img_size` is ONE
-  // hps_io register feeding BOTH slots (sys/hps_io.sv:130 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
+  // hps_io register feeding BOTH slots (sys/hps_io.sv:145 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
   // size register and two mount pulses - and why the mount tasks set it before each pulse.
   reg        mnt0 = 0, mnt1 = 0;
   reg [63:0] img_size = 0;
@@ -205,6 +205,7 @@ module tb_pc9821_fdc_mf;
   reg c_is_raw = 0;
 
   reg [12:0] widx, wtotal;
+  reg [15:0] hword_q;   // the word the host model is about to present (see its use)
   reg [31:0] hlba;
   reg        hbusy, hlast;
   reg  [1:0] hwhich;
@@ -244,7 +245,14 @@ module tb_pc9821_fdc_mf;
     end else begin
       sd_buff_wr   <= 1'b1;
       sd_buff_addr <= widx;
-      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], sd_buff_dout);
+      // The word is formed in a process-local variable and reaches the port through a
+      // NONBLOCKING assignment, like sd_buff_addr and sd_buff_wr beside it: hps_io drives
+      // all three from registers (sys/hps_io.sv:156 `output reg [DW:0] sd_buff_dout,`). A
+      // blocking write here is read by the adapter's own posedge process in the same time
+      // step, a race IEEE 1800-2017 4.7 leaves to the simulator's process order (Verilator
+      // 5.052 resolved it as the old word, 5.054 as the new one, one word early).
+      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], hword_q);
+      sd_buff_dout <= hword_q;
       if (hlast) begin
         hbusy      <= 1'b0;
         sd_ack_b   <= 1'b0;

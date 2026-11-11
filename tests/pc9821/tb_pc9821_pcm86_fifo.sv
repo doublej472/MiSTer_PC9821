@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PCM86_FIFO:
-// The PC-9801-86's 86-PCM block against NP2kai, FIFO level rather than waveform: the reset values 0xA468 = 0x00 and 0xA46A = 0x32, 0xA466's full and empty bits at NP2kai's own thresholds (virbuf >= 0x8000 for full, virbuf <= stepmask for empty, so the empty boundary moves with the 0xA46A format field), the logical count saturating at 0x8000 and the oldest byte being dropped past it, the 0xA468 read substituting the interrupt for bit 4, and the buffer-low interrupt rising at the 0xA46A threshold and re-asserting on a bit-4-clear write while the buffer is still below threshold. The four spare ports NP2kai leaves as a dummy read (0xA462, 0xA464, 0xA46C, 0xA46E) are ASSERTED to answer pcm86_inpdummy's 0x00. And the 0xA46C write FIFO back-pressures its writer when full -- twelve pushes at the strobe cadence with the SDRAM port withheld are all held and land byte-exact, never dropped -- which is what io_wr_wait and the bus's S_IOWAIT hold now guarantee. The remaining measured divergences are named and printed rather than asserted: a 0xA468 bit-7 rising edge does not restart the sample clock where pcm86_oa468 resets lastclock, and an arming write with the count already at or below the threshold raises the interrupt on the next cycle where NP2kai waits datawriteirqwait.
+// The PC-9801-86's 86-PCM block against NP2kai, FIFO level rather than waveform: the reset values 0xA468 = 0x00 and 0xA46A = 0x32, 0xA466's full and empty bits at NP2kai's own thresholds (virbuf >= 0x8000 for full, virbuf <= stepmask for empty, so the empty boundary moves with the 0xA46A format field), the logical count saturating at 0x8000 and the oldest byte being dropped past it, the 0xA468 read substituting the interrupt for bit 4, and the buffer-low interrupt rising at the 0xA46A threshold and re-asserting on a bit-4-clear write while the buffer is still below threshold. The four spare ports NP2kai leaves as a dummy read (0xA462, 0xA464, 0xA46C, 0xA46E) are ASSERTED to answer the Xe10's bytes FF, FF, EE, FF (docs/probes/XE10T-XE10-AUDIT.TXT), not pcm86_inpdummy's 0x00. And the 0xA46C write FIFO back-pressures its writer when full -- twelve pushes at the strobe cadence with the SDRAM port withheld are all held and land byte-exact, never dropped -- which is what io_wr_wait and the bus's S_IOWAIT hold now guarantee. The remaining measured divergences are named and printed rather than asserted: a 0xA468 bit-7 rising edge does not restart the sample clock where pcm86_oa468 resets lastclock, and an arming write with the count already at or below the threshold raises the interrupt on the next cycle where NP2kai waits datawriteirqwait.
 
 // Reference: NP2kai (PRIMARY) cbus/pcm86io.c
 // (pcm86_oa468, pcm86_oa46a, pcm86_oa46c, pcm86_ia466, pcm86_ia468, pcm86_inpdummy)
@@ -275,18 +275,19 @@ module tb_pc9821_pcm86_fifo;
         diverge("0xA468 bit-7 rising edge does not restart the sample clock (delay in clk)", delay, PERIOD0);
     end
 
-    // ---- 7. the four ports NP2kai answers with a dummy read ---------------
-    // pcm86io_bind attaches pcm86_inpdummy to 0xA462, 0xA464, 0xA46C and 0xA46E
-    // on the non-WaveStar path (cbus/pcm86io.c:342-346,430-490); it returns 0.
-    // The primary reference's byte is ASSERTED.
+    // ---- 7. the four spare ports read the Xe10's bytes --------------------
+    // docs/probes/XE10T-XE10-AUDIT.TXT, each port read twice at a DOS prompt: BA462 `v=FF
+    // v2=FF`, BA464 `v=FF v2=FF`, BA46C `v=EE v2=EE`, BA46E `v=FF v2=FF`. NP2kai's
+    // pcm86_inpdummy answers 0x00 at all four (cbus/pcm86io.c:342-346); the machine outranks
+    // it. FAIL-FIRST: the core answered NP2kai's 0x00.
     read_port(P_SPARE0, rb);
-    if (rb !== 8'h00) fail("0xA462 is not NP2kai's pcm86_inpdummy 0x00");
+    if (rb !== 8'hFF) fail("0xA462 is not the Xe10's 0xFF");
     read_port(P_SPARE1, rb);
-    if (rb !== 8'h00) fail("0xA464 is not NP2kai's pcm86_inpdummy 0x00");
+    if (rb !== 8'hFF) fail("0xA464 is not the Xe10's 0xFF");
     read_port(P_DATA, rb);
-    if (rb !== 8'h00) fail("0xA46C is not NP2kai's pcm86_inpdummy 0x00");
+    if (rb !== 8'hEE) fail("0xA46C is not the Xe10's 0xEE");
     read_port(P_SPARE2, rb);
-    if (rb !== 8'h00) fail("0xA46E is not NP2kai's pcm86_inpdummy 0x00");
+    if (rb !== 8'hFF) fail("0xA46E is not the Xe10's 0xFF");
 
     // ---- 8. S6: a full write FIFO back-pressures the writer; no byte is dropped ----
     // With the SDRAM port withheld (the model's stall), the depth-4 write FIFO

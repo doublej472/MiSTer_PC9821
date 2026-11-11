@@ -8,7 +8,7 @@
 // core left reported as 56 Hz drops or judders frames.
 //
 // THE FIGURES are the BIOS SYNC blocks' geometry (the same blocks tb_pc9821_crt31k_video drives) and
-// hps_io's own counting rule (sys/hps_io.sv:957 `old_vmode != new_vmode`, and the report after the
+// hps_io's own counting rule (sys/hps_io.sv:986 `old_vmode != new_vmode`, and the report after the
 // 15-frame timeout), never read out of the DUT.
 //
 // WHAT IT IS BLIND TO: the video PLL's frequency change (clk_vid is one fixed clock here, equal to
@@ -69,7 +69,7 @@ module tb_pc9821_vmode_notify;
   );
 
   // ---- the framework's measurement, as hps_io instantiates it (clk_vid = CLK_VIDEO) ----
-  // sys_top hands it the syncs after its polarity fixers (sys/sys_top.v:1707 `sync_fix sync_v(clk_vid,
+  // sys_top hands it the syncs after its polarity fixers (sys/sys_top.v:1716 `sync_fix sync_v(clk_vid,
   // vs_emu, vs_fix);`), which turn them active HIGH; the core's are active low (pc9821_crtc), so they
   // are inverted here.
   video_calc vc (

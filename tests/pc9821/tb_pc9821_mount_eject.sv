@@ -6,7 +6,7 @@
 // EXPECTED VALUES. The eject's meaning - a mount event whose size is under one sector - is
 // pc9821_block_io's own unmount rule (`eject = img_mounted && (img_size < 512)`) and hps_io's
 // event contract (img_size/img_readonly "valid only for active bit in img_mounted",
-// sys/hps_io.sv:129-130). The reset policy - an IDE slot's change resets once, a floppy's never -
+// sys/hps_io.sv:144-145). The reset policy - an IDE slot's change resets once, a floppy's never -
 // is a design decision (a floppy change must not reset, a disk change must). Nothing is taken from
 // the RTL under test.
 // ==== DUT ====
@@ -118,7 +118,7 @@ module tb_pc9821_mount_eject;
   endtask
 
   // hps_io's mount: img_size first (the 0x1d transaction), then img_mounted held for the
-  // 0x1c transaction's length (sys/hps_io.sv:461 set, :318 clear).
+  // 0x1c transaction's length (sys/hps_io.sv:490 set, :334 clear).
   task automatic host_mount(input integer slot, input [63:0] size, input integer w);
     begin
       @(negedge clk); hps_size = size; hps_ro = 1'b0;

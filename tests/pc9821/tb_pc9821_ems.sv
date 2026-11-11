@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// Every non-0x2x/non-0xEx write to 0x043F leaves the EMS window state alone: after 0x22 enables the 64 KiB page, the BIOS's pre-mov-cr0 cache-flush write 0xA0 - and 0x80/0xC4 - still serve the EMS page at 0xB0000 instead of resetting the window to the VRAM planes, exactly as qemu's mem_bankctl_write acts only on 0x20 (EMS) and 0xE0 (bank) (pc98-mem.c:684-701). FAIL-FIRST: before this fix every other nibble took the else arm, reset ems_state to the identity, and 0xB0000 fell back to VRAM - an EMM386-style driver that enables 0x22 and then toggles paging with the BIOS's 0xA0 flush lost its page.
+// Every non-0x2x/non-0xEx write to 0x043F leaves the EMS window state alone: after 0x22 enables the 64 KiB page, the BIOS's pre-mov-cr0 cache-flush write 0xA0 - and 0x80/0xC4 - still serve the EMS page at 0xB0000 instead of resetting the window to the VRAM planes, exactly as qemu's mem_bankctl_write acts only on 0x20 (EMS) and 0xE0 (bank) (pc98-mem.c:684-701). FAIL-FIRST: before this fix every other nibble took the else arm, reset ems_state to the identity, and 0xB0000 fell back to VRAM - an EMM386-style driver that enables 0x22 and then toggles paging with the BIOS's 0xA0 flush lost its page. And 0x24 written from the identity keeps the VRAM planes (docs/probes/DMAROUTE-XE10.TXT cases E1/E2: the 0x20 and 0x24 views are one storage) while written from the page it unmaps the window (docs/probes/EMS.TXT `B0000 under 20/22/24: 1111 2222 FFFF`) - FAIL-FIRST, the identity case read unmapped.
 //
 // The defect: pc9821_iobus's 0x043F
 // write arm returned ems_state to the identity for every nibble except 0x2x
@@ -72,9 +72,9 @@ module tb_pc9821_ems;
   wire        fdd_frame_tick = 1'b0;
 
   pc9821_iobus bus (
-      .ide_unit0_present(1'b0),
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),
       .clk(clk), .reset(reset),
-      .bios_set(4'h0), .gdc_clock_5m(1'b0), .fdd_dip_fixed(1'b0), .triple_fault_reset(1'b0),
+      .bios_set(4'h0), .gdc_clock_5m(1'b0), .triple_fault_reset(1'b0),
       .cpu_addr(io_cpu_addr), .cpu_din(io_cpu_din), .cpu_be(io_cpu_be),
       .cpu_valid(io_cpu_valid), .cpu_write(io_cpu_write),
       .cpu_dout(io_cpu_dout), .cpu_ready(io_cpu_ready),
@@ -97,8 +97,14 @@ module tb_pc9821_ems;
       .cache_flush_done(cache_flush_req),
       .ems_state(ems_state)
   );
+  // The 16-colour select (port 0x6A FF2 num 0): 0 = the digital mode the machine resets to,
+  // where 0xE0000-0xE7FFF is open bus (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b0;
+  wire       e_plane_nc;
 
   pc9821_memory_map map (
+      .mode2_16color(mode2_16color),
+      .e_plane_nc(e_plane_nc),
       .top_bank(4'd3), .ide_rom_enable(1'b0), .d8_bank(2'b00), .ide_ram_gate(1'b0),
       .bios_ram_gate(1'b0), .top_shadow_en(1'b0), .fw_shadow_dirty(1'b0),
       .fw_shadow_base(32'h0),
@@ -189,6 +195,24 @@ module tb_pc9821_ems;
     end
   endtask
 
+  // The unmapped state: no backend request, no plane, the open-bus responder's flag.
+  task automatic check_unmapped(input [8*120-1:0] what);
+    begin
+      @(negedge clk);
+      mem_cpu_addr = 32'h000B_0000;
+      mem_cpu_valid = 1;
+      mem_cpu_write = 0;
+      #1;
+      if (mem_valid || gvram_window || !ems_open_bus) begin
+        $display("FAIL %0s: 0xB0000 -> mem_valid=%b gvram=%b open=%b, want the unmapped state",
+                 what, mem_valid, gvram_window, ems_open_bus);
+        errors = errors + 1;
+      end
+      @(negedge clk);
+      mem_cpu_valid = 0;
+    end
+  endtask
+
   task automatic check_vram(input [8*120-1:0] what);
     begin
       @(negedge clk);
@@ -217,6 +241,24 @@ module tb_pc9821_ems;
     // (the state the BIOS's mode-set stub and the ITF leave it in).
     write_port(16'h043F, 8'h20);
     check_vram("0x20: the identity state");
+
+    // 0x24 FROM THE IDENTITY KEEPS THE PLANES, and from the page it unmaps the window.
+    // docs/probes/DMAROUTE-XE10.TXT writes 0x24 right after 0x20 (dmaroute.s set_state ->
+    // to_normal): case E1's 0x20 view and 0x24 view are one storage (`V1 PRE=D735...`, V2's
+    // prefill) and case E2's store under 0x24 reads back through 0x20 (`E2 CPU V1 NORMAL -> D`).
+    // docs/probes/EMS.TXT writes it right after 0x22: `B0000 under 20/22/24: 1111 2222 FFFF`,
+    // and the later 0x20 and 0x22 reads still find 1111 and 2222.
+    write_port(16'h043F, 8'h24);
+    check_vram("0x24 written from the identity keeps the planes (DMAROUTE-XE10 E1/E2)");
+    write_port(16'h043F, 8'h24);
+    check_vram("0x24 written twice from the identity keeps the planes");
+    write_port(16'h043F, 8'h22);
+    write_port(16'h043F, 8'h24);
+    check_unmapped("0x24 written from the page unmaps the window (EMS.TXT 24 -> FFFF)");
+    write_port(16'h043F, 8'h24);
+    check_unmapped("0x24 again keeps the window unmapped");
+    write_port(16'h043F, 8'h20);
+    check_vram("0x20 after the unmapped state: the planes (EMS.TXT 20 -> 1111)");
 
     // 0x22 enables the 64 KiB page - the ITF's own fill-and-verify window
     // (BANK4@0xF82C7-0xF8317). From here on the page must SURVIVE every

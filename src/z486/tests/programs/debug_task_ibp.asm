@@ -1,6 +1,9 @@
 ; debug_task_ibp - a global instruction breakpoint on the first instruction
 ; of a task entered by a task switch faults before it runs (#DB, DR6.B0,
 ; saved EIP = the task's entry), then RF lets it run (Intel486 PRM 11.3.1.1).
+; The #DB pushes RF=0 (a real Am486DX4, CPUSUITE-XE10, locks up on this
+; program's original handler, which relied on a pushed RF=1; Intel SDM vol. 3
+; 17.3.1.1), so the handler sets RF in the frame itself.
 BITS 16
 org 0
 STATUS_PORT equ 0xE0
@@ -50,8 +53,8 @@ task_entry:
     cmp eax, task_entry
     jne fail_3
     mov eax, [db_eflags]
-    test eax, 0x10000                 ; RF in the fault frame
-    jz fail_4
+    test eax, 0x10000                 ; the fault frame carries RF=0
+    jnz fail_4
     mov al, 1
     out STATUS_PORT, al
     hlt
@@ -64,6 +67,7 @@ db_handler:
     mov [db_eip], eax
     mov eax, [esp + 12]
     mov [db_eflags], eax
+    or dword [esp + 12], 0x10000      ; RF: run the breakpointed instruction
     xor eax, eax
     mov dr6, eax
     inc ebp

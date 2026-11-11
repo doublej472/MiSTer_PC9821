@@ -53,7 +53,8 @@ module pc9821_cpu_bus_bridge (
 // again (it would serve it twice), so p_valid/p_inta drop and the CPU's ready is held.
 // NOT cleared by the CPU's reset: an accept can be the CPU's own reset request (`out 0xF0`,
 // a triple fault's re-entry), and the reset reaches the CPU only at its next edge
-// (cpu_throttle forces cpu_ce one cycle after reset_n falls), so clearing the hold on the
+// (cpu_throttle forces its enable one cycle after reset_n falls, and the gate's staged cpu_ce
+// follows one cycle later: pc9821_cpu_clk.sv), so clearing the hold on the
 // reset would show the platform the CPU's still-raised valid again - the request served
 // twice (pc9821_iobus's R6/R8 assertion caught exactly that at 1 MHz). The edge clears it.
 reg acc_pend;

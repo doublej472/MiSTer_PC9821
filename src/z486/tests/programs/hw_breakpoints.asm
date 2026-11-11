@@ -1,7 +1,9 @@
 ; hw_breakpoints.asm - debug-register breakpoints (486 PRM chapter 11)
 ;
 ; Instruction breakpoints are faults: #DB before the instruction, DR6 Bn,
-; the pushed EFLAGS has RF so IRETD resumes it without a second fault. Data
+; the pushed EFLAGS has RF=0 and the handler sets RF in the frame so IRETD
+; resumes it without a second fault (a real Am486DX4, CPUSUITE-XE10, locks up
+; on a handler that relies on a pushed RF=1; Intel SDM vol. 3 17.3.1.1). Data
 ; breakpoints are traps after the accessing instruction (exact: the 486 slows
 ; down while any Ln/Gn is set); a REP string stops after the iteration that hit
 ; and resumes. DR6 reports every breakpoint whose condition holds, enabled or
@@ -57,13 +59,17 @@ bp_exec:
     jne fail
     test dword [log_dr6], 1         ; B0
     jz fail
-    test dword [log_flags], RF_FLAG ; pushed EFLAGS has RF
-    jz fail
+    test dword [log_flags], RF_FLAG ; pushed EFLAGS has RF=0
+    jnz fail
     cmp ebx, 1                      ; the instruction ran once
     jne fail
 
     ; 2. Dword write breakpoint on wvar (DR1, R/W 01, LEN 11, L1); DR3 on the
-    ; same dword for reads or writes but disabled: DR6 reports it too.
+    ; same dword for reads or writes but disabled.  DR6.B3 for that disabled
+    ; match is vendor-variant: the Intel486 PRM 11.2.3 sets it, AMD APM 24593
+    ; 13.1.1.3 and a real Am486DX4 do not (CPUSUITE-XE10-triage:
+    ; debug_bn_noenable data=00004000h), Intel SDM vol. 3 (DR6) says "may or
+    ; may not".  Either value passes.
     call clear_log
     mov eax, BASE + wvar
     mov dr1, eax
@@ -81,8 +87,11 @@ after_write:
     jne fail
     mov ecx, [log_dr6]
     and ecx, 0xF
-    cmp ecx, 0xA                    ; B1 and the disabled B3
+    cmp ecx, 0x2                    ; B1 only (AMD APM, Am486DX4, z486)
+    je hw_case2_b3_either
+    cmp ecx, 0xA                    ; B1 and the disabled B3 (Intel486 PRM)
     jne fail
+hw_case2_b3_either:
     test dword [log_flags], RF_FLAG ; traps do not set RF
     jnz fail
 
@@ -164,7 +173,7 @@ clear_log:
     ret
 
 ; #DB: log DR6, the pushed EIP/EFLAGS and ECX; clear DR6 and TF; optionally
-; disarm. An instruction-breakpoint return relies on the pushed RF.
+; disarm. DR0 (B0) is the only execute breakpoint: its return sets RF.
 db_handler:
     push eax
     mov eax, dr6
@@ -173,6 +182,10 @@ db_handler:
     mov [log_eip], eax
     mov eax, [esp + 12]
     mov [log_flags], eax
+    test dword [log_dr6], 1
+    jz .no_rf
+    or dword [esp + 12], RF_FLAG    ; RF: resume the breakpointed instruction
+.no_rf:
     mov [log_ecx], ecx
     inc dword [log_count]
     xor eax, eax

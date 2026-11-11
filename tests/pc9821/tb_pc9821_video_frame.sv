@@ -26,7 +26,7 @@ module tb_pc9821_video_frame;
 
   // ==== DUT ====
   // The raster GDC, clocked exactly as pc9821_system clocks it: clk_vid = clk_sys gated
-  // by the pixel enable (pc9821_system.sv:1149, `The video domain is clk_sys gated by pixel_ce`). It owns the raster and the
+  // by the pixel enable (pc9821_system.sv:1240, `The video domain is clk_sys gated by pixel_ce`). It owns the raster and the
   // line origin (gfx_line_addr); every signal below is declared because the (.*) instance
   // matches ports by name, the same shape tb_pc9821_gdc2_scroll.sv uses.
   wire clk_sys    = clk;
@@ -83,7 +83,6 @@ module tb_pc9821_video_frame;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire        hs_out, vs_out, de_out;
 
   // Mirrors pc9821_system.sv: any write to port 0x64 arms the VSYNC IRQ latch.
@@ -171,10 +170,9 @@ module tb_pc9821_video_frame;
       .text_opaque(text_opaque), .text_cell(text_cell), .text_colour(text_colour),
       .line_data(line_data), .line_ready(line_ready), .line_sel(line_sel),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
-      .clk(clk), .rst_n(rst_n_vid),
+      .clk(clk),
       .pal_mode16(gfx_mode16), .pal_dig(gfx_dig),
       .pal_wr_en(1'b0), .pal_wr_idx(4'd0), .pal_wr_chan(2'd0), .pal_wr_data(4'd0),
-      .pal_commit(1'b0),
       .fold_bypass(1'b0), .packed_idx(8'h00),
     .pegc_256(mix_pegc_256),
     .pal256_wr_en(mix_pal256_wr_en), .pal256_wr_idx(mix_pal256_wr_idx),

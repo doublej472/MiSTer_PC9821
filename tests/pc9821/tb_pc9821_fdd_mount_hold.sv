@@ -11,7 +11,7 @@
 // variable between its arms is WHEN the mount pulse arrives relative to cpu_run.
 //
 // REFERENCES (external). hps_io's `img_mounted` is a single-cycle pulse and its `img_size` is
-// "valid only for active bit in img_mounted" - sys/hps_io.sv:130 "size of image in bytes" -
+// "valid only for active bit in img_mounted" - sys/hps_io.sv:145 "size of image in bytes" -
 // which is why both are latched together; `pc9821_block_share` - the shared adapter this module's fetches go
 // through - latches each slot's size at the same pulse for the same reason (its a_capacity/
 // b_capacity arm). The D88 layout and the sector walk are the ones tb_pc9821_fdd_media_d88

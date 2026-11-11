@@ -57,7 +57,7 @@ module tb_pc9821_line_doubler;
   wire [9:0]  pix_dot;
   wire        pix_h_active, pix_v_active, gfx_odd_line, gfx_mode16;
   wire [31:0] gfx_dig;
-  wire        pal_wr_en, pal_commit;
+  wire        pal_wr_en;
   wire  [3:0] pal_wr_idx, pal_wr_data;
   wire  [1:0] pal_wr_chan;
   wire        hs_out, vs_out, de_out;
@@ -97,7 +97,7 @@ module tb_pc9821_line_doubler;
       .gfx_odd_line(gfx_odd_line),
       .gfx_mode16(gfx_mode16), .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
-      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
       .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out)
   );
 
@@ -113,8 +113,10 @@ module tb_pc9821_line_doubler;
 
   // The 24 kHz machine's gdcclk[1] (io/gdc.c:34): minx, maxx, miny, maxy. The Xe10 is strapped
   // to this entry - its GDC clock select never moves the raster - and the 15 kHz and 31 kHz
-  // entries are other machines' monitors.
-  localparam integer CLK_MINX = 100, CLK_MAXX = 112;
+  // entries are other machines' monitors. minx is the machine's 90, not gdcclk[1]'s 100: the
+  // real Xe10 runs an AW 64 block (x = 90) as a 720-dot line (docs/probes/KIT2-XE10-TXTMODE.TXT:36
+  // `FRAME 16 VSYNC ticks=000120F1 lines=01B8`; tb_pc9821_gdc_sync_raster). No block here is below 100.
+  localparam integer CLK_MINX = 90, CLK_MAXX = 112;
   localparam integer CLK_MINY = 400, CLK_MAXY = 575;
 
   // ==== CHECKS ====

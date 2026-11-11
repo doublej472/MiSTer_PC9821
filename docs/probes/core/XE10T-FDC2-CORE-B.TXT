@@ -1,0 +1,72 @@
+XE10T v1 sha=5c94f34129e02155 crc=0B64D463 imgcrc=0B64D463 size=45520 build=gas-xe10t args= /FDC2 /O FDC2B.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0030 cr0=00000030 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=00 bda0458=02 bda045C=C0 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=00 bda0595=00
+I ID dos=6.20 bufseg=183C bufparas=4000 sel=00200000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=6CBB
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6144 pit=49152
+P CAL PITWIN i=1 art=6145 pit=49159
+P CAL PITWIN i=2 art=6145 pit=49160
+P CAL PITWIN i=3 art=6145 pit=49160
+P CAL PITWIN i=4 art=6144 pit=49152
+P CAL PITWIN i=5 art=6146 pit=49167
+P CAL PITWIN i=6 art=6145 pit=49159
+P CAL PITWIN i=7 art=6144 pit=49152
+P CAL PITEDGE edges=19 art=155647 vmax=65535 vmin=0
+P CAL VSYNC edges=60 art=326673 pit=2598655 tsc=-
+I CAL pit_mod=65536 ratio_x1000=7999 vsync_x10=54445 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=127A
+BEGIN:FDC2
+STATE FDC2 imr_m=7D imr_s=75 irr_s=10 bda0480=DB bda0485=95 bda0494=00 bda0500=03 bda055C=03 bda055D=01 bda055E=00 bda055F=00 bda05CA=FF bda05CB=96 bda05D7=00 p0090=80 p0092=80 p0094=44 p00BE=FB p00BF=FF p04BE=FE p00C8=FF p00CA=FF p00CC=FF
+ROW FDC2 SENSE
+X FDC2 SENSE da=90 ah=60 cls=E
+ROW FDC2 SENSE
+X FDC2 SENSE da=91 ah=60 cls=E
+ROW FDC2 UNIT port=0092
+X FDC2 UNIT da=90 cls=E st3=18 st3_spun=18 recal_st0=28 pcn=00
+X FDC2 UNIT da=91 cls=E st3=19 st3_spun=19 recal_st0=29 pcn=00
+I FDC2 disk_unit=FF empty_unit=00 dma_phys=00020000
+SKIP FDC2 reason=nodisk
+ROW FDC2 NRID port=0092
+X FDC2 NRID da=90 end=I t_end_art=4 irr_pre=10 msr0=11 msr_end=81 msr=81:1:2 sis=4000,80 dmacnt=FFFF nres=0 st0=FF st1=FF st2=FF c=FF h=FF r=FF n=FF
+ROW FDC2 NRRD port=0092
+X FDC2 NRRD da=90 end=I t_end_art=4 irr_pre=10 msr0=11 msr_end=81 msr=81:1:3 sis=4800,80 dmacnt=03FF nres=0 st0=FF st1=FF st2=FF c=FF h=FF r=FF n=FF
+ROW FDC2 NRID_U2 port=0092
+X FDC2 NRID_U2 da=92 end=I t_end_art=4 irr_pre=10 msr0=14 msr_end=84 msr=84:1:3 sis=4200,80 dmacnt=FFFF nres=0 st0=FF st1=FF st2=FF c=FF h=FF r=FF n=FF
+ROW FDC2 RST_M port=0094
+X FDC2 RST_M da=90 w=98/18 irr_pre=10 t_irq_art=- rises=0 t_irq2_art=- sis=- sis2=- irr_end=10 msr=80:65535:3
+ROW FDC2 RST_NM port=0094
+X FDC2 RST_NM da=90 w=90/10 irr_pre=10 t_irq_art=- rises=0 t_irq2_art=- sis=- sis2=- irr_end=10 msr=80:65535:2
+RESTORE FDC2 DMA2_MASK was=- now=06 kind=default OK
+RESTORE FDC2 SPECIFY_03_C1_46 was=- now=46 kind=default OK
+I FDC2 irq11_taken=0
+RESTORE FDC2 P94_MOTOR_HANDBACK_BDA0485 was=- now=96 kind=default OK
+RESTORE FDC2 PIC2_OCW3_ISR was=- now=0B kind=default OK
+RESTORE FDC2 VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE FDC2 IMR_S was=75 now=75 kind=readback OK
+END:FDC2 rows=9 sum=4368
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD802369 now=FD802369 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=3E7D
+XE10T DONE sections=4 sum=4CB0D348

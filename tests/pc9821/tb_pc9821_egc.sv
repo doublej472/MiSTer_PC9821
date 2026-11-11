@@ -12,6 +12,10 @@
 // 7) is checked in tb_pc9821_gdc_text.sv and tb_pc9821_iobus.sv.
 
 module tb_pc9821_egc;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -127,6 +131,7 @@ module tb_pc9821_egc;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   reg        scan_enable = 0;
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -142,6 +147,7 @@ module tb_pc9821_egc;
   wire       grcg_expand_nx;   // mode[7]'s next state (opt-video VID-1); unused here
 
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
 
   // The GVRAM write client's two-word payload; this bench's backend ignores it.
 
@@ -165,7 +171,9 @@ module tb_pc9821_egc;
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
-  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
+  wire        dma_load    = 1'b0;
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -222,6 +230,9 @@ module tb_pc9821_egc;
   // 0x063C bank select into the 0xD8000 window: 0 = the IDE option ROM, the reset bank.
 
   reg  [1:0] d8_bank = 2'b00;
+  // The 16-colour mode (the guest's OUT 0x6A,0x01, FF2 num 0): this bench reaches the E plane at
+  // 0xE0000-0xE7FFF, which the machine maps only in that mode (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b1;
 
   pc9821_memory_subsystem #(.SYS_CLOCK_HZ(100_000_000)) dut (.*);
 

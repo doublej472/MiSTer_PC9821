@@ -496,8 +496,17 @@ always_ff @(posedge clk) begin
         if (rom_q_ce) begin
             uc_addr <= pb_slot ? pb_entry_r : uc_addr_mem;
             // The m80 store tail executes after a dword-stride loop, but its
-            // immutable `wr W` word writes only the final two bytes.
-            uc_force_word <= uc_addr_mem == UADDR_FPU_STORE_TAIL;
+            // immutable `wr W` word writes only the final two bytes.  An
+            // error-code push also writes two bytes into its stack slot,
+            // while ESP moves by the stack width: Intel SDM vol. 3,
+            // Architecture Compatibility, "Error Code Pushes": "When pushed
+            // onto a 32-bit stack, the Intel486 processor only pushes 2
+            // bytes and updates ESP by 4" (a real Am486DX4 leaves the upper
+            // half nonzero, CPUSUITE-XE10-triage callgate_newstack_ss).
+            uc_force_word <= (uc_addr_mem == UADDR_FPU_STORE_TAIL) ||
+                             (uc_addr_mem == UADDR_ERRC_PUSH_PRIV) ||
+                             (uc_addr_mem == UADDR_ERRC_PUSH_TASK) ||
+                             (uc_addr_mem == UADDR_ERRC_PUSH);
             uc_ctl_pref <= (rom_q_early[5:0] == BUSOP_PREF);
         end
 

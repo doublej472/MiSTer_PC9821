@@ -145,7 +145,6 @@ module tb_pc9821_interleave_odd_vtotal;
   wire  [3:0] pal_wr_idx;
   wire  [1:0] pal_wr_chan;
   wire  [3:0] pal_wr_data;
-  wire        pal_commit;
   wire        hs_out, vs_out, de_out;
 
   wire cg_rd_hold, cg_win_byte_hold;
@@ -218,14 +217,14 @@ module tb_pc9821_interleave_odd_vtotal;
   reg  [7:0] mix_pal256_wr_idx = 8'd0, mix_pal256_wr_data = 8'd0;
   reg  [1:0] mix_pal256_wr_chan = 2'd0;
   pc9821_video_mixer u_mixer (
-      .clk(clk), .rst_n(~reset),
+      .clk(clk),
       .dot_x(pix_dot), .h_active(pix_h_active), .v_active(pix_v_active),
       .text_opaque(text_opaque), .text_cell(text_cell), .text_colour(text_colour),
       .line_data(line_data), .line_ready(line_ready), .line_sel(line_sel),
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .pal_mode16(gfx_mode16), .pal_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx), .pal_wr_chan(pal_wr_chan),
-      .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_data(pal_wr_data),
       .fold_bypass(1'b0), .packed_idx(8'h00),
     .pegc_256(mix_pegc_256),
     .pal256_wr_en(mix_pal256_wr_en), .pal256_wr_idx(mix_pal256_wr_idx),

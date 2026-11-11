@@ -2,7 +2,7 @@
 // key stream, from Main_MiSTer's bytes through the hps_io normalizer to pc9821_kbd.
 //
 // ==== WHAT THIS PROVES ====
-// No host stream puts a STOP make (0x60) in the guest's key stream unless the user pressed the one key NP2kai maps to STOP (Pause): an F11 tap must reach the guest as VF1 (0x52/0xD2) and a NumLock tap (the non-extended set-2 0x77) as keypad = (0x4D/0xCD), never as STOP, and the framework's normalized Pause token (Main_MiSTer sends the E1 14 77 E1 F0 14 F0 77 make sequence at key RELEASE with no break, user_io.cpp "pause does not have a break code"; hps_io normalizes it to one {pressed,extended,0x77} event, sys/hps_io.sv:309) must reach the guest as the NP2kai tap pair 0x60 make + 0xE0 break and then SILENCE - no stuck STOP make and no typematic flood of a key that can never break.
+// No host stream puts a STOP make (0x60) in the guest's key stream unless the user pressed the one key NP2kai maps to STOP (Pause): an F11 tap must reach the guest as VF1 (0x52/0xD2) and a NumLock tap (the non-extended set-2 0x77) as keypad = (0x4D/0xCD), never as STOP, and the framework's normalized Pause token (Main_MiSTer sends the E1 14 77 E1 F0 14 F0 77 make sequence at key RELEASE with no break, user_io.cpp "pause does not have a break code"; hps_io normalizes it to one {pressed,extended,0x77} event, sys/hps_io.sv:325) must reach the guest as the NP2kai tap pair 0x60 make + 0xE0 break and then SILENCE - no stuck STOP make and no typematic flood of a key that can never break.
 //
 // The host side of this bench is the REAL chain, not an idealized one:
 //
@@ -72,8 +72,7 @@ module tb_pc9821_kbd_stop;
       .din(din),
       .dout(dout),
       .irq(irq),
-      .ps2_key(ps2_key),
-      .bios_setup(1'b0)
+      .ps2_key(ps2_key)
   );
 
   integer errors = 0;
@@ -85,7 +84,7 @@ module tb_pc9821_kbd_stop;
 
   // The host's cmd-5 keyboard byte stream for one key EVENT (one transaction):
   // bytes are shifted into the hps_io window, and one ps2_key event fires at
-  // the transaction end - sys/hps_io.sv:258-310 verbatim in little-sv form.
+  // the transaction end - sys/hps_io.sv:273-326 verbatim in little-sv form.
   reg [7:0] tx_bytes [0:15];
   integer   tx_count;
   reg [31:0] ps2_key_raw;
@@ -113,8 +112,8 @@ module tb_pc9821_kbd_stop;
   endtask
 
   // One Main_MiSTer UIO_KEYBOARD transaction: the hps_io window is cleared at
-  // the command byte (hps_io.sv:346), the data bytes shift in (:383), and one
-  // event is emitted at transaction end (:306-309 with the three overrides).
+  // the command byte (hps_io.sv:368), the data bytes shift in (:412), and one
+  // event is emitted at transaction end (:322-325 with the three overrides).
   task host_event;
     begin
       ps2_key_raw = 32'd0;

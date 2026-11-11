@@ -65,6 +65,7 @@ module tb_pc9821_opna_port;
   wire  [7:0] dbg_last_io_data;
   wire        dbg_last_io_rd;
   wire        dbg_last_io_wr;
+  wire        dbg_last_io_stb;
   // The FDC's debug taps: named because the DUT is (.*), not exercised here
   // (tb_pc9821_fdc_dbg pins them).
   wire [7:0]  dbg_fdc_state;
@@ -87,6 +88,7 @@ module tb_pc9821_opna_port;
   // 0x043F EMS page register / window select (pc9821_iobus outputs).
   wire [1:0] ems_state;
   wire top_shadow_en;
+  wire soft_reboot;   // pc9821_iobus's reboot strobe (0x534)
   // The FDC's level interrupt (slave PIC IRQ11). pc9821_iobus carries the
   // port and the `.*` DUT instantiation matches by name, so it must
   // be declared here; this bench does not exercise the floppy path.
@@ -99,7 +101,10 @@ module tb_pc9821_opna_port;
   // Static here: this bench is not about the strap and an UNDRIVEN input is 0, which is
   // the machine's own state - tb_pc9821_bios_select and tb_pc9821_userdisk own the field.
   reg  gdc_clock_5m = 1'b0;
-  reg  fdd_dip_fixed = 1'b1;   // the 0x00BE bit-2 FDD-mode switch at the measured unit's Fixed
+  reg  msw_hold = 1'b0;        // port 0x31 bit 4 at the measured machine's memory-switch init (0xF3)
+  reg  text_lines_20 = 1'b0;   // port 0x31 bit 3 at the measured 25 lines (0xF3)
+  reg  [1:0] floppy_mode = 2'd0;   // Auto (1M), 0x861E = 0xF7: the Floppy mode default
+  wire [23:0] setup_cfg;       // the OSD configuration pc9821_cg is built from (unread here)
   reg device_wr_wait = 1'b0;   // write back-pressure: unused here (no device buffer is stressed), 0 = never stall
   // The 0x9A0 query state input (pc9821_iobus): driven at 0 here - only
   // tb_pc9821_readback_sysports exercises the query protocol.
@@ -127,7 +132,8 @@ module tb_pc9821_opna_port;
   wire        fdd_rpm;
   wire        fdd_ready = 1'b1, fdd_rdy = 1'b0, fdd_hdrv = 1'b0, fdd_err = 1'b0;
   wire [31:0] dma_mem_addr, dma_mem_din;
-  wire [1:0]  dma_mem_gvwin;   // the DMAC's plane-window class (unused here)
+  wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
+  wire        dma_mem_load;
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -147,8 +153,10 @@ module tb_pc9821_opna_port;
   // instance lives inside it), so `.*` above binds it instead of a local copy.
   wire pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs,
        ata_cs, opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, gdc_cs;
+  // The OSD's I/O timing field (pc9821_iobus io_timing_xe10): Fast, the default table.
+  wire io_timing_xe10 = 1'b0;
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) dut (
-      .ide_unit0_present(1'b0),.*);
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),.*);
 
   wire [7:0] opna_io_dout;
   wire       beep_mute = 1'b0;   // the system beeper's mute; not exercised here
@@ -350,10 +358,13 @@ module tb_pc9821_opna_port;
     // opna_i18c returns opna_readExtendedStatus when extended. This bench only
     // requires that it is not the shadow, because asserting the chip's own byte
     // would be reading the implementation back rather than a reference.
+    // The shadow byte is one the status cannot hold (its bit 6 is always 0: jt12_dout's
+    // 2'b10 word `{ busy, 1'd0, adpcmb_flag2, flag_B, flag_A }`), so a shadow answer
+    // cannot pass for a status byte.
     write_byte(16'h018C, 8'h20);
-    write_byte(16'h018E, 8'h00);
+    write_byte(16'h018E, 8'h5A);
     read_raw (16'h018C, got);
-    if (got === 8'h00)
+    if (got === 8'h5A)
       fail("0x18C must answer the chip's extended status, not the data shadow");
 
     // ---- 8. S1: a queued write's fire must not corrupt a coincident host read ----

@@ -179,7 +179,7 @@ module tb_pc9821_bios_model;
   wire       fdd_abort;
 
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) x10_dut (
-      .ide_unit0_present(1'b0),
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),
       .clk(clk),
       .bios_set(set_x10),
       .reset(reset),
@@ -243,7 +243,7 @@ module tb_pc9821_bios_model;
   );
 
   pc9821_iobus #(.SDIP_WRITES_ENABLED(1)) xe_dut (
-      .ide_unit0_present(1'b0),
+      .ide_unit0_present(1'b0), .ide_unit2_present(1'b1),
       .clk(clk),
       .bios_set(set_xe),
       .reset(reset),

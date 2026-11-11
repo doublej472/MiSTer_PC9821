@@ -22,7 +22,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_video_mix
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_pegc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/interrupts/pc9821_inta_bridge.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/interrupts/pc9821_interrupts.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/interrupts/pc9821_irq_share.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_osd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_aspect.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_video_cleaner.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_line_doubler.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_video_out.sv
@@ -39,6 +41,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_cpu_clk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_cpu_bus_bridge.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_disk_change_reset.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_mount_eject.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_disk_led.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/input/pc9821_kbd.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/input/pc9821_mouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/interrupts/pc9821_pic.sv
@@ -74,6 +77,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_dbg_ring.s
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_dbg_mux.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_dbg_cpu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/video/pc9821_gdc_log.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/storage/pc9821_fdc_log.sv
 
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/core/pc9821_system.sv
 
@@ -93,6 +97,9 @@ set_global_assignment -name VERILOG_FILE src/soc/cdda.v
 # The N-channel audio volume attenuator. It was the framework's `sb_volume`, extracted
 # and renamed: the PC-9821 has no Sound Blaster, and only the name was ever SB.
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/audio/pc9821_audio_volume.sv
+# The CLK_AUDIO mix: the OSD Audio page's per-source levels and their crossing, the volume
+# stage, the wide sum and the one clamp.
+set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/audio/pc9821_audio_mix.sv
 # The 48 kHz output stage: the CIC decimator, the FIR MAC engine and the top that presents
 # one sample per 512 CLK_AUDIO cycles.
 set_global_assignment -name SYSTEMVERILOG_FILE src/pc9821/audio/pc9821_audio_cic4.sv

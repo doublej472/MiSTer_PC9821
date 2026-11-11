@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OSD:
-// The OSD's two stored selections, decoded: all eight RAM Size list positions select the guest size their label names, the list rotated so position 0 - what a card with no config file passes - is 16 MB instead of the 1 MB that cannot boot the firmware, with every size in the set still reachable exactly once; and Enter BIOS setup, position 0 Off = the config-less default. FDD mode position 0 is Auto and position 1 Fixed (0x00BE bit 2). Keyboard position 0 is the US host layout and position 1 JIS.
+// The OSD's two stored selections, decoded: all eight RAM Size list positions select the guest size their label names, the list rotated so position 0 - what a card with no config file passes - is 16 MB instead of the 1 MB that cannot boot the firmware, with every size in the set still reachable exactly once; Floppy mode passes its list position through unchanged (0 = Auto (1M), the default, to 3 = 640K; pc9821_iobus decodes it). Keyboard position 0 is the US host layout and position 1 JIS. The two SETUP items: Text lines position 0 is 25 lines and position 1 20 (port 0x31 bit 3), Memory switch position 0 Initialise and position 1 Keep, each position 0 the measured Xe10 (0x31 = 0xF3).
 //
 // WHY THIS BENCH EXISTS AT ALL. The mapping used to be a function inside z486_mister.sv, which
 // no bench in this tree can reach, because they are unit benches and none of them elaborates the
@@ -15,23 +15,27 @@ module tb_pc9821_osd;
 
   // ==== DUT ====
   reg  [2:0] osd_ram_size = 3'd0;
-  reg        osd_bios_setup = 1'b0;
-  reg        osd_fdd_mode = 1'b0;
+  reg        osd_text_lines = 1'b0;
+  reg        osd_msw_keep = 1'b0;
+  wire       text_lines_20, msw_keep;
+  reg  [1:0] osd_floppy_mode = 2'd0;
   reg        osd_kbd_layout = 1'b0;
   wire       kbd_layout_jis;
   wire [2:0] ram_size_code;
-  wire       bios_setup;
-  wire       fdd_dip_fixed;
+  wire [1:0] floppy_mode;
 
   pc9821_osd dut (
     .osd_ram_size (osd_ram_size),
-    .osd_bios_setup(osd_bios_setup),
+    .osd_text_lines(osd_text_lines),
+    .osd_msw_keep (osd_msw_keep),
     .osd_gdc_clock(1'b0),
-    .osd_fdd_mode (osd_fdd_mode),
+    .osd_floppy_mode(osd_floppy_mode),
+    .floppy_mode  (floppy_mode),
     .ram_size_code(ram_size_code),
-    .bios_setup   (bios_setup),
+    .text_lines_20(text_lines_20),
+    .msw_keep     (msw_keep),
     .gdc_clock_5m (),
-    .fdd_dip_fixed(fdd_dip_fixed),
+    
     .osd_kbd_layout(osd_kbd_layout),
     .kbd_layout_jis(kbd_layout_jis),
     .osd_cd_volume(3'd0),        // the CD audio volume field: tb_pc9821_osd_cd_volume
@@ -129,34 +133,39 @@ module tb_pc9821_osd;
       errors = errors + 1;
     end
 
-    // 4. Enter BIOS setup (hold HELP). Position 0 is Off, which is what a card with
-    //    no stored config passes; position 1 asks the keyboard to hold HELP.
-    osd_bios_setup = 1'b0;
+    // 4. The SETUP items. Position 0 of each is the measured Xe10 and SETUP's factory value
+    //    (port 0x31 = 0xF3: bit 3 clear = 25 lines, bit 4 set = initialise, docs/probes/
+    //    MEMSW.TXT `0031=F3`).
+    osd_text_lines = 1'b0; osd_msw_keep = 1'b0;
     #1;
-    if (bios_setup !== 1'b0) begin
-      $display("FAIL BIOS setup entry 0 is Off, but bios_setup=%0b", bios_setup);
+    if (text_lines_20 !== 1'b0 || msw_keep !== 1'b0) begin
+      $display("FAIL SETUP items entry 0 (25 lines, Initialise) decode as %0b%0b",
+               text_lines_20, msw_keep);
       errors = errors + 1;
     end
-    osd_bios_setup = 1'b1;
+    osd_text_lines = 1'b1;
     #1;
-    if (bios_setup !== 1'b1) begin
-      $display("FAIL BIOS setup entry 1 is On, but bios_setup=%0b", bios_setup);
+    if (text_lines_20 !== 1'b1 || msw_keep !== 1'b0) begin
+      $display("FAIL Text lines entry 1 is 20 lines alone, decode %0b%0b", text_lines_20, msw_keep);
       errors = errors + 1;
     end
+    osd_text_lines = 1'b0; osd_msw_keep = 1'b1;
+    #1;
+    if (text_lines_20 !== 1'b0 || msw_keep !== 1'b1) begin
+      $display("FAIL Memory switch entry 1 is Keep alone, decode %0b%0b", text_lines_20, msw_keep);
+      errors = errors + 1;
+    end
+    osd_msw_keep = 1'b0;
 
-    // 5. FDD mode. Position 0 is Auto (0x00BE bit 2 clear), the chosen default; position 1 is
-    //    Fixed, the measured unit's setting (both are MAME pc9801.cpp DSW3:1 positions).
-    osd_fdd_mode = 1'b0;
-    #1;
-    if (fdd_dip_fixed !== 1'b0) begin
-      $display("FAIL FDD mode entry 0 is Auto, but fdd_dip_fixed=%0b", fdd_dip_fixed);
-      errors = errors + 1;
-    end
-    osd_fdd_mode = 1'b1;
-    #1;
-    if (fdd_dip_fixed !== 1'b1) begin
-      $display("FAIL FDD mode entry 1 is Fixed, but fdd_dip_fixed=%0b", fdd_dip_fixed);
-      errors = errors + 1;
+    // 5. Floppy mode. The position goes through as a position (0 = Auto (1M), the default), so an
+    //    undriven port downstream is the default; pc9821_iobus's fdmode_setup decodes it.
+    for (integer fm = 0; fm < 4; fm = fm + 1) begin
+      osd_floppy_mode = fm[1:0];
+      #1;
+      if (floppy_mode !== fm[1:0]) begin
+        $display("FAIL Floppy mode position %0d reads %0d", fm, floppy_mode);
+        errors = errors + 1;
+      end
     end
 
     // 6. Keyboard. Position 0 is US (the layout the core translated the backslash key in

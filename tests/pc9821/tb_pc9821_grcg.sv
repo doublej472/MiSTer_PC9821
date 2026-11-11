@@ -82,8 +82,14 @@ module tb_pc9821_grcg;
   reg         mem_ready = 0;
   reg  [31:0] mem_dout = 0;
   reg         mem_resp_valid = 0;
+  // The 16-colour mode (the guest's OUT 0x6A,0x01, FF2 num 0): this bench reaches the E plane at
+  // 0xE0000-0xE7FFF, which the machine maps only in that mode (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b1;
+  wire       e_plane_nc;
 
   pc9821_memory_map map_dut (
+      .mode2_16color(mode2_16color),
+      .e_plane_nc(e_plane_nc),
       .top_bank(top_bank), .ide_rom_enable(ide_rom_enable), .d8_bank(2'b00),
       .ide_ram_gate(ide_ram_gate),
       .bios_ram_gate(bios_ram_gate), .win0_sel(win0_sel), .win0_sel_moved(win0_sel != 8'h08),

@@ -78,6 +78,10 @@
 `default_nettype none
 
 module tb_pc9821_gvram_porta_equiv;
+  // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
+  // level here (tb_pc9821_boot0_load drives that), so the level is low and the hold unread.
+  wire hps_apply_reset = 1'b0;
+  wire pack_load_hold;
   reg clk = 0;
   always #5 clk = ~clk;
   reg reset = 1;
@@ -95,6 +99,7 @@ module tb_pc9821_gvram_porta_equiv;
     // shape - tb_pc9821_memory_subsystem and tb_pc9821_memory_map pin it.
   reg bios_ram_gate = 0;
   reg top_shadow_en = 0;
+  reg  soft_reboot = 1'b0;   // no reboot strobe in this bench
   reg [7:0] win0_sel = 8'h08;
   wire       win0_sel_moved = (win0_sel != 8'h08);   // pc9821_iobus's registered compare
   reg  sys16m_en = 1'b1;
@@ -173,6 +178,9 @@ module tb_pc9821_gvram_porta_equiv;
 
 
   reg        scan_enable = 0;
+
+
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -196,12 +204,17 @@ module tb_pc9821_gvram_porta_equiv;
   // time-derived per-operation periods (pc9821_gvram_arb's GVRAM_PERIODS) are converted from
   // 100 MHz here, exactly as the core's build converts them from SYS_FREQ.
   // ==== DUT ====
+  // The 16-colour mode (the guest's OUT 0x6A,0x01, FF2 num 0): this bench reaches the E plane at
+  // 0xE0000-0xE7FFF, which the machine maps only in that mode (pc9821_memory_map e_plane_nc).
+  reg        mode2_16color = 1'b1;
   `ifdef VERILATOR
   // ---- pc9821_memory_subsystem's DMA bus-master port, tied off (see the iobus block) ----
 /* verilator lint_off UNUSEDSIGNAL */
   wire        dma_addr_unused = 1'b0;
   wire [31:0] dma_addr = 32'd0;
-  wire [1:0]  dma_gvwin = 2'b00;   // the DMAC's plane-window class of dma_addr (idle here)
+  wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
+  wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
+  wire        dma_load    = 1'b0;
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -381,8 +394,10 @@ module tb_pc9821_gvram_porta_equiv;
       ems_shadow = (low20 >= 20'hB0000) && (low20 <= 20'hBFFFF) &&
                    !(|d[31:20]) && (ems_state != 2'd0);
       contig = (low20 >= 20'hA8000) && (low20 <= 20'hBFFFF) && !ems_shadow;
-      inten  = (low20 >= 20'hE0000) && (low20 <= 20'hE7FFF);
-      dec_hit = (contig || inten) && !(|d[31:20]);
+      // The E plane only in the 16-colour mode (DMAROUTE-XE10.TXT P4 view V1: open bus otherwise).
+      inten  = (low20 >= 20'hE0000) && (low20 <= 20'hE7FFF) && mode2_16color;
+      // Window 0 at 0x0A is RAM of its own (no plane window): docs/probes/DMAROUTE-XE10.TXT W1.
+      dec_hit = (contig || inten) && !(|d[31:20]) && !(win0_moved && (win0_sel == 8'h0A));
       dec_plane = contig ? (low20[16:15] - 2'd1) : 2'd3;
       dec_off = low20[14:0];
       dec_page = gvram_access_page;
@@ -1114,18 +1129,19 @@ module tb_pc9821_gvram_porta_equiv;
 
     // ---- 9c: the win0_in_window boundaries, each with the 0x461 sel that makes the ----
     // corner SHARP (a membership regression at that edge turns silence into writes or a
-    // write into silence): 0x7FFFF @ 0x0A is below the window (regression -> a d=0xBFFFF
+    // write into silence): 0x7FFFF @ 0x09 is below the window (regression -> a d=0xAFFFF
     // hit), 0x80000 @ 0x0B is the inclusive low edge (a hit at d=0xB0000; regression ->
-    // silence), 0x9FFFF @ 0x0A is the inclusive high edge (a hit at d=0xBFFFF, the top of
-    // the contig window; regression -> silence), 0xA0000 @ 0x0B is above it (regression ->
-    // a d=0xB0000 hit).
-    win0_sel = 8'h0A;
+    // silence), 0x9FFFF @ 0x09 is the inclusive high edge (a hit at d=0xAFFFF, the top of
+    // plane B's window; regression -> silence), 0xA0000 @ 0x0B is above it (regression ->
+    // a d=0xB0000 hit). 0x0A itself is no plane page (the window's RAM, DMAROUTE-XE10 W1), and
+    // 0x09/0x0B are values the iobus never presents (it masks bit 0) but the map decodes.
+    win0_sel = 8'h09;
     do_access("S9 win0 7FFFF", 0, 32'h0007_FFFF, 32'h13579BDF, 4'hF, 1, 0, 0, 0, -1);
     cov_win0_bound = cov_win0_bound + 1;
     win0_sel = 8'h0B;
     do_access("S9 win0 80000", 0, 32'h0008_0000, 32'h2468ACE0, 4'hF, 1, 0, 0, 0, -1);
     cov_win0_bound = cov_win0_bound + 1;
-    win0_sel = 8'h0A;
+    win0_sel = 8'h09;
     do_access("S9 win0 9FFFF", 0, 32'h0009_FFFF, 32'h0F1E2D3C, 4'hF, 1, 0, 0, 0, -1);
     cov_win0_bound = cov_win0_bound + 1;
     win0_sel = 8'h0B;

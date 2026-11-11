@@ -22,7 +22,9 @@ WHAT IT WRITES (into --out, default build/ beside this script, git-ignored):
     python3 tools/hwprobe/cpusuite/gen_cpusuite.py               # build the pack
     python3 tools/hwprobe/cpusuite/gen_cpusuite.py --simcheck    # + run every PATCHED program in
                                                                  #   z486's own bench and require the
-                                                                 #   trap to latch the bench's verdict
+                                                                 #   trap to latch the bench's verdict;
+                                                                 #   + probes that the trap and data
+                                                                 #   records keep the whole EAX
     python3 tools/hwprobe/cpusuite/gen_cpusuite.py --selftest
 """
 from __future__ import annotations
@@ -481,6 +483,87 @@ def simcheck(res, out: Path, jobs=8):
     return got
 
 
+# The trap's EAX record: a probe program whose EAX at the verdict write is known, through each
+# dispatch form (`out dx, al` and `out 0xE0, al`), in real mode and in 32-bit protected mode. AH
+# and CH differ, so a dispatch that hands the trap the caller's CH in AH (the `mov al, cl` form the
+# CPUSUITE triage rows tri_div_edges, tri_cr3_race and tri_tss286_esp were captured with) fails.
+PROBE_EAX = 0x9ABC7E01      # AL = 01: the pass verdict
+PROBE_ECX = 0x00005A00      # CH = 5Ah != AH = 7Eh
+PROBE_DATA = 0x11223344     # the E4 record through DX, before the verdict
+PROBE_ASM = """BITS {bits}
+ORG 0
+    mov eax, 0x{data:08X}
+    mov dx, 0xE4
+    out dx, eax
+    mov ecx, 0x{ecx:08X}
+    mov eax, 0x{eax:08X}
+    mov dx, 0xE0
+    out {port}, al
+    hlt
+"""
+
+
+def trap_eax_probe(out: Path):
+    """-> [(name, ok, detail)]: the trap's DMA channel 0 record (ports 0x01, 0x01, 0x03, 0x03:
+    EAX[7:0], [15:8], [23:16], [31:24]) and channel 1's (0x05, 0x07) equal the EAX the probe
+    wrote."""
+    tpm = suite_module()
+    base = {"eip": 0, "cr3": 0, "page_tables": [], "cycles": 20000}
+    flat = {k: {"base": 0x10000 if k == "CS" else 0, "limit": 0xFFFFF, "flags": 0xA9E0 if k == "CS" else 0x29E0}
+            for k in SREGS}
+    modes = {
+        "real": (16, dict(base, start_mode="real", cr0=0, d_init=0,
+                          initial_selectors={"DS": 0, "SS": 0, "ES": 0, "FS": 0, "GS": 0},
+                          seg_cache={k: {"base": 0x10000 if k == "CS" else 0, "limit": 0xFFFF,
+                                         "flags": RM_CODE_FLAGS if k == "CS" else RM_DATA_FLAGS} for k in SREGS})),
+        "prot32": (32, dict(base, start_mode="protected", cr0=1, d_init=1,
+                            initial_selectors={"CS": 8, "DS": 0, "SS": 0, "ES": 0, "FS": 0, "GS": 0},
+                            seg_cache=flat)),
+    }
+    io_re = re.compile(r"IO WR port=([0-9a-f]{4}) data=([0-9a-f]{8})")
+    work = Path(tempfile.mkdtemp(prefix="cpus_probe_", dir=out))
+    cwd = os.getcwd()
+    got = []
+    try:
+        os.chdir(SUITE)
+        for mode, (bits, cfg) in modes.items():
+            for port in ("dx", "0xE0"):
+                name = f"trap_eax_{mode}_{'dx' if port == 'dx' else 'imm'}"
+                asm, binf = work / f"{name}.asm", work / f"{name}.bin"
+                asm.write_text(PROBE_ASM.format(bits=bits, data=PROBE_DATA, ecx=PROBE_ECX, eax=PROBE_EAX, port=port))
+                ok, mode_or_err = assemble(asm, binf)
+                if not ok:
+                    got.append((name, False, f"does not assemble ({mode_or_err})"))
+                    continue
+                mem, code_phys, _ = build_image(tpm, cfg, binf.read_bytes(), False)
+                hexf = work / f"{name}.hex"
+                hexf.write_text("".join(f"{mem.get(a, 0):02X}\n" for a in range(max(mem) + 1)))
+                cmd = bench_command(tpm, cfg, hexf, code_phys, cfg["cycles"])
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                # The bench names the dword-aligned port and puts the byte on its lane: the
+                # records' writes (ports 01h, 01h, 03h, 03h; 05h, 05h, 07h, 07h) arrive as
+                # 0000h / 0004h on lanes 1, 1, 3, 3.
+                rec = {0x00: [], 0x04: []}
+                for m in io_re.finditer(r.stdout):
+                    p, d = int(m.group(1), 16), int(m.group(2), 16)
+                    if p in rec and len(rec[p]) < 4:
+                        rec[p].append((d >> (8 * (1, 1, 3, 3)[len(rec[p])])) & 0xFF)
+                    if p == 0xF0:
+                        break
+
+                def word(p):
+                    return int.from_bytes(bytes(rec[p]), "little") if len(rec[p]) == 4 else None
+                trap, data = word(0x00), word(0x04)
+                good = trap == PROBE_EAX and data == PROBE_DATA
+                fmt = lambda v: "none" if v is None else f"{v:08X}"
+                got.append((name, good, f"trap EAX {fmt(trap)} (want {PROBE_EAX:08X}), "
+                                        f"data {fmt(data)} (want {PROBE_DATA:08X})"))
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(work, ignore_errors=True)
+    return got
+
+
 # ---------------------------------------------------------------------------------------------
 def selftest() -> int:
     fails = 0
@@ -555,7 +638,12 @@ def main(argv=None):
             if not ok:
                 print(f"SIMCHECK FAIL {n}: {d}")
         print(f"simcheck: {len(got) - len(bad)}/{len(got)} programs latch the bench's verdict through the trap")
-        return 1 if bad else 0
+        probe = trap_eax_probe(out)
+        pbad = [g for g in probe if not g[1]]
+        for n, ok, d in probe:
+            print(f"SIMCHECK {'ok  ' if ok else 'FAIL'} {n}: {d}")
+        print(f"simcheck: {len(probe) - len(pbad)}/{len(probe)} probes record the whole EAX")
+        return 1 if bad or pbad else 0
     return 0
 
 

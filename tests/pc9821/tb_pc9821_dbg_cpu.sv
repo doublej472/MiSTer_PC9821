@@ -50,7 +50,8 @@ module tb_pc9821_dbg_cpu;
         .cpu_intr(cpu_intr), .cpu_sp(cpu_sp), .cpu_flags(cpu_flags), .inta_ready(inta_ready), .inta_vec(inta_vec),
         .vsync_irq(vsync_irq), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .imr(imr), .irr(irr), .isr(isr),
         .s_imr(s_imr), .s_isr(s_isr), .ata_block_read(ata_block_read), .gate_read(gate_read), .gate_addr(gate_addr),
-        .issue(issue), .issue_eip(issue_eip), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
+        .issue(issue), .issue_eip(issue_eip),
+        .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
         .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
         .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[0]), .log_we(lw[0]), .log_accept(acc[0]));
   // B: the PC trigger, POST above 63, an 8-entry trace
@@ -60,7 +61,8 @@ module tb_pc9821_dbg_cpu;
         .cpu_intr(cpu_intr), .cpu_sp(cpu_sp), .cpu_flags(cpu_flags), .inta_ready(inta_ready), .inta_vec(inta_vec),
         .vsync_irq(vsync_irq), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .imr(imr), .irr(irr), .isr(isr),
         .s_imr(s_imr), .s_isr(s_isr), .ata_block_read(ata_block_read), .gate_read(gate_read), .gate_addr(gate_addr),
-        .issue(issue), .issue_eip(issue_eip), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
+        .issue(issue), .issue_eip(issue_eip),
+        .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
         .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
         .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[1]), .log_we(lw[1]), .log_accept(acc[1]));
   // C: the WRITE trigger behind a one-second ARM delay, POST = 0
@@ -70,7 +72,8 @@ module tb_pc9821_dbg_cpu;
         .cpu_intr(cpu_intr), .cpu_sp(cpu_sp), .cpu_flags(cpu_flags), .inta_ready(inta_ready), .inta_vec(inta_vec),
         .vsync_irq(vsync_irq), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .imr(imr), .irr(irr), .isr(isr),
         .s_imr(s_imr), .s_isr(s_isr), .ata_block_read(ata_block_read), .gate_read(gate_read), .gate_addr(gate_addr),
-        .issue(issue), .issue_eip(issue_eip), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
+        .issue(issue), .issue_eip(issue_eip),
+        .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
         .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
         .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[2]), .log_we(lw[2]), .log_accept(acc[2]));
   // D: a ring far too small for the offered load: 128 bytes, a 1 ms (10-clock) sampler, a snoop
@@ -80,7 +83,8 @@ module tb_pc9821_dbg_cpu;
         .cpu_intr(cpu_intr), .cpu_sp(cpu_sp), .cpu_flags(cpu_flags), .inta_ready(inta_ready), .inta_vec(inta_vec),
         .vsync_irq(vsync_irq), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .imr(imr), .irr(irr), .isr(isr),
         .s_imr(s_imr), .s_isr(s_isr), .ata_block_read(ata_block_read), .gate_read(gate_read), .gate_addr(gate_addr),
-        .issue(issue), .issue_eip(issue_eip), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
+        .issue(issue), .issue_eip(issue_eip),
+        .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
         .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
         .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[3]), .log_we(lw[3]), .log_accept(acc[3]));
   // E: a long sampler window (10,000 clocks) for the INTR-high counter
@@ -89,7 +93,8 @@ module tb_pc9821_dbg_cpu;
         .cpu_intr(cpu_intr), .cpu_sp(cpu_sp), .cpu_flags(cpu_flags), .inta_ready(inta_ready), .inta_vec(inta_vec),
         .vsync_irq(vsync_irq), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .imr(imr), .irr(irr), .isr(isr),
         .s_imr(s_imr), .s_isr(s_isr), .ata_block_read(ata_block_read), .gate_read(gate_read), .gate_addr(gate_addr),
-        .issue(issue), .issue_eip(issue_eip), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
+        .issue(issue), .issue_eip(issue_eip),
+        .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
         .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
         .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[4]), .log_we(lw[4]), .log_accept(acc[4]));
 

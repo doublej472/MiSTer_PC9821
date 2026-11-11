@@ -30,6 +30,16 @@ module pc9821_gvram_arb #(
     // The CPU's access page (port 0xA6). Display uses the scanout's own latch.
     input wire        access_page,
 
+    // ---- The OSD I/O timing field's GVRAM half (GVRAM_PERIODS, the Xe10 table) ----
+    // `timing_xe10`: OSD I/O timing = Xe10 (status[79], the level pc9821_iobus's io_timing_xe10
+    // reads). 0 (Fast, and an undriven port) keeps every period exactly as before the field
+    // existed. A runtime level by owner exception (docs/policies.md "I/O timing"): it applies
+    // from the next accepted access.
+    // `gfx_scan_on`: pc9821_gdc2's gfx_grph_on, the graphics GDC's START latch AND its SYNC
+    // window - the lines the machine's display fetch reads the GVRAM on. Read only in Xe10 mode.
+    input wire        timing_xe10,
+    input wire        gfx_scan_on,
+
     // ---- CPU plane-window route: the D1 client the CPU's own accesses use ----
     // `cpu_valid` is already gated by pc9821_memory_subsystem's route-owner mux,
     // so it means exactly "this CPU access is a GVRAM access".
@@ -397,6 +407,69 @@ module pc9821_gvram_arb #(
   localparam [15:0] GVRAM_WR_HOLD = 16'((SYS_CLOCK_HZ * 64'd142 + 64'd500_000_000) / 64'd1_000_000_000);
   localparam [15:0] GVRAM_GR_HOLD = 16'((SYS_CLOCK_HZ * 64'd104 + 64'd500_000_000) / 64'd1_000_000_000);
 
+  // ---- THE XE10 TABLE: the store periods OSD I/O timing = Xe10 charges (timing_xe10) ----
+  // Fast (timing_xe10 = 0) is the three constants above and nothing else. Xe10 replaces the
+  // STORE periods with the machine's SUSTAINED store rate per class: a back-to-back store is
+  // accepted no sooner than P ns after the previous one, P from these rows. Reads keep
+  // GVRAM_RD_HOLD in both tables (todo item 152 owns the read period), and the EGC's requests
+  // stay exempt in both (item 153: the EGC pace is an open owner decision).
+  //   class                       ns  capture row
+  //   GRCG RMW byte/word, raster  300  docs/probes/RWIPE-XE10.TXT: the logo wipe's 4000-word
+  //     on a graphics line              `rep stosw` fill under 0x7C = 0xC0, S->F per step on the
+  //                                     ARTIC (307 200 Hz): 368 ticks (line 16 `S=4B26D2
+  //                                     F=4B2842`) = 1197.9 us = 299.5 ns/store, the decoder's
+  //                                     `fill 1.198` on all nine rows of every arm (rwipe_decode.py)
+  //   GRCG RMW byte/word, raster  256  docs/probes/XE10T-XE10.TXT:141 (`R GRCG RMWSTOSW unit=w
+  //     outside the graphics lines      n=16384 nop=0 rep=5 art=1283/1288/1288`) = 255.3 ns, RMW16
+  //                                     256.7 (:123) and RMW8 255.9 (:129) alike, at a DOS prompt;
+  //                                     and the same wipe's fills that fell inside the vertical
+  //                                     blank: 314 ticks = 255.5 ns/store (RWIPE-XE10.TXT:31
+  //                                     `S=4B63A7 F=4B64E1`, :52 `S=4BB919 F=4BBA53`)
+  //   GRCG RMW dword               498  XE10T-XE10.TXT:135 RMW32 (`art=624/626/628`) 497.5 ns,
+  //                                     :142 RMWSTOSD 495.5: two of the word's cycles (x1.94)
+  //   GRCG RMW dword, graphics     583  UNMEASURED: the dword's own 497.5 scaled by the word's
+  //     line                             graphics-line / blank ratio 299.5 / 255.5
+  //   GRCG TDW byte/word           168  XE10T-XE10.TXT:145 TDW16 (`art=423/424/425`) 168.3 ns,
+  //                                     :151 TDW8 168.5, :163 TDWSTOSW 166.9
+  //   GRCG TDW dword               211  XE10T-XE10.TXT:157 TDW32 (`art=262/264/267`) 210.6 ns
+  //   plain dword store            281  XE10T-XE10.TXT:68 W32 (`art=351/352/355`) 280.9 ns
+  //   plain byte/word store        142  GVRAM_WR_HOLD (XE10T W16 143.8 ns, :56, agrees)
+  // WHY THE RASTER SPLITS THE RMW. The wipe's fill reads 1.198 ms on almost every step, but
+  // the steps whose fill sits in the vertical blank read 1.022 ms, the XE10T prompt-time rate,
+  // and the steps that straddle the blank fall between (1.087-1.133 ms): the display fetch on
+  // a graphics line costs the CPU's RMW 44 ns. `gfx_scan_on` (the graphics GDC's START latch
+  // AND its SYNC window, the lines it fetches) picks the row per store at its accept. The TDW
+  // and plain rows exist only from the prompt (XE10T) and are charged in both raster states;
+  // what would settle them is an XE10T /GRCG and /GVRAM pass with the graphics display started
+  // (INT 18h AH=40h), the TDW16/W32/RMW32 rows read against these.
+  // A MISALIGNED word is charged per CPU access as z486 presents it: inside a dword it is one
+  // access (one period), across a dword boundary two byte accesses (two). The wipe's rows
+  // blit 20 words a row to odd addresses on half the rows, and the machine's rows run 2.171
+  // ms/step (RWIPE-XE10.TXT, every arm) against the replica's aligned 1.912
+  // (WIPE-XE10-RWIPEKIT-S01.TXT, W2); that +0.26 ms, less the real program's extra CPU work,
+  // is about half a period per misaligned word, which the per-access rule charges. A direct
+  // row would be an XE10T RMW16 loop at an odd DI.
+  localparam [15:0] GVRAM_X_RMW_GL  = 16'((SYS_CLOCK_HZ * 64'd300 + 64'd500_000_000) / 64'd1_000_000_000);
+  localparam [15:0] GVRAM_X_RMW_BL  = 16'((SYS_CLOCK_HZ * 64'd256 + 64'd500_000_000) / 64'd1_000_000_000);
+  localparam [15:0] GVRAM_X_RMW32_BL = 16'((SYS_CLOCK_HZ * 64'd498 + 64'd500_000_000) / 64'd1_000_000_000);
+  localparam [15:0] GVRAM_X_RMW32_GL = 16'((SYS_CLOCK_HZ * 64'd583 + 64'd500_000_000) / 64'd1_000_000_000);
+  localparam [15:0] GVRAM_X_TDW     = 16'((SYS_CLOCK_HZ * 64'd168 + 64'd500_000_000) / 64'd1_000_000_000);
+  localparam [15:0] GVRAM_X_TDW32   = 16'((SYS_CLOCK_HZ * 64'd211 + 64'd500_000_000) / 64'd1_000_000_000);
+  localparam [15:0] GVRAM_X_WR32    = 16'((SYS_CLOCK_HZ * 64'd281 + 64'd500_000_000) / 64'd1_000_000_000);
+
+  // The two levels, registered here: neither is a pulse (the OSD bit and a per-line window),
+  // and the flop keeps the GDC's window decode and the OSD fan-out off the accept path.
+  reg         timing_xe10_q, gfx_scan_q;
+  always @(posedge clk) begin
+    if (reset) begin
+      timing_xe10_q <= 1'b0;
+      gfx_scan_q    <= 1'b0;
+    end else begin
+      timing_xe10_q <= timing_xe10;
+      gfx_scan_q    <= gfx_scan_on;
+    end
+  end
+
   // WHAT ONE PERIOD PAYS FOR is ONE CPU ACCESS, which is the capture's own unit and the reason
   // the class decode is not simply "every client request":
   //   * the plain client presents exactly one request per CPU access, so each of its requests a
@@ -416,8 +489,21 @@ module pc9821_gvram_arb #(
   // latch there (c_write_q is the access it presents), the GRCG's is its registered cl_write (a
   // TCR read is a window READ, so it takes the read period).
   wire        acc_wr    = cc_owns_plain ? c_write_q : cc_write;
-  wire [15:0] acc_hold  = (cc_owns_grcg && acc_wr) ? GVRAM_GR_HOLD :
-                          acc_wr                    ? GVRAM_WR_HOLD : GVRAM_RD_HOLD;
+  wire [15:0] acc_hold_fast = (cc_owns_grcg && acc_wr) ? GVRAM_GR_HOLD :
+                              acc_wr                    ? GVRAM_WR_HOLD : GVRAM_RD_HOLD;
+  // The Xe10 table (above). A GRCG store's class is its OWN latched presentation - the RMW bit
+  // and the byte enables of the request being accepted (grcg_cl_rmw / grcg_cl_be), never the
+  // live CPU request, which has moved on for a decoupled store; a dword is all four lanes.
+  // The plain store's width is c_be, latched with c_write_q at the plain FSM's capture.
+  wire        acc_gr_dw = (grcg_cl_be == 4'hF);
+  wire [15:0] acc_gr_x  = grcg_cl_rmw
+                          ? (acc_gr_dw ? (gfx_scan_q ? GVRAM_X_RMW32_GL : GVRAM_X_RMW32_BL)
+                                       : (gfx_scan_q ? GVRAM_X_RMW_GL   : GVRAM_X_RMW_BL))
+                          : (acc_gr_dw ? GVRAM_X_TDW32 : GVRAM_X_TDW);
+  wire [15:0] acc_hold_x = (cc_owns_grcg && acc_wr) ? acc_gr_x :
+                           acc_wr ? ((c_be == 4'hF) ? GVRAM_X_WR32 : GVRAM_WR_HOLD) :
+                           GVRAM_RD_HOLD;
+  wire [15:0] acc_hold  = timing_xe10_q ? acc_hold_x : acc_hold_fast;
   // A GRCG store's period is armed by the FIRST request it is accepted on - which is usually its
   // capture cycle, but is a LATER cycle whenever the device is still busy with the previous
   // access (the capture cycle's presentation is then not accepted, and `grcg_cl_cap` has fallen by
@@ -428,20 +514,25 @@ module pc9821_gvram_arb #(
                           cc_owns_grcg  ? (cc_write ? (grcg_cl_cap || gr_arm_pend) : 1'b1) : 1'b0;
   // `hold_left` is WIDTH-SIZED TO WHAT IT CAN HOLD, not to the 16 bits the constant-only form
   // happened to have. It counts IDLE INTERVALS, so its range is 0..(the accepted access's period
-  // - 1), and the periods are one nanosecond table scaled by SYS_CLOCK_HZ: the READ class (478 ns)
-  // is the largest of the three by construction (against 142 and 104), so the largest load is
-  // GVRAM_RD_HOLD - 24 at 50 MHz and 57 at 120 MHz. $clog2 of it bounds both (5 bits, then 6),
-  // with a one-bit floor for a parameter set whose periods round to zero clk_sys.
-  localparam integer HOLD_BITS = ($clog2(GVRAM_RD_HOLD) < 1) ? 1 : $clog2(GVRAM_RD_HOLD);
-  // ... and that bound is the READ class only because the READ class is the widest of the three.
-  // The three constants are one nanosecond table over one SYS_CLOCK_HZ, so the order is fixed by
-  // the capture's own numbers - but it is fixed HERE by the constants, not by remembering them: a
-  // profile or capture edit that reordered them would otherwise truncate the shortest-width
-  // counter silently, which is the failure class this guard exists for.
+  // - 1), and the periods are one nanosecond table scaled by SYS_CLOCK_HZ. The widest is the
+  // larger of the READ class (478 ns, the widest of Fast's three) and the Xe10 graphics-line
+  // RMW dword (583 ns, the widest of the Xe10 table): HOLD_MAX names it, so the largest load is
+  // HOLD_MAX - 1 (29 at 50 MHz, 70 at 120 MHz) and $clog2 of it bounds every load, with a
+  // one-bit floor for a parameter set whose periods round to zero clk_sys.
+  localparam [15:0] HOLD_MAX = (GVRAM_X_RMW32_GL > GVRAM_RD_HOLD) ? GVRAM_X_RMW32_GL : GVRAM_RD_HOLD;
+  localparam integer HOLD_BITS = ($clog2(HOLD_MAX) < 1) ? 1 : $clog2(HOLD_MAX);
+  // ... and HOLD_MAX is the widest only because those two are the widest of their tables. The
+  // constants are one nanosecond table over one SYS_CLOCK_HZ, so the order is fixed by the
+  // captures' own numbers - but it is fixed HERE by the constants, not by remembering them: a
+  // profile or capture edit that reordered them would otherwise truncate the counter silently,
+  // which is the failure class this guard exists for.
   generate
-    if ((GVRAM_WR_HOLD > GVRAM_RD_HOLD) || (GVRAM_GR_HOLD > GVRAM_RD_HOLD)) begin : gen_hold_width_check
+    if ((GVRAM_WR_HOLD > HOLD_MAX) || (GVRAM_GR_HOLD > HOLD_MAX) ||
+        (GVRAM_X_RMW_GL > HOLD_MAX) || (GVRAM_X_RMW_BL > HOLD_MAX) ||
+        (GVRAM_X_RMW32_BL > HOLD_MAX) || (GVRAM_X_TDW > HOLD_MAX) ||
+        (GVRAM_X_TDW32 > HOLD_MAX) || (GVRAM_X_WR32 > HOLD_MAX)) begin : gen_hold_width_check
       initial
-        $error("pc9821_gvram_arb: a non-READ period is wider than GVRAM_RD_HOLD, which HOLD_BITS is $clog2 of: hold_left could not name the load");
+        $error("pc9821_gvram_arb: a period is wider than HOLD_MAX, which HOLD_BITS is $clog2 of: hold_left could not name the load");
     end
   endgenerate
   reg  [HOLD_BITS-1:0] hold_left;
@@ -450,7 +541,15 @@ module pc9821_gvram_arb #(
   // The one gate every accept path reads: the array FSM's dispatch, the walk's first lane and
   // `cc_ready` itself, so no arm of the dispatch can start on the accepting cycle. The EGC's
   // requests are exempt (see above), so they are taken at the engine's own rate.
-  wire        accept_ok = (gstate == G_IDLE) && !m_mode && (cc_owns_egc || !hold_busy);
+  // XE10: the SECOND pair of a two-pair GRCG store (the dword TDW / 0xFF-datum burst) is the
+  // same CPU store as its first, whose accept already charged the store's whole period, so in
+  // the Xe10 table it does not wait that period out: the store then costs max(period, its two
+  // pairs' walk), the capture's one-store unit (XE10T TDW32 210.6 ns is one dword store).
+  // Fast keeps the wait exactly as it was (the term is gated on timing_xe10_q).
+  wire        gr_same_store = timing_xe10_q && cc_owns_grcg && cc_write &&
+                              !grcg_cl_cap && !gr_arm_pend;
+  wire        accept_ok = (gstate == G_IDLE) && !m_mode &&
+                          (cc_owns_egc || !hold_busy || gr_same_store);
 
   // The counter holds IDLE INTERVALS, not the period itself: the accepted access's own cycle is
   // the first of the N, so N-1 intervals remain before the device will take another one - which

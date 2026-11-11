@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OPNA_WRQ:
-// The PC-9801-86 command buffer (the WRQ in pc9821_opna) delivers its queued select/data writes to the vendored JT12 chip in guest order with every data write seeing its select latched first, captures a single worst-phase 1-clk fire into every operator register class (the pending latches persist and the sample-rate scan commits them, so no bus hold is needed), still lets jt12_kon sample a 0x28 key-on with the next write queued right behind it, holds 0x188 bit 7 across the whole queue-plus-drain and clears it in bounded time, gates 0x18C/0x18E writes away from the chip while the 0xA460 extension bit is clear, loses zero of 48 back-to-back no-poll writes across all 24 operator slots in both banks, answers a 0x18E read after a 0x18C select write with the select byte just written (NP2kai's opna_o18c s.data shadow) rather than the previous data byte, and pins the drop boundary at the reduced write cadence: a 160-write no-poll burst at 5 clk_sys per access overflows the 64-deep queue and loses writes, while the same burst behind the guest's WAITREADY poll loses none.
+// The PC-9801-86 command buffer (the WRQ in pc9821_opna) delivers its queued select/data writes to the vendored JT12 chip in guest order with every data write seeing its select latched first, captures a single worst-phase 1-clk fire into every operator register class (the pending latches persist and the sample-rate scan commits them, so no bus hold is needed), still lets jt12_kon sample a 0x28 key-on with the next write queued right behind it, reads 0x188 bit 7 clear at the first poll after a write (the real Xe10's XE10T /OPNA rows) and set only while the queue holds 64 words or more (half full), clearing once a word drains below that, gates 0x18C/0x18E writes away from the chip while the 0xA460 extension bit is clear, loses zero of 48 back-to-back no-poll writes across all 24 operator slots in both banks, answers a 0x18E read after a 0x18C select write with the select byte just written (NP2kai's opna_o18c s.data shadow) rather than the previous data byte, and pins the drop boundary at the reduced write cadence: a 160-write no-poll burst at 5 clk_sys per access overflows the 128-deep queue and loses writes, while the same burst behind the guest's WAITREADY poll loses none.
 //
 // The WRQ is probed against the vendored JT12 chip; the test sequence T0-T8:
 //  T1  in-order delivery: queued select/data pairs reach the chip's own pins in the
@@ -19,19 +19,20 @@
 //  T3  the key-on race the queue closed: 0x28 (key-on) paced by DRAIN_GAP, with the
 //      next data write queued right behind — jt12_kon must still sample it.
 //  T4  overflow: a guest burst faster than the drain (no WAITREADY poll) fills the
-//      64-deep queue; measure how many writes the chip never sees, and whether the
+//      128-deep queue; measure how many writes the chip never sees, and whether the
 //      board's select shadow (sel_lo) then diverges from the chip's select latch.
 //      The reference models (MAME pc9801_86.cpp, NP2kai board86.c) attach the
 //      YM2608 to the ports with NO FIFO in front of it, so every write is latched
 //      by the chip; the drop is a model-only divergence.
-//  T5  BUSY semantics: 0x188 bit 7 covers the queue and the drain, and clears in
-//      bounded time (the games' WAITREADY).
+//  T5  BUSY semantics: 0x188 bit 7 is the queue's back-pressure only - clear at the
+//      first poll after a write (the machine's XE10T /OPNA rows), set while the queue
+//      is full, clear again once one word drains (the games' WAITREADY).
 //  T6  0x18C readback contract: NP2kai's opna_o18c sets s.data, so a 0x18E read after
 //      a 0x18C select answers the select byte; check what the board answers.
 //  T7  extension gate: 0x18C/0x18E writes must not reach the chip while 0xA460 bit 0
 //      is clear, and reads answer 0xFF.
 //  T9  the reduced iobus write cadence (class 4 = 5 clk_sys per access,
-//      the FSM floor): a 160-write no-poll burst overflows the 64-deep queue and loses
+//      the FSM floor): a 160-write no-poll burst overflows the 128-deep queue and loses
 //      writes, while the same burst behind a WAITREADY poll loses none -- so the
 //      drop is a function of the guest's handshake, not of the shortened wait.
 
@@ -107,10 +108,10 @@ module tb_pc9821_opna_wrq;
 
 
   // Queue state.
-  wire [6:0]  wrq_cnt  = u_dut.wrq_cnt;
+  wire [7:0]  wrq_cnt  = u_dut.wrq_cnt;
   wire [1:0]  dr_state = u_dut.dr_state;
   wire [7:0]  dr_gap   = u_dut.dr_gap;
-  wire        wrq_busy = (wrq_cnt != 0) | (dr_state != 2'd0);
+  wire        wrq_busy = (wrq_cnt != 0) | (dr_state != 2'd0);   // the drain, not the guest's BUSY
 
   // The chip-write log: every (addr, din) the chip's own write strobe presents.
   localparam int LOGMAX = 2048;
@@ -134,7 +135,7 @@ module tb_pc9821_opna_wrq;
   // Bus driver, shaped like pc9821_iobus: a one-cycle strobe, 186 clk per
   // access (io_access_cycles for this port class). Reads are answered one
   // cycle later (the S_DEVWAIT cycle the board's io_rd_wait buys).
-  // drop_flag comes back as the push gate saw it: the wrq_cnt[6] value on the
+  // drop_flag comes back as the push gate saw it: the wrq_cnt[7] value on the
   // strobe edge, i.e. 1 when the queue was full and the byte was swallowed.
   // ------------------------------------------------------------------
   task automatic bus_write(input [15:0] port, input [7:0] data, output reg drop_flag);
@@ -144,7 +145,7 @@ module tb_pc9821_opna_wrq;
       drop_flag = 1'b0;
       @(posedge clk);
       io_wr <= 1'b1;
-      drop_flag = wrq_cnt[6];
+      drop_flag = wrq_cnt[7];
       @(posedge clk);
       io_wr <= 1'b0;
       for (int i = 0; i < 184; i++) @(posedge clk);
@@ -175,7 +176,7 @@ module tb_pc9821_opna_wrq;
       drop_flag = 1'b0;
       @(posedge clk);
       io_wr <= 1'b1;
-      drop_flag = wrq_cnt[6];
+      drop_flag = wrq_cnt[7];
       @(posedge clk);
       io_wr <= 1'b0;
       repeat (3) @(posedge clk);
@@ -495,8 +496,8 @@ module tb_pc9821_opna_wrq;
 
       log_n = 0;
       pushed = 0; dropped = 0;
-      // 80 select/data pairs of stretched (0x3x) writes at the bus's fastest rate.
-      for (i = 0; i < 80; i++) begin
+      // 120 select/data pairs of stretched (0x3x) writes at the bus's fastest rate.
+      for (i = 0; i < 120; i++) begin
         bus_write(16'h0188, 8'h30 + i[2:0], drop);
         if (drop) dropped++;
         pushed++;
@@ -511,7 +512,7 @@ module tb_pc9821_opna_wrq;
       note($sformatf("T4: burst of %0d host writes: %0d dropped at the full queue, %0d delivered",
                     pushed, dropped, delivered));
       if (dropped === 0)
-        fail("T4: expected the 64-deep queue to drop at least one burst write");
+        fail("T4: expected the 128-deep queue to drop at least one burst write");
       if (delivered + dropped !== pushed)
         fail($sformatf("T4: accounting hole - %0d delivered + %0d dropped != %0d pushed",
                       delivered, dropped, pushed));
@@ -533,18 +534,34 @@ module tb_pc9821_opna_wrq;
     end
 
     // ----------------------------------------------------------------
-    // T5: BUSY covers the queue and the drain, and clears in bounded time.
+    // T5: BUSY is the queue's own pacing only. The first poll after a write reads it
+    // clear (docs/probes/XE10T-XE10.TXT /OPNA: `polls=1/1/..` on every row); it is set
+    // while the queue holds 64 words or more (half full) and clears as soon as one word
+    // drains below that (WAITREADY).
     // ----------------------------------------------------------------
     begin : t5
       integer busy_clk;
       integer poll_n;
+      integer i;
       reg [7:0] v;
+      wait_drain(20000);
       bus_write(16'h0188, 8'h40, drop);
       bus_write(16'h018A, 8'h55, drop);     // one stretched write
+      bus_read(16'h0188, v);
+      if (v[7]) fail("T5: BUSY set at the first poll after one FM data write (the machine reads it clear)");
+      wait_drain(20000);
+      // Fill the queue to half full with no poll (the class-4 cadence), then poll.
+      for (i = 0; i < 100 && wrq_cnt < 64; i++) begin
+        bus_write_fast(16'h0188, 8'h40, drop);
+        if (drop) fail("T5: a write dropped before the queue was half full");
+        if (wrq_cnt < 64) bus_write_fast(16'h018A, 8'h55, drop);
+        if (drop) fail("T5: a write dropped before the queue was half full");
+      end
+      if (wrq_cnt < 64) fail($sformatf("T5: the queue holds %0d, the fill did not reach half full", wrq_cnt));
       busy_clk = 0;
       poll_n = 0;
-      while (busy_clk < 20000) begin
-        // The guest's WAITREADY: read 0x188, test bit 7.
+      v = 8'h80;
+      while (v[7] && busy_clk < 20000) begin
         io_addr <= 16'h0188;
         @(posedge clk);
         io_rd <= 1'b1;
@@ -553,15 +570,17 @@ module tb_pc9821_opna_wrq;
         @(posedge clk);
         v = io_dout;
         poll_n++;
-        if (!v[7]) break;
-        busy_clk += 187;
-        for (int i = 0; i < 184; i++) @(posedge clk);
-        busy_clk += 184;
+        busy_clk += 3;
       end
       if (busy_clk >= 20000)
         fail("T5: BUSY never cleared (WAITREADY would hang)");
+      else if (wrq_cnt >= 64)
+        fail("T5: BUSY read clear with the queue still half full");
+      else if (poll_n < 2)
+        fail("T5: BUSY read clear at the first poll with the queue half full (no pacing shown)");
       else
-        note($sformatf("T5 pass: BUSY held ~%0d clk then cleared (%0d polls)", busy_clk, poll_n));
+        note($sformatf("T5 pass: BUSY clear at the first poll after a write; with the queue half full it held %0d polls, until one word drained", poll_n));
+      wait_drain(20000);
     end
 
     // ----------------------------------------------------------------
@@ -619,7 +638,7 @@ module tb_pc9821_opna_wrq;
     // T8: back-to-back multi-operator burst - the clobber scenario the WRQ
     // exists to prevent. 24 distinct (ch,op) slots, each written sel+data
     // with NO WAITREADY between them (48 host writes; the queue peaks at
-    // 48 < 64, so no overflow). A data fire lands >=216 cen after the
+    // 48 < 128, so no overflow). A data fire lands >=216 cen after the
     // previous one while the 24-clk_en scan commits a pending write within
     // one ring, so no slot may hold a reset or foreign value afterwards.
     // ----------------------------------------------------------------
@@ -651,25 +670,23 @@ module tb_pc9821_opna_wrq;
           bus_write(g < 3 ? 16'h0188 : 16'h018C, selreg, drop);
           bus_write(g < 3 ? 16'h018A : 16'h018E, datav,  drop);
           if (g == 2) begin
-            // mid-burst: the guest's WAITREADY must be blocking right now
+            // mid-burst: the queue holds ~18 of 128 entries, so the guest's WAITREADY
+            // reads BUSY clear (the machine reads it clear after every write).
             bus_read(16'h0188, rd8);
-            if (!rd8[7])
-              fail("T8: BUSY not set mid-burst (queue should still hold ~18 entries)");
+            if (rd8[7])
+              fail("T8: BUSY set mid-burst with the queue far from full");
           end
         end
       end
-      // poll BUSY like the guest's WAITREADY does
+      // let the queue drain (BUSY no longer covers the drain, so it is read directly)
       busy_clk = 0;
-      while (busy_clk < 120000) begin
-        bus_read(16'h0188, rd8);
-        if (!rd8[7]) break;
-        busy_clk += 187;
-      end
-      if (busy_clk >= 120000) fail("T8: BUSY never cleared after the 48-write burst");
+      wait_drain(2000);
       // verify every slot: one full ring sweep, window +/-2 visits per slot.
       // dt1 (class I) and mul (class II) may skew a visit apart in the CSR
-      // pipeline, so track them separately.
-      for (w = 0; w < 24; w++) begin
+      // pipeline, so track them separately. 26 samples, not 24: the first wait
+      // lands on the clk_en the sweep starts in, so 24 samples cover only 23 ring
+      // positions and one slot's class-II field can fall outside the sweep.
+      for (w = 0; w < 26; w++) begin
         for (s = 0; s < 24; s++) begin
           if (dist_to(OPV[s], CHV[s]) <= 2) begin
             if (o_dt1 === EXPD[s]) seen_d[s] = 1;
@@ -696,7 +713,7 @@ module tb_pc9821_opna_wrq;
     // T9: the reduced write cadence and the drop question.
     // The reduced iobus class lets the guest strobe a host write every 5 clk_sys
     // instead of 186; a stretched FM write drains over DRAIN_GAP=216 cen, so the
-    // 64-deep queue can fill. Does the faster guest lose FM register writes, and
+    // 128-deep queue can fill. Does the faster guest lose FM register writes, and
     // does the guest's WAITREADY poll cover it?
     //   (a) 80 select/data pairs with NO poll -> the queue fills and writes drop;
     //   (b) the same pairs WITH a WAITREADY poll before every write -> zero drops.
@@ -719,7 +736,7 @@ module tb_pc9821_opna_wrq;
       note($sformatf("T9a: class-4 no-poll burst: %0d host writes, %0d dropped at the full queue, %0d delivered",
                     pushed, dropped_np, log_n));
       if (dropped_np === 0)
-        fail("T9a: expected the 64-deep queue to drop at least one class-4 no-poll burst write");
+        fail("T9a: expected the 128-deep queue to drop at least one class-4 no-poll burst write");
 
       // (b) the same burst behind the guest's WAITREADY, at the same cadence.
       wait_drain(20000);

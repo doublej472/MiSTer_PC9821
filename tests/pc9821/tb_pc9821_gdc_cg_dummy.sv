@@ -87,7 +87,6 @@ module tb_pc9821_gdc_cg_dummy;
   wire [3:0]  pal_wr_idx;
   wire [1:0]  pal_wr_chan;
   wire [3:0]  pal_wr_data;
-  wire        pal_commit;
   wire        hs_out, vs_out, de_out;
 
   // ==== DUT ====
@@ -114,7 +113,7 @@ module tb_pc9821_gdc_cg_dummy;
       .pix_h_active(pix_h_active), .pix_v_active(pix_v_active), .gfx_mode16(gfx_mode16),
       .gfx_dig(gfx_dig),
       .pal_wr_en(pal_wr_en), .pal_wr_idx(pal_wr_idx),
-      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data), .pal_commit(pal_commit),
+      .pal_wr_chan(pal_wr_chan), .pal_wr_data(pal_wr_data),
       .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out)
   );
 

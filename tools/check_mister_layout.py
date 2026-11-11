@@ -49,6 +49,12 @@ WHAT IS ASSERTED, every value read out of the tools themselves so nothing here i
      declare, so a tool cannot address a pack no MGL can load.
   4. The check is not vacuous: it fails if it found no setname, no MGL emission or no config
      path, so a rename that empties it cannot pass it silently.
+  6. No tool writes anything under the card's Scripts/ folder, and the offline staging tree
+     holds no Scripts/ directory: no script is installed on the MiSTer, and the image
+     converters run on a computer (docs/user/images.md "Converting images").
+  5. Every MGL image slot a tool writes (mister_load.sh, deploy_mister.sh, mister_regress.py's
+     mgl_text) is the hps_io slot z486_mister.sv's CONF_STR gives that drive (S0 HDD, S1/S2 the
+     floppies, S3 HDD2, S4 the CD-ROM).
 """
 
 from __future__ import annotations
@@ -130,11 +136,6 @@ def staging_leaves_no_config(deploy: Path) -> list[str]:
         t = Path(td)
         (t / "tools").mkdir()
         shutil.copy2(deploy, t / "tools" / deploy.name)
-        # the other files the staging copies (the Scripts-menu CUE/BIN converter)
-        for rel in ("cue2pcd.py", "mister/pc9821_cue2pcd.sh"):
-            if (ROOT / "tools" / rel).is_file():
-                (t / "tools" / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(ROOT / "tools" / rel, t / "tools" / rel)
         (t / "output_files").mkdir()
         (t / "output_files" / "z486_mister.rbf").write_bytes(b"")
         (t / "build").mkdir()
@@ -151,11 +152,67 @@ def staging_leaves_no_config(deploy: Path) -> list[str]:
                     % (deploy.name, r.returncode, (r.stderr or r.stdout).strip()[:300])]
         left = sorted(str(p.relative_to(t)) for p in (t / "mister_deploy").rglob("*")
                       if p.is_file() and p.suffix.lower() == ".cfg")
+        found: list[str] = []
         if left:
-            return ["%s left a config in its own staging tree: %s - copying that tree onto a "
-                    "card would overwrite the RAM size the user selected"
-                    % (deploy.name, ", ".join(left))]
-        return []
+            found.append("%s left a config in its own staging tree: %s - copying that tree "
+                         "onto a card would overwrite the RAM size the user selected"
+                         % (deploy.name, ", ".join(left)))
+        if (t / "mister_deploy" / "Scripts").exists():
+            found.append("%s staged a Scripts/ directory: no script is installed on the MiSTer"
+                         % deploy.name)
+        return found
+
+
+# THE MGL SLOT INDICES. An MGL's `<file type="s" index="N">` mounts into hps_io slot N, which is
+# the digit of CONF_STR's `S{N},...,Mount <drive>` entry (Main_MiSTer menu.cpp takes the index
+# from the digit; sys/hps_io.sv turns it into img_mounted[N]). Each tool that writes an MGL names
+# the drive by the variable or keyword it mounts, so the index it writes for that drive must be
+# the S-slot the top level gives the drive - a drive moved to another slot (HDD2 = 3, the CD
+# kept at 4) would otherwise mount the user's file into the wrong drive.
+MGL_DRIVE_OF = {
+    "IMGNAME": "HDD", "hdd.img": "HDD",            # mister_load.sh, deploy_mister.sh
+    "FDDNAME0": "FDD1", "FDDNAME1": "FDD2", "HDD2NAME": "HDD2",   # mister_load.sh
+    "hdd": "HDD", "fdd0": "FDD1", "fdd1": "FDD2", "hdd2": "HDD2", "cd": "CD-ROM",  # mister_regress.py
+}
+RE_SH_SLOT = re.compile(r'type=\\?"s\\?" index=\\?"(\d+)\\?" path=\\?"\$?\{?([\w.]+)')
+RE_PY_SLOT = re.compile(r"for idx, p in \(((?:\(\d+, \w+\),? ?)+)\):")
+# A path under the card's Scripts/ folder (`/media/fat/Scripts`, `$deploy/Scripts/...`).
+RE_SCRIPTS = re.compile(r"(?:/|\$\w+/|\b)Scripts(?:/|\b)")
+RE_CONF_MOUNT = re.compile(r"S(\d+),[A-Z0-9]*,Mount ([^;\"]+);")
+
+
+def mgl_slots() -> tuple[list[str], str]:
+    """Pass 6: every MGL slot a tool writes against the top level's CONF_STR S-entries."""
+    top = (ROOT / "z486_mister.sv").read_text()
+    slot_of = {drive: int(n) for n, drive in RE_CONF_MOUNT.findall(top)}
+    bad: list[str] = []
+    seen: list[str] = []
+    if not slot_of:
+        return ["z486_mister.sv: no `S{n},...,Mount <drive>` entry found, so the MGL slot "
+                "check is vacuous"], ""
+    uses: list[tuple[str, int, str]] = []
+    for name in ("tools/mister_load.sh", "tools/deploy_mister.sh"):
+        for n, var in RE_SH_SLOT.findall(strip_comments((ROOT / name).read_text())):
+            uses.append((name, int(n), var))
+    m = RE_PY_SLOT.search((ROOT / "tools/mister_regress.py").read_text())
+    if m:
+        for n, var in re.findall(r"\((\d+), (\w+)\)", m.group(1)):
+            uses.append(("tools/mister_regress.py", int(n), var))
+    else:
+        bad.append("tools/mister_regress.py: mgl_text's slot table not found")
+    for where, n, var in uses:
+        drive = MGL_DRIVE_OF.get(var)
+        if drive is None:
+            bad.append("%s: writes an MGL slot %d for `%s`, which this check cannot name a "
+                       "drive for (add it to MGL_DRIVE_OF)" % (where, n, var))
+        elif slot_of.get(drive) != n:
+            bad.append("%s: mounts %s (`%s`) at MGL index %d, but CONF_STR gives %s slot %s"
+                       % (where, drive, var, n, drive, slot_of.get(drive, "none")))
+        else:
+            seen.append("%s=%d" % (drive, n))
+    if not uses:
+        bad.append("no tool writes an MGL slot, so the MGL slot check is vacuous")
+    return bad, " ".join(sorted(set(seen)))
 
 
 def main(argv: list[str]) -> int:
@@ -289,6 +346,22 @@ def main(argv: list[str]) -> int:
     else:
         staging_ok = None
 
+    # ---- pass 6: the MGL slot indices the tools write match CONF_STR's S-slots -----------
+    # Only for the tree's own tools (a run pointed at candidate files checks those alone).
+    if argv[1:]:
+        slots_seen = None
+    else:
+        slot_bad, slots_seen = mgl_slots()
+        failures.extend(slot_bad)
+
+    # ---- pass 7: nothing is installed under the card's Scripts/ folder --------------------
+    # Comments are stripped (prose may say that nothing goes there); a code line naming the
+    # folder is a copy, a mkdir or a delete aimed at it.
+    scripts_refs = [rel(p) for p in paths if RE_SCRIPTS.search(code[p])]
+    for where in scripts_refs:
+        failures.append("%s names the card's Scripts/ folder on a code line: no script is "
+                        "installed on the MiSTer, so no tool writes there" % where)
+
     # ---- report ---------------------------------------------------------------------------
     print("  setname                 : %s" % (setname or "NONE"))
     print("  declared                : %s"
@@ -303,6 +376,10 @@ def main(argv: list[str]) -> int:
           % ("cannot leave a config file" if staging_ok else
              "NOT CHECKED (no deploy_mister.sh among the files given)" if staging_ok is None else
              "LEFT A CONFIG FILE - see below"))
+    print("  Scripts/ folder         : %s"
+          % ("named by %s" % ", ".join(scripts_refs) if scripts_refs else "no tool writes there"))
+    print("  MGL slot indices        : %s"
+          % ("NOT CHECKED (files given)" if slots_seen is None else slots_seen or "none"))
 
     if failures:
         print()

@@ -1,0 +1,35 @@
+CPUSUITE BEGIN V1 PROGRAMS=266 PASSES=1 FROM=hw_breakpoints
+CPUSUITE CPU ac=1 cpuid=none bda486=0432 detail=dma resetdx=00000432
+hw_breakpoints SKIP
+hw_breakpoints_rm PASS
+hz_cross_store_rm PASS
+hz_invlpg_code PASS
+hz_invlpg_data PASS
+hz_invlpg_spec PASS
+hz_ret_rewrite PASS
+hz_ret_rewrite_np PASS
+hz_rmw_after_paged_store PASS
+hz_rmw_cross_store PASS
+hz_rmw_cross_store_pg PASS
+hz_spec_dev_reads PASS
+hz_spec_launch_rm PASS
+hz_spec_walk_abit PASS
+hz_spec_walk_store PASS
+hz_tr6_pfxlat PASS
+hz_tr6_spec PASS
+idiv_quotient_bounds FAIL verdict=FF data=00001E07 eax=00001EFF
+int_newstack_ss FAIL verdict=FF data=55000038 eax=550000FF
+intgate16_errcode_frame PASS
+invd_wbinvd_cpl3 FAIL verdict=FF data=00000000 eax=000000FF
+invlpg PASS
+invlpg_no_limit_cpl0 PASS
+invlpg_ss_limit_gp FAIL verdict=FF data=00000001 eax=000000FF
+io_bitmap_cpl3 PASS
+io_read_prefetch_race PASS
+io_store_out_in PASS
+jcc_then_fault PASS
+lar_ldt PASS
+lar_lsl_priv PASS
+lea_sib_disp PASS
+load_pf_flags_backup PASS
+loadall_tr3_486 

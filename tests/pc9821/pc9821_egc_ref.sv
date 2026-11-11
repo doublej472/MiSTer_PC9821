@@ -851,7 +851,7 @@ module pc9821_egc_ref;
   // egc_writeword/readword, at an ODD address -> two byte ops, HIGH-byte-first when
   // egc.sft bit 12 is set (:1385-1404); memegc_wr32/rd32 -> wr16/rd16 at addr then
   // addr+2, in that order unconditionally (:1417-1424)), combined with the z486 beat
-  // split (src/z486/z486_pkg.sv:1169 `calc_be`, :1226 `calc_be_first`, :1242
+  // split (src/z486/z486_pkg.sv:1181 `calc_be`, :1238 `calc_be_first`, :1254
   // `calc_be_second`). Every byte-enable set a real x86 access generates maps to a
   // UNIQUE memegc dispatch of its bytes:
   //

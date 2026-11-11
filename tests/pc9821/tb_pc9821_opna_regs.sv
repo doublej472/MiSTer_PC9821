@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PC-9801-86's OPNA port model against NP2kai, register by register and flag by flag: the 0x18A shadow's per-register bytes and the 0x188 status flags match cbus/board86.c and sound/opntimer.c wherever the two references agree -- the timer overflow flag appears in the status read and the IRQ line follows the enable bits, a 0x27 write with bit 4 or 5 clears the matching flag, and registers at or above 0x10 read back the last data byte. The SSG shadow's bytes are ASSERTED: register 7 reads the MACHINE's 0x00 (probes/OPNA.TXT CHIPID) and register 0x0f reads 0xff as NP2kai's opna_reset holds it, so master.lib's js_start read-modify-write (js_start.asm:67-72) lands on 0x80 - every tone/noise source routed, which is what js_start means - where NP2kai's 0xbf seed disconnects all six. An earlier reading took the 0x80 outcome as corruption; the capture shows it is the hardware's own. The remaining measured divergences are named and printed rather than asserted: the joystick at 0x0E ignores SSG register 0x0F bit 6 (NP2kai gates the stick on it), a timer whose IRQ enable is clear still sets its overflow flag where NP2kai's fmport_a/fmport_b set the flag only when the enable bit is set, and a write to register 0x29 masks both timer IRQs in the vendored core where NP2kai never reads that register.
+// The PC-9801-86's OPNA port model against NP2kai, register by register and flag by flag: the 0x18A shadow's per-register bytes and the 0x188 status flags match cbus/board86.c and sound/opntimer.c wherever the two references agree -- the timer overflow flag appears in the status read and the IRQ line follows the enable bits, a 0x27 write with bit 4 or 5 clears the matching flag, and registers above 0x0F read back the last data byte (0x20, 0x23), while the rhythm bank 0x10-0x1F reads the machine's FF with the extension closed (KIT1 YM29 READMAP, XE10T /OPNA2 IDC r10=FF). The SSG shadow's bytes are ASSERTED: register 7 reads the MACHINE's 0x00 (probes/OPNA.TXT CHIPID) and register 0x0f reads 0xff as NP2kai's opna_reset holds it, so master.lib's js_start read-modify-write (js_start.asm:67-72) lands on 0x80 - every tone/noise source routed, which is what js_start means - where NP2kai's 0xbf seed disconnects all six. An earlier reading took the 0x80 outcome as corruption; the capture shows it is the hardware's own. The remaining measured divergences are named and printed rather than asserted: the joystick at 0x0E ignores SSG register 0x0F bit 6 (NP2kai gates the stick on it), a timer whose IRQ enable is clear still sets its overflow flag where NP2kai's fmport_a/fmport_b set the flag only when the enable bit is set. Register 0x29 does not gate the timer IRQs, as on the Xe10 (docs/probes/YM29-XE10.TXT, YM29B-XE10.TXT) and in NP2kai, which never reads that register: a Timer B started with its 0x27 enable after 0x29 = 00 still raises the line.
 //
-// The PC-9801-86's OPNA port model against NP2kai, register by register and flag by flag: the 0x18A shadow's per-register bytes and the 0x188 status flags match cbus/board86.c and sound/opntimer.c wherever the two references agree -- the timer overflow flag appears in the status read only while the timer's enable bit is set (opntimer.c fmport_a/fmport_b), the IRQ line follows the enable bits, a 0x27 write with bit 4 or 5 clears the matching flag, and registers at or above 0x10 read back the last data byte. The SSG shadow's bytes are ASSERTED: register 7 reads the MACHINE's 0x00 (probes/OPNA.TXT CHIPID) and register 0x0f reads 0xff as NP2kai's opna_reset holds it, so master.lib's js_start read-modify-write lands on 0x80 - every tone/noise source routed, which is what js_start means - where NP2kai's 0xbf seed would disconnect all six (an earlier reading took the 0x80 outcome as corruption; the machine shows it is the hardware's own). The remaining measured divergences are named and printed rather than asserted: the joystick at 0x0E ignores SSG register 0x0F bit 6 (NP2kai gates the stick on it), and a write to register 0x29 masks both timer IRQs in the vendored core where NP2kai never reads that register.
+// The PC-9801-86's OPNA port model against NP2kai, register by register and flag by flag: the 0x18A shadow's per-register bytes and the 0x188 status flags match cbus/board86.c and sound/opntimer.c wherever the two references agree -- the timer overflow flag appears in the status read only while the timer's enable bit is set (opntimer.c fmport_a/fmport_b), the IRQ line follows the enable bits, a 0x27 write with bit 4 or 5 clears the matching flag, and registers at or above 0x10 read back the last data byte. The SSG shadow's bytes are ASSERTED: register 7 reads the MACHINE's 0x00 (probes/OPNA.TXT CHIPID) and register 0x0f reads 0xff as NP2kai's opna_reset holds it, so master.lib's js_start read-modify-write lands on 0x80 - every tone/noise source routed, which is what js_start means - where NP2kai's 0xbf seed would disconnect all six (an earlier reading took the 0x80 outcome as corruption; the machine shows it is the hardware's own). The remaining measured divergences are named and printed rather than asserted: the joystick at 0x0E ignores SSG register 0x0F bit 6 (NP2kai gates the stick on it). Register 0x29 does not gate the timer IRQs, as on the Xe10 (docs/probes/YM29-XE10.TXT, YM29B-XE10.TXT) and in NP2kai, which never reads that register: a Timer B started with its 0x27 enable after 0x29 = 00 still raises the line.
 
 // Reference: NP2kai (PRIMARY) cbus/board86.c (opna_i188/
 // opna_i18a/opna_i18c/opna_i18e), sound/opna.c (opna_reset, opna_readRegister),
@@ -201,28 +201,40 @@ module tb_pc9821_opna_regs;
     read_reg(8'hFF, rb);
     if (rb !== 8'h01) fail("register 0xFF did not answer the -86 chip ID 0x01");
 
-    // ---- 5. registers at or above 0x10 read back the last DATA byte --------
+    // ---- 5. registers above 0x0F read back the last DATA byte --------------
     // opna_i18a: above 0x0F and below 0xFF it returns s.data, the last byte
     // through any data port -- so a data write is read back without re-selecting.
-    // The rhythm region (0x10 key-on, 0x11 total level, 0x18-0x1D per-instrument
-    // level and pan) is NP2kai's rhythm_setreg; the LEVELS themselves are audio
-    // and out of this bench's scope, but the port contract is the same one.
+    // The real machine overrides that for the rhythm bank 0x10-0x1F, 0x22 and 0x29 while
+    // the extension is closed (this bench's extend = 0): they read FF, not the data byte
+    // (docs/probes/KIT1-XE10-YM29.TXT READMAP `r10= FF FF FF FF FF FF FF FF FF FF FF FF FF
+    // FF FF FF`, `RD29 v29=1F pre=FF post=FF`; 0x10 also XE10T-XE10-OPNA2.TXT IDC
+    // `ext=0 ... r10=FF`), which outranks NP2kai's s.data. 0x20 and 0x23 (no YM2608
+    // function) keep the NP2kai echo of a data write (the machine's READMAP reads them
+    // after a select alone and echoes the select, as s.data does).
     write_port(16'h0188, 8'h10);
     write_port(16'h018A, 8'h01);
     read_port(16'h018A, rb);
-    if (rb !== 8'h01) fail("a data write to rhythm register 0x10 was not the byte 0x18A reads back");
+    if (rb !== 8'hFF) fail("rhythm register 0x10 with the extension closed did not read the machine's FF");
     write_port(16'h0188, 8'h11);
     write_port(16'h018A, 8'h3F);
     read_port(16'h018A, rb);
-    if (rb !== 8'h3F) fail("a data write to rhythm register 0x11 was not the byte 0x18A reads back");
+    if (rb !== 8'hFF) fail("rhythm register 0x11 with the extension closed did not read the machine's FF");
     write_port(16'h0188, 8'h18);
     write_port(16'h018A, 8'hDF);
     read_port(16'h018A, rb);
-    if (rb !== 8'hDF) fail("a data write to rhythm register 0x18 was not the byte 0x18A reads back");
+    if (rb !== 8'hFF) fail("rhythm register 0x18 with the extension closed did not read the machine's FF");
     write_port(16'h0188, 8'h1D);
     write_port(16'h018A, 8'h9F);
     read_port(16'h018A, rb);
-    if (rb !== 8'h9F) fail("a data write to rhythm register 0x1D was not the byte 0x18A reads back");
+    if (rb !== 8'hFF) fail("rhythm register 0x1D with the extension closed did not read the machine's FF");
+    write_port(16'h0188, 8'h20);
+    write_port(16'h018A, 8'h5A);
+    read_port(16'h018A, rb);
+    if (rb !== 8'h5A) fail("a data write to register 0x20 was not the byte 0x18A reads back");
+    write_port(16'h0188, 8'h23);
+    write_port(16'h018A, 8'hA5);
+    read_port(16'h018A, rb);
+    if (rb !== 8'hA5) fail("a data write to register 0x23 was not the byte 0x18A reads back");
 
     // ---- 6. Timer B, IRQ ENABLED: flag + line, then the reset bit ----------
     // opna_settimer: bit1 starts B, bit3 enables its IRQ; fmport_b sets status
@@ -277,20 +289,20 @@ module tb_pc9821_opna_regs;
     read_port(16'h0188, rb);
     if (rb[0] !== 1'b0) fail("Timer A's flag did not clear on a 0x27 write with bit 4 set");
 
-    // ---- 9. register 0x29: jt12's IRQ mask, which NP2kai never reads ------
-    // jt12_mmr decodes 0x29 as REG_IRQMASK and ANDs irq_mask[1:0] into both
-    // timer IRQ terms (jt12_top's use_adpcm==2 assign). NP2kai's writeRegister
-    // stores 0x29 in s.reg and consults it nowhere, so a timer with its enable
-    // bit set still interrupts there. Probe: mask everything, arm Timer B, and
-    // see whether the line still rises.
+    // ---- 9. register 0x29 does not gate the timer IRQs ---------------------
+    // NP2kai's writeRegister stores 0x29 in s.reg and consults it nowhere; fmport_b
+    // raises the IRQ on `reg[0x27] & 0x08` alone (sound/opntimer.c), so a timer with
+    // its enable bit set still interrupts with 0x29 = 00. The machine agrees for Timer
+    // A (docs/probes/YM29-XE10.TXT `IRQ  v29=00 n=21`; tb_pc9821_opna_timers 9b
+    // asserts that one). Mask everything, arm Timer B, and the line must still rise.
     stop_and_clear;
     sound_o(8'h29, 8'h00);
     sound_o(8'h26, 8'hFF);
     sound_o(8'h27, 8'h0A);
     wait_irq(60000, n_cycles);
     if (n_cycles == 0)
-      diverge("Timer B IRQ with 0x29 (jt12 IRQ mask) written 0x00", 8'h00, 8'h01);
-    sound_o(8'h29, 8'h1F);         // restore the mask NP2kai does not have
+      fail("Timer B with its 0x27 enable set did not raise the IRQ after 0x29 = 00");
+    sound_o(8'h29, 8'h1F);         // back to the reset value
     stop_and_clear;
 
     // ---- 10. the status byte's timer bits are the ONLY live low bits -------

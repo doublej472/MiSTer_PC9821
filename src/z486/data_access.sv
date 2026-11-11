@@ -212,6 +212,19 @@ reg        vipt_load_slow_segf_r;
 assign     ret_redirect = vipt_load_wb_valid_r && vipt_load_wb_ret_r;
 reg [31:0] vipt_load_wb_data_r;
 reg        vipt_load_overlap_r;        // Plain-load successor owns EX while load completes
+// A direct load that crosses a dword boundary inside one 16-byte line (a word
+// at byte 3, a dword at byte 1..3 of its dword) reads its two dwords on the
+// probe/resolve pipeline, as the i486 runs a misaligned cache hit as two
+// cache cycles (Intel i486 Microprocessor data book, instruction timing
+// assumptions: misaligned operands add 3 clocks) instead of taking paging's
+// crossing path (about 8.5 clocks more).  The first resolve keeps the low
+// dword and steps the token's word address; the EX re-probe reads the next
+// dword, and its resolve completes the load from both.  The limit and every
+// translation term are the first resolve's: both dwords sit in one line, so
+// in one page.  A second resolve that misses falls back to paging with the
+// original address.
+reg        vipt_x2_r;                  // EX token waits for its second dword
+reg [31:0] vipt_x2_lo_r;               // the first dword
 assign vipt_load_slow_busy = vipt_load_slow_req_r || vipt_load_slow_wait_r;
 wire       vipt_load_busy = vipt_load_ex_r.valid || vipt_load_replay_r.valid ||
                             vipt_load_slow_busy || vipt_load_wb_valid_r;
@@ -324,6 +337,14 @@ endfunction
 
 assign vipt_load_wb_data = vipt_load_wb_data_r;
 
+// The EX token's load data: its first dword (a crossing token's kept low
+// dword) under the resolving dword, shifted down from its byte lane.  A
+// contained access needs no byte above the resolving dword, so the upper
+// half's content is masked away by its size.
+wire [31:0] vipt_ex_raw = vipt_x2_r ? vipt_x2_lo_r : dcache_vipt_resolve_data;
+wire [63:0] vipt_ex_pair = {dcache_vipt_resolve_data, vipt_ex_raw};
+wire [31:0] vipt_ex_word = vipt_ex_pair[{vipt_load_ex_r.lane, 3'b000} +: 32];
+
 // An occupied EX stage may accept only another direct load. If the older load
 // misses, the accepted younger token moves to the replay slot on this edge.
 assign d2_vipt_pipe_ready = d2_vipt_candidate &&
@@ -392,13 +413,25 @@ wire vipt_load_ex_contained =
      (vipt_load_ex_r.lane != 2'd3)) ||
     ((vipt_load_ex_r.mem_size == 2'd2) &&
      (vipt_load_ex_r.lane == 2'd0));
-wire vipt_load_ex_segf = vipt_load_ex_r.valid && dir_seg_fault;
+// A crossing token's second resolve no longer owns IND/seg_sel (a younger
+// load may have issued beside its first); its limit verdict was the first's.
+wire vipt_load_ex_segf = vipt_load_ex_r.valid && !vipt_x2_r && dir_seg_fault;
+// Within one line: the second dword is the next word of the same line.
+wire vipt_load_ex_inline = (vipt_load_ex_r.linear_addr[3:2] != 2'b11) &&
+                           !vipt_load_ex_r.is_ret;
 assign vipt_load_ex_hit = vipt_load_ex_r.valid && vipt_load_ex_probed_r &&
-                          vipt_load_ex_contained &&
+                          (vipt_load_ex_contained || vipt_x2_r) &&
                           vipt_translation_ok &&
                           !vipt_tlb_is_vga_mem && !vipt_load_ex_segf &&
                           !vipt_load_ex_token_pending &&
                           dcache_vipt_resolve_hit;
+// The first resolve of a crossing load: every hit term but containment.
+wire vipt_x2_go = vipt_load_ex_r.valid && vipt_load_ex_probed_r && !vipt_x2_r &&
+                  !vipt_load_ex_contained && vipt_load_ex_inline &&
+                  vipt_translation_ok &&
+                  !vipt_tlb_is_vga_mem && !vipt_load_ex_segf &&
+                  !vipt_load_ex_token_pending &&
+                  dcache_vipt_resolve_hit;
 // Capture the destination operand from every registered EX token,
 // independently of translation, segmentation, and cache outcome. Plain loads
 // use it for byte/word merge forwarding; M3 uses it as the private ALU
@@ -418,8 +451,7 @@ assign vipt_load_alu_dst_capture_size =
                                    : vipt_load_slow_r.write_size;
 assign vipt_load_alu_dst_capture_data =
     vipt_load_alu_dst_capture_fast
-        ? format_hardwired_load(dcache_vipt_resolve_data,
-                               vipt_load_ex_r.lane,
+        ? format_hardwired_load(vipt_ex_word, 2'd0,
                                vipt_load_ex_r.mem_size,
                                vipt_load_ex_r.result_kind)
         : format_hardwired_load(OPR_R, 2'd0,
@@ -429,8 +461,10 @@ assign vipt_load_alu_dst_capture_data =
 // port that cycle) probes again from EX at once, instead of through the
 // replay slot a cycle later. No younger load is in D2 issue beside an
 // unprobed EX token, so it has the probe port.
+// A crossing token's second probe is the same re-probe; the younger load that
+// issued beside its first resolve waits in the replay slot behind it.
 wire ex_reprobe = vipt_load_ex_r.valid && !vipt_load_ex_probed_r &&
-                  !vipt_load_replay_r.valid && !vipt_load_slow_busy &&
+                  (!vipt_load_replay_r.valid || vipt_x2_r) && !vipt_load_slow_busy &&
                   !mem_servicing && dcache_vipt_probe_ready;
 wire vipt_replay_try = vipt_load_replay_r.valid &&
                        !vipt_load_ex_r.valid && !vipt_load_slow_busy &&
@@ -584,6 +618,8 @@ always_ff @(posedge clk) begin
         vipt_load_wb_is_alu_r <= 1'b0;
         vipt_load_wb_alu_op_r <= 5'd0;
         vipt_load_overlap_r <= 1'b0;
+        vipt_x2_r <= 1'b0;
+        vipt_x2_lo_r <= 32'd0;
     end else begin
         if (vipt_load_wb_valid_r)
             vipt_load_overlap_r <= 1'b0;
@@ -594,7 +630,12 @@ always_ff @(posedge clk) begin
         // request; captured whenever a token resolves (no slow request is
         // pending then) so the fault cone does not reach their enables.
         if (vipt_load_ex_r.valid && !vipt_load_slow_busy) begin
-            vipt_load_slow_r.linear_addr <= vipt_load_ex_r.linear_addr;
+            // A crossing token's second resolve carries the next word.
+            vipt_load_slow_r.linear_addr <= vipt_x2_r
+                ? {vipt_load_ex_r.linear_addr[31:4],
+                   vipt_load_ex_r.linear_addr[3:2] - 2'd1,
+                   vipt_load_ex_r.linear_addr[1:0]}
+                : vipt_load_ex_r.linear_addr;
             vipt_load_slow_r.restart_eip <= vipt_load_ex_r.restart_eip;
             vipt_load_slow_r.dst <= vipt_load_ex_r.dst;
             vipt_load_slow_r.dst_onehot <= vipt_load_ex_r.dst_onehot;
@@ -619,6 +660,7 @@ always_ff @(posedge clk) begin
         // The EX slot normally advances or empties every cycle.
         vipt_load_ex_r.valid <= 1'b0;
         vipt_load_ex_probed_r <= 1'b0;
+        vipt_x2_r <= 1'b0;
 
         if (vipt_replay_try && dcache_vipt_probe_direct_accepted) begin
             vipt_load_ex_r <= vipt_load_replay_r;
@@ -631,6 +673,11 @@ always_ff @(posedge clk) begin
                 if (ex_reprobe && dcache_vipt_probe_direct_accepted) begin
                     vipt_load_ex_r.valid <= 1'b1;
                     vipt_load_ex_probed_r <= 1'b1;
+                    vipt_x2_r <= vipt_x2_r;
+                end else if (vipt_x2_r) begin
+                    // Its younger load may hold the replay slot: wait in EX.
+                    vipt_load_ex_r.valid <= 1'b1;
+                    vipt_x2_r <= 1'b1;
                 end else begin
                     vipt_load_replay_r <= vipt_load_ex_r;
                 end
@@ -639,7 +686,7 @@ always_ff @(posedge clk) begin
                 // the loaded target for the redirect.
                 vipt_load_wb_data_r <= vipt_load_ex_r.is_ret ? vipt_load_ex_r.ret_esp
                                      : format_hardwired_load(
-                    dcache_vipt_resolve_data, vipt_load_ex_r.lane,
+                    vipt_ex_word, 2'd0,
                     vipt_load_ex_r.mem_size, vipt_load_ex_r.result_kind);
                 vipt_load_wb_ret_r <= vipt_load_ex_r.is_ret;
                 vipt_load_wb_target_r <= dcache_vipt_resolve_data;
@@ -650,6 +697,11 @@ always_ff @(posedge clk) begin
                                      vipt_load_ex_r.dst[2];
                 vipt_load_wb_is_alu_r <= vipt_load_ex_r.is_alu;
                 vipt_load_wb_alu_op_r <= vipt_load_ex_r.alu_op;
+            end else if (vipt_x2_go && !any_fault) begin
+                vipt_load_ex_r.valid <= 1'b1;
+                vipt_x2_r <= 1'b1;
+                vipt_x2_lo_r <= dcache_vipt_resolve_data;
+                vipt_load_ex_r.linear_addr[3:2] <= vipt_load_ex_r.linear_addr[3:2] + 2'd1;
             end else if (!any_fault) begin
                 vipt_load_slow_req_r <= 1'b1;
                 // The EX stage is the only cycle IND/seg_sel belong to a direct
@@ -723,6 +775,7 @@ always_ff @(posedge clk) begin
 
         if (q_flush || any_fault || interrupt_entry) begin
             vipt_load_ex_r.valid <= 1'b0;
+            vipt_x2_r <= 1'b0;
             vipt_load_replay_r.valid <= 1'b0;
             vipt_load_slow_req_r <= 1'b0;
             vipt_load_slow_wait_r <= 1'b0;

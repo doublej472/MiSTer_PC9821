@@ -17,6 +17,31 @@ deleted. A bench `tools/bench.py` passes also prints no line opening with `FAIL`
 `tools/check_tests.py` and `tools/check_tool_citations.py` carry visible, shrink-only ledgers: an
 entry that stops being true fails the check, so a ledger can only get shorter.
 
+## Bench rules that keep a result independent of the simulator
+
+Three patterns gave different results between Verilator 5.052 and 5.054, and all are bench errors,
+not simulator bugs:
+
+- **A bench process clocked on the DUT's edge drives every signal the DUT reads with `<=`.** A
+  blocking write (`=`, or a task's output argument) in an `always @(posedge clk)` that a DUT
+  process reads on the same edge is an IEEE 1800-2017 4.7 ordering race: the simulator may run the
+  reader before or after it. The floppy benches' HPS model wrote `sd_buff_dout` through a task
+  output and every word landed one address early under 5.054; hps_io itself drives the buffer
+  from registers (`sys/hps_io.sv`).
+- **`force` the register that drives a net, not a net that crosses an output port.** IEEE
+  23.3.3.7 makes the two sides of a port one net, but Verilator treats them as one only when it
+  inlines the module, so a force on the upper side may not reach the lower one. Force
+  `dut.memory.loader.cpu_run`, not `dut.cpu_run`.
+- **Preload a register by forcing the register, never the net its output port drives.** A
+  variable output port is a continuous assignment from the inner variable to the outer net
+  (IEEE 23.3.3.2), so `force`/`release` on the outer net never reaches the register, and the
+  release returns the net to its driver; a variable keeps its forced value on release until its
+  next procedural assignment (10.6.2). The fork's Dhrystone, `tb_z486` and `tb_test386` benches
+  preloaded ESP and the other GPRs through `dut.ESP`, a wire driven by `data_unit`'s `esp`: under
+  5.052 the inlined port aliased the two and the preload landed, under 5.054 ESP stayed at its
+  reset 0 and Dhrystone timed out at its first CALL (`Instructions: 2`, EIP 1), `test-simple`
+  passed 8/26. They now force `dut.data_unit_inst.esp`.
+
 ## The static contract checks
 
 The static contract checks take seconds and hold two files (or the tree and a claim) together -
@@ -36,7 +61,7 @@ python3 tools/bench.py --selftest            # the runner's verdict rules on pla
 python3 tools/gen_egc_compare_vectors.py --check   # the EGC capture vectors are the generator's output
 python3 tools/gen_gdc_compare_vectors.py --check   # and the GDC conformance clusters
 python3 tools/gen_gdc_draw_vectors.py --check      # and the GDC figure-drawing replay rows
-python3 tools/gen_keymap_table.py --check    # README's keyboard table is translate()'s, remap_slot() names
+python3 tools/gen_keymap_table.py --check    # docs/user/input.md's key table is translate()'s, remap_slot() names
                                              # exactly the rows the two layouts differ in
 python3 tools/mutate_bench.py --plan tests/pc9821/mutations.json --check-plan   # the mutation record still applies
 python3 tools/check_dbglog_contract.py       # the debug-UART record table (+ --selftest)
@@ -60,12 +85,18 @@ python3 tools/check_z486_patch_diff.py       # src/z486 vs the fork at the vendo
 python3 tools/check_opna_vendor_diff.py    # src/opna vs the PC88_MiSTer commit LICENSE-SCOPE.md pins (+ --selftest;
                                              # exit 2 = SKIP without --upstream/$OPNA_UPSTREAM)
 python3 tools/check_todo_split.py            # todo/ items, the index, and every `item NN` reference
-python3 tools/pc98_hdd_convert.py --selftest # the HDD-image converter on synthetic SASI/IDE disks
+python3 tools/pc98_hdd_convert.py --selftest # the HDD-image converter on synthetic SASI/IDE disks, and --new (blank disk)
+python3 tools/cue2pcd.py --selftest          # the CD converter: synthetic CUE/BIN and CloneCD sets, --batch
+python3 tools/fdconv.py --selftest           # the floppy converter: synthetic FDI/Virtual98/NFD r0/r1 images, --batch
 python3 tools/mister/zclick.py --selftest   # the uinput mouse helper's event streams (no device)
 python3 tools/mister/ztype.py --selftest    # every typed character of both layouts through Main_MiSTer's
                                              # set-2 table, translate() and the BIOS table (no device)
 python3 tools/decode_cdlog.py --selftest     # the CD-log decoder: record framing and the 16-bit ms timer's unwrap
 python3 tools/mister_load_loop.py --selftest # the load screen's schedule, build labels, frame header and own-shot test (no card)
+python3 tools/hwprobe/xe10t/xe10t_decode.py --selftest  # the XE10T capture decoder: checksums, truncation, control
+                                             # mismatch, sweep fits, CAL trust, the fencepost, compare refusal, the stamp
+python3 tools/hwprobe/mputest/mputest_decode.py --selftest  # the MPUTEST tables: generated includes current, the NP2kai
+                                             # wire model, wire/message compare, truncation, build mismatch
 python3 tools/check_win0_moved_inv.py        # iobus win0_sel_moved == (win0_sel != 8'h08) every cycle (+ --selftest)
 python3 tools/check_iobus_lane_inv.py        # iobus: in S_DEVWAIT the lane is the one S_BYTE presented (+ --selftest)
 python3 tools/check_arb_resp_inv.py          # the GVRAM arbiter's response-routing state invariants (+ --selftest)
@@ -117,22 +148,27 @@ simulation - the instrument for a guest that hangs on a real disk. Run it as
 `PC98_PACK=<pack.bin> USERDISK_IMG_FILE=1 TB_ARGS="+IMG_RW +PAST_IPL ..." CYCLES=<n> bash
 tests/pc9821/run_userdisk.sh <image>` (the `.mem` beside the pack comes from `build_pack.py`'s
 `--mem`). `+IMG_RW` makes the image writable through an in-memory overlay, `+PAST_IPL` keeps
-running after the boot sector, `+KEYSEQ`/`+KEYSEQ_N`/`+KEYSEQ_AT` type scancodes, and the traps
-stop at an event: `+TRAP_CSEIP=<cs:eip>`, `+TRAP_LIN=<linear>`, `+TRAP_AFTER=<cycle>`,
-`+TRAP_HITS=<n>`, `+TRAP_WIDE`, `+TRAP_RAMFILE=<path>`, `+PC_SEQ_N=<n>`. It runs ~210 k cycles/s,
+running after the boot sector, `+KEYSEQ`/`+KEYSEQ_N`/`+KEYSEQ_AT` type scancodes, `+TEXT_LINES_20`
+and `+MSW_KEEP` set the OSD's SETUP items (`+GDC_CLOCK_5MHZ` and
+`+FDD_MODE=<n>` (the Boot order position) the other DIP Switch fields; `+FLOPPY_MODE=<n>` sets the Floppy mode position (0 Auto (1M), the default; 1 1M)
+and reports 0x00BE, 0x500 and 0x55C/0x55D at the end beside the Xe10's captures), `+KBD_MON` logs every 8251 keyboard access and
+the stores to the ITF's boot-key CG cells, and the traps stop at an event: `+TRAP_CSEIP=<cs:eip>`, `+TRAP_LIN=<linear>`, `+TRAP_AFTER=<cycle>`,
+`+TRAP_HITS=<n>`, `+TRAP_WIDE`, `+TRAP_RAMFILE=<path>`, `+PC_SEQ_N=<n>`. `+RESET_EVERY=<n>` (with `+RESETS=<k>`, default 3, and `+RESET_HOLD=<c>`) asserts the machine reset every n cycles, to watch the boot across repeated OSD-style resets, and `+SYSDIP_LOG` logs every port 0x0031, 0x841E-0x8F1E and 0x8F1F access with its CS:EIP and the P31 latch. `+IMG_OVL_OUT=<file>` dumps the `+IMG_RW` overlay at the end of the run, and
+`tools/hwprobe/integ/ovl_extract.py` applies it to a copy of the image and copies out the files the
+guest wrote (a probe's capture, for one run on the core in simulation). It runs ~210 k cycles/s,
 so edit the image's CONFIG.SYS to reach the case directly rather than simulating a menu timeout.
 Trust its PC trail and RAM dump over the trap registers, which can lag by a few cycles.
 
 ## Real-controller measurements
 
-The boot golden (`run_boot.sh`, 930533) and the CPU's Dhrystone (242611) both run a fixed-latency
+The boot golden (`run_boot.sh`, 930528) and the CPU's Dhrystone (242611) both run a fixed-latency
 memory model, so an SDRAM controller change cannot move them. Two runs put the real controller
 (`split_sdram_backend` over `sdram_sync_bridge` over `src/memory/sdram.v`, ADQM=1, FAST_GRADE=0)
 and `tests/pc9821/sdram_chip_model.sv`, with its protocol, -7 AC and tREFI checks, under the same
 programs:
 
 ```
-bash tests/pc9821/run_boot_real.sh           # the boot tier (50 MHz clk_sys): CYCLES used=942542
+bash tests/pc9821/run_boot_real.sh           # the boot tier (50 MHz clk_sys): CYCLES used=942534
 python3 tools/dhrystone_real.py              # Dhrystone at 90 MHz: 271807 cycles
 ```
 

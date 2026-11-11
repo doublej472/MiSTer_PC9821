@@ -17,15 +17,12 @@ module tb_pc9821_kbd;
   wire [7:0] dout;
   wire irq;
   reg [10:0] ps2_key = 0;
-  reg        bios_setup = 0;
 
   // ==== DUT ====
   pc9821_kbd #(
       // The presentation pace is shrunk so the bench's back-to-back keys and reads
       // stay inside read_byte's budget; the real tick is SYS_CLOCK_HZ / 1280.
-      .XFER_TICK_CYCLES(26'd8),
-      // Shrink the HELP hold window so the bench can observe its release.
-      .HELP_HOLD_CYCLES(28'd2000)
+      .XFER_TICK_CYCLES(26'd8)
   ) dut (
       .clk(clk),
       .rst_n(rst_n),
@@ -36,8 +33,7 @@ module tb_pc9821_kbd;
       .din(din),
       .dout(dout),
       .irq(irq),
-      .ps2_key(ps2_key),
-      .bios_setup(bios_setup)
+      .ps2_key(ps2_key)
   );
 
   integer errors = 0;
@@ -148,9 +144,9 @@ module tb_pc9821_kbd;
     read_byte(8'h8D);
 
     // F1 -> NEC F1 0x62 (NP2kai lrcnv106 F1->0x62): the old F1->HELP
-    // remap left NEC F1 unreachable. HELP keeps its two other routes: End
+    // remap left NEC F1 unreachable. HELP keeps its own route: End
     // (E0 0x69 -> 0x3F, the raw key number the ITF's POST reads to enter SETUP,
-    // BANK4@0x4C3F) and the OSD bios_setup injector below.
+    // BANK4@0x4C3F).
     send_key(1'b1, 1'b0, 8'h05);
     read_byte(8'h62);
     send_key(1'b0, 1'b0, 8'h05);
@@ -358,35 +354,11 @@ module tb_pc9821_kbd;
     #1;
     if (dout & 8'h10) fail("8251 error reset did not clear overrun");
 
-    // ---- OSD "Enter BIOS setup (hold HELP)": the guest sees HELP HELD, not a tap,
-    //      and the OPTION IS SAMPLED AT MACHINE RESET ONLY:
-    //      a mid-run OSD flip must do NOTHING to the running machine.
-    //
-    // The hold is armed from reset: make 0x3F, and a RE-MAKE after the guest's own
-    // bit-3 keyboard reset (the held key survives the ITF's 8251 re-init, which flushes
-    // the receive side -- NP2kai keystat_resendstat, io/serial.c), then one break 0xBF
-    // after HELP_HOLD_CYCLES. Assert the guest-visible bytes, not module internals.
+    // ---- No key the host did not send: a reset followed by the ITF's 8251 set-up
+    //      (0x5E then 0x05, whose bit-3 1->0 transition is its keyboard reset) delivers
+    //      nothing: the keyboard synthesises no key of its own (no HELP hold at POST, so
+    //      the ITF never enters SETUP on this core).
     ps2_key = 0;
-    bios_setup = 1'b0;
-    @(negedge clk);
-    rst_n = 0;
-    repeat (4) @(posedge clk);
-    @(negedge clk);
-    rst_n = 1;
-    #1;
-    // Configure the 8251 with the option OFF (0x5E then 0x05; their bit-3 1->0
-    // transition is the ITF's keyboard reset), then flip the option ON mid-run:
-    // nothing may be injected. FAIL-FIRST: on the live-apply wiring this flip
-    // starts the hold immediately and the check below fires.
-    write_port(1'b1, 8'h5E);
-    write_port(1'b1, 8'h05);
-    bios_setup = 1'b1;
-    repeat (40) @(posedge clk);
-    if (irq) fail("a mid-run Enter-BIOS-setup flip injected HELP into the running machine");
-    bios_setup = 1'b0;
-
-    // The hold itself, armed at a reset like every other DIP value.
-    bios_setup = 1'b1;
     @(negedge clk);
     rst_n = 0;
     repeat (4) @(posedge clk);
@@ -395,21 +367,8 @@ module tb_pc9821_kbd;
     #1;
     write_port(1'b1, 8'h5E);
     write_port(1'b1, 8'h05);
-    repeat (4) @(posedge clk);   // let the first make reach the FIFO
-    // The ITF's POST re-init now flushes the receive side, discarding that first
-    // make; the held key is re-announced and must be what the poll reads.
-    write_port(1'b1, 8'h5E);
-    write_port(1'b1, 8'h05);
-    read_byte(8'h3F);            // the re-announced make: the key is HELD, not a tap
-    repeat (2500) @(posedge clk); // > the bench's HELP_HOLD_CYCLES (2000)
-    read_byte(8'hBF);            // ...then the single break that releases HELP
-    // The hold is over: a later keyboard reset must NOT re-announce HELP.
-    write_port(1'b1, 8'h5E);
-    write_port(1'b1, 8'h05);
-    repeat (20) @(posedge clk);
-    if (irq) fail("expired HELP hold re-announced a make on keyboard reset");
-    bios_setup = 1'b0;
-    $display("KBD_HELP: injected HELP held and re-announced (3F/BF) reached the guest");
+    repeat (2500) @(posedge clk);
+    if (irq) fail("a key the host never sent was delivered after a reset");
   // ==== VERDICT ====
 
     if (errors == 0) begin

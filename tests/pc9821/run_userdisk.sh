@@ -43,22 +43,21 @@ USERDISK_IMG_FILE=${USERDISK_IMG_FILE:-0}
 # cannot share a Verilator cache.
 LATE_MOUNT=${USERDISK_LATE_MOUNT:-0}
 
-# The I/O-latency profile variant (USERDISK_IO=faithful): the same source built with
-# -DIO_FAITHFUL, which selects IO_LATENCY_PROFILE 2 - the machine's measured access
-# TIMES from docs/probes/IO.TXT - for the tier's pc9821_system. It is the compile-time
-# devkit switch (build_profile.py's 'iofaithful' profile is the same one variable at
-# the top level), so the two sides of a boot A/B differ in exactly that one constant -
-# which is what makes the delta attributable rather than a two-variable comparison.
+# The I/O timing variant (USERDISK_IO=xe10): the same source built with -DIO_XE10, which
+# ties the tier's pc9821_system io_timing_xe10 input high - the OSD's I/O timing field at
+# Xe10, the machine's measured access TIMES (docs/probes/XE10T-XE10.TXT /IO). On the card it is
+# a run-time choice; here one define, so the two sides of a boot A/B differ in exactly that one
+# input - which is what makes the delta attributable rather than a two-variable comparison.
 # Its own build directory, for the same reason LATE_MOUNT has one.
-IO_VARIANT=${USERDISK_IO:-min}
+IO_VARIANT=${USERDISK_IO:-fast}
 IO_DEFINE=()
 VARIANT_SUFFIX=""
 if [[ $LATE_MOUNT == 1 ]]; then
   VARIANT_SUFFIX="-late"
 fi
-if [[ $IO_VARIANT == faithful ]]; then
-  VARIANT_SUFFIX="$VARIANT_SUFFIX-faithful"
-  IO_DEFINE=(-DIO_FAITHFUL)
+if [[ $IO_VARIANT == xe10 ]]; then
+  VARIANT_SUFFIX="$VARIANT_SUFFIX-xe10"
+  IO_DEFINE=(-DIO_XE10)
 fi
 # USERDISK_CD=1: the CD-ROM build (-DUSERDISK_CD; CD image via TB_ARGS="+CD_FILE=<path>").
 if [[ ${USERDISK_CD:-0} == 1 ]]; then

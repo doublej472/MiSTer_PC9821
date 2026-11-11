@@ -264,7 +264,7 @@ module tb_pc9821_block_io;
 
     // ---- another slot's stream while this request waits for its own acknowledge ----
     // hps_io serves ONE slot at a time and the word bus (sd_buff_wr/addr/dout) is shared by
-    // every slot; only `sd_ack`, which is per slot (sys/hps_io.sv:331 "sd_ack <= disk[VD:0]"),
+    // every slot; only `sd_ack`, which is per slot (sys/hps_io.sv:347 "sd_ack <= disk[VD:0]"),
     // says whose words they are. Here the request is presented (sd_rd high) and hps_io is still
     // busy with another slot - the CD-ROM's CD-DA stream in Policenauts' intro - so its
     // 1024-word transfer goes by with THIS engine's sd_ack low. None of it may reach the buffer

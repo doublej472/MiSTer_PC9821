@@ -229,7 +229,7 @@ module tb_pc9821_fdd_media_change;
   );
 
   // The two drives' image slots, wired as pc9821_system wires them: `img_size` is ONE
-  // hps_io register feeding BOTH slots (sys/hps_io.sv:130 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
+  // hps_io register feeding BOTH slots (sys/hps_io.sv:145 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
   // size register and two mount pulses - and why the mount tasks set it before each pulse.
   reg        mnt0 = 0, mnt1 = 0;
   reg [63:0] img_size = 0;
@@ -300,6 +300,7 @@ module tb_pc9821_fdd_media_change;
   reg b_is_raw = 0;
 
   reg [12:0] widx, wtotal;
+  reg [15:0] hword_q;   // the word the host model is about to present (see its use)
   reg [31:0] hlba;
   reg        hbusy, hlast;
   reg  [1:0] hwhich;
@@ -340,7 +341,14 @@ module tb_pc9821_fdd_media_change;
     end else begin
       sd_buff_wr   <= 1'b1;
       sd_buff_addr <= widx;
-      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], sd_buff_dout);
+      // The word is formed in a process-local variable and reaches the port through a
+      // NONBLOCKING assignment, like sd_buff_addr and sd_buff_wr beside it: hps_io drives
+      // all three from registers (sys/hps_io.sv:156 `output reg [DW:0] sd_buff_dout,`). A
+      // blocking write here is read by the adapter's own posedge process in the same time
+      // step, a race IEEE 1800-2017 4.7 leaves to the simulator's process order (Verilator
+      // 5.052 resolved it as the old word, 5.054 as the new one, one word early).
+      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], hword_q);
+      sd_buff_dout <= hword_q;
       if (hlast) begin
         hbusy      <= 1'b0;
         sd_ack_b   <= 1'b0;
@@ -521,9 +529,11 @@ module tb_pc9821_fdd_media_change;
       expect8(g_rs[0], {5'd0, hd, us}, {what, ": ST0 = hd<<2|us"});
       expect8(g_rs[1], 8'h00, {what, ": ST1"});
       expect8(g_rs[2], 8'h00, {what, ": ST2"});
-      expect8(g_rs[3], c, {what, ": C"});
+      // The count ends on R = EOT: C+1, R = 1, H unchanged, the machine's answer
+      // (docs/probes/XE10T-XE10-FDC.TXT `X READ1 ... c=01 h=00 r=01` for C0 R1 EOT=1).
+      expect8(g_rs[3], c + 8'd1, {what, ": C+1 at EOT"});
       expect8(g_rs[4], h, {what, ": H"});
-      expect8(g_rs[5], 8'h01, {what, ": R forced to 1 by the terminal count"});
+      expect8(g_rs[5], 8'h01, {what, ": R = 1 at EOT"});
       expect8(g_rs[6], 8'h03, {what, ": N"});
       expecti(dm_n, 1024, {what, ": (N+1) bytes moved"});
     end
@@ -583,7 +593,7 @@ module tb_pc9821_fdd_media_change;
 
 
   // A mount pulse of `w` cycles (hps_io holds img_mounted for the whole image-selection
-  // transaction, sys/hps_io.sv:318/:461), with no settle time after it: the caller decides
+  // transaction, sys/hps_io.sv:334/:490), with no settle time after it: the caller decides
   // whether to wait for the walk.
   task automatic pulse_mount(input integer which, input [63:0] size, input integer w);
     begin
@@ -769,7 +779,7 @@ module tb_pc9821_fdd_media_change;
     get_result;
     expecti(g_rlen, 7, "M4 drive 0 result length");
     expect8(g_rs[0], 8'h00, "M4 drive 0 ST0 = success");
-    expect8(g_rs[5], 8'h01, "M4 drive 0 R forced to 1 by TC");
+    expect8(g_rs[5], 8'h01, "M4 drive 0 R = 1 at EOT (XE10T-XE10-FDC READ1)");
     expecti(dm_n, 1024, "M4 drive 0 moved its whole sector");
     check_sector(0, 8'h01, 8'h00, 1024, 1024);
     wr8(3'd1, 8'h08); get_result;

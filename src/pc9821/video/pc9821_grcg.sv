@@ -27,13 +27,12 @@ module pc9821_grcg (
     // /RDBACK wrote 0x5A and read FF anyway, docs/probes/RDBACK.TXT:152).
     // NP2kai's crtc_i7c returns grcg.modereg (io/crtc.c:46-50) and is the weaker
     // source: the post-write read shows no live register behind the port.
-    // A WORD read at 0x7C answers 0x00FF - NP2kai's TERM_MINUS zero-extends the
-    // 16-bit IN and never fetches 0x7D (io/iocore16.tbl:23-26, io/iocore.c:781-782),
-    // so lane 1 is 0x00, and lane 0 is the 0xFF byte read above (the word form was
-    // never machine-measured - TODO item 42). 0x7E is NOT in that table, so a word read at 0x7E
-    // byte-splits and its high byte is 0x7F's open bus (the zero-extend covers 0x7C
-    // only). pc9821_iobus assembles both
-    // (tb_pc9821_iobus pins them).
+    // A WORD read at 0x7C answers 0xFFFF, the Xe10's value (docs/probes/XE10T-XE10-AUDIT.TXT
+    // W007C `w1=FFFF`): pc9821_iobus answers lane 1 with a terminated 0xFF without fetching
+    // 0x7D, and lane 0 is the 0xFF byte read above. (NP2kai's minus_term zero-extends it to
+    // 0x00FF, io/iocore16.tbl, which the machine does not.) A word read at 0x7E
+    // byte-splits and its high byte is 0x7F's open bus. pc9821_iobus assembles both
+    // (tb_pc9821_iobus and tb_pc9821_iobus_word_term pin them).
     input wire       port_we,
     input wire [7:0] port_addr,
     input wire [7:0] port_din,

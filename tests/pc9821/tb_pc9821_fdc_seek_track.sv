@@ -20,7 +20,9 @@
 //     RECALIBRATE zeroing treg alone - so after a SEEK the head stays put, and after a
 //     RECALIBRATE that left the two different the command's C is adopted;
 //   * READ ID answers C = the track register (fdd_readid_d88 :494-552);
-//   * the seven-byte result {ST0,ST1,ST2,C,H,R,N} with R forced to 1 by the terminal count, and
+//   * the seven-byte result {ST0,ST1,ST2,C,H,R,N}; a one-sector read (EOT = R) ended by the
+//     terminal count answers C+1 and R = 1, the real Xe10's answer
+//     (docs/probes/XE10T-XE10-FDC.TXT READ1; NP2kai keeps C there), and
 //     a missing sector ST0 = IC0|hd<<2|us with ST1 ND (fdcsend_success7/readsector).
 //
 // FAIL-FIRST: with the old seam S1 returns physical track 0's bytes, S2 and S3 answer ND, and
@@ -142,7 +144,7 @@ module tb_pc9821_fdc_seek_track;
   );
 
   // The two drives' image slots, wired as pc9821_system wires them: `img_size` is ONE
-  // hps_io register feeding BOTH slots (sys/hps_io.sv:130 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
+  // hps_io register feeding BOTH slots (sys/hps_io.sv:145 (output reg [63:0] img_size,     // size of image in bytes. v)), which is why this bench has one
   // size register and two mount pulses - and why the mount tasks set it before each pulse.
   reg        mnt0 = 0, mnt1 = 0;
   reg [63:0] img_size = 0;
@@ -210,6 +212,7 @@ module tb_pc9821_fdc_seek_track;
   reg c_is_raw = 0;
 
   reg [12:0] widx, wtotal;
+  reg [15:0] hword_q;   // the word the host model is about to present (see its use)
   reg [31:0] hlba;
   reg        hbusy, hlast;
   reg  [1:0] hwhich;
@@ -249,7 +252,14 @@ module tb_pc9821_fdc_seek_track;
     end else begin
       sd_buff_wr   <= 1'b1;
       sd_buff_addr <= widx;
-      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], sd_buff_dout);
+      // The word is formed in a process-local variable and reaches the port through a
+      // NONBLOCKING assignment, like sd_buff_addr and sd_buff_wr beside it: hps_io drives
+      // all three from registers (sys/hps_io.sv:156 `output reg [DW:0] sd_buff_dout,`). A
+      // blocking write here is read by the adapter's own posedge process in the same time
+      // step, a race IEEE 1800-2017 4.7 leaves to the simulator's process order (Verilator
+      // 5.052 resolved it as the old word, 5.054 as the new one, one word early).
+      word_for(hwhich, hlba + {19'd0, widx[12:8]}, widx[7:0], hword_q);
+      sd_buff_dout <= hword_q;
       if (hlast) begin
         hbusy      <= 1'b0;
         sd_ack_b   <= 1'b0;
@@ -400,9 +410,11 @@ module tb_pc9821_fdc_seek_track;
       expect8(g_rs[0], {5'd0, hd, us}, {what, ": ST0 = hd<<2|us"});
       expect8(g_rs[1], 8'h00, {what, ": ST1"});
       expect8(g_rs[2], 8'h00, {what, ": ST2"});
-      expect8(g_rs[3], c, {what, ": C"});
+      // The count ends on R = EOT: C+1, R = 1, H unchanged, the machine's answer
+      // (docs/probes/XE10T-XE10-FDC.TXT `X READ1 ... c=01 h=00 r=01` for C0 R1 EOT=1).
+      expect8(g_rs[3], c + 8'd1, {what, ": C+1 at EOT"});
       expect8(g_rs[4], h, {what, ": H"});
-      expect8(g_rs[5], 8'h01, {what, ": R forced to 1 by the terminal count"});
+      expect8(g_rs[5], 8'h01, {what, ": R = 1 at EOT"});
       expect8(g_rs[6], 8'h03, {what, ": N"});
       expecti(dm_n, 1024, {what, ": (N+1) bytes moved"});
     end

@@ -33,7 +33,7 @@ module tb_pc9821_opna_ssg_strobe;
   wire [7:0] psg_data;
   wire       psg_wr_n;
 
-  // The memory-mapped-register block of the OPNA, configured exactly as jt08.v:76-77
+  // The memory-mapped-register block of the OPNA, configured exactly as jt08.v:78-80
   // drives jt12_top (use_ssg=1, num_ch=6, use_pcm=0, use_adpcm=2, use_chipid=1).
   jt12_mmr #(
       .use_ssg   (1'b1),
@@ -148,7 +148,7 @@ module tb_pc9821_opna_ssg_strobe;
       .sel_dac_dat  ()
   );
 
-  // The SSG consumer, wired exactly as jt12_top.v:665-679 (`.cs_n ( 1'b0 )`, so write = !wr_n).
+  // The SSG consumer, wired exactly as jt12_top.v:689-703 (`.cs_n ( 1'b0 )`, so write = !wr_n).
   jt49 u_psg (
       .rst_n  (~rst),
       .clk    (clk),

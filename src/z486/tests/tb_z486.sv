@@ -360,15 +360,17 @@ module tb_z486 #(
         // Force initial register values
         force dut.CR0 = cr0_arg;
         force dut.CR3 = cr3_arg;
-        force dut.EAX = eax_arg;
-        force dut.ECX = ecx_arg;
-        force dut.EDX = edx_arg;
-        force dut.EBX = ebx_arg;
-        force dut.ESP = esp_arg;
-        force dut.EBP = ebp_arg;
-        force dut.ESI = esi_arg;
-        force dut.EDI = edi_arg;
-        force dut.EFLAGS = eflags_arg;
+        // EAX..EDI and EFLAGS: force data_unit's registers, not the dut.EAX..
+        // nets its output ports drive; see tests/dhrystone/tb_dhrystone.sv.
+        force dut.data_unit_inst.eax = eax_arg;
+        force dut.data_unit_inst.ecx = ecx_arg;
+        force dut.data_unit_inst.edx = edx_arg;
+        force dut.data_unit_inst.ebx = ebx_arg;
+        force dut.data_unit_inst.esp = esp_arg;
+        force dut.data_unit_inst.ebp = ebp_arg;
+        force dut.data_unit_inst.esi = esi_arg;
+        force dut.data_unit_inst.edi = edi_arg;
+        force dut.data_unit_inst.eflags = eflags_arg;
         force dut.CS = cs_arg[15:0];
         force dut.DS = ds_arg[15:0];
         force dut.ES = es_arg[15:0];
@@ -414,15 +416,15 @@ module tb_z486 #(
         reset_n = 1;
         release dut.CR0;
         release dut.CR3;
-        release dut.EAX;
-        release dut.ECX;
-        release dut.EDX;
-        release dut.EBX;
-        release dut.ESP;
-        release dut.EBP;
-        release dut.ESI;
-        release dut.EDI;
-        release dut.EFLAGS;
+        release dut.data_unit_inst.eax;
+        release dut.data_unit_inst.ecx;
+        release dut.data_unit_inst.edx;
+        release dut.data_unit_inst.ebx;
+        release dut.data_unit_inst.esp;
+        release dut.data_unit_inst.ebp;
+        release dut.data_unit_inst.esi;
+        release dut.data_unit_inst.edi;
+        release dut.data_unit_inst.eflags;
         release dut.CS;
         release dut.DS;
         release dut.ES;

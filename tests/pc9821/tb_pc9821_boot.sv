@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_BOOT:
-  // The diagnostic pack boots through the real CPU, memory and I/O path and reaches its own result marker. The cycle count is ASSERTED, not printed: the real backend must reach the marker at exactly 930533 clk_sys (or 875227 with the deliberately-selected +FAST_MEM stub), so a timing regression fails the tier instead of moving a line nothing reads. REGRESSION PIN, NOT CONFORMANCE: the two counts are tripwires fitted to this tree's own runs - non-regression evidence, never correctness evidence - and a DELIBERATE timing change is blessed by re-running with +REBASE_CYCLES (which prints the new measured count instead of asserting the old one) and editing the two constants once in the same change, so a timing change cannot be laundered through by re-measuring silently (review benches N9).
+  // The diagnostic pack boots through the real CPU, memory and I/O path and reaches its own result marker. The cycle count is ASSERTED, not printed: the real backend must reach the marker at exactly 930528 clk_sys (or 875218 with the deliberately-selected +FAST_MEM stub), so a timing regression fails the tier instead of moving a line nothing reads. REGRESSION PIN, NOT CONFORMANCE: the two counts are tripwires fitted to this tree's own runs - non-regression evidence, never correctness evidence - and a DELIBERATE timing change is blessed by re-running with +REBASE_CYCLES (which prints the new measured count instead of asserting the old one) and editing the two constants once in the same change, so a timing change cannot be laundered through by re-measuring silently (review benches N9).
 
 
 module tb_pc9821_boot;
@@ -20,15 +20,18 @@ module tb_pc9821_boot;
   // +FAST_MEM immediate stub (see the BACKEND block) reaches it at BOOT_CYCLES_FAST. Both are
   // asserted where the count is reported below, so a timing change of ANY size is a fatal
   // failure rather than a printed note the gate never reads. Each number was MEASURED on this
-    // tree, not chosen. The current pair (930533 / 875227) includes post.s's explicit GDT/IDT
+    // tree, not chosen. The current pair (930528 / 875218) includes post.s's explicit GDT/IDT
     // initialization, which retimed the boot by +12 / +5 when it made the triple-fault stage
     // independent of low-RAM power-up state; moving it again means
     // re-measuring and moving the literal in tests/pc9821/run_boot.sh and the docs with it.
     //
-    // LAST MOVE 930529 -> 930533 / 875223 -> 875227, the z486 re-vendor at 860a4ef: +1 from the
-    // real-mode interrupt-entry EFLAGS split (real-mode delivery keeps clearing AC through its own
-    // copy of the 386 mask pair, one cycle longer: 930535 vs 930534 with/without it on dcc3e72); +3
-    // from microcode reads probing the L1 from any uStep (930530 without that commit). Earlier moves
+    // LAST MOVE 930533 -> 930528 / 875227 -> 875218, the z486 re-vendor at d5d0974 (todo item
+    // 160): 0 / 0 from a misaligned direct load reading both dwords on the probe pipeline
+    // (a6805e7), -1 / -11 from CLI/STI and LOOP-not-taken without the 386 refetch (a364a2d),
+    // -3 / +3 from the real-mode far-transfer tail without its CS-limit restore (bb273da),
+    // -1 / -1 from real-mode delivery without the long jump back to the shared tail (d5d0974)
+    // (the FAST_MEM stub count is not monotonic in cycles saved: the endpoint is VSYNC-locked).
+    // The real-controller count moved 942542 -> 942534 with them (0, -4, -3, -1). Earlier moves
     // and their attributions are in the git history. This tier is VSYNC-locked at its endpoint and
     // runs with paging off, so it is not the instrument for a CPU change: Dhrystone is.
     //
@@ -38,14 +41,14 @@ module tb_pc9821_boot;
     // with it once after a DELIBERATE timing change, take the printed measured count,
     // and edit these two constants in the same change (the run then passes on the new
     // count; without the plusarg every count move stays fatal).
-    localparam integer BOOT_CYCLES_REAL = 930533;
-    localparam integer BOOT_CYCLES_FAST = 875227;
+    localparam integer BOOT_CYCLES_REAL = 930528;
+    localparam integer BOOT_CYCLES_FAST = 875218;
     // The REAL-CONTROLLER variant (`BOOT_REAL_SDRAM, tests/pc9821/run_boot_real.sh): the same boot
     // with the core's SDRAM backend (split_sdram_backend over sdram_sync_bridge over sdram.v,
     // ADQM=1, FAST_GRADE=0, at this tier's 50 MHz clk_sys) and sdram_chip_model with every
     // protocol, -7 AC and tREFI check on. Pinned: every other count is fatal, and a controller
     // change that moves it reports the new value with its attribution (0 would only report).
-    localparam integer BOOT_CYCLES_REAL_SDRAM = 942542;
+    localparam integer BOOT_CYCLES_REAL_SDRAM = 942534;
     reg rebase_cycles = 1'b0;
   reg reset = 1;
   reg hps_apply_reset = 0;
@@ -206,7 +209,6 @@ module tb_pc9821_boot;
       .ram_size_max(ram_size_max),
       // 5 MHz: this bench boots the real firmware and so must not change the display's
       // GDC line step. The strap decode and the step have their own benches.
-      .bios_setup(1'b0),
       // The debug UART FIFO and its accept handshake live in the top level (z486_mister.sv),
       // which this tier does not build - and nothing here reads dbg_uart_byte either. Tying
       // accept high lets the report emitter free-run at one byte per clk_sys, which is the

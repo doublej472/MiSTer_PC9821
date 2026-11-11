@@ -40,7 +40,23 @@ module jtopna (
     input   [15:0]  rhythm_wdata,
     // LOCAL CHANGE (B-4, this repository): 0xA460 bit 0 dropping switches the
     // FM to NP2kai's 3-channel mono configuration (cbus/board86.c:79-94).
-    input           ch3_mono
+    input           ch3_mono,
+    // LOCAL CHANGE (flag-reset seam, this repository): the board glue's timer flag
+    // reset, a one-clk pulse per flag ([0] timer A, [1] timer B) on the guest's data
+    // write that resets it (0x27 bit 4/5, or 0x110 bit 7). The chip resets the flag at
+    // the bus write (ymfm ymfm_fm.ipp engine_mode_write `set_reset_status(0, reset_mask);`,
+    // ymfm_opn.cpp ym2608::write_data `m_fm.set_reset_status(0, 0xff);`; NP2kai
+    // sound/opntimer.c opna_settimer `opna->s.status &= ~((cData & 0x30) >> 4);`), but
+    // the glue feeds the register port through a queue (pc9821_opna.sv), so the reset
+    // comes in here at the write instead and the queued copy no longer carries it.
+    // [1] is also held high, a level, while the guest's 0x110 Timer-B mask (bit 1)
+    // stands: a real Xe10 keeps that flag clear under the mask while the timer runs
+    // (pc9821_opna.sv tmr_mask_b, docs/probes/KIT1-XE10-OPNA.TXT STATUS3).
+    input   [1:0]   host_clr_tmr,
+    // The same seam's timer registers (0x24-0x26, 0x27 bits 3-0) as the glue latched them
+    // at the guest's write: {value_A[9:0], value_B[7:0], enable B, enable A, load B,
+    // load A}; see jt12_top.v.
+    input   [21:0]  host_tmr
 );
 
 // ADPCM-A
@@ -104,6 +120,8 @@ jt08 u_jt08(
     .fm_snd_left    ( fm_snd_left  ),
     .fm_snd_right   ( fm_snd_right ),
     .ch3_mono       ( ch3_mono     ),
+    .host_clr_tmr   ( host_clr_tmr ),   // LOCAL CHANGE (flag-reset seam)
+    .host_tmr       ( host_tmr     ),   // LOCAL CHANGE (flag-reset seam)
     // Sound output
     .psg_snd        ( psg_snd      ),
     .snd_left       (              ),

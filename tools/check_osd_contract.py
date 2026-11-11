@@ -31,7 +31,7 @@ that reports PASS about a contract nobody checked, so the coverage is now:
 
   1. every CONF_STR field that names status bits is parsed, bracketed or not - the parse
      is scoped to the `localparam CONF_STR = { ... };` block, because a quoted entry in a
-     COMMENT used to be parsed as a second field of the same kind (`S1,D88FDDHDM,FDD0;`
+     COMMENT used to be parsed as a second field of the same kind (`S1,D88FDDHDMFDI,FDD0;`
      beside the floppy wiring was a phantom root-menu member);
   2. every declared `O` field's bits are READ by the core (a field wired to nothing is
      declared-but-dead, and that is invisible to every Verilog tool);
@@ -40,9 +40,10 @@ that reports PASS about a contract nobody checked, so the coverage is now:
      have caught `O[3]` being wired to a port its module ignored;
   4. no two declared fields share a bit (and no option field shares one with an `R`/`T`
      action field) - the general form of the guard the Machine field once needed;
-  5. each field's POSITION 0 is the value the measured machine has, from a table that
-     names the reference (`FIELD_DEFAULT`); a new field with no entry is a FAILURE, not a
-     silent pass, because position 0 is what a card with no config file gets;
+  5. each field's POSITION 0 is the registered default, from a table that names its reason
+     (`FIELD_DEFAULT`; docs/policies.md, "Defaults favour running software": the value that
+     runs the most software, usually the measured machine's); a new field with no entry is a
+     FAILURE, not a silent pass, because position 0 is what a card with no config file gets;
   6. the option count fits the field's width, every `O` field's label is non-empty, and
      the RAM Size list, the position->code mapping and the code->bytes table still agree
      (the original RAM Size contract, unchanged);
@@ -58,9 +59,14 @@ that reports PASS about a contract nobody checked, so the coverage is now:
      a field between pages cannot silently drop it out of the default table;
   8. THE ROOT MENU'S LAYOUT is the one ROOT_LAYOUT states (the owner's order): the firmware
      pack's Load first, then the drives - each Mount directly followed by its own Eject, HDD,
-     CD-ROM, FDD1, FDD2 - then RAM Size, CPU Speed and Keyboard as one group, the DIP Switch page, the
+     CD-ROM, FDD1, FDD2 - then IDE bank 1 (CD builds), RAM Size, CPU Speed, I/O timing and
+     Keyboard as one group, the DIP Switch and Audio pages, the
      video options, and Reset last, each group set off by a separator. Every Mount has its
-     Eject, wired to that Mount's hps_io slot.
+     Eject, wired to that Mount's hps_io slot;
+ 10. THE AUDIO PAGE (`P2,Audio`): every level field the top level wires into pc9821_osd's
+     level ports is filed under it, in the owner's order (PC-9801-86, Beeper, then CD audio
+     in a CD-audio build), each offers all eight positions of its 3-bit field, and each
+     label names the gain code pc9821_osd's level_code table maps its position to.
 
 WHAT IT DELIBERATELY DOES NOT DO. It does not require that every status bit the RTL reads
 be declared: this core reads a set of bits no OSD entry declares on purpose (the
@@ -103,6 +109,9 @@ CRTC = ROOT / "src/pc9821/core/pc9821_text_mem.sv"
 # position selects - the label-vs-rate drift the cpu-speed table checker guarded before the
 # field was withdrawn on 2026-09-27; it was deleted with the field.
 THROTTLE = ROOT / "src/z486/cpu_throttle.sv"
+# The Floppy mode field's POSITION -> SETUP value table (pc9821_iobus's fdmode_setup), at its
+# point of use for the same reason as CRTC above: the port carries the position downstream.
+IOBUS = ROOT / "src/pc9821/core/pc9821_iobus.sv"
 
 # Where a module-port consumer may be found. src/ is this core's RTL and sys/ the frozen
 # framework it sits in (hps_io is reached that way); build trees are never scanned.
@@ -112,10 +121,12 @@ RTL_DIRS = (ROOT / "src", ROOT / "sys")
 #
 # POSITION 0 IS THE CONFIG-LESS CARD. The framework passes option index 0 for a field
 # when the core has no stored config and CONF_STR has no syntax for a default, so position
-# 0 is the machine the core is when nobody has configured it - and the reference for each
-# entry below is the MACHINE, not a preference. A field with no entry is a failure: a new
-# field's default has to be justified against the reference by whoever adds it, and an
-# unregistered default is exactly the "nobody checked" state this file exists to remove.
+# 0 is the machine the core is when nobody has configured it. Each entry's default is the value
+# that runs the most software (docs/policies.md, "Defaults favour running software") - the
+# measured machine's where that serves, but one machine's factory setting alone is not a
+# reason (Floppy mode below). A field with no entry is a failure: a new field's default has to
+# be justified by whoever adds it, and an unregistered default is exactly the "nobody checked"
+# state this file exists to remove.
 FIELD_DEFAULT: dict[str, tuple[str, str]] = {
     "O[63:61]": (
         "16M",
@@ -134,24 +145,33 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
         "it into work-area 0x54D bit 5, and the display-mode setter derives the games' bit 2 "
         "from that), so a config-less card answers the captured machine's clock",
     ),
-    "O[38]": (
-        "Auto",
-        "both positions exist on the machine (MAME pc9801.cpp fdc_mode_r `(m_dsw3->read() & 3) "
-        "<< 2`, DSW3:1 Fixed / Auto-Detection; the measured unit is Fixed, docs/probes/"
-        "FDMODE-XE10.TXT `PORT 00BE=FF`); Auto by design decision because with "
-        "Fixed POST leaves the 640 KB floppy interface uninitialised and a 2DD boot disk "
-        "that addresses it gets no drive",
-    ),
     "O[17:14]": (
         "Full",
         "the CPU at the profile's own clk_sys rate, ungated: position 0 makes cpu_throttle's "
         "cpu_ce constant 1, so a config-less card runs the cycle-identical full-speed core the "
         "boot golden and Dhrystone are pinned on",
     ),
-    "O[3]": (
-        "Off",
-        "the machine enters SETUP only while HELP is held at POST; a config-less card "
-        "must POST normally (the ITF writes 0x7FDD/0x7FDF but never reads Port C)",
+    "O[79]": (
+        "Fast",
+        "not a machine strap but how long the core makes an I/O port access take: Fast, the "
+        "shortest wait the bus allows (every class but the 8253 write at the FSM floor), runs "
+        "the most software and is the table the boot golden and Dhrystone are pinned on; Xe10, "
+        "the measured machine's per-class times (docs/probes/XE10T-XE10.TXT /IO), is the "
+        "opt-in for software that times itself by its port accesses (the owner's decision, "
+        "2026-11-08, todo item 82: a runtime choice by exception to the compile-time-knob rule)",
+    ),
+    "O[68]": (
+        "25",
+        "the MEASURED PC-9821Xe10 port-0x31 byte 0xF3 (docs/probes/MEMSW.TXT `0031=F3`) has "
+        "bit 3 clear, which the BIOS's POST CRT-mode call reads as 25 lines (BANK7@0x5952-0x5968; "
+        "NP2kai bios/bios.c bios_screeninit `al += (pccore.dipsw[1] & 0x08) >> 3;`), and 25 "
+        "lines is SETUP's factory value (record row 2 0x8C, BANK3@0x09F0)",
+    ),
+    "O[69]": (
+        "Initialise",
+        "the MEASURED port-0x31 byte 0xF3 has bit 4 SET, the memory-switch init switch at "
+        "initialise (MAME pc9801.cpp DSW2 SW2:5 \"Memory Switch Init\"), and the measured "
+        "0x871E = 0x3E has bit 5 set (docs/probes/PORTS.TXT:258), SETUP's factory value",
     ),
     "O[51]": (
         "US",
@@ -178,6 +198,13 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
         "Normal",
         "1:1 scaling: the machine's own pixel count, the framework's only neutral option",
     ),
+    "O[67]": (
+        "CD-ROM",
+        "the stock CD-equipped Xe10's layout and NP2kai's default: the hard disk on the first "
+        "IDE connector (bank 0) and the CD-ROM on the second (bank 1), so a config-less card "
+        "keeps the drive NEC's own CD drivers look for (NECCD.SYS/NECCDD.SYS talk to bank 1's "
+        "master only); HDD2 puts a second hard disk there instead",
+    ),
     "O[66:64]": (
         "0 dB",
         "not a machine setting but the user's CD-DA level, like the volume wheel on a real CD "
@@ -187,6 +214,30 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
         "clamp in the output FIR (tb_pc9821_audio_out_sat), not a level problem. NP2kai's "
         "default CD-DA level stays a step of the list: davolume 128 of 255 (sdl/ini.c:704, "
         "applied as davolume/255 in cbus/ideio.c:1738-1740), 20*log10(128/255) = -5.99 dB",
+    ),
+    "O[75:73]": (
+        "0 dB",
+        "not a machine setting but the user's level for the PC-9801-86 board as a whole: the "
+        "board has no volume of its own that the guest does not set (the 86-PCM's 0xA466 and "
+        "the YM2608's registers stay the guest's, upstream). 0 dB is unity, the level the board "
+        "reached the mix at before the field existed, so a config-less card and a config saved "
+        "before the Audio page sound as they did",
+    ),
+    "O[78:76]": (
+        "0 dB",
+        "not a machine setting but the user's beeper level, on top of the 0x871E BEEPER VOLUME "
+        "ladder the guest sets (NP2kai sound/beepg.c:113-114, linear in the code). 0 dB is "
+        "unity, the ladder exactly as it sounded before the field existed",
+    ),
+    "O[72:71]": (
+        "Auto (1M)",
+        "the owner's decision (2026-11-04, docs/policies.md \"Defaults favour running "
+        "software\"): auto (1M) runs the most software - the drives start as 1 MB drives and "
+        "POST also sets up the 640 KB interface, which some 2DD boot disks' IPLs use and which "
+        "the fixed 1M leaves unset (BANK7@0x7CAE), so they stay black at 1M. It seeds 0x861E = "
+        "0xF7 and 0x00BE reads FB after POST (docs/probes/XE10CFG-XE10-CFGF3.TXT, "
+        "FDMODE-XE10-FDMF3.TXT), the behaviour of the earlier FDD mode field's Auto default. "
+        "SETUP's factory value and the measured Xe10's is 1M (0x861E = 0x76), position 1",
     ),
     "O[42:40]": (
         "Auto",
@@ -218,21 +269,24 @@ FIELD_DEFAULT: dict[str, tuple[str, str]] = {
 # otherwise; NP2kai bios.c:254: `mem[MEMB_MSW5] & 0xf0`, "!= 0x20" is the 1 MB case, 0x20 the
 # 640 KB one). Positions 3..6 append NP2kai's boot-device codes for the same nibble
 # (bios1b.c:883-926 `switch (mem[MEMB_MSW5] & 0xf0)`: 0x60 MO, 0xa0 SASI 1, 0xb0 SASI 2,
-# 0xc0 SCSI) - the primary software reference's names for those switch positions. THE
-# DIVERGENCE is real and lives in the RTL's comment and the report: the real Xe10 firmware
-# does not select a boot device from this nibble (its boot helper keeps the controller's FDD
-# mode for every value but 0x20/0x40, and NP2kai's own switch comment at bios1b.c:883 says
-# the value should really arrive in the AL register), so this table pins the ENCODING the
-# reference names, not a claim that the machine boots MO/SASI/SCSI from it.
+# 0xc0 SCSI) - the primary software reference's names for those switch positions. The real
+# Xe10's bootstrap uses the same codes (BANK7@0x7F7B-0x7FBA passes the nibble in AL to the FDD
+# boot, BIOS.ROM@0xF700C-0xF7046, and the IDE ROM's boot entry, BANK3@0x07E5-0x0841).
+# O[72:71],Floppy mode: each label against SETUP's own value number for the item, the 0x861E
+# bits 1:0 the reset walk seeds (docs/bios-setup.md, DIP switch 3, from the item table at
+# BANK3@0x20A5: 0 640K, 1 auto (640K), 2 1M, 3 auto (1M)). The Xe10 holds F7 / 76 / 75 / F4 at
+# auto (1M) / 1M / auto (640K) / 640K (docs/probes/XE10CFG-XE10-CFGF3/CFG0/CFGF1/CFGF0.TXT).
+FLOPPY_MODE: dict[str, int] = {"Auto (1M)": 3, "1M": 2, "Auto (640K)": 1, "640K": 0}
+
 FDD_NIBBLE: dict[str, int] = {
     "Auto": 0x0, "640K": 0x2, "1M": 0x4, "MO": 0x6, "SASI1": 0xa, "SASI2": 0xb, "SCSI": 0xc,
 }
 
-# O[66:64],CD audio volume: each option's LABEL against the pc9821_audio_volume gain code
-# pc9821_osd.sv maps its position to. The code scale is that module's gain table, 0 dB at code 31
-# and 2 dB per code (pc9821_audio_volume.sv's gain_lut), so "-N dB" is code 31 - N/2, and "Off"
-# is code 0, the table's exact zero. A label whose code is not this is a volume the menu
-# misnames.
+# THE AUDIO PAGE's levels (O[75:73] PC-9801-86, O[78:76] Beeper, O[66:64] CD audio): each
+# option's LABEL against the pc9821_audio_volume gain code pc9821_osd.sv's level_code maps its
+# position to. The code scale is that module's gain table, 0 dB at code 31 and 2 dB per code
+# (pc9821_audio_volume.sv's gain_lut), so "-N dB" is code 31 - N/2, and "Off" is code 0, the
+# table's exact zero. A label whose code is not this is a volume the menu misnames.
 def cd_volume_label_code(label: str) -> int | None:
     """'-6 dB' -> 28, '0 dB' -> 31, 'Off' -> 0; None for a label that names no gain step."""
     if label == "Off":
@@ -248,8 +302,9 @@ def cd_volume_label_code(label: str) -> int | None:
 
 # THE DIP SWITCH PAGE. The requirement: all DIP/configuration
 # handling lives in the `P1,DIP Switch` sub-page. The ports below are the ones the top level
-# wires the DIP page's fields into - the status[] read at the connection (`osd_bios_setup`,
-# `osd_gdc_clock`, `osd_fdd_mode` - the FDD-mode switch, O[38] - and `cfg_fdd_mode` - the Boot
+# wires the DIP page's fields into - the status[] read at the connection (`osd_gdc_clock`,
+# the SETUP items `osd_text_lines`, `osd_floppy_mode` and
+# `osd_msw_keep`, and `cfg_fdd_mode` - the Boot
 # order, whose name only resembles it) or the port itself where the field's bits
 # are read straight off status[] (`bios_set`) - so a field that reaches one of them IS a DIP
 # field and must be filed under that page. A new switch field dropped into the root menu, or
@@ -258,7 +313,44 @@ def cd_volume_label_code(label: str) -> int | None:
 # `cfg_base_mem` left when the base memory was hardcoded to 640 KB.)
 DIP_PAGE = 1
 DIP_PORTS = ("bios_set",
-             "osd_bios_setup", "osd_gdc_clock", "osd_fdd_mode", "cfg_fdd_mode")
+             "osd_gdc_clock", "osd_text_lines", "osd_msw_keep",
+             "osd_floppy_mode", "cfg_fdd_mode")
+
+# THE AUDIO PAGE. The owner's specification: one page titled "Audio" holding one level per
+# source, in this order - the PC-9801-86 board, the beeper, CD audio (the last only in a build
+# with the CD drive's player). AUDIO_PORTS are pc9821_osd's level inputs, so a field wired to
+# one IS an audio level and must be filed under the page; AUDIO_ORDER is the page's field order
+# by bitspec (a `?` suffix marks a field only some builds declare). The title is short of the
+# side stripe's ~111-pixel limit (the DIP page's note below).
+AUDIO_PAGE = 2
+AUDIO_PAGE_TITLE = "Audio"
+AUDIO_PORTS = ("osd_snd86_level", "osd_beep_level", "osd_cd_volume")
+AUDIO_ORDER = ["O[75:73]", "O[78:76]", "O[66:64]?"]
+AUDIO_LABELS = {"O[75:73]": "PC-9801-86", "O[78:76]": "Beeper", "O[66:64]": "CD audio"}
+
+# STATUS BITS THAT ONCE CARRIED A FIELD AND ARE NOT REUSED. A saved config keeps whatever the
+# old field stored there, so a new field on such a bit would start from that stale value on
+# every card that ever set it. Each entry names the field it carried.
+RETIRED_BITS: dict[int, str] = {
+    3: "Enter BIOS setup (hold HELP)",
+    38: "FDD mode, Auto/Fixed (0x00BE bit 2, now part of Floppy mode)",
+}
+
+# THE LABELS THAT CARRY A USER-FACING WARNING. Every field on the DIP page is latched at
+# machine reset / reload (z486_mister.sv's CONF_STR comments: pc9821_iobus's straps, the FDD
+# mode POST reads, pc9821_crtc's memory-switch latch, the SETUP items' reset seed), so the page's
+# FIRST ROW is a `P1-,text` note saying a change needs a reset. The note is not in the title:
+# Main_MiSTer draws a page title as the OSD's side stripe, condensed, centred and cut at
+# OSDHEIGHT-8 pixels, and a page's bottom row covers the stripe's first 8 pixels with the scroll
+# arrow, so a 16-row OSD shows at most 111 condensed pixels of title ("DIP Switch" is 59; the
+# earlier "DIP Switch (reset to apply)" read "IP Switch (reset to" on a card). And only the
+# Xe10 firmware set boots (README "Hardware features"), so the Machine field's Xe entry is LABELLED as not working rather than hidden: a label moves
+# no status bit and no position, so a saved config keeps its meaning. A label that loses
+# either warning offers the user a setting that silently does nothing (or nothing yet).
+DIP_PAGE_TITLE = "DIP Switch"
+DIP_PAGE_NOTE = "Takes effect at next reset"
+MACHINE_FIELD = "O[31:28]"
+MACHINE_LABELS = ["Xe10", "Xe (not working)"]
 
 problems: list[str] = []
 
@@ -354,7 +446,8 @@ class Field:
 CONF_BLOCK = re.compile(r"localparam\s+CONF_STR\s*=\s*\{(.*?)\n\};", re.S)
 
 
-# A profile-rewritten CONF_STR LINE: `localparam NAME = "...";` (CONF_STR_CD, CONF_STR_VIDEO),
+# A profile-rewritten CONF_STR LINE: `localparam NAME = "...";` (CONF_STR_CD, CONF_STR_BANK1,
+# CONF_STR_CD_VOL, CONF_STR_VIDEO),
 # spliced into the block by name because a string cannot be built conditionally.
 STRING_PARAM = re.compile(r'^\s*localparam\s+(\w+)\s*=\s*"([^"]*)"\s*;', re.M)
 # The header is the framework's FIRST element (the core name and the UART/MIDI declaration),
@@ -367,7 +460,7 @@ def conf_str_region(text: str) -> str:
 
     THE PARSE IS SCOPED TO THIS BLOCK, NOT TO THE FILE. Every other quoted string in
     z486_mister.sv is prose in a comment, and one of them quotes a real entry
-    ("S1,D88FDDHDM,FDD0;" beside the floppy-slot wiring): parsed as CONF_STR it became a
+    ("S1,D88FDDHDMFDI,FDD0;" beside the floppy-slot wiring): parsed as CONF_STR it became a
     SECOND S1 field, i.e. a phantom member of the root menu, and the page checks this file
     now carries would report pages and fields the user never sees. The block is the
     contract, so the block is what is parsed; the full text is still what `status_reads`
@@ -379,7 +472,7 @@ def conf_str_region(text: str) -> str:
     # lines are described that way) would otherwise parse as a phantom entry of the menu.
     region = strip_comments(region)
     # THE PROFILE-REWRITTEN LINES ARE PART OF THE MENU. A bare identifier in the block is a
-    # string localparam (CONF_STR_CD, CONF_STR_VIDEO); its value is spliced in one quoted
+    # string localparam (CONF_STR_CD, CONF_STR_BANK1, CONF_STR_CD_VOL, CONF_STR_VIDEO); its value is spliced in one quoted
     # entry per `;`, as the framework reads it, so the CD's mount and eject - which exist only
     # in every preset since 2026-10-10 and are absent from a --no-cdrom build - are checked
     # exactly as the tree is configured.
@@ -611,7 +704,8 @@ def port_consumers(port: str, sources: list[tuple[str, str]]) -> list[str]:
 # --- the checks ---------------------------------------------------------------------
 
 def check(top_text: str, osd_text: str, system_text: str,
-          sources: list[tuple[str, str]], crtc_text: str = "") -> dict[str, str]:
+          sources: list[tuple[str, str]], crtc_text: str = "",
+          iobus_text: str = "") -> dict[str, str]:
     """Run every check against the three texts; return the PASS summary lines."""
     summary: dict[str, str] = {}
     top_code = strip_comments(top_text)
@@ -666,6 +760,15 @@ def check(top_text: str, osd_text: str, system_text: str,
                     f"(`{prefix}`), and no module that declares `{port}` reads it: the "
                     "option is wired to a port its module ignores"
                 )
+
+    # 4a. no declared field may sit on a retired bit (RETIRED_BITS).
+    for f in fields:
+        for bit in sorted(f.bits & set(RETIRED_BITS)):
+            note(
+                f"{f.spec} ({f.label}) declares status[{bit}], which carried "
+                f"\"{RETIRED_BITS[bit]}\": a saved config may still hold the old field's "
+                "value there, so the bit stays unused"
+            )
 
     # 4. no two declared fields may share a bit.
     #
@@ -748,6 +851,32 @@ def check(top_text: str, osd_text: str, system_text: str,
                     f"P{DIP_PAGE} sub-page"
                 )
     summary["dip"] = ", ".join(sorted(set(dip_members))) if dip_members else "(none)"
+
+    # 5e. THE WARNING LABELS (DIP_PAGE_TITLE, MACHINE_LABELS): what the user reads is the only
+    #     place the reset rule and the Xe set's state reach the OSD.
+    title = pages.get(DIP_PAGE, "").rstrip(";").strip()
+    if title != DIP_PAGE_TITLE:
+        note(f"the P{DIP_PAGE} page is titled {title!r}, want {DIP_PAGE_TITLE!r}: "
+             "the page's side-stripe title shows at most ~111 condensed pixels (a longer one is "
+             "cut off on a card), so the reset warning lives in the page's note row instead")
+    # The note row: the FIRST entry filed under the DIP page must be `P1-,<DIP_PAGE_NOTE>`,
+    # the unselectable text line Main_MiSTer's menu draws for a `-` entry with text.
+    page_entries = [m.group(1) for m in ENTRY.finditer(conf_text)
+                    if (pm := PAGE_PREFIX.match(m.group(1))) and int(pm.group(1)) == DIP_PAGE
+                    and m.group(1)[pm.end():pm.end() + 1] != ","]
+    first = page_entries[0].rstrip(";").strip() if page_entries else ""
+    want_note = f"P{DIP_PAGE}-,{DIP_PAGE_NOTE}"
+    if first != want_note:
+        note(f"the P{DIP_PAGE} page's first row is {first!r}, want {want_note!r}: every field "
+             "on it applies only at the next reset, and the note row is where the user sees that")
+    machine = [f for f in option_fields if f.bitspec == MACHINE_FIELD]
+    if machine and [o.strip().rstrip(";") for o in machine[0].options] != MACHINE_LABELS:
+        note(f"{machine[0].spec} ({machine[0].label}) offers {machine[0].options}, want "
+             f"{MACHINE_LABELS}: only the Xe10 firmware set boots, so the Xe entry carries "
+             "that in its label (labelled, not hidden, so no position moves)")
+    summary["labels"] = (f"P{DIP_PAGE} {title!r} note {DIP_PAGE_NOTE!r}; "
+                         + (f"{MACHINE_FIELD} {', '.join(machine[0].options)}" if machine
+                            else f"{MACHINE_FIELD} absent"))
 
     # 5d. THE HARDWARE-SWITCH FIELDS: each offered option's LABEL must be the value the code
     #     pc9821_osd.sv maps that position to. This is the class the RAM Size block below has
@@ -833,34 +962,94 @@ def check(top_text: str, osd_text: str, system_text: str,
                                     for p, w in enumerate(fdd_options))
     summary["fdd"] = fdd_summary
 
-    # 5f. THE CD AUDIO VOLUME (a CD-DA build only): each option's label is the gain code
-    #     pc9821_osd.sv maps its position to (cd_volume_label_code), and every one of the
-    #     field's positions is offered, so no saved value can land on an unlabelled code.
-    cdvol_options = conf_str_options(conf_text, "O[66:64]")
-    cdvol_summary = "(not in this build)"
-    if cdvol_options is not None:
+    # 5g. THE FLOPPY MODE: each label is the SETUP value pc9821_iobus's fdmode_setup maps its
+    #     position to (FLOPPY_MODE), and all four positions of the 2-bit field are offered.
+    fm_options = conf_str_options(conf_text, "O[72:71]")
+    fm_summary = "?"
+    if fm_options is None:
+        note("z486_mister.sv has no CONF_STR entry for O[72:71] (Floppy mode)")
+    else:
         arms = {int(m.group(1)): int(m.group(2)) for m in re.finditer(
-            r"3'd(\d):\s*cd_volume_code\s*=\s*5'd(\d+);", osd_text)}
-        dm = re.search(r"default:\s*cd_volume_code\s*=\s*5'd(\d+);", osd_text)
-        dflt = int(dm.group(1)) if dm else None
-        if len(cdvol_options) != 8:
-            note(f"O[66:64] (CD audio volume) offers {len(cdvol_options)} options, want all 8 "
-                 "positions of the 3-bit field labelled")
-        if not arms or dflt is None:
-            note("pc9821_osd.sv has no `3'dN: cd_volume_code = 5'dM;` arms with a `default:`")
+            r"2'd(\d):\s*fdmode_setup\s*=\s*2'd(\d);", iobus_text)}
+        dm = re.search(r"default:\s*fdmode_setup\s*=\s*2'd(\d);", iobus_text)
+        if dm:
+            for pos in range(4):
+                arms.setdefault(pos, int(dm.group(1)))
+        if len(fm_options) != 4:
+            note(f"O[72:71] (Floppy mode) offers {len(fm_options)} options, want SETUP's four")
+        if sorted(arms) != [0, 1, 2, 3]:
+            note("pc9821_iobus.sv has no complete `2'dN: fdmode_setup = 2'dM;` table "
+                 "(with a `default:`)")
         else:
-            for pos, word in enumerate(cdvol_options):
-                want = cd_volume_label_code(word.strip())
+            for pos, word in enumerate(fm_options):
+                want = FLOPPY_MODE.get(word.strip())
+                if want is None:
+                    note(f'Floppy mode position {pos}: option "{word}" is not one of SETUP\'s '
+                         f"items {sorted(FLOPPY_MODE)}")
+                elif arms[pos] != want:
+                    note(f'Floppy mode position {pos}: the CONF_STR list says "{word}" (SETUP '
+                         f"value {want}), but pc9821_iobus.sv maps that position to {arms[pos]}"
+                         " - the 0x861E bits the firmware reads")
+            fm_summary = ", ".join(f"{w}->{arms[p]}" for p, w in enumerate(fm_options))
+    summary["floppy"] = fm_summary
+
+    # 5f. THE AUDIO PAGE (check 10): every field wired to a level port is on the page, in
+    #     AUDIO_ORDER, with its label; each offers all eight positions of its 3-bit field; and
+    #     each option's label is the gain code pc9821_osd.sv's level_code maps its position to
+    #     (cd_volume_label_code), so no saved value can land on an unlabelled or misnamed code.
+    audio_members: list[str] = []
+    for bits, _prefix, port in reads:
+        if port is None or port not in AUDIO_PORTS:
+            continue
+        for f in fields:
+            if not (bits & f.bits):
+                continue
+            audio_members.append(f.bitspec)
+            if f.page != AUDIO_PAGE:
+                note(f"{f.spec} ({f.label}) is wired to the Audio page's `{port}` port but is "
+                     f"filed in {'the root menu' if f.page is None else f'P{f.page}'}: every "
+                     f"audio level lives on the P{AUDIO_PAGE} {AUDIO_PAGE_TITLE!r} page")
+    atitle = pages.get(AUDIO_PAGE, "").rstrip(";").strip()
+    if atitle != AUDIO_PAGE_TITLE:
+        note(f"the P{AUDIO_PAGE} page is titled {atitle!r}, want {AUDIO_PAGE_TITLE!r}")
+    on_page = [f.bitspec for f in fields if f.page == AUDIO_PAGE]
+    present = set(on_page)
+    want_order = [e.rstrip("?") for e in AUDIO_ORDER
+                  if not e.endswith("?") or e.rstrip("?") in present]
+    if on_page != want_order:
+        note(f"the P{AUDIO_PAGE} {AUDIO_PAGE_TITLE!r} page holds {on_page}, want {want_order} "
+             "(the owner's order: PC-9801-86, Beeper, then CD audio with the CD drive's player)")
+    arms = {int(m.group(1)): int(m.group(2)) for m in re.finditer(
+        r"3'd(\d):\s*level_code\s*=\s*5'd(\d+);", osd_text)}
+    dm = re.search(r"default:\s*level_code\s*=\s*5'd(\d+);", osd_text)
+    dflt = int(dm.group(1)) if dm else None
+    if not arms or dflt is None:
+        note("pc9821_osd.sv has no `3'dN: level_code = 5'dM;` arms with a `default:`")
+    audio_summary: list[str] = []
+    for f in fields:
+        if f.page != AUDIO_PAGE or f.bitspec not in AUDIO_LABELS:
+            continue
+        name = AUDIO_LABELS[f.bitspec]
+        if f.label != name:
+            note(f"{f.spec} is labelled {f.label!r}, want {name!r}")
+        opts = [o.strip().rstrip(";").strip() for o in f.options]
+        if len(opts) != 8:
+            note(f"{f.spec} ({f.label}) offers {len(opts)} options, want all 8 positions of "
+                 "the 3-bit field labelled")
+        if arms and dflt is not None:
+            for pos, word in enumerate(opts):
+                want = cd_volume_label_code(word)
                 code = arms.get(pos, dflt)
                 if want is None:
-                    note(f'CD audio volume position {pos}: option "{word}" names no gain step '
+                    note(f'{f.label} position {pos}: option "{word}" names no gain step '
                          "(want \"Off\" or \"-N dB\" with N even, 0..60)")
                 elif code != want:
-                    note(f'CD audio volume position {pos}: the CONF_STR list says "{word}" '
+                    note(f'{f.label} position {pos}: the CONF_STR list says "{word}" '
                          f"(gain code {want}), but pc9821_osd.sv maps that position to {code}")
-            cdvol_summary = ", ".join(f"{w}->{arms.get(p, dflt)}"
-                                      for p, w in enumerate(cdvol_options))
-    summary["cdvol"] = cdvol_summary
+            audio_summary.append(f"{f.label}: " + ", ".join(
+                f"{w}->{arms.get(p, dflt)}" for p, w in enumerate(opts)))
+    summary["audio"] = (f"P{AUDIO_PAGE} {atitle!r} " + "; ".join(audio_summary)
+                        + f" (wired: {', '.join(audio_members) or 'none'})")
 
     # 5e. THE DRIVES: one Eject per Mount, wired to that mount's slot.
     #     Every `S{n},<ext>,Mount <drive>` image slot has exactly one `T[b],Eject <drive>`
@@ -1147,12 +1336,14 @@ def check_drives(conf_text: str, top_code: str, fields: list[Field]) -> str:
 
 
 # THE ROOT MENU'S LAYOUT, the owner's order: the firmware pack (the BIOS ROM set) first, then
-# the drives - each Mount directly followed by its own Eject, HDD, CD-ROM, FDD1, FDD2 - then
-# the machine (RAM Size, CPU Speed and the Keyboard layout, one group), the DIP Switch page, the video options, and
+# the drives - each Mount directly followed by its own Eject, HDD, HDD2, CD-ROM, FDD1, FDD2 -
+# then the machine (the IDE bank 1 layout - a setting, not a drive action, so below the
+# Mount/Eject section, the owner's order of 2026-11-01 - then RAM Size, CPU Speed and the
+# Keyboard layout, one group), the DIP Switch and Audio pages, the video options, and
 # Reset last. One inner list is one group, set off from the next by a `-` separator. An entry
 # is named by its spec (the text before the first comma); a `?` suffix marks an entry only
-# some builds declare (the CD-ROM's pair with cdrom_en, its CD audio volume with
-# cdrom_audio_en, the analog-video fields with
+# some builds declare (the CD-ROM's pair and the IDE bank 1 field with cdrom_en, the analog-video
+# fields with
 # vga_dbl_en: build_profile.py's rewritten lines), which the layout then expects exactly when
 # the build has it. Entries filed under a sub-page are that page's, not the root menu's, and
 # an entry this list does not name is left to the other checks (a new field's default, its
@@ -1161,9 +1352,9 @@ def check_drives(conf_text: str, top_code: str, fields: list[Field]) -> str:
 # comments in z486_mister.sv cite the framework lines that make that so).
 ROOT_LAYOUT: list[list[str]] = [
     ["F0"],
-    ["S0", "T[8]", "S4?", "T[11]?", "O[66:64]?", "S1", "T[9]", "S2", "T[10]"],
-    ["O[63:61]", "O[17:14]", "O[51]"],
-    ["P1"],
+    ["S0", "T[8]", "S3", "T[7]", "S4?", "T[11]?", "S1", "T[9]", "S2", "T[10]"],
+    ["O[67]?", "O[63:61]", "O[17:14]", "O[79]", "O[51]"],
+    ["P1", "P2"],
     ["O[23:22]", "O[46:45]", "O[81:80]?", "O[83:82]?"],
     ["T[0]", "R[0]", "J", "V"],
 ]
@@ -1175,15 +1366,25 @@ ROOT_LAYOUT: list[list[str]] = [
 #    images by their content (pc9821_hdd_image.sv: the HDI header and the "conectix" footer).
 MOUNT_EXTS: dict[str, str] = {
     "S0": "IMGHDIVHD",          # Mount HDD: raw, HDI, fixed VHD
-    "S1": "D88FDDHDM",          # Mount FDD1
-    "S2": "D88FDDHDM",          # Mount FDD2
-    "S4": "ISOPCD",             # Mount CD-ROM (CD builds only)
+    "S3": "IMGHDIVHD",          # Mount HDD2: the same detector, per drive
+    "S1": "D88FDDHDMFDI",       # Mount FDD1: D88, raw (FDD/HDM), FDI (pc9821_fdd_media.sv)
+    "S2": "D88FDDHDMFDI",       # Mount FDD2
+    "S4": "ISOPCDBIN",          # Mount CD-ROM (CD builds only): ISO, PCD, raw 2352 BIN
 }
+# Main_MiSTer copies an F/S entry's extension list into a 13-byte buffer (menu.cpp
+# `static char fs_pFileExt[13] = "xxx";`, filled by `strcpy(fs_pFileExt, ext);`), so a list longer
+# than 12 characters - four 3-character extensions - overruns it. The floppy slots are at that
+# limit; a raw image with another name (.xdf, .2hd, ...) is mounted after a rename (docs/user/images.md, "Formats").
+MOUNT_EXT_MAX = 12
 
 
 def check_mount_exts(conf_text: str) -> str:
     """Check 9: each image slot offers MOUNT_EXTS' extensions; return the summary."""
     seen = []
+    for m in re.finditer(r'([FS]C?\d),([A-Z0-9 ]*),', conf_text):
+        if len(m.group(2)) > MOUNT_EXT_MAX:
+            note(f"the {m.group(1)} entry's extension list {m.group(2)!r} is longer than "
+                 f"{MOUNT_EXT_MAX} characters (Main_MiSTer's fs_pFileExt[13])")
     for m in re.finditer(r'(S\d),([A-Z0-9]*),Mount ', conf_text):
         slot, exts = m.group(1), m.group(2)
         want = MOUNT_EXTS.get(slot)
@@ -1226,8 +1427,8 @@ def check_layout(conf_text: str) -> str:
 
     if actual != want:
         note("CONF_STR's root menu is not the contracted layout (ROOT_LAYOUT: the ROM pack "
-             "first, then each drive's Mount and Eject - HDD, CD-ROM, FDD1, FDD2 - then RAM "
-             "Size, CPU Speed and Keyboard, the DIP Switch page, video, Reset; `|` is a separator): "
+             "first, then each drive's Mount and Eject - HDD, HDD2, CD-ROM, FDD1, FDD2 - then IDE "
+             "bank 1, RAM Size, CPU Speed, I/O timing and Keyboard, the DIP Switch and Audio pages, video, Reset; `|` is a separator): "
              f"it reads {show(actual)}, want {show(want)}")
     return show(actual)
 
@@ -1269,8 +1470,10 @@ def report(summary: dict[str, str]) -> None:
     print(f"  root menu       {summary['root']}")
     print(f"  sub-pages       {summary['pages']}")
     print(f"  DIP page        P{DIP_PAGE} holds {summary['dip']} (every field wired to a DIP port)")
+    print(f"  labels          {summary['labels']}  (DIP_PAGE_TITLE, DIP_PAGE_NOTE, MACHINE_LABELS)")
     print(f"  switch values   Boot order {summary['fdd']} (label -> the nibble the cell takes)")
-    print(f"  CD volume       {summary['cdvol']} (label -> pc9821_audio_volume gain code)")
+    print(f"  Floppy mode     {summary['floppy']} (label -> SETUP's 0x861E value)")
+    print(f"  Audio page      {summary['audio']} (label -> pc9821_audio_volume gain code)")
     print(f"  mapping         {summary['mapping']}")
 
 
@@ -1284,15 +1487,15 @@ def main() -> int:
         return selftest()
 
     texts = []
-    for path in (TOP, OSD, SYSTEM, CRTC):
+    for path in (TOP, OSD, SYSTEM, CRTC, IOBUS):
         text = slurp(path)
         if text is None:
             print(f"OSD CONTRACT CHECK: FAIL -- cannot read {path}")
             return 1
         texts.append(text)
 
-    top, osd, system, crtc = texts
-    summary = check(top, osd, system, rtl_sources(), crtc)
+    top, osd, system, crtc, iobus = texts
+    summary = check(top, osd, system, rtl_sources(), crtc, iobus)
     if problems:
         print("OSD CONTRACT CHECK: FAIL")
         for p in problems:
@@ -1313,7 +1516,7 @@ def selftest() -> int:
     """
     texts = {}
     for key, path in (("top", TOP), ("osd", OSD), ("system", SYSTEM), ("crtc", CRTC),
-                      ("throttle", THROTTLE)):
+                      ("throttle", THROTTLE), ("iobus", IOBUS)):
         text = slurp(path)
         if text is None:
             print(f"OSD CONTRACT SELFTEST: FAIL -- cannot read {path}")
@@ -1324,7 +1527,7 @@ def selftest() -> int:
     problems = []
     sources = rtl_sources()
     paths = {"top": str(TOP), "osd": str(OSD), "system": str(SYSTEM), "crtc": str(CRTC),
-             "throttle": str(THROTTLE)}
+             "throttle": str(THROTTLE), "iobus": str(IOBUS)}
 
     def run(mutated: dict[str, str]) -> None:
         """Check every text with each one standing in for its own file."""
@@ -1335,7 +1538,7 @@ def selftest() -> int:
                 for path, text in sources if path == paths[key]]
         rest = [(path, text) for path, text in sources if path not in paths.values()]
         check(mutated["top"], mutated["osd"], mutated["system"], here + rest,
-              mutated["crtc"])
+              mutated["crtc"], mutated["iobus"])
 
     run(texts)
     if problems:
@@ -1344,25 +1547,42 @@ def selftest() -> int:
             print(f"  - {p}")
         return 1
 
-    # BOTH menus, made in memory the way build_profile.py writes them (its profile-rewritten
-    # CONF_STR_CD line), whichever one the tree is configured with: the CD build's (every
-    # preset's default since 2026-10-10) and the --no-cdrom opt-out's, so the CD's mount/eject
-    # pair is checked as a CD build has it and its absence as a build without the drive has it.
-    # A CD build with the drive's audio player also carries the CD audio volume field; a
-    # data-only drive (--no-cdrom-audio) has the pair alone.
-    cdvol_entry = "O[66:64],CD audio volume,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"
-    cd_line = '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;' + cdvol_entry + '"'
-    cddata_line = '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;T[11],Eject CD-ROM;"'
-    nocd_line = '"T[8],Eject HDD;"'
+    # EVERY menu, made in memory the way build_profile.py writes them (its profile-rewritten
+    # CONF_STR_CD, CONF_STR_BANK1 and CONF_STR_CD_VOL lines), whichever one the tree is
+    # configured with: the CD build's (every preset's default since 2026-10-10) and the
+    # --no-cdrom opt-out's, so the CD's mount/eject pair is checked as a CD build has it and its
+    # absence as a build without the drive has it. Every CD build has the IDE bank 1 field first
+    # after the drives block's separator (CONF_STR_BANK1). A CD build with the drive's audio
+    # player also carries the Audio page's CD audio field, on CONF_STR_CD_VOL before the page
+    # group's closing separator; a data-only drive (--no-cdrom-audio) has the separator alone.
+    # Every build has the second hard disk's pair (slot 3).
+    cdvol_entry = "P2O[66:64],CD audio,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"
+    cdvol_root = cdvol_entry[2:]
+    bank1_entry = "O[67],IDE bank 1,CD-ROM,HDD2;"
+    hdd2 = "S3,IMGHDIVHD,Mount HDD2;T[7],Eject HDD2;"
+    cd_line = '"T[8],Eject HDD;' + hdd2 + 'S4,ISOPCDBIN,Mount CD-ROM;T[11],Eject CD-ROM;"'
+    nocd_line = '"T[8],Eject HDD;' + hdd2 + '"'
+    bank_line = '"-;' + bank1_entry + '"'
+    nobank_line = '"-;"'
+    vol_line = '"' + cdvol_entry + '-;"'
+    novol_line = '"-;"'
 
-    def menu(line: str) -> str:
-        return re.sub(r'(?m)^(localparam\s+CONF_STR_CD\s*=\s*)"[^"]*"', r"\g<1>" + line,
-                      texts["top"], count=1)
+    def menu(line: str, bline: str, vline: str) -> str:
+        top = texts["top"]
+        for name, value in (("CONF_STR_CD", line), ("CONF_STR_BANK1", bline),
+                            ("CONF_STR_CD_VOL", vline)):
+            top = re.sub(r'(?m)^(localparam\s+' + name + r'\s*=\s*)"[^"]*"',
+                         lambda m, v=value: m.group(1) + v, top, count=1)
+        return top
 
     variants = {}
-    for tag, line in (("cd", cd_line), ("cddata", cddata_line), ("nocd", nocd_line)):
-        top = menu(line)
-        if top.count(f"CONF_STR_CD = {line};") != 1:
+    for tag, line, bline, vline in (("cd", cd_line, bank_line, vol_line),
+                                    ("cddata", cd_line, bank_line, novol_line),
+                                    ("nocd", nocd_line, nobank_line, novol_line)):
+        top = menu(line, bline, vline)
+        if top.count(f"CONF_STR_CD = {line};") != 1 \
+                or top.count(f"CONF_STR_BANK1 = {bline};") != 1 \
+                or top.count(f"CONF_STR_CD_VOL = {vline};") != 1:
             print(f"OSD CONTRACT SELFTEST: FAIL -- could not build the {tag} menu in memory")
             return 1
         variants[tag] = dict(texts, top=top)
@@ -1377,30 +1597,45 @@ def selftest() -> int:
     # with the field, so the new-field plant anchors on the Scale entry, a plain quoted
     # line of the block.)
     scale_line = '"O[46:45],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",'
-    biosup_line = '"P1O[3],Enter BIOS setup (hold HELP),Off,On;"'
+    text_line = '"P1O[68],Text lines,25,20;"'
     page_line = '"P1,DIP Switch;"'
+    audio_page = '"P2,Audio;"'
+    pk86_line = '"P2O[75:73],PC-9801-86,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"'
+    beep_line = '"P2O[78:76],Beeper,0 dB,-2 dB,-4 dB,-6 dB,-8 dB,-10 dB,-12 dB,Off;"'
+    note_line = '"P1-,Takes effect at next reset;"'
     cases: list[tuple[str, str, tuple]] = [
         ("the RAM Size default is 1M again", "top",
          ('"O[63:61],RAM Size,16M,', '"O[63:61],RAM Size,1M,')),
         ("a selected field is never read by the RTL", "top",
-         (".osd_bios_setup(status[3]),", ".osd_bios_setup(1'b0),")),
+         (".osd_text_lines(status[68]),", ".osd_text_lines(1'b0),")),
         ("a field is wired to a port its module ignores", "osd",
-         ("assign bios_setup = osd_bios_setup;", "assign bios_setup = 1'b0;")),
+         ("assign text_lines_20 = osd_text_lines;", "assign text_lines_20 = 1'b0;")),
         ("two declared fields share a bit", "top",
          ('"P1O[31:28],Machine,', '"P1O[46:45],Machine,')),
         ("an option field shares a bit with an action field", "top",
          ('"R[0],Reset and close OSD;"',
           '"R[0],Reset and close OSD;"\n\t"P1O[0],Sharpen,Off,On;"')),
         ("a field's position 0 is not the machine's", "top",
-         (biosup_line, '"P1O[3],Enter BIOS setup (hold HELP),On,Off;"')),
+         (text_line, '"P1O[68],Text lines,20,25;"')),
         ("an option list longer than its field is wide", "top",
-         (biosup_line, '"P1O[3],Enter BIOS setup (hold HELP),Off,On,Maybe;"')),
+         (text_line, '"P1O[68],Text lines,25,20,30;"')),
         ("a new option field with no measured default", "top",
          (scale_line, scale_line + '\n\t"O[5],Teleport,Off,On;",')),
         ("the RAM size table drifts a code", "osd",
          ("3'd0:    ram_size_code = 3'd4;", "3'd0:    ram_size_code = 3'd5;")),
+        ("the DIP page's title grows past what the side stripe shows", "top",
+         (page_line, '"P1,DIP Switch (reset to apply);"')),
+        ("the DIP page loses its reset-warning note row", "top",
+         (note_line, '"P1-;"')),
+        ("the DIP page's reset-warning note is not its first row", "top",
+         ((note_line + ',\n', ''),
+          (text_line + ',',
+           text_line + ',\n\t' + note_line + ','))),
+        ("the Machine field's Xe entry loses its not-working label", "top",
+         ('"P1O[31:28],Machine,Xe10,Xe (not working);"', '"P1O[31:28],Machine,Xe10,Xe;"')),
         ("the Machine field loses its CONF_STR entry", "top",
-         ('"P1O[31:28],Machine,Xe10,Xe;"', '"P1O[27:24],Machine,Xe10,Xe;"')),
+         ('"P1O[31:28],Machine,Xe10,Xe (not working);"',
+          '"P1O[27:24],Machine,Xe10,Xe (not working);"')),
         ("a status-bit field is written in a form the parser cannot read", "top",
          ('"O[17:14],CPU Speed,', '"O(17:14),CPU Speed,')),
         ("an option is filed under a sub-page nothing declares", "top",
@@ -1408,7 +1643,7 @@ def selftest() -> int:
         ("a page tag comes after the field it scopes", "top",
          ('"P1O[32],GDC Clock,2.5 MHz,5 MHz;"', '"O[32]P1,GDC Clock,2.5 MHz,5 MHz;"')),
         ("a declared sub-page holds nothing", "top",
-         (biosup_line, biosup_line + '\n\t"P2,Empty Page;"')),
+         (text_line, text_line + '\n\t"P3,Empty Page;"')),
         ("a page definition loses its title", "top",
          (page_line, '"P1,"')),
         ("a page tag names the root menu", "top",
@@ -1417,8 +1652,28 @@ def selftest() -> int:
         ("a DIP field is moved out of the DIP sub-page", "top",
          ('"P1O[42:40],Boot order,Auto,640K,1M,MO,SASI1,SASI2,SCSI;"',
           '"O[42:40],Boot order,Auto,640K,1M,MO,SASI1,SASI2,SCSI;"')),
-        ("the FDD mode switch is moved out of the DIP sub-page", "top",
-         ('"P1O[38],FDD mode,Auto,Fixed;"', '"O[38],FDD mode,Auto,Fixed;"')),
+        ("a retired status bit carries a field again", "top",
+         ((text_line, '"P1O[3],Text lines,25,20;"'),
+          (".osd_text_lines(status[68]),", ".osd_text_lines(status[3]),"))),
+        ("a SETUP item is moved out of the DIP sub-page", "top",
+         ('"P1O[69],Memory switch,Initialise,Keep;"', '"O[69],Memory switch,Initialise,Keep;"')),
+        ("the Memory switch item's default is not the measured Initialise", "top",
+         ('"P1O[69],Memory switch,Initialise,Keep;"', '"P1O[69],Memory switch,Keep,Initialise;"')),
+        ("the retired FDD mode switch comes back on status[38]", "top",
+         (('"P1O[72:71],Floppy mode,Auto (1M),1M,Auto (640K),640K;",',
+           '"P1O[72:71],Floppy mode,Auto (1M),1M,Auto (640K),640K;",\n\t"P1O[38],FDD mode,Auto,Fixed;",'),
+          (".osd_text_lines(status[68]),", ".osd_text_lines(status[68] | status[38]),"))),
+        ("the Floppy mode field is moved out of the DIP sub-page", "top",
+         ('"P1O[72:71],Floppy mode,', '"O[72:71],Floppy mode,')),
+        ("the Floppy mode default is not Auto (1M)", "top",
+         ('Floppy mode,Auto (1M),1M,Auto (640K),640K;', 'Floppy mode,1M,Auto (1M),Auto (640K),640K;')),
+        ("two Floppy mode labels are swapped", "top",
+         ('Floppy mode,Auto (1M),1M,Auto (640K),640K;', 'Floppy mode,Auto (1M),Auto (640K),1M,640K;')),
+        ("the Floppy mode position->value table drifts", "iobus",
+         ("2'd2:    fdmode_setup = 2'd1;", "2'd2:    fdmode_setup = 2'd0;")),
+        ("the Floppy mode field sits on the retired status[3]", "top",
+         (('"P1O[72:71],Floppy mode,', '"P1O[3:2],Floppy mode,'),
+          (".osd_floppy_mode(status[72:71]),", ".osd_floppy_mode(status[3:2]),"))),
         ("the Boot order list's labels are swapped", "top",
          ('"P1O[42:40],Boot order,Auto,640K,1M,MO,SASI1,SASI2,SCSI;"',
           '"P1O[42:40],Boot order,640K,Auto,1M,MO,SASI1,SASI2,SCSI;"')),
@@ -1450,47 +1705,96 @@ def selftest() -> int:
         ("a drive's eject_req is wired to nothing", "top",
          ("assign eject_req[2] = status[10];", "assign eject_req[2] = 1'b0;")),
         ("an image slot's label is not Mount <drive>", "top",
-         ('"S1,D88FDDHDM,Mount FDD1;",', '"S1,D88FDDHDM,FDD1;",')),
+         ('"S1,D88FDDHDMFDI,Mount FDD1;",', '"S1,D88FDDHDMFDI,FDD1;",')),
         # --- the formats each Mount entry offers (9) ----------------------------------------
         ("the HDD Mount hides HDI and VHD images", "top",
          ('"S0,IMGHDIVHD,Mount HDD;",', '"S0,IMG,Mount HDD;",')),
+        ("a floppy Mount hides FDI images", "top",
+         ('"S1,D88FDDHDMFDI,Mount FDD1;",', '"S1,D88FDDHDM,Mount FDD1;",')),
         ("a CD build's Mount drops PCD images", "top-cd",
          (cd_line, cd_line.replace("ISOPCD", "ISO"))),
         # --- the root menu's layout (8) ---------------------------------------------------
         ("an Eject sits above its Mount", "top",
-         ('"S1,D88FDDHDM,Mount FDD1;",\n\t"T[9],Eject FDD1;",',
-          '"T[9],Eject FDD1;",\n\t"S1,D88FDDHDM,Mount FDD1;",')),
+         ('"S1,D88FDDHDMFDI,Mount FDD1;",\n\t"T[9],Eject FDD1;",',
+          '"T[9],Eject FDD1;",\n\t"S1,D88FDDHDMFDI,Mount FDD1;",')),
         ("the drives go back to every Mount, then every Eject", "top",
-         ('"T[9],Eject FDD1;",\n\t"S2,D88FDDHDM,Mount FDD2;",',
-          '"S2,D88FDDHDM,Mount FDD2;",\n\t"T[9],Eject FDD1;",')),
+         ('"T[9],Eject FDD1;",\n\t"S2,D88FDDHDMFDI,Mount FDD2;",',
+          '"S2,D88FDDHDMFDI,Mount FDD2;",\n\t"T[9],Eject FDD1;",')),
         ("the ROM pack's load is back at the bottom", "top",
          (('\t"F0,BIN,Load BIOS ROM;",\n\t"-;",\n', ''),
           ('"R[0],Reset and close OSD;",', '"R[0],Reset and close OSD;",\n\t"-;",\n\t"F0,BIN,Load BIOS ROM;",'))),
         ("the floppies are listed above the hard disk", "top",
-         (('\t"S1,D88FDDHDM,Mount FDD1;",\n\t"T[9],Eject FDD1;",\n', ''),
+         (('\t"S1,D88FDDHDMFDI,Mount FDD1;",\n\t"T[9],Eject FDD1;",\n', ''),
           ('\t"S0,IMGHDIVHD,Mount HDD;",',
-           '\t"S1,D88FDDHDM,Mount FDD1;",\n\t"T[9],Eject FDD1;",\n\t"S0,IMGHDIVHD,Mount HDD;",'))),
+           '\t"S1,D88FDDHDMFDI,Mount FDD1;",\n\t"T[9],Eject FDD1;",\n\t"S0,IMGHDIVHD,Mount HDD;",'))),
         ("RAM Size and CPU Speed are split by a separator", "top",
          ('"O[17:14],CPU Speed,', '"-;",\n\t"O[17:14],CPU Speed,')),
         ("the DIP Switch page moves above the drives", "top",
          (('\t"P1,DIP Switch;",\n', ''),
-          ('\t"S0,IMGHDIVHD,Mount HDD;",', '\t"P1,DIP Switch;",\n\t"-;",\n\t"S0,IMGHDIVHD,Mount HDD;",'))),
+          ('\t"S0,IMGHDIVHD,Mount HDD;",',
+           '\t"P1,DIP Switch;",\n\t"-;",\n\t"S0,IMGHDIVHD,Mount HDD;",'))),
         ("a CD build lists the CD-ROM after the floppies", "top-cd",
          ((cd_line, nocd_line),
-          ('"T[10],Eject FDD2;",', '"T[10],Eject FDD2;",\n\t"S4,ISOPCD,Mount CD-ROM;",\n\t"T[11],Eject CD-ROM;",'))),
+          ('"T[10],Eject FDD2;",', '"T[10],Eject FDD2;",\n\t"S4,ISOPCDBIN,Mount CD-ROM;",\n\t"T[11],Eject CD-ROM;",'))),
         ("a CD build loses the CD-ROM's Eject", "top-cd",
-         (cd_line, '"T[8],Eject HDD;S4,ISOPCD,Mount CD-ROM;' + cdvol_entry + '"')),
-        ("the CD audio volume's default is NP2kai's -6 dB, not the owner's 0 dB", "top-cd",
-         (cd_line, cd_line.replace("0 dB,-2 dB,-4 dB,-6 dB,",
-                                   "-6 dB,-2 dB,-4 dB,0 dB,"))),
-        ("a CD audio volume label misnames its gain code", "osd",
-         ("3'd6:    cd_volume_code = 5'd25;", "3'd6:    cd_volume_code = 5'd24;")),
-        ("the CD audio volume offers fewer positions than its field holds", "top-cd",
-         (cd_line, cd_line.replace(",-12 dB,Off;", ",-12 dB;"))),
-        ("a CD build's Eject is wired to the unused slot 3", "top-cd",
+         (cd_line, '"T[8],Eject HDD;' + hdd2 + 'S4,ISOPCDBIN,Mount CD-ROM;"')),
+        ("the CD audio field is back inside the drives' Mount/Eject section", "top-cd",
+         ((cd_line, cd_line[:-1] + cdvol_root + '"'), (vol_line, novol_line))),
+        ("the CD audio field is back on the main page below RAM Size", "top-cd",
+         ((vol_line, novol_line),
+          ('"O[63:61],RAM Size,16M,32M,64M,96M,1M,2M,4M,8M;",',
+           '"O[63:61],RAM Size,16M,32M,64M,96M,1M,2M,4M,8M;",\n\t"' + cdvol_root + '",'))),
+        ("the CD audio field's default is NP2kai's -6 dB, not the owner's 0 dB", "top-cd",
+         (vol_line, vol_line.replace("0 dB,-2 dB,-4 dB,-6 dB,",
+                                     "-6 dB,-2 dB,-4 dB,0 dB,"))),
+        ("an audio level label misnames its gain code", "osd",
+         ("3'd6:    level_code = 5'd25;", "3'd6:    level_code = 5'd24;")),
+        ("the CD audio field offers fewer positions than its field holds", "top-cd",
+         (vol_line, vol_line.replace(",-12 dB,Off;", ",-12 dB;"))),
+        ("the CD audio field sits above the PC-9801-86 level on the Audio page", "top-cd",
+         ((vol_line, novol_line),
+          (pk86_line, '"' + cdvol_entry + '",\n\t' + pk86_line))),
+        # --- the Audio page (10) ---------------------------------------------------------------
+        ("the Audio page is retitled", "top",
+         (audio_page, '"P2,Sound;"')),
+        ("the Audio page's title grows past what the side stripe shows", "top",
+         (audio_page, '"P2,Audio levels (per source, 2 dB);"')),
+        ("the PC-9801-86 level is moved onto the main page", "top",
+         (pk86_line, pk86_line.replace('"P2O[75:73]', '"O[75:73]'))),
+        ("the Beeper level is filed under the DIP Switch page", "top",
+         (beep_line, beep_line.replace('"P2O[78:76]', '"P1O[78:76]'))),
+        ("the Beeper comes before the PC-9801-86 on the Audio page", "top",
+         ((beep_line + ',\n', ''), (pk86_line + ',', beep_line + ',\n\t' + pk86_line + ','))),
+        ("the Beeper level's default is not 0 dB", "top",
+         (beep_line, beep_line.replace("Beeper,0 dB,-2 dB,", "Beeper,-2 dB,0 dB,"))),
+        ("two PC-9801-86 labels are swapped", "top",
+         (pk86_line, pk86_line.replace("-2 dB,-4 dB,", "-4 dB,-2 dB,"))),
+        ("the PC-9801-86 level loses its Off position", "top",
+         (pk86_line, pk86_line.replace(",-12 dB,Off;", ",-12 dB;"))),
+        ("the PC-9801-86 level is relabelled", "top",
+         (pk86_line, pk86_line.replace("PC-9801-86,", "FM,"))),
+        ("the Beeper level is wired to nothing", "top",
+         (".osd_beep_level(status[78:76]),", ".osd_beep_level(3'd0),")),
+        ("the Beeper level's decode is a constant", "osd",
+         ("assign beep_level_code  = level_code(osd_beep_level);", "assign beep_level_code  = 5'd31;")),
+        ("the PC-9801-86 level overlaps the Floppy mode field's bits", "top",
+         ((pk86_line, pk86_line.replace("O[75:73]", "O[72:70]")),
+          (".osd_snd86_level(status[75:73]),", ".osd_snd86_level(status[72:70]),"))),
+        ("a CD build's Eject is wired to HDD2's slot 3", "top-cd",
          ("assign eject_req[4] = status[11];", "assign eject_req[3] = status[11];")),
         ("a build without the CD offers the CD-ROM's Eject", "top-nocd",
-         (f"CONF_STR_CD = {nocd_line};", 'CONF_STR_CD = "T[8],Eject HDD;T[11],Eject CD-ROM;";')),
+         (f"CONF_STR_CD = {nocd_line};",
+          'CONF_STR_CD = "T[8],Eject HDD;' + hdd2 + 'T[11],Eject CD-ROM;";')),
+        ("HDD2's Eject is wired to nothing", "top",
+         ("assign eject_req[3] = status[7];", "assign eject_req[3] = 1'b0;")),
+        ("HDD2's Mount hides HDI and VHD images", "top-cd",
+         (cd_line, cd_line.replace("S3,IMGHDIVHD,", "S3,IMG,"))),
+        ("HDD2 is listed after the CD-ROM", "top-cd",
+         (cd_line, '"T[8],Eject HDD;S4,ISOPCDBIN,Mount CD-ROM;T[11],Eject CD-ROM;' + hdd2 + '"')),
+        ("the IDE bank 1 field's default is HDD2, not the stock CD-ROM", "top-cd",
+         (bank_line, bank_line.replace("CD-ROM,HDD2;", "HDD2,CD-ROM;"))),
+        ("the IDE bank 1 field sits inside the drives' Mount/Eject section", "top-cd",
+         ((cd_line, cd_line[:-1] + bank1_entry + '"'), (bank_line, nobank_line))),
     ]
 
     accepted = []
