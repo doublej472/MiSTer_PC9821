@@ -167,9 +167,32 @@ module pc9821_pegc_storebuf #(
   // through rp as one bit. Equal to the window compares whenever both entries are held
   // (tools/check_storebuf_head_inv.py proves it by induction over this module).
   reg  [16:0] last_addr;             // the newest allocation's dword: ent_addr[wp-1] while count > 0
-  reg  [DEPTH-1:0] nx_adj;           // entry e+1 holds the dword after entry e's
-  reg  [DEPTH-1:0] nx_row_lg;        // ... and the same SDRAM row, 512-column geometry (da[24:9])
-  reg  [DEPTH-1:0] nx_row_sm;        // ... and the same SDRAM row, 256-column geometry (da[22:8])
+  wire [DEPTH-1:0] nx_adj;           // entry e+1 holds the dword after entry e's
+  wire [DEPTH-1:0] nx_row_lg;        // ... and the same SDRAM row, 512-column geometry (da[24:9])
+  wire [DEPTH-1:0] nx_row_sm;        // ... and the same SDRAM row, 256-column geometry (da[22:8])
+  // THE PAIR FACTS FROM REGISTERS (0 cycles). The facts were compared at the allocation itself,
+  // in_addr against last_addr: a single-cycle path from the CPU's ext_addr_r through the memory
+  // map's window decode into nx_adj/nx_row_* (xt: to -4 to -5 ns, the C5 cone's allocation side;
+  // a late bit pairs two non-adjacent dwords into one two-word write, or groups a gather across
+  // rows). The pair an allocation makes is (wp-1, wp), and in the cycle AFTER it both its dwords
+  // are registers: the new one is last_addr, the one before it prev_addr (last_addr's previous
+  // value, loaded at the allocation). So the facts are compared then, from those two registers,
+  // and stored into nx_*_r at the end of that cycle; in that one cycle (nx_fresh) the fact the
+  // allocation's index reads is the register compare itself. nx_adj/nx_row_* are therefore the
+  // values the allocation-time compare stored, in every cycle and at every index: no reader waits,
+  // no decision moves (tools/check_seq_equiv.py --proof storebuf_pair_facts; the C5-head
+  // invariant over these same names is tools/check_storebuf_head_inv.py's).
+  reg  [DEPTH-1:0] nx_adj_r, nx_row_lg_r, nx_row_sm_r;   // the facts, stored from the cycle after
+  reg  [16:0] prev_addr;             // last_addr before the latest allocation
+  reg         nx_fresh;              // an allocation happened last cycle ...
+  reg   [2:0] nx_fresh_i;            // ... and its pair's facts are entry nx_fresh_i's
+  wire        fresh_adj = ({1'b0, last_addr} == ({1'b0, prev_addr} + 18'd1));   // 18 bits, as at the allocation
+  wire        fresh_lg  = (last_addr[16:9] == prev_addr[16:9]);
+  wire        fresh_sm  = (last_addr[16:8] == prev_addr[16:8]);
+  wire [DEPTH-1:0] fresh_m = nx_fresh ? (DEPTH'(1) << nx_fresh_i) : {DEPTH{1'b0}};
+  assign nx_adj    = (nx_adj_r    & ~fresh_m) | ({DEPTH{fresh_adj}} & fresh_m);
+  assign nx_row_lg = (nx_row_lg_r & ~fresh_m) | ({DEPTH{fresh_lg}}  & fresh_m);
+  assign nx_row_sm = (nx_row_sm_r & ~fresh_m) | ({DEPTH{fresh_sm}}  & fresh_m);
 
 
   // ---- the head window: entries rp .. rp+NB-1, read through a banked structure ----
@@ -425,9 +448,9 @@ module pc9821_pegc_storebuf #(
       wp           <= alloc_now ? (wp + 3'd1) : wp;
       // the pair (wp-1, wp)'s facts, against the newest held dword (meaningless, and never
       // read, when the buffer was empty: entry wp-1 is then not held)
-      nx_adj[3'(wp - 3'd1)]    <= alloc_now ? ({1'b0, in_addr[18:2]} == ({1'b0, last_addr} + 18'd1)) : nx_adj[3'(wp - 3'd1)];   // 18 bits: the window's last dword and its first are NOT adjacent
-      nx_row_lg[3'(wp - 3'd1)] <= alloc_now ? (in_addr[18:11] == last_addr[16:9]) : nx_row_lg[3'(wp - 3'd1)];
-      nx_row_sm[3'(wp - 3'd1)] <= alloc_now ? (in_addr[18:10] == last_addr[16:8]) : nx_row_sm[3'(wp - 3'd1)];
+      // (the facts themselves are formed the cycle after, from last_addr and prev_addr: THE PAIR
+      // FACTS FROM REGISTERS, above and the block below)
+      prev_addr    <= alloc_now ? last_addr : prev_addr;
       last_addr    <= alloc_now ? in_addr[18:2] : last_addr;
       for (i = 0; i < DEPTH; i = i + 1) begin
         if (post_accept && (3'(i) == wp)) begin
@@ -454,6 +477,20 @@ module pc9821_pegc_storebuf #(
       end
 
       count <= alloc_now ? (cnt_base + 4'd1) : cnt_base;
+    end
+  end
+
+  // The pair facts' second half (THE PAIR FACTS FROM REGISTERS): the allocation of the previous
+  // cycle is stored here, from the register compare. Outside the reset, as the allocation that made
+  // it was not under one (only the reset-free branch above allocates); 18 bits for adjacency, as
+  // there: the window's last dword and its first are NOT adjacent.
+  always @(posedge clk) begin
+    nx_fresh   <= !reset && alloc_now;
+    nx_fresh_i <= 3'(wp - 3'd1);
+    if (nx_fresh) begin
+      nx_adj_r[nx_fresh_i]    <= fresh_adj;
+      nx_row_lg_r[nx_fresh_i] <= fresh_lg;
+      nx_row_sm_r[nx_fresh_i] <= fresh_sm;
     end
   end
 

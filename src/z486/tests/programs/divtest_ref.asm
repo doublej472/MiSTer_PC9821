@@ -6,8 +6,11 @@
 ; The reference values are computed by ref_udiv (a restoring shift/subtract
 ; 64/32 unsigned divide) and the signed |a|/|b| + sign-fix, then compared with
 ; the CPU's DIV/IDIV -- never from this core's RTL, so a divergence is a real
-; finding. Quotients that would overflow are skipped (the reference decides),
-; so the only #DE path is a CPU bug and is reported as a failure.
+; finding. Each dividend's high half is first reduced below the divisor (by the
+; reference, not by DIV), so every quotient fits and every round is compared;
+; the one overflowing IDIV (-2^31 / -1) is skipped.  The only #DE path is a
+; CPU bug and is reported as a failure, and the run fails unless all 192 rounds
+; less the IDIV skips were compared.
 ;
 ; Scale is reduced from the DOS original's 8 x 4096 x 3 rounds to 64 x 3 cases
 ; (still the same xorshift32 stream, deterministic seed 2463534242) so the
@@ -38,6 +41,8 @@ start:
 
     mov dword [seed], 2463534242
     mov word [fails], 0
+    mov word [compared], 0
+    mov word [skipped], 0
 
 ; ---- 64 unsigned 16-bit divisions (DX:AX / r16) ---------------------------
     mov cx, 64
@@ -58,12 +63,19 @@ start:
         jnz     .u16d
         inc     eax
 .u16d:  mov     [divisor], eax
+        ; high word below the divisor so the quotient fits 16 bits (no #DE):
+        ; DX := DX mod divisor, computed by the reference, not by DIV
+        movzx   eax, word [dividend+2]
+        movzx   ebx, word [divisor]
+        xor     edx, edx
+        call    ref_udiv
+        mov     [dividend+2], dx
         mov     eax, [dividend]         ; low dword
         movzx   ebx, word [divisor]
         xor     edx, edx
         call    ref_udiv                ; EDX:EAX / EBX -> EAX q, EDX r
         cmp     eax, 0FFFFh
-        ja      .u16skip                ; would overflow: #DE on real silicon
+        ja      bad_setup               ; the reduction above makes this unreachable
         mov     [exp_q], eax
         mov     [exp_r], edx
         mov     ax, [dividend]
@@ -74,7 +86,6 @@ start:
         movzx   edx, dx
         mov     byte [kind], 1
         call    compare
-.u16skip:
         pop     cx
         dec     cx
         jnz     .u16
@@ -133,10 +144,13 @@ start:
         call    rnd32
         and     cl, 31
         inc     cl
+        mov     ebx, 0FFFFFFFFh         ; width 32: SHL by 32 would shift by 0
+        cmp     cl, 32
+        je      .sfull
         mov     ebx, 1
         shl     ebx, cl
         dec     ebx
-        and     eax, ebx
+.sfull: and     eax, ebx
         jnz     .s32d
         inc     eax
 .s32d:  test    ch, 1
@@ -172,7 +186,9 @@ start:
         cmp     dword [dividend], 80000000h ; -2^31 / -1 overflows: skip
         jne     .scmp
         cmp     dword [divisor], -1
-        je      .sskip
+        jne     .scmp
+        inc     word [skipped]
+        jmp     .sskip
 .scmp:  call    compare
 .sskip: pop     cx
         dec     cx
@@ -180,6 +196,10 @@ start:
 
         cmp     word [fails], 0
         jne     fail
+        mov     ax, [compared]
+        add     ax, [skipped]
+        cmp     ax, 192
+        jne     bad_setup
         mov     al, STATUS_PASS
         mov     dx, STATUS_PORT
         out     dx, al
@@ -215,6 +235,7 @@ compare:
         jne     .bad
         cmp     edx, [exp_r]
         jne     .bad
+        inc     word [compared]
         ret
 .bad:   inc     word [fails]
         ret
@@ -239,6 +260,11 @@ de_handler:
         mov     word [cs:fails], 0xFFFF
         jmp     fail
 
+; a round the reference could not set up, or fewer rounds compared than run
+bad_setup:
+        mov     byte [kind], 0FFh
+        jmp     fail
+
 fail:
         mov     dx, DATA_PORT
         movzx   eax, word [fails]
@@ -253,6 +279,8 @@ fail:
 
 seed:    dd 0
 fails:   dw 0
+compared: dw 0
+skipped: dw 0
 kind:    db 0
 dividend: dd 0, 0
 divisor: dd 0

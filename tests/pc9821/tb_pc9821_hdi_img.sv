@@ -1,7 +1,7 @@
 // tb_pc9821_hdi_img - HDI (Anex86/FDI) hard-disk images through the real disk path.
 //
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_HDI_IMG: An HDI (Anex86/FDI, 4096-byte front header: reserved 0, HeaderSize 4096, DataSize 34816, 512 bytes/sector, 17/2/2 geometry) and a fixed VHD (Microsoft Virtual PC: the same 68 payload sectors at offset 0 plus a 512-byte big-endian 'conectix' footer whose current size is 34816) both mount on the real pc9821_ata -> pc9821_hdd_image -> pc9821_block_share stack as drives whose IDENTIFY pages and every guest READ SECTORS sector are IDENTICAL to the same 68 sectors mounted raw, with capacity cylinders x heads x sectors for HDI (NP2kai fdd/sxsihdd.c totals; the file is 76 sectors), every guest LBA translated by HeaderSize/512 for reads AND writes (a write of guest LBA 5 lands at file LBA 13 and the header bytes 0..4095 are never read or written as guest data), capacity current size/512 for VHD (the file is 69 sectors), offset 0 there (a write of guest LBA 5 lands at file LBA 5, and the footer's sector 68 is refused by the drive and never exposed), the drive held not-ready until the mount probes have read sector 0 and, for VHD, the last sector through the block port with the read-ahead window tag low, a queued guest request served after the probes with its offset, a remount during a probe discarding that probe and re-reading, an eject clearing the offset, a raw PC-98 image (first DWORD the IPL, not 0) NOT detected as either, and every header NP2kai's reader refuses (heads 0, heads 256) or this ATA cannot serve (bytes/sector 256), or that content detection cannot tell from a raw disk (reserved != 0, HeaderSize < 32, HeaderSize not a multiple of 512), and every corrupt VHD footer (bad cookie, bad checksum, disk type 3 with a cxsparse header at offset 512, current size with no room for the footer, data offset not all-ones) falling back to the raw image byte for byte; while the headers NP2kai mounts although the file is not exactly header + DataSize (a DataSize that disagrees, a geometry past the file or short of DataSize, trailing padding) mount as HDI with the header's offset and NP2kai's capacity, cylinders x heads x sectors clamped to the sectors the file holds after the header.
+// TB_PC9821_HDI_IMG: An HDI (Anex86/FDI, 4096-byte front header: reserved 0, HeaderSize 4096, DataSize 34816, 512 bytes/sector, 17/2/2 geometry) and a fixed VHD (Microsoft Virtual PC: the same 68 payload sectors at offset 0 plus a 512-byte big-endian 'conectix' footer whose current size is 34816) both mount on the real pc9821_ata -> pc9821_hdd_image -> pc9821_block_share stack as drives whose IDENTIFY pages and every guest READ SECTORS sector are IDENTICAL to the same 68 sectors mounted raw, with capacity cylinders x heads x sectors for HDI (NP2kai fdd/sxsihdd.c totals; the file is 76 sectors), every guest LBA translated by HeaderSize/512 for reads AND writes (a write of guest LBA 5 lands at file LBA 13 and the header bytes 0..4095 are never read or written as guest data), capacity current size/512 for VHD (the file is 69 sectors), offset 0 there (a write of guest LBA 5 lands at file LBA 5, and the footer's sector 68 is refused by the drive and never exposed), the drive held not-ready until the mount probes have read sector 0 and, for VHD, the last sector through the block port, a queued guest request served after the probes with its offset, a remount during a probe discarding that probe and re-reading, a raw PC-98 image (first DWORD the IPL, not 0) NOT detected as either, and every header NP2kai's reader refuses (sectors/track, heads or cylinders 0, or sectors/track or heads >= 256 or cylinders >= 65536, a bound broken in the DWORD's high word included) or this ATA cannot serve (bytes/sector 256), or that content detection cannot tell from a raw disk (reserved != 0, HeaderSize < 32, HeaderSize not a multiple of 512), and every corrupt VHD footer (bad cookie, bad checksum, disk type 3 with a cxsparse header at offset 512, current size with no room for the footer, data offset not all-ones) falling back to the raw image byte for byte; while the headers NP2kai mounts although the file is not exactly header + DataSize (a DataSize that disagrees, a geometry past the file or short of DataSize, trailing padding) mount as HDI with the header's offset and NP2kai's capacity, cylinders x heads x sectors clamped to the sectors the file holds after the header.
 //
 // Reference: https://www.pc98.org/project/doc/hdi.html (the header's eight little-endian
 // DWORDs), NP2kai fdd/sxsihdd.h (`HDIHDR`: dummy, hddtype, headersize, hddsize, sectorsize,
@@ -108,6 +108,13 @@ module tb_pc9821_hdi_img;
         8: hf[7] = 32'd1;                       // geometry (34 sectors) short of DataSize
         9: hf[6] = 32'd0;                       // heads 0 (NP2kai: surfaces == 0)
         10: hf[6] = 32'd256;                    // heads 256 (NP2kai: surfaces >= 256)
+        11: hf[5] = 32'd0;                      // sectors 0 (NP2kai: sectors == 0)
+        12: hf[5] = 32'h0000_0111;              // sectors 273 (NP2kai: sectors >= 256), low byte non-zero
+        13: hf[5] = 32'h0001_0011;              // sectors >= 256 in the DWORD's high word
+        14: hf[7] = 32'd0;                      // cylinders 0 (NP2kai: cylinders == 0)
+        15: hf[7] = 32'h0001_0002;              // cylinders 65538 (NP2kai: cylinders >= 65536), low word non-zero
+        16: hf[6] = 32'h0001_0002;              // heads >= 256 in the DWORD's high word
+        17: hf[6] = 32'h0000_0102;              // heads 258 (NP2kai: surfaces >= 256), low byte non-zero
         default: ;                              // 0 = a valid HDI
       endcase
       for (i = 0; i < HOST_MAX; i = i + 1) host_img[i] = 8'h00;
@@ -717,7 +724,7 @@ module tb_pc9821_hdi_img;
       $display("    VHD dbg: cap=%0d vhd_ok=%b kind=%b sum=%08x csum=%08x cur_lo=%011x cur_hi_z=%b type_ok=%b%b dof_w=%b cookie=%b tailok=%b",
                hdd_capacity, hdi.vhd_ok, hdi.probe_kind, hdi.vhd_sum, hdi.vhd_csum,
                hdi.v_cur_lo, hdi.vhd_cur_hi_z, hdi.v_type_hi_z, hdi.v_type_lo_2, hdi.v_dof_w,
-               hdi.vhd_cookie_ok, hdi.tail_ok);
+               hdi.vhd_cookie_ok, hdi.tail_ok_q);
       fail("D: the fixed VHD's capacity is not current size/512");
     end
     identify;
@@ -765,7 +772,11 @@ module tb_pc9821_hdi_img;
     // Only the headers NP2kai's sxsihdd.c would refuse (a zero or too large geometry field, a
     // sector size this ATA cannot serve), plus the two the content detection needs in place of
     // NP2kai's extension test (reserved == 0, a whole-sector HeaderSize).
-    for (i = 1; i <= 10; i = i + 1) if (i != 2 && i != 3 && i != 7 && i != 8) begin
+    // NP2kai fdd/sxsihdd.c:286-288 refuses `(surfaces == 0) || (surfaces >= 256) ||
+    // (cylinders == 0) || (cylinders >= 65536) || (sectors == 0) || (sectors >= 256)` on the
+    // header's full DWORDs, so each bound is driven once (variants 9-17), with a non-zero low
+    // byte/word where the bound is in the upper bits, and the high-word cases included.
+    for (i = 1; i <= 17; i = i + 1) if (i != 2 && i != 3 && i != 7 && i != 8) begin
       build_image(i);
       host_bytes = HDI_BYTES;
       rd_n = 0; wr_n = 0;

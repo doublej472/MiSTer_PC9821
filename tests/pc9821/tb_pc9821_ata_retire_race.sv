@@ -11,7 +11,7 @@
 // `X_PIO_READ && prefetch_busy && block_done` in the last word's read cycle:
 // two consumers of one one-shot completion, with the outcome correct only
 // because the last-word handler is the later NBA (a source-order invariant,
-// race-idiom R2). The latch's `prefetch_error <= block_error` record was NOT
+// docs/single-cycle-event-discipline.md R2). The latch's `prefetch_error <= block_error` record was NOT
 // overridden by the last-word success path - in the ERROR collision
 // abort_command's later clear erased it, so `prefetch_error` stopped equalling
 // the error of the completion just retired. After the fix the last-word handler
@@ -293,6 +293,13 @@ module tb_pc9821_ata_retire_race;
       $finish;
     end
     else $fatal(1, "TB_PC9821_ATA_RETIRE_RACE: FAIL (%0d errors)", errors);
+  end
+
+  // A DUT that never answers (a wait above that never ends) fails with a verdict here rather
+  // than hanging until the runner's outer timeout. Far above the bench's own run time.
+  initial begin
+    #10_000_000;
+    $fatal(1, "TB_PC9821_ATA_RETIRE_RACE: TIMEOUT");
   end
 
 endmodule

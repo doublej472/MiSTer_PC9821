@@ -9,9 +9,9 @@
 //   * the floppy controller: its media data path out of X_IDLE (READ DATA, WRITE DATA, FORMAT,
 //     READ ID, the missing-sector search), the x_st field of its dbg_state tap {IRQ, DRQ, st,
 //     x_st} (pc9821_fdc.sv `assign dbg_state  = {irq, dma_drq, st, x_st};`).
-// A command that moves no data - an ATA status poll or IDENTIFY, an ATAPI TEST UNIT READY or GET
-// EVENT STATUS NOTIFICATION, an FDC SENSE INTERRUPT STATUS or SENSE DRIVE STATUS, a SEEK - leaves
-// the lamp dark. This is how ao486 drives its lamps: from the HPS block requests alone
+// A command that moves no data - an ATA status poll or IDENTIFY, an ATAPI TEST UNIT READY or a
+// packet the drive aborts (GET EVENT STATUS NOTIFICATION among them), an FDC SENSE INTERRUPT
+// STATUS or SENSE DRIVE STATUS, a SEEK - leaves the lamp dark. This is how ao486 drives its lamps: from the HPS block requests alone
 // (ao486.sv `led hdd_led(clk_sys, |mgmt_req[5:0], LED_DISK[0]);` and
 // `led fdd_led(clk_sys, |mgmt_req[7:6], LED_USER);`), so a guest polling an idle drive does not
 // blink it. (The previous lamp

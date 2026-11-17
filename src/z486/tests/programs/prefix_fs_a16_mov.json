@@ -1,0 +1,41 @@
+{
+  "asm": "prefix_fs_a16_mov.asm",
+  "start_mode": "protected",
+  "cr0": 17,
+  "cr3": 0,
+  "eip": 0,
+  "seg_cache": {
+    "CS": {
+      "base": 65536,
+      "limit": 1048575,
+      "flags": 43488
+    },
+    "DS": {
+      "base": 0,
+      "limit": 1048575,
+      "flags": 10720
+    },
+    "SS": {
+      "base": 0,
+      "limit": 1048575,
+      "flags": 10720
+    },
+    "ES": {
+      "base": 0,
+      "limit": 1048575,
+      "flags": 10720
+    },
+    "FS": {
+      "base": 65536,
+      "limit": 1048575,
+      "flags": 10720
+    },
+    "GS": {
+      "base": 0,
+      "limit": 1048575,
+      "flags": 10720
+    }
+  },
+  "page_tables": [],
+  "cycles": 20000
+}

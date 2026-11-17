@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OPNA:
-// The PC-9801-86's own port behaviour through the real I/O bus: the games' SOUND_O/SOUND_I/WAITREADY sequence, SSG register 7 reading back what was written, register 0x0E answering the joystick, the 0xFF chip ID, and 0x188's BUSY bit clearing within a bounded number of accesses -- which is the property the games' WAITREADY loop hangs on. It also pins the 0xA460 extension gate on 0x18C/0x18E. It asserts the chip's OWN audio output three ways: a programmed SSG tone moves snd_l, a keyed FM channel SWINGS BOTH WAYS (so a slowly drifting, block-0 channel - a silent FM that still moves the output - is a failure), and a triggered ADPCM-A rhythm instrument plays a supplied ROM image. It keys the FM a second time with the key-on first and a register write immediately behind it, and requires the board's timer IRQ line to rise, because a driver clocks the FM from that interrupt. It also keys a channel written through the extended port pair, which is the only path to FM channels 4-6. The FM register bank is written through the vendored core's sample-rate operator scan and was silent under the same back-to-back register writes the SSG tolerates. It does not cover ADPCM-B.
+// The PC-9801-86's own port behaviour through the real I/O bus: the games' SOUND_O/SOUND_I/WAITREADY sequence, SSG register 7 reading back what was written, register 0x0E answering the joystick, the 0xFF chip ID, and 0x188's BUSY bit clearing within a bounded number of accesses -- which is the property the games' WAITREADY loop hangs on. It also pins the 0xA460 extension gate on 0x18C/0x18E. It asserts the chip's OWN audio output three ways: a programmed SSG tone moves snd_l, a keyed FM channel SWINGS BOTH WAYS (so a slowly drifting, block-0 channel - a silent FM that still moves the output - is a failure), and a triggered ADPCM-A rhythm instrument plays a supplied ROM image. It keys the FM a second time with the key-on first and a register write immediately behind it, and requires the board's timer IRQ line to rise, because a driver clocks the FM from that interrupt. It also keys a channel written through the extended port pair, which is the only path to FM channels 4-6. The FM register bank is written through the vendored core's sample-rate operator scan and was silent under the same back-to-back register writes the SSG tolerates. It also reads the RIGHT channel and the 0xB4 pan bits: with 0xA460 bit 0 clear channels 1-3 are mono, so a left-only pan still sounds on both sides (NP2kai extendchannel(0), OPN_MONORAL), and with the extension open 0xC0 sounds on both, 0x80 on the left only and 0x40 on the right only, the muted side never crossing +-2048. It does not cover ADPCM-B.
 
 
 // The DUTs are pc9821_iobus plus pc9821_opna wired exactly as pc9821_system
@@ -146,6 +146,7 @@ module tb_pc9821_opna;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -328,7 +329,11 @@ module tb_pc9821_opna;
     // ---- 3. the joystick at register 0x0E -------------------------------
     // NP2kai cbus/board86.c:55-62: reading 0x18A with register 0x0E selected
     // returns fmboard_getjoy(), 0xFF with nothing on the connector. master.lib
-    // INVERTS this and masks 0x3F, so 0xFF reads as "nothing pressed".
+    // INVERTS this and masks 0x3F, so 0xFF reads as "nothing pressed". fmboard_getjoy reads
+    // the connector only with register 0x0F bit 6 (INSL) clear (sound/fmboard.c
+    // `if (!(opna->s.reg[15] & 0x40))`), so the pad is selected first, as a driver does
+    // (tb_pc9821_opna_insl covers INSL set).
+    sound_o(8'h0F, 8'h80);
     write_byte(16'h0188, 8'h0E);
     read_byte(16'h018A, 8'hFF, "joystick at register 0x0E");
     // The six switch lines are LIVE: they come from the game port, so a direction
@@ -536,6 +541,50 @@ module tb_pc9821_opna;
       if (fm_hi < FM_MIN_SWING || fm_lo > -FM_MIN_SWING)
         fail("the keyed FM channel never swings past +-2048: what moves is a tail, not the FM");
 
+      // THE RIGHT CHANNEL AND THE PAN BITS. Register 0xB4 bit 7 is L and bit 6 is R (NP2kai
+      // sound/opngenc.c:607-608 `ch->pan = (UINT8)(value & 0xc0);` and :218-225, 0x80 ->
+      // outdl, 0x40 -> outdr, 0xC0 the centre sum) - but only while the channel is STEREO:
+      // with 0xA460 bit 0 clear (CHK-10 left it so) NP2kai's extendchannel(0) sets channels
+      // 1-3 MONORAL (cbus/board86.c:111-121, opngen_setcfg(.., 3, OPN_MONORAL | 0x07)), so a
+      // left-only pan still sounds on both. With the extension open, 0xC0 is on both, 0x80
+      // on the left only and 0x40 on the right only, and the muted side may then never
+      // cross +-2048 (what remains there is at most the SSG tail CHK-9 left, <= 1110).
+      begin : pan
+        integer l_lo, l_hi, r_lo, r_hi, k;
+        integer pan_val [0:3];
+        pan_val[0] = 8'h1C0; pan_val[1] = 8'hC0; pan_val[2] = 8'h80; pan_val[3] = 8'h40;
+        // entry 0 (bit 8 = the extension still closed): pan 0x80 must sound on BOTH sides
+        for (k = 0; k < 4; k = k + 1) begin
+          if (k == 0) sound_o(8'hB4, 8'h80);
+          else begin
+            if (k == 1) write_byte(16'h0A460, 8'h73);   // open the extension: stereo
+            sound_o(8'hB4, pan_val[k][7:0]);
+          end
+          repeat (20_000) @(posedge clk);
+          l_lo = 0; l_hi = 0; r_lo = 0; r_hi = 0;
+          for (n = 0; n < 300_000; n = n + 1) begin
+            @(posedge clk);
+            if (opna_snd_l > l_hi) l_hi = opna_snd_l;
+            if (opna_snd_l < l_lo) l_lo = opna_snd_l;
+            if (opna_snd_r > r_hi) r_hi = opna_snd_r;
+            if (opna_snd_r < r_lo) r_lo = opna_snd_r;
+          end
+          $display("  OPNA FM pan %02x, extension %0s: snd_l %0d .. %0d, snd_r %0d .. %0d",
+                   (k == 0) ? 8'h80 : pan_val[k][7:0], (k == 0) ? "closed (mono)" : "open",
+                   l_lo, l_hi, r_lo, r_hi);
+          if (pan_val[k][7] && (l_hi < FM_MIN_SWING || l_lo > -FM_MIN_SWING))
+            begin $display("FAIL: pan %02x: the left channel does not carry the note (+-2048)", (k == 0) ? 8'h80 : pan_val[k][7:0]); errors = errors + 1; end
+          if (pan_val[k][6] && (r_hi < FM_MIN_SWING || r_lo > -FM_MIN_SWING))
+            begin $display("FAIL: pan %02x: the right channel does not carry the note (+-2048)", (k == 0) ? 8'h80 : pan_val[k][7:0]); errors = errors + 1; end
+          if (!pan_val[k][7] && (l_hi >= FM_MIN_SWING || l_lo <= -FM_MIN_SWING))
+            begin $display("FAIL: pan %02x: the note leaks onto the muted left channel", (k == 0) ? 8'h80 : pan_val[k][7:0]); errors = errors + 1; end
+          if (!pan_val[k][6] && (r_hi >= FM_MIN_SWING || r_lo <= -FM_MIN_SWING))
+            begin $display("FAIL: pan %02x: the note leaks onto the muted right channel", (k == 0) ? 8'h80 : pan_val[k][7:0]); errors = errors + 1; end
+        end
+        sound_o(8'hB4, 8'hC0);   // back to L+R for what follows
+        write_byte(16'h0A460, 8'h70);   // and the extension closed again, as CHK-10 left it
+      end
+
       // The SAME channel, keyed on again the way a driver keys a note: the
       // key-on first and a register write right behind it. That is the one
       // window left open, and it is specific to the key-on: jt12_mmr
@@ -703,7 +752,7 @@ module tb_pc9821_opna;
 
   // In-bench watchdog.
   initial begin
-    #40_000_000;
+    #60_000_000;
     $fatal(1, "TB_PC9821_OPNA: TIMEOUT");
   end
 

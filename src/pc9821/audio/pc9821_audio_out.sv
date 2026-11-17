@@ -17,7 +17,7 @@
 // makes a decimator cheap - a single stage with the same final transition would need ~1800
 // taps at the grid rate):
 //
-//   A  pc9821_audio_cic4      decimate 4    2 457 600 -> 614 400 Hz   (boxcar^5: u_fir_a now)
+//   A  pc9821_audio_cic4      decimate 4    2 457 600 -> 614 400 Hz   (boxcar^5: u_fir_a)
 //   B  this engine (TAPS=19)  decimate 2      614 400 -> 307 200 Hz   Q17 FIR
 //   C  this engine (TAPS=247) 5/32 polyphase  307 200 ->  48 000 Hz   Q17 FIR, 1235-tap
 //                                                                     prototype
@@ -96,7 +96,7 @@ module pc9821_audio_out (
         end
     end
 
-    // ---- stage C: 5/16 polyphase resampler ---------------------------------
+    // ---- stage C: 5/32 polyphase resampler ---------------------------------
     // t_j = 32j/5 input samples (307 200 / 48 000 = 6.4): the integer part q_j moves by 6
     // (or 7 when the phase wraps) and the phase steps by 2 through 0,2,4,1,3 - one
     // accumulator produces both. The ratio must be EXACT or some presentations fall between

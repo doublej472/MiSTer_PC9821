@@ -293,7 +293,7 @@ module tb_pc9821_rom_windows;
     // The freeze lane's verified site: CS=D800, EIP = BANK3.BIN file offset.
     ide_rom_enable = 1;
     check_dword(32'h000D_8000, 32'hCB9090CB, "D8000 IDE ROM first",
-                "bios/xe10/BANK3.BIN[0]; emm386-freeze3-REPORT.md 2");
+                "bios/xe10/BANK3.BIN[0]");
     check_dword(32'h000D_8004, 32'h90CB9090, "D8000 IDE ROM first+4",
                 "bios/xe10/BANK3.BIN[4]");
     check_dword(32'h000D_9FFC, 32'hE33DFF00, "D9FFC IDE ROM window end (8 KiB)",
@@ -333,7 +333,7 @@ module tb_pc9821_rom_windows;
                 "bios/xe10/BANK7.BIN[4]");
     top_bank = 4'd7;
     check_dword(32'h000F_8000, 32'h8B066CA1, "bank 7 (0x043F=0xEE) = the BIOS top",
-                "bios/xe10/BANK7.BIN[0]; emm386-freeze3-REPORT.md 2");
+                "bios/xe10/BANK7.BIN[0]");
     check_dword(32'h000F_FFF8, 32'h00000000, "bank 7 (BIOS top) last",
                 "bios/xe10/BANK7.BIN[0x7FF8]");
     check_dword(32'h000F_FFFC, 32'h51B40000, "bank 7 (BIOS top) window end",

@@ -17,7 +17,7 @@ and the CONTROL, the unmutated bench, which must PASS first: a mutant that "fail
 bench that already fails proves nothing.
 
   tools/mutate_bench.py BENCH --file SRC --from OLD --to NEW [--why TEXT]
-  tools/mutate_bench.py --plan tests/pc9821/mutations.json [--bench NAME ...]
+  tools/mutate_bench.py --plan tests/pc9821/mutations.json [--only BENCH ...]
   tools/mutate_bench.py --plan FILE --check-plan
                                          without Verilator: every entry still names a
                                          source its bench builds and its `from` text still
@@ -35,7 +35,9 @@ bench include path (tests/pc9821/*.svh). Mutating a file the bench does not buil
 "survive" trivially, so it is refused. `from` must occur EXACTLY ONCE in SRC; use more
 context to disambiguate. A plan is a JSON list of {"bench", "file", "from", "to", "why"}.
 
-Exit 0 iff every control passed and every mutant was KILLED. Builds live under
+Exit 0 iff every control passed and every mutant was KILLED. A selection that runs nothing
+proves nothing, so it exits 2: an empty plan, or an `--only` name no plan entry carries
+(a typo used to run zero mutants and exit 0). Builds live under
 .build/mutate/<bench>/ (one object directory per bench, so its mutants rebuild
 incrementally) and are removed afterwards unless --keep; a Verilator object directory is
 large (docs/lanes.md: prune build trees).
@@ -169,6 +171,25 @@ def check_plan(plan: list[dict], manifest: dict) -> int:
     return 1 if bad else 0
 
 
+def select_mutants(plan: list[dict], only: list[str]) -> dict[str, list[dict]]:
+    """The plan's mutants by bench, narrowed to `only` when it is given.
+
+    Dies (exit 2) when nothing is selected or an `only` name matches no entry: a run of
+    zero mutants would print "0 killed, 0 not" and exit 0, which reads as proof.
+    """
+    by_bench: dict[str, list[dict]] = {}
+    for m in plan:
+        if only and m["bench"] not in only:
+            continue
+        by_bench.setdefault(m["bench"], []).append(m)
+    unmatched = [name for name in only if name not in by_bench]
+    if unmatched:
+        die(f"--only {' '.join(unmatched)}: no plan entry for that bench", code=2)
+    if not by_bench:
+        die("the plan selects no mutants", code=2)
+    return by_bench
+
+
 def selftest() -> int:
     cases = [
         ("a = b;", "a = b;", "a = c;", "a = c;"),
@@ -185,12 +206,28 @@ def selftest() -> int:
         bad.append("an .svh in the bench include path must count as built")
     if buildable("pit_ref", "src/pc9821/video/pc9821_crtc.sv", ["src/a.sv"]):
         bad.append("a source the bench does not list must be refused")
+    plan = [{"bench": "a"}, {"bench": "a"}, {"bench": "b"}]
+    selections = [
+        (plan, [], {"a": 2, "b": 1}),
+        (plan, ["b"], {"b": 1}),
+        (plan, ["b", "typo"], None),      # an unmatched --only name: refused
+        (plan, ["typo"], None),           # nothing selected: refused
+        ([], [], None),                   # an empty plan: refused
+    ]
+    for entries, only, want in selections:
+        try:
+            got = {k: len(v) for k, v in select_mutants(entries, only).items()}
+        except SystemExit as e:
+            got = None if e.code == 2 else f"exit {e.code}"
+        if got != want:
+            bad.append(f"select_mutants(plan of {len(entries)}, only={only}) = {got!r}, "
+                       f"want {want!r}")
     if bad:
         print("MUTATE_BENCH SELFTEST: FAIL")
         for b in bad:
             print(f"  - {b}")
         return 1
-    print(f"MUTATE_BENCH SELFTEST: PASS ({len(cases) + 2} cases)")
+    print(f"MUTATE_BENCH SELFTEST: PASS ({len(cases) + 2 + len(selections)} cases)")
     return 0
 
 
@@ -217,20 +254,16 @@ def main(argv: list[str]) -> int:
         if not opts.plan:
             die("--check-plan needs --plan FILE", code=2)
         return check_plan(json.loads(Path(opts.plan).read_text()), manifest)
-    if not have("verilator"):
-        die("verilator is not installed", code=1)
-
     by_bench: dict[str, list[dict]] = {}
     if opts.plan:
-        for m in json.loads(Path(opts.plan).read_text()):
-            if opts.only and m["bench"] not in opts.only:
-                continue
-            by_bench.setdefault(m["bench"], []).append(m)
+        by_bench = select_mutants(json.loads(Path(opts.plan).read_text()), opts.only)
     elif opts.bench and opts.file and opts.old is not None and opts.new is not None:
         by_bench[opts.bench] = [dict(bench=opts.bench, file=opts.file, why=opts.why,
                                      **{"from": opts.old, "to": opts.new})]
     else:
         die("give BENCH --file --from --to, or --plan FILE", code=2)
+    if not have("verilator"):
+        die("verilator is not installed", code=1)
 
     all_rows = []
     for name, mutants in by_bench.items():

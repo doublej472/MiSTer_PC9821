@@ -371,6 +371,27 @@ def strip_strings(text: str) -> str:
     return re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', " ", text)
 
 
+def py_code_and_strings(text: str):
+    """A Python file split by its own tokenizer: (the code with every comment and string
+    literal removed, the list of string literal values). The regex strippers above cannot
+    do this for Python: a `#` or `//` inside a claim string cut the string short and threw
+    the quote pairing off for the rest of the file."""
+    import io, tokenize, ast
+    code, strings = [], []
+    for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        if tok.type == tokenize.STRING:
+            try:
+                strings.append(ast.literal_eval(tok.string))
+            except (ValueError, SyntaxError):
+                strings.append(tok.string)
+            code.append(" ")
+            continue
+        code.append(tok.string if tok.type != tokenize.NEWLINE else "\n")
+    return " ".join(code), strings
+
+
 OLD_ENGINE = re.compile(r"\biverilog\b|\bvvp\b")
 # A shell command position: line start (possibly behind `VAR=...`), after a pipeline or
 # separator, or inside a command substitution.
@@ -383,6 +404,11 @@ live = [q for q in list((ROOT / "tests").rglob("*")) + list((ROOT / "tools").rgl
         and q.name not in ("check_wiring.py", "check_4state_xlock.py")]
 offenders = []
 for q in live:
+    if q.suffix == ".py":
+        py_code, py_strings = py_code_and_strings(q.read_text(errors="ignore"))
+        if OLD_ENGINE.search(py_code) or any(s in ("iverilog", "vvp") for s in py_strings):
+            offenders.append(q.relative_to(ROOT))
+        continue
     code = strip_comments(q.read_text(errors="ignore"), q.suffix)
     if q.suffix == ".sh":
         invoked = bool(SH_INVOKE.search(code))
@@ -430,9 +456,45 @@ check(re.search(r"wire\s+reset_req\s*=\s*buttons\[1\]\s*\|\s*status\[0\]", top) 
 # with this reset modelled; z486_mister.sv itself is in no bench, so the two texts are pinned
 # here). Losing the gate leaves the controller in reset for the whole download; losing the
 # port connection leaves the hold undriven.
-check(re.search(r"\)\s*de10_guest_memory\s*\((?:(?!\);).)*?\.reset\(\s*reset_sync_r\[2\]\s*&&\s*!pack_load_hold\s*\)",
+check(re.search(r"\)\s*de10_guest_memory\s*\((?:(?!\);).)*?\.reset\(\s*rst_top\[T_SDRAM\]\s*&&\s*!pack_load_hold\s*\)",
                 top, re.S) is not None,
-      "the SDRAM backend's reset is reset_sync_r[2] && !pack_load_hold")
+      "the SDRAM backend's reset is its reset-tree copy rst_top[T_SDRAM] && !pack_load_hold")
+
+# THE RESET TREE (pc9821_reset_tree, tb_pc9821_reset_tree). Every block takes its own registered
+# copy of reset_sync_r[2], all loaded on one edge; a block left on the raw source would leave
+# reset a cycle before the rest. The raw source may therefore reach only a tree's input, or a
+# hierarchy that builds its own tree from it (pc9821_system, and inside it the memory
+# subsystem). These pin that text; the bench pins the behaviour.
+def code_only(text):
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    return re.sub(r'"[^"\n]*"', '""', text)   # a message string is not a use
+top_code = code_only(top)
+check(re.search(r"pc9821_reset_tree\s*#\(\s*\.N\(T_N\)\s*\)\s*u_reset_tree\s*\(\s*\.clk\(clk_sys\),\s*"
+                r"\.reset\(reset_sync_r\[2\]\),\s*\.q\(rst_top\)\s*\)", top_code) is not None,
+      "z486_mister.sv's reset tree is loaded from reset_sync_r[2]")
+raw_uses = [m.start() for m in re.finditer(r"reset_sync_r\[2\]", top_code)]
+check(len(raw_uses) == 2 and re.search(r"\)\s*core\s*\((?:(?!\);).)*?\.reset\s*\(reset_sync_r\[2\]\)",
+                                        top_code, re.S) is not None,
+      "reset_sync_r[2] reaches only the top level's reset tree and pc9821_system (found %d uses)"
+      % len(raw_uses))
+for path, tree_rx in (("src/pc9821/core/pc9821_system.sv",
+                       r"pc9821_reset_tree\s*#\(\s*\.N\(R_N\)\s*\)\s*u_reset_tree\s*\(\s*\.clk\(clk_sys\),\s*\.reset\(reset\)"),
+                      ("src/pc9821/core/pc9821_memory_subsystem.sv",
+                       r"pc9821_reset_tree\s*#\(\s*\.N\(M_N\)\s*\)\s*u_reset_tree\s*\(\s*\.clk\(clk\),\s*\.reset\(reset\)")):
+    code = code_only((ROOT / path).read_text())
+    # `reset` as a value: not a port name (.reset), not part of a longer identifier.
+    uses = re.findall(r"(?<![.\w$])reset(?![\w$])", code)
+    # the port declaration, the tree's input, and (in pc9821_system) the memory subsystem's port and
+    # pc9821_raster_reseed's, which reads the input beside its copy to find the reset's last clock
+    allowed = 4 if path.endswith("pc9821_system.sv") else 2
+    sys_extra = (path.endswith("pc9821_system.sv") and
+                 re.search(r"pc9821_raster_reseed\s+u_raster_reseed\s*\(\s*\.clk\(clk_sys\),\s*\.reset\(reset\)",
+                           code) is not None) or not path.endswith("pc9821_system.sv")
+    check(re.search(tree_rx, code) is not None and len(uses) == allowed and sys_extra,
+          "%s reads its raw `reset` only at its reset tree%s (found %d uses, expected %d)"
+          % (path, ", the memory subsystem's port and the raster re-seed's" if allowed == 4 else "",
+             len(uses), allowed))
 check(re.search(r"\.pack_load_hold\s*\(\s*pack_load_hold\s*\)", top) is not None,
       "z486_mister.sv connects pc9821_system's pack_load_hold")
 
@@ -552,6 +614,15 @@ check(dbg_mode is not None, "uart_debug_mode is uart_mode == 0 (the OSD's None)"
 check(rhs.count("debug_uart_tx") == 1 and "uart_debug_mode?debug_uart_tx:1'b1" in rhs
       and "uart_midi_mode?mpu_uart_tx:" in rhs,
       f"UART_TXD carries the MPU in MIDI, the debug UART only in None, and idles high otherwise ({rhs!r})")
+
+# The user port is open drain (sys/sys_top.v drives USER_IO[n] low for user_out[n] = 0 and
+# floats it for 1; sys/emu_ports.vh: "Set USER_OUT to 1 to read from USER_IN"). This core has
+# no user-port device, so every pin is released: a 0 held all seven pins low against an
+# attached adapter. Nothing simulated reaches the top level's port, so the text is pinned.
+uo = re.findall(r"assign\s+USER_OUT\s*=\s*([^;]*);", top_live)
+uo_rhs = re.sub(r"\s+", "", uo[0]) if len(uo) == 1 else ""
+check(len(uo) == 1 and uo_rhs in ("'1", "7'h7F", "7'h7f", "7'b1111111", "{7{1'b1}}"),
+      f"USER_OUT releases every open-drain user-port pin (all ones; found {uo!r})")
 
 print("== the Memory switch and Boot order fields drive the memory-switch hold on port 0x31 ==")
 # tb_pc9821_msw_hold pins pc9821_iobus's side (the latch and bit 4); the decode from the OSD

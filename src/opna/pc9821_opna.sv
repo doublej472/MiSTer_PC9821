@@ -6,8 +6,10 @@
 //   0x18E read extended data       | write extended data
 // 0x18C/0x18E answer 0xFF until 0xA460 bit 0 enables the extension (NP2kai board86.c,
 // pcm86io.c); 0x18A reads follow NP2kai's board shadow (opna_i18a), which master.lib's
-// read-modify-write of SSG register 7 depends on (r12/06 P0-3). 0x188 is the chip's own
-// status, so bit 7 is its BUSY and clears in bounded time (the games' WAITREADY, r12/06 P0-2).
+// read-modify-write of SSG register 7 depends on (rec98 libs/master.lib/js_start.asm:67-72, quoted
+// at the SSG shadow below). 0x188 is the chip's own status, so bit 7 is its BUSY and clears in
+// bounded time: drivers poll it before each write (docs/pc9821-port-status.md "Sound": MDRV2
+// 3.4F polls BUSY).
 // Clocking: the chip's 7.9872 MHz as a 32-bit DDS carry on clk (NP2kai OPNA_CLOCK doubled).
 // Register writes are latched and presented to the chip at its own rate, because the vendored
 // FM register file is a sample-rate operator scan that drops a write not held until its slot
@@ -60,15 +62,14 @@ module pc9821_opna #(
     // sum already clamped at its junction (jt08_acc restores ymfm's clamp16 on
     // the complete FM+ADPCM-A+ADPCM-B sum, ymfm_opn.cpp:1410-1414, then sign-
     // extends it to 20 bits) and leaves the SSG on a separate word; the two are
-    // added here at the SSG level the upstream PC-88 board mix sets
-    // (psg_snd << 2 - the measurement-derived board-trim correction is
-    // DEFERRED per owner 2026-09-24; see the comment at the sum itself for the
-    // measured range and the open owner question). The SSG is then
-    // AC-COUPLED before the join: a 1-pole high-pass modelling the -86 board's
-    // C7C1 series coupling capacitor,
-    // which removes the SSG's unipolar DC so it joins the mix zero-mean. The
-    // result is delivered in 20 bits (clamped FM+ADPCM [+-32,767] + zero-mean
-    // SSG [+-6,138]). The SSG is added AFTER the FM clamp, exactly as ymfm adds
+    // added here with the SSG at psg_snd * 33/16: the upstream PC-88 board-mix
+    // baseline (psg_snd << 2) times the -86 board's MEASURED SSG:FM trim (see
+    // THE JOIN at the sum itself for the derivation and the captures). The SSG
+    // is AC-COUPLED before the join: a 1-pole high-pass modelling the -86
+    // board's C7C1 series coupling capacitor, which removes the SSG's unipolar
+    // DC so it joins the mix zero-mean. The result is delivered in 20 bits
+    // (clamped FM+ADPCM [+-32,767] + zero-mean SSG, three channels spanning
+    // 0..6,329 before the coupling). The SSG is added AFTER the FM clamp, exactly as ymfm adds
     // it after its clamp16. The LAST saturation of the whole -86 chain is the
     // FINAL DAC (z486_mister's mix_dry saturator, NP2kai's _saturation_s16),
     // which catches this tail.
@@ -104,14 +105,32 @@ module pc9821_opna #(
   /* verilator lint_on WIDTHTRUNC */
   /* verilator lint_on WIDTHEXPAND */
 
-  reg  [31:0] cen_acc;
-  wire [32:0] cen_sum = {1'b0, cen_acc} + CEN_STEP;
-  wire        cen     = cen_sum[32];
+  // `cen` is a REGISTER, not the adder's carry. It fans out to the whole chip's enables
+  // (jt12_div registers `cen & cen_int` on the NEGEDGE of clk, a half-cycle path), so a
+  // combinational carry out of a 32-bit add in front of that fan-out is the longest
+  // half-cycle path in the YM2608. The accumulator therefore runs ONE STEP AHEAD:
+  // cen_acc_ahead holds acc(t+1) = acc(t) + CEN_STEP of the plain DDS (acc(0) = 0), and the
+  // carry of acc(t+1) + CEN_STEP is registered into cen for cycle t+1. The pulse train is the
+  // plain DDS's clock for clock (out of reset cen = carry(0 + CEN_STEP) = 0, which the reset
+  // value states): tb_pc9821_opna_cen checks it against the combinational form.
+  reg  [31:0] cen_acc_ahead;
+  reg         cen;
+  wire [32:0] cen_sum = {1'b0, cen_acc_ahead} + {1'b0, CEN_STEP};
 
   always @(posedge clk) begin
-    if (reset) cen_acc <= 32'd0;
-    else       cen_acc <= cen_sum[31:0];
+    if (reset) begin
+      cen_acc_ahead <= CEN_STEP;
+      cen           <= 1'b0;
+    end else begin
+      cen_acc_ahead <= cen_sum[31:0];
+      cen           <= cen_sum[32];
+    end
   end
+  // The value `cen` takes at the next edge, for jt12_div's rising-edge clock enables (its LOCAL
+  // PATCH, src/opna/jt12/hdl/jt12_div.v): the six enables it used to register on the FALLING
+  // edge from `cen` (a half-cycle path off the chip's ~1000-load enable net) are loaded one edge
+  // earlier from this, a full-cycle path, with the same value at every rising edge.
+  wire        cen_nx = !reset && cen_sum[32];
 
   // ------------------------------------------------------------------
   // Reset: jt12 wants rst held for at least six clk&cen cycles
@@ -141,6 +160,11 @@ module pc9821_opna #(
       end
     end
   end
+  // The value op_rst takes at the next edge (the always block above, as one expression), for
+  // jt12_rst's rising-edge synchroniser (its LOCAL PATCH, src/opna/jt12/hdl/jt12_rst.v): the
+  // ADPCM reset it used to register on the FALLING edge from op_rst (a half-cycle path to the
+  // ADPCM blocks) is loaded one edge earlier from this, with the same value at every rising edge.
+  wire      op_rst_nx = reset ? 1'b1 : (cen ? (rst_cnt != 5'd0) : op_rst);
 
   // ------------------------------------------------------------------
   // Register-write buffer. See the header: the vendored FM register file can
@@ -194,7 +218,7 @@ module pc9821_opna #(
   localparam integer SHORT_GAP = 2;
 
   // The queue storage is ONE 128x12 M10K, not three per-slot arrays (flip-flops
-  // with one 12-bit write enable per slot, r13/113). A word is
+  // with one 12-bit write enable per slot). A word is
   // {flagc, stretch, addr[1:0], data[7:0]} (flagc: is_flag_register below); one write
   // port and a registered read port make
   // it a simple dual port. no_rw_check is safe because the queue never reads the
@@ -227,7 +251,26 @@ module pc9821_opna #(
   // the chip port that cycle (the addr/din muxes and wr_n are gated with dr_go
   // below) and the queued write retries the next cycle. Nothing is dropped and
   // jt12_dout can never latch the data-port case during a status read.
-  wire                dr_go = dr_fire && !host_rd && !io_wr;
+  // THE ADPCM-B MEMORY DATA WRITE (extended 0x08, `dr_ramw`) fires only on a cycle with the
+  // chip's clock enable. The vendored ADPCM-B unit takes a CPU byte for its memory only in
+  // its `cen` branch (jt08_adpcm_drvB.v `end else if (cen) begin` ... `if ((sel_ram) &&
+  // (!acmd_on_b))` ... `if (acmd_rec_b & !wr_n) begin`), so a one-clk fire that missed the
+  // enable was dropped: the unit's address never moved and EOS never set, where the Xe10
+  // sets EOS once the stop address is written (docs/probes/XE10T-XE10-OPNA2.TXT
+  // `ADB_W i=32 reads=1 pit=11 st=0C`; the core's own run read `st=08` for all 40 bytes,
+  // docs/probes/core/XE10T-CORE-opnasafe-OPNA2.TXT; tb_pc9821_opna_adpcmb_mem). The wait
+  // is at most one enable (125 ns) inside the drain, behind a write the chip itself is
+  // still busy with for longer (the same rows' `st=88`, BUSY set after a byte).
+  // chip_sel08 is the chip's own register select as the drain has written it: jt12_mmr
+  // takes a select from either bank into one `selected_register` and decodes the data port
+  // as `((addr == 2'b11) && (selected_register == 8'h08))` (its sel_ram_dat).
+  reg                 chip_sel08;
+  wire                dr_ramw = (dr_addr == 2'b11) && chip_sel08;
+  wire                dr_go = dr_fire && !host_rd && !io_wr && (!dr_ramw || cen);
+  // The chip's data lines between fires hold the last fired byte: the ADPCM-B unit latches
+  // a memory byte one enable AFTER it took the write (`STATE_WRITE: ... ram_dout <=
+  // bus_din;`), and every other reader of the chip's din samples it only on a write.
+  reg  [7:0]          dr_din_q;
 
   // The one definition of which register the vendored FM register file can only
   // absorb at its own scan slot. Everything 0x30-0xB6 is the FM register file
@@ -422,7 +465,8 @@ module pc9821_opna #(
   // The queue-full back-pressure. `wrq_push` keeps its !full guard as the last
   // resort (a master that ignores io_wr_wait - a bare bench driving this module -
   // still loses the write rather than corrupting the queue), but the iobus never
-  // presents such a write: it waits in S_IOWAIT while this is high. The same
+  // presents such a write: the lane waits in S_BYTE while this is high (pc9821_iobus
+  // `lane_wr_wait`) and its strobe fires once when it drops. The same
   // wait also holds a host write while the two-word key-off injection is in
   // flight, so the pair is atomic with respect to the chip.
   assign                io_wr_wait = op_sel && (wrq_cnt[WRQ_BITS] || ext_inj_busy);
@@ -547,12 +591,24 @@ module pc9821_opna #(
               end
         default: dr_state <= 2'd0;
       endcase
-      wrq_cnt <= wrq_cnt + {WRQ_BITS{1'b0}} + any_push - {WRQ_BITS{1'b0}} - wrq_pop;
+      wrq_cnt <= wrq_cnt + {{WRQ_BITS{1'b0}}, any_push} - {{WRQ_BITS{1'b0}}, wrq_pop};
+    end
+  end
+
+  // The chip-side shadows of the drain's fires (chip_sel08, dr_din_q: see dr_go). A
+  // select resets with the chip to 0x00 (jt12_mmr `selected_register   <= 0;`).
+  always @(posedge clk) begin
+    if (reset) begin
+      chip_sel08 <= 1'b0;
+      dr_din_q   <= 8'h00;
+    end else if (dr_go) begin
+      dr_din_q <= dr_data;
+      if (!dr_addr[0]) chip_sel08 <= (dr_data == 8'h08);
     end
   end
 
   // The write port, in its own block so the array infers as one M10K rather than a
-  // flip-flop file (r13/110's split). wrq_wr is the write address register.
+  // flip-flop file. wrq_wr is the write address register.
   always @(posedge clk)
     if (any_push) wrq_mem[wrq_wr] <= push_word;
 
@@ -615,17 +671,21 @@ module pc9821_opna #(
   wire       op_irq_n;
   wire signed [19:0] fm_l, fm_r;
   wire [11:0] psg_snd;
+  wire        op_adpcm_wr;     // the ADPCM-B unit's memory write strobe (active high)
+  wire [7:0]  op_adpcm_dout;   // and the byte it drives on the memory data lines
 
   jtopna u_opna (
     .rst            (op_rst),
     .clk            (clk),
     .cen            (cen),
+    .cen_nx         (cen_nx),
+    .rst_nx         (op_rst_nx),
     // The chip only ever sees a chip write from the drain, and only ever sees
     // a read from a host read cycle (the same routing that keeps host writes
     // out of the chip while they sit in the buffer). Both muxes and wr_n are
     // gated with dr_go (S1): on a fire cycle the host claims, the chip sees the
     // host's own access alone and the write retries next cycle.
-    .din            (dr_go ? dr_data : io_din),
+    .din            (dr_go ? dr_data : dr_din_q),
     .addr           (dr_go ? dr_addr : op_addr),
     .cs_n           (~(host_rd | dr_go)),
     .wr_n           (~dr_go),
@@ -639,13 +699,21 @@ module pc9821_opna #(
     .IOB_out        (),
     .IOA_oe         (),
     .IOB_oe         (),
-    // No ADPCM-B sample RAM is wired yet: the chip reads zeros there, so
-    // ADPCM-B is silent until that memory lands.
+    // No ADPCM-B sample RAM is wired: the chip's memory data lines carry only what the
+    // chip itself drives in its own write cycle, and read zero otherwise, so playback
+    // and RAM reads see zeros (open: todo item 38). The unit latches the lines into its
+    // +6 read byte at the end of every memory cycle, a write included (jt08_adpcm_drvB.v
+    // `STATE_POST:` ... `bus_dout    <= ram_din;`, while its write strobe is still low),
+    // so a 0x108 read after a memory write answers the byte just written, as the Xe10
+    // does (docs/probes/XE10T-XE10-OPNA2.TXT `ADB_END st=0C s6=80` after 40 bytes of
+    // 0x80; the core read `s6=00`, docs/probes/core/XE10T-CORE-opnasafe-OPNA2.TXT;
+    // tb_pc9821_opna_adpcmb_mem). What a read returns after a write of a pattern is not
+    // captured (item 38's read-back half).
     .adpcm_addr     (),
     .adpcm_roe      (),
-    .adpcm_din      (8'h00),
-    .adpcm_wr       (),
-    .adpcm_dout     (),
+    .adpcm_din      (op_adpcm_wr ? op_adpcm_dout : 8'h00),
+    .adpcm_wr       (op_adpcm_wr),
+    .adpcm_dout     (op_adpcm_dout),
     /* verilator lint_on PINCONNECTEMPTY */
     .fm_snd_right   (fm_r),
     .fm_snd_left    (fm_l),
@@ -667,11 +735,11 @@ module pc9821_opna #(
   // The 16-byte SSG read shadow. It is ONE block RAM, not 128 flip-flops plus a
   // 16:1 read mux: one write port and one registered read is a simple dual port,
   // and a block memory holds it for no logic ALMs at all -- where the flop array
-  // costs 2.00 registers per ALM (res-mlab-REPORT: 256 flops = exactly 128 ALMs)
+  // costs 2.00 registers per ALM (a fit measured 256 flops = exactly 128 ALMs; the report is not kept in the tree)
   // on top of the mux -- while block RAM is the resource this design does NOT
   // bind on. Registers -> block RAM is the profitable direction, and M10K is the
   // right end of it: an MLAB IS a LAB, so parking the array there would spend the
-  // BINDING resource to buy back the free one (res-mlab-REPORT section 0).
+  // BINDING resource to buy back the free one (an MLAB is a LAB configured as memory).
   //
   // THE READ IS REGISTERED, one clk behind sel_lo, and that is free at this
   // port: sel_lo moves on its OWN 0x188/0x18C bus access, never on the 0x18A
@@ -679,7 +747,8 @@ module pc9821_opna #(
   // (io_rd_wait) whose byte is captured a cycle after the strobe.
   //
   // THE TWO THINGS THAT WOULD SILENTLY BLOCK THE INFERENCE ARE ABSENT BY
-  // CONSTRUCTION (the kbd_lut trap, res-mlab-REPORT section 7.2): the array
+  // CONSTRUCTION (the kbd_lut trap, pc9821_kbd.sv's "THE TRANSLATION ROM'S READ IS REGISTERED"
+  // comment): the array
   // carries NO reset -- a reset blocks inference exactly as a power-up value on
   // its read register does -- and ssg_rd_q carries no power-up value. A memory's
   // power-up contents are therefore the board's reset values, and a LATER reset
@@ -707,7 +776,7 @@ module pc9821_opna #(
   // itself (fmopna_impl.c:2232-2235) and reset loads it from an internal bus
   // that is 0 (:2114-2130). ymfm's SSG resets all-zero as well
   // (ymfm_ssg.cpp:44-47 with ssg_engine::reset :86-93).
-  // r12/06 section 2.1c argued the other way: master.lib's js_start
+  // An earlier analysis argued the other way: master.lib's js_start
   // (rec98 libs/master.lib/js_start.asm:67-72, read reg 7 / and 3Fh / or 80h /
   // write back) turns a 0x00 read into 0x80 - every SSG tone and noise source
   // ROUTED - and that was read as corruption. The capture shows 0x80 is the
@@ -723,7 +792,7 @@ module pc9821_opna #(
   // changed with this read-back fix.
   // Register 0x0E is SHADOW-ONLY here - 0x18A answers it from the joystick
   // (opna_i18a, above), so this byte can never be read back - but NP2kai holds
-  // 0xFF there and an exact shadow is the point of this block (opna-audit F7).
+  // 0xFF there and an exact shadow is the point of this block.
   initial begin
     for (i = 0; i < 16; i = i + 1) ssg_reg[i] = 8'h00;   // incl. reg 7: the machine's 0x00
     ssg_reg[14] = 8'hFF;
@@ -743,7 +812,7 @@ module pc9821_opna #(
   // 0 with the same 0x00).
   //
   // THE SWEEP IS THE RESET, AND IT IS ATOMIC FROM THE GUEST'S SIDE BY CONSTRUCTION
-  // (v-reset-audit F1/F2). A bare 16-clk sweep has NEITHER of the two facts below; both are
+  // A bare 16-clk sweep has NEITHER of the two facts below; both are
   // module state, and neither is a margin against the CPU reset gate's hold:
   //   * ssg_ok[a] means entry a's array word is THIS epoch's byte - the sweep has reached it,
   //     or the guest wrote it since this reset. A read of an entry that is neither answers the
@@ -759,14 +828,9 @@ module pc9821_opna #(
   // reached. Nothing here depends on the ~1-clk margin between the 16-clk sweep and the CPU
   // reset gate's 15-cycle hold, which the audit found nothing pinning.
   //
-  // THE REJECTED ALTERNATIVE, recorded because it is the obvious first idea: hold the guest off
-  // the device until the sweep finishes (drive io_wr_wait / a read-hold from the sweep's done
-  // signal). That fixes F1 and leaves F2 intact - it only DEFERS a write, and the module still
-  // clobbers one presented inside the window, so F2's own minimal case (a direct 0x18A write
-  // four clk into the sweep) still reads back 0x00 across cycles. Satisfying both findings at
-  // the module boundary, for a bare master as well as through pc9821_iobus, is strictly better
-  // than pinning an integration margin. The cost of this form is ssg_ok's 16 flops; the
-  // 16-entry array and its inference are untouched.
+  // Holding the guest off until the sweep finishes would not do: it only DEFERS a write, and a
+  // write presented inside the window would still be clobbered (F2). The cost of this form is
+  // ssg_ok's 16 flops; the 16-entry array and its inference are untouched.
   function automatic [7:0] ssg_reset_byte(input [3:0] ad);
     ssg_reset_byte = (ad >= 4'hE) ? 8'hFF : 8'h00;   // entries 14 and 15 carry 0xFF
   endfunction
@@ -806,6 +870,24 @@ module pc9821_opna #(
       ssg_reg[sel_lo[3:0]] <= io_din;
     else if (ssg_seed_we && !ssg_ok[ssg_seed_ad])
       ssg_reg[ssg_seed_ad] <= ssg_seed_da;
+  end
+
+  // REGISTER 0x0F BIT 6, INSL (the input select, undoc98 io_sound.txt `0Fh |R/W|I/O PortB`
+  // ... `bit 6: INSL`): with it set the 0x0E read is not the connector's pad, and the six
+  // switch lines read released. NP2kai reads the stick only with it clear
+  // (sound/fmboard.c fmboard_getjoy `if (!(opna->s.reg[15] & 0x40))`, else `ret = 0xff`
+  // for a physical pad), and MAME only with bits 7:6 = 10 (bus/pc98_cbus/pc9801_86.cpp
+  // `if((m_joy_sel & 0xc0) == 0x80)`); the two agree on bit 6, which is all this models
+  // (bit 7 is where they differ). The power-up 0x0F is 0xFF, the shadow's reset image
+  // below, which is the Xe10's read-back after the BIOS (docs/probes/XE10T-XE10-OPNA2.TXT
+  // `X OPNA2 IDC b=0188 ext=0 ... r0e=FF r0f=FF`). No capture holds a pad with INSL clear
+  // and set (tb_pc9821_opna_insl).
+  reg ssg_insl;
+  always @(posedge clk) begin
+    if (reset)
+      ssg_insl <= 1'b1;
+    else if (ssg_guest_we && (sel_lo[3:0] == 4'hF))
+      ssg_insl <= io_din[6];
   end
 
   always @(posedge clk) begin
@@ -862,8 +944,8 @@ module pc9821_opna #(
       // Chip status: the chip's flags with BUSY replaced by the queue's back-pressure
       // (wrq_busy, see its declaration: the machine reads BUSY clear at the first poll).
       2'b00: io_dout = {wrq_busy, op_dout[6:0]};    // chip status
-      // The board's joystick register, register 0x0E: the connector's six switch lines,
-      // active low (NP2kai fmboard_getjoy, which returns its result masked to 0x3F). The
+      // The board's joystick register, register 0x0E: the connector's six switch lines while
+      // 0x0F bit 6 (INSL, ssg_insl above) is clear, released while it is set, active low (NP2kai fmboard_getjoy, which returns its result masked to 0x3F). The
       // two upper bits stay 1: NP2kai ORs the chip's own interrupt flags into them
       // (sound/fmboard.c:92-93), and the machine's measured idle byte is 0xFF (probes/JOY.TXT),
       // so only the six switch lines are this register's live part.
@@ -884,7 +966,7 @@ module pc9821_opna #(
       // closed, `RMAP_C rB0=B0B1B2B3FFFFFFFFB8B9`) and shows the rest of 0x30-0xFE echo the
       // select both ways, and every select 0x10-0xFE echo it with the extension open
       // (`RMAP_O r10=101112131415161718191A1B1C1D1E1F`, `RMAP_O rB0=B0B1B2B3B4B5B6B7B8B9`).
-      2'b01: io_dout = (sel_lo == 8'h0E) ? {2'b11, joystick} :
+      2'b01: io_dout = (sel_lo == 8'h0E) ? {2'b11, ssg_insl ? 6'h3F : joystick} :
                        (sel_lo == 8'hFF) ? 8'h01 :    // the -86 chip ID
                        (!extend && reads_ff_closed(sel_lo)) ? 8'hFF :
                        // The shadow read, through the sweep above: an entry this epoch's
@@ -972,11 +1054,10 @@ module pc9821_opna #(
   //     hardware wins"). ymfm's s_amplitudes[31] = 16,382/ch (its MixTo1 2/3
   //     mix puts a max channel at 0.333 of its clamp rail, 6.4-7.5 dB above
   //     the machine's ~0.14-0.16, 20*log10(0.333/0.14..0.16)) and NP2kai's vol_ssg absolutes are
-  //     deliberately unused. The A-11 `<< 3` history is why both the
-  //     baseline and the correction are stated separately above: the units
-  //     question (qemu-full vs our half-scale junction) and the board-trim
-  //     question (recordings) are different errors and only the latter is
-  //     addressed here.
+  //     deliberately unused. The baseline and the correction are stated
+  //     separately above because they answer different errors: the units
+  //     (qemu-full vs our half-scale junction) and the board trim
+  //     (recordings).
   // The -86 board AC-COUPLES the SSG before it is summed into the YM3016 FM/DAC
   // output: the SSG leaves pin 27 with a ~2 V DC offset (a YM2149-style unipolar
   // output, which jt49 models), passes the series coupling capacitor C7C1, and
@@ -988,7 +1069,7 @@ module pc9821_opna #(
   // by 4 for the SSG at the YM2608 reset setting (jt12_div.v:60-99), so that is
   // once every 16 cen = 7.9872 MHz / 16 = 499.2 kHz. N=14 puts the cutoff at
   // fc = fs*2^-N/2pi ~= 4.85 Hz - coupling-cap-like and well below 20 Hz (the
-  // exact -86 cap value is not published; see the lane FIX_REPORT).
+  // exact -86 cap value is not published, so this corner is chosen, not sourced).
   //
   // The filter runs on the JOIN-SCALE integer, not the raw 12-bit psg_snd: one
   // max channel (jt49_exp's LUT peak 1,023) is then a 0..2,109 square wave the

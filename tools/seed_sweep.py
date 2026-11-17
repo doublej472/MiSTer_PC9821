@@ -339,7 +339,10 @@ def _fit_seed(sd: Path, seed: int, profile_argv: list[str], expected: str,
 
 def load_summaries(root: Path) -> list[dict]:
     rows = []
-    for sd in sorted(root.glob("seed*")):
+    # Live seeds only: seedNNN, the name remote_fit.py's fetch counts. A seed --restart-stale or
+    # --retry-failed moved aside (seedNNN.stale-<time>) keeps its summary of another design and
+    # must never rank, count toward --min-seeds or pass the deploy gate.
+    for sd in sorted(root.glob("seed[0-9][0-9][0-9]")):
         s = sd / SUMMARY
         if not s.exists():
             continue
@@ -655,6 +658,16 @@ def selftest() -> int:
             (d / SUMMARY).write_text(f"seed={seed}\nverdict=passed\nclk_sys_slack=-5.0\n"
                                      f"other_setup={hdmi}\nsdram_io_min=0.4\n")
         assert report(root) == 1, "an all-below sweep must fail"
+        # A moved-aside stale seed with a deployable margin is not a live seed.
+        moved = move_aside(root, 2)
+        (moved / SUMMARY).write_text("seed=2\nverdict=passed\nclk_sys_slack=-4.0\n"
+                                     "other_setup=+0.1\nsdram_io_min=0.4\n")
+        seed_dir(root, 2).mkdir()
+        (seed_dir(root, 2) / SUMMARY).write_text("seed=2\nverdict=passed\nclk_sys_slack=-5.0\n"
+                                                 "other_setup=-0.6\nsdram_io_min=0.4\n")
+        assert sorted(r["other_setup"] for r in load_summaries(root)) == [-0.6, -0.5], \
+            "a .stale-<time> seed must not be loaded"
+        assert report(root) == 1, "a moved-aside stale seed must not pass the gate"
         (seed_dir(root, 2) / SUMMARY).write_text("seed=2\nverdict=passed\nclk_sys_slack=-4.0\n"
                                                  "other_setup=+0.1\nsdram_io_min=0.4\n")
         assert report(root) == 0, "one deployable seed must pass"

@@ -1,5 +1,5 @@
 // One decimating FIR MAC engine for the 48 kHz output stage, used twice per channel: as
-// stage B (decimate by 2) and as stage C (the 5/16 polyphase resampler). It owns its two
+// stage B (decimate by 2) and as stage C (the 5/32 polyphase resampler). It owns its two
 // history RAMs and two multipliers (left and right in parallel, so one tap costs one clock),
 // reads its coefficients through a port so the PARENT holds one shared ROM for both
 // channels, and is otherwise a pure "run TAPS taps and hand back the answer" machine.
@@ -16,13 +16,13 @@
 //
 // History addressing: the tap window is the TAPS samples ending at `start_addr`, read as
 // start_addr - k on a circular buffer. The buffer is deliberately larger than the window
-// (32 vs 19, 128 vs 123) so a write landing during a run can never overwrite a sample the run
+// (2^RAM_AW against TAPS: 32 vs 19 for stage B, 256 vs 247 for stage C) so a write landing during a run can never overwrite a sample the run
 // still needs - and a write to the address being read that cycle reads back the OLD value,
 // which is the value that tap wants anyway.
 //
 // Coefficients are Q17 signed and the table is symmetric about CMIRROR; the parent stores
 // only the first half, so the address is mirrored here (one compare and one subtractor, and
-// half the ROM - 308 entries fits one M10K where 615 would not).
+// half the ROM: stage C stores 618 of its 1235 prototype entries, pc9821_audio_out's coeff_c).
 //
 // The CLK_AUDIO domain has no reset, so every register is seeded and the state machine only
 // ever moves to a defined state (st has no undefined encoding: 2'd0 and 2'd1 are the only
@@ -91,7 +91,7 @@ module pc9821_audio_fir_engine #(
     /* verilator lint_off PROCASSINIT */   // the seeds ARE this domain's power-up state
     reg [RAM_AW-1:0] base = 0;
     reg [1:0]        st   = 0;      // 0 idle, 1 running
-    reg [7:0]        cyc  = 0;      // 1 .. TAPS+3 (TAPS <= 123 here, so 8 bits is exact)
+    reg [7:0]        cyc  = 0;      // 1 .. TAPS+3 (TAPS <= 247 here, so the 250 maximum fits 8 bits)
     reg [2:0]        ph   = 0;
 
     // One-deep request buffer: every `start` produces exactly one `done`, even if a start
@@ -109,8 +109,8 @@ module pc9821_audio_fir_engine #(
 
     // Coefficient index, mirrored about the prototype centre. Stride and phase are applied
     // on the prototype BEFORE mirroring, which is what makes the five phases work.
-    // Widths are explicit: the index never exceeds the prototype length (123*5 = 615), so
-    // 12 bits carry stride*k + phase exactly and the product cannot truncate.
+    // Widths are explicit: the index never exceeds the prototype length (stage C's largest is
+    // 5*246 + 4 = 1234 of 1235), so 12 bits carry stride*k + phase exactly and the product cannot truncate.
     localparam [11:0] STRIDE_W = 12'(STRIDE);
     localparam [11:0] MID_W    = 12'(CMIRROR);
     wire [11:0] kk   = {4'b0, cyc} - 12'd1;
@@ -125,8 +125,8 @@ module pc9821_audio_fir_engine #(
     //
     // q_l/q_r carry NO power-up value and NO reset, and that is a hardware rule, not a
     // style one: a seed or a reset on the register that captures a memory read makes Quartus
-    // refuse the RAM and build the whole history out of LUTs (the kbd_lut trap,
-    // res-mlab-REPORT section 7.2). Their first value before any run is X in 4-state
+    // refuse the RAM and build the whole history out of LUTs (the kbd_lut trap:
+    // pc9821_kbd.sv's "THE TRANSLATION ROM'S READ IS REGISTERED" comment). Their first value before any run is X in 4-state
     // simulation and is never used - the engine only accumulates inside a run, and a run
     // always issues TAPS addresses first.
     reg signed [15:0] q_l, q_r;

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_MOUNT_EJECT: the OSD's per-slot Eject actions (T[8..10]: HDD, FDD1, FDD2, and in a --cdrom build T[11]: CD-ROM, on hps_io slot 4 with slot 3 unused) become the slot's own mount event with img_size 0, the sub-sector unmount every image consumer already reads, through pc9821_mount_eject in front of the real pc9821_disk_change_reset and pc9821_block_share: an HDD eject with the pack loaded unmounts the disk's latch and raises reset_req for exactly one cycle however long the OSD holds its bit; an FDD eject delivers one size-0 event on its own slot and raises no reset; an eject before the pack is loaded unmounts without a reset; an eject requested while hps_io is mounting another slot is deferred until the channel is quiet, never shares a cycle with a host mount, and leaves the host mount's size on its own slot; two ejects requested in one cycle (the disk and a floppy) are issued one slot per cycle and reset once, for the disk; a host mount of a slot after its eject mounts it again (and resets once); and hps_io's own events pass through unchanged; with the module spanning all five slots as the --cdrom top instantiates it, a CD-ROM eject delivers one size-0 event on slot 4 and raises no reset, and an HDD eject pressed while hps_io is mounting the CD is deferred past that mount, which keeps its own size. FAIL-FIRST: the base tree has no eject path at all (no module, no OSD entry), so this bench does not build on it; and with -DPRE_CD_EJECT (the pre-change top: the module over slots 0..2 only, the CD's slot passed straight through with no eject) the CD-ROM cases fail.
+// TB_PC9821_MOUNT_EJECT: the OSD's per-slot Eject actions (T[8..10]: HDD, FDD1, FDD2, and in a --cdrom build T[11]: CD-ROM, on hps_io slot 4 with slot 3 unused) become the slot's own mount event with img_size 0, the sub-sector unmount every image consumer already reads, through pc9821_mount_eject in front of the real pc9821_disk_change_reset and pc9821_block_share: an HDD eject with the pack loaded unmounts the disk's latch and raises reset_req for exactly one cycle however long the OSD holds its bit; an FDD eject delivers one size-0 event on its own slot and raises no reset; an eject before the pack is loaded unmounts without a reset; an eject requested while hps_io is mounting another slot is deferred until the channel is quiet, never shares a cycle with a host mount, and leaves the host mount's size on its own slot; two ejects requested in one cycle (the disk and a floppy) are issued one slot per cycle and reset once, for the disk; a host mount of a slot after its eject mounts it again (and resets once); and hps_io's own events pass through unchanged, two clk_sys later (the outputs are registered behind one look-ahead stage); every eject and every mount is its own rising edge on its slot, as an edge-reading consumer (pc9821_fdd_media's mnt_ev) counts them: an eject pressed while hps_io is mounting THAT slot is delivered after the mount as a second event (the mount's size, then size 0), and a host mount of a slot that starts in the cycle right after its eject was issued is its own event after the eject, with its own size; with the module spanning all five slots as the --cdrom top instantiates it, a CD-ROM eject delivers one size-0 event on slot 4 and raises no reset, and an HDD eject pressed while hps_io is mounting the CD is deferred past that mount, which keeps its own size; and a mount's img_readonly rides with its event as its size does (a read-only floppy or disk mount arrives read-only, latched by the block engine, and the next writable mount arrives writable). FAIL-FIRST: the base tree has no eject path at all (no module, no OSD entry), so this bench does not build on it; and with -DPRE_CD_EJECT (the pre-change top: the module over slots 0..2 only, the CD's slot passed straight through with no eject) the CD-ROM cases fail; with the previous single-stage module (the eject issued in the first cycle hps_io is quiet, the host event one clk_sys late) the eject after a same-slot mount and the mount right after an eject each merge into one level, and E10/E11 fail.
 //
 // EXPECTED VALUES. The eject's meaning - a mount event whose size is under one sector - is
 // pc9821_block_io's own unmount rule (`eject = img_mounted && (img_size < 512)`) and hps_io's
@@ -53,11 +53,12 @@ module tb_pc9821_mount_eject;
   );
 
   wire        a_mounted;
+  wire        a_ro;
   wire [31:0] a_capacity;
   pc9821_block_share share (
       .clk(clk), .rst_n(1'b1),
       .a_img_mounted(img_mounted[0]), .a_img_readonly(img_ro), .a_img_size(img_size),
-      .a_mounted(a_mounted), .a_readonly(), .a_capacity(a_capacity),
+      .a_mounted(a_mounted), .a_readonly(a_ro), .a_capacity(a_capacity),
       .a_req_read(1'b0), .a_req_write(1'b0), .a_req_lba(32'd0),
       .a_req_window(1'b1),
       .a_req_done(), .a_req_error(), .a_busy(),
@@ -99,21 +100,32 @@ module tb_pc9821_mount_eject;
   integer ev [0:4];
   reg [63:0] ev_size [0:4];
   reg [4:0]  prev_m = 5'b00000;
+  // The module registers its outputs behind one look-ahead stage (two clk_sys), so a host event
+  // passes through as hps_mounted of two cycles before.
+  reg [4:0]  hps_mounted_d = 5'b00000;
+  reg [4:0]  hps_mounted_dd = 5'b00000;
   integer collide = 0;
   integer j;
-  initial for (j = 0; j < 5; j = j + 1) begin ev[j] = 0; ev_size[j] = 64'hDEAD; end
+  reg [63:0] ev_first [0:4];   // the size the FIRST event since clear_counts carried
+  reg        ev_ro [0:4];      // the img_readonly the LAST event carried
+  initial for (j = 0; j < 5; j = j + 1) begin ev[j] = 0; ev_size[j] = 64'hDEAD; ev_first[j] = 64'hDEAD; end
   always @(posedge clk) begin
     if (reset_req) resets = resets + 1;
     for (j = 0; j < 5; j = j + 1)
-      if (img_mounted[j] && !prev_m[j]) begin ev[j] = ev[j] + 1; ev_size[j] = img_size; end
-    if ((|hps_mounted) && (img_mounted != hps_mounted)) collide = collide + 1;
+      if (img_mounted[j] && !prev_m[j]) begin
+        if (ev[j] == 0) ev_first[j] = img_size;
+        ev[j] = ev[j] + 1; ev_size[j] = img_size; ev_ro[j] = img_ro;
+      end
+    if ((|hps_mounted_dd) && (img_mounted != hps_mounted_dd)) collide = collide + 1;
     prev_m = img_mounted;
+    hps_mounted_dd = hps_mounted_d;
+    hps_mounted_d = hps_mounted;
   end
 
   task automatic clear_counts;
     begin
       resets = 0; collide = 0;
-      for (j = 0; j < 5; j = j + 1) begin ev[j] = 0; ev_size[j] = 64'hDEAD; end
+      for (j = 0; j < 5; j = j + 1) begin ev[j] = 0; ev_size[j] = 64'hDEAD; ev_first[j] = 64'hDEAD; end
     end
   endtask
 
@@ -121,7 +133,14 @@ module tb_pc9821_mount_eject;
   // 0x1c transaction's length (sys/hps_io.sv:490 set, :334 clear).
   task automatic host_mount(input integer slot, input [63:0] size, input integer w);
     begin
-      @(negedge clk); hps_size = size; hps_ro = 1'b0;
+      host_mount_ro(slot, size, w, 1'b0);
+    end
+  endtask
+
+  task automatic host_mount_ro(input integer slot, input [63:0] size, input integer w,
+                               input ro);
+    begin
+      @(negedge clk); hps_size = size; hps_ro = ro;
       @(negedge clk); hps_mounted[slot] = 1'b1;
       repeat (w) @(negedge clk);
       hps_mounted = 5'b00000;
@@ -265,6 +284,72 @@ module tb_pc9821_mount_eject;
     check(ev[4] == 1 && ev_size[4] == 64'd2048 * 300, "E9 the CD's host mount keeps its size");
     check(ev[0] == 1 && ev_size[0] == 64'd0, "E9 the deferred HDD eject is delivered");
     check(resets == 1, "E9 one reset, for the disk");
+
+    // ---------------- E10: an eject pressed while hps_io is mounting THAT slot ----------
+    // FDD1's eject is pressed during hps_io's mount of FDD1 itself: the eject waits for the quiet
+    // channel and must then be its own rising edge, not a tail joined to the mount's level that an
+    // edge-reading consumer (fdd_media's mnt_ev) would never see. Two events: the mount (its own
+    // size), then the eject (size 0). Swept over the host level's length.
+    for (k = 1; k <= 4; k = k + 1) begin
+      clear_counts;
+      fork
+        host_mount(1, 64'd1261568, k * 3);
+        begin repeat (2) @(negedge clk); osd_eject(5'b00010, 1); end
+      join
+      repeat (10) @(negedge clk);
+      check(ev[1] == 2, "E10 the mount and the deferred eject of the same slot are two events");
+      check(ev_first[1] == 64'd1261568, "E10 the first event is the mount, with its size");
+      check(ev_size[1] == 64'd0, "E10 the second event is the eject, size 0");
+      check(collide == 0, "E10 the eject never shares a cycle with the host mount");
+    end
+
+    // ---------------- E11: a host mount starting next to an eject's issue -------------
+    // FDD1's eject is pressed on a quiet channel; hps_io's mount of FDD1 rises in the cycle the
+    // eject would be issued (k = 0) or 1..3 cycles after it. The eject and the mount are always
+    // two events. From k = 1 the eject has gone out and the mount follows it (size 0, then the
+    // mount's size: the drive ends up holding the new image); at k = 0 the channel was not quiet,
+    // so the eject waits for the mount (the mount's size, then size 0), as in E10.
+    for (k = 0; k < 5; k = k + 1) begin
+      clear_counts;
+      @(negedge clk); hps_size = 64'd1261568; hps_ro = 1'b0;
+      @(negedge clk); eject_req = 5'b00010;     // the edge is taken at the next posedge
+      @(negedge clk); eject_req = 5'b00000;     // the cycle after it: the eject's issue cycle
+      if (k > 0) repeat (k) @(negedge clk);     // k = 1: the cycle right after the issue
+      hps_mounted = 5'b00010;
+      repeat (6) @(negedge clk); hps_mounted = 5'b00000;
+      repeat (10) @(negedge clk);
+      check(ev[1] == 2, "E11 an eject and a host mount next to it are two events");
+      if (k == 0) begin
+        check(ev_first[1] == 64'd1261568, "E11 k=0 the mount goes first, with its size");
+        check(ev_size[1] == 64'd0, "E11 k=0 the deferred eject follows it, size 0");
+      end
+      else begin
+        check(ev_first[1] == 64'd0, "E11 the first event is the eject, size 0");
+        check(ev_size[1] == 64'd1261568, "E11 the last event is the mount, with its size");
+      end
+      check(collide == 0, "E11 the eject never shares a cycle with the host mount");
+    end
+
+    // ---------------- E12: a mount's write-protect flag rides with its event ------------
+    // hps_io's img_readonly is "valid only for active bit in img_mounted" (sys/hps_io.sv:144-145),
+    // exactly as img_size is: a read-only image mounted from the OSD must arrive read-only at
+    // its event (the guest's write protect), and the next writable mount of the slot must
+    // arrive writable - the flag is the event's, not sticky.
+    clear_counts();
+    host_mount_ro(1, 64'd1261568, 20, 1'b1);
+    check(ev[1] == 1, "E12 a read-only mount is one event");
+    check(ev_size[1] == 64'd1261568, "E12 the read-only mount carries its size");
+    check(ev_ro[1] == 1'b1, "E12 a read-only mount arrives with img_readonly = 1");
+    clear_counts();
+    host_mount_ro(0, HDD0_BYTES, 20, 1'b1);
+    check(ev[0] == 1 && ev_ro[0] == 1'b1, "E12 a read-only disk mount arrives with img_readonly = 1");
+    check(a_ro == 1'b1, "E12 the disk's block engine latches the read-only flag");
+    clear_counts();
+    host_mount_ro(1, 64'd1261568, 20, 1'b0);
+    check(ev[1] == 1 && ev_ro[1] == 1'b0, "E12 a writable mount after a read-only one arrives writable");
+    clear_counts();
+    host_mount_ro(0, HDD0_BYTES, 20, 1'b0);
+    check(a_ro == 1'b0, "E12 a writable disk remount clears the latched read-only flag");
 
     // ==== VERDICT ====
     if (fails == 0) begin

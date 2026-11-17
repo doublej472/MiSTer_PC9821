@@ -351,6 +351,7 @@ module tb_pc9821_ata_irq_hold;
     if (value !== 8'h01) fail("B: 0x0433 lost the pending bit after the write commit");
     read_byte(16'h064E, value);         // the deferred ISR's ack
     ack_watch = 0;
+    if (fell_before_ack) fail("B: irq fell between the write raise and its 0x064E ack");
     if (irq) fail("B: the 0x064E status read did not acknowledge the write interrupt");
     wait_complete;
     if (dut.status_reg !== 8'h50) fail("B: WRITE SECTORS did not complete READY|DSC");
@@ -367,6 +368,8 @@ module tb_pc9821_ata_irq_hold;
     // ---------------------------------------------------------------
     write_byte(16'h064E, 8'h40);        // READ VERIFY: an immediate completion + raise
     if (!irq) fail("C: READ VERIFY raised no interrupt");
+    fell_before_ack = 0;
+    ack_watch = 1;                      // the level must hold, continuously, until the ack
     write_byte(16'h0644, 8'd1);
     write_byte(16'h0646, 8'h70);
     write_byte(16'h0648, 8'h00);
@@ -377,6 +380,8 @@ module tb_pc9821_ata_irq_hold;
     read_byte(16'h0433, value);
     if (value !== 8'h01) fail("C: 0x0433 lost the pending bit across a command issue");
     read_byte(16'h064E, value);         // ack
+    ack_watch = 0;
+    if (fell_before_ack) fail("C: irq fell between the READ VERIFY raise and its 0x064E ack");
     if (irq) fail("C: the 0x064E status read did not acknowledge");
     wait_drq;
     drain_sector(32'h70);

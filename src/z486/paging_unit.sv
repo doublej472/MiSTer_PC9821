@@ -48,7 +48,6 @@ module paging_unit
     output logic        mem_accepted,      // Ready: demand request may be handed off this cycle
     output reg          mem_servicing,     // High while accepted request is in flight
     output              demand_idle,       // A demand request would be captured this cycle
-    output              mem_complete_now,  // Completion shortcut (disabled: use registered mem_servicing clear)
     output              mem_read_complete, // Demand operand read, excluding walker traffic
     output reg          mem_dly_grace,     // Pulse: dcache lookup cycle of an optimistic demand read;
                                            // a pure-DLY uop may execute this cycle (data lands end of cycle)
@@ -231,20 +230,20 @@ logic        tlb_update_pwt;
 //=============================================================================
 // State Machine
 //=============================================================================
+// The encodings are explicit: dbg_state exports them (tb_protected_mode
+// matches PG_PF_WALKING as 4'd10), and 3, 8 and 11 belonged to three
+// lookup-slot wait states, unreachable since the lookup slot is always granted.
 typedef enum logic [3:0] {
-    PG_IDLE,
-    PG_MEM_TLB,          // Registered demand-memory TLB/permission cycle
-    PG_WALKING,          // Page walk in progress (mem/IO)
-    PG_WALK_LOOKUP,      // Wait for lookup slot before launching walked access
-    PG_CROSS_WAIT1,      // First half sent to BIU, waiting for completion
-    PG_CROSS_PREP2,      // One-cycle handoff before second-half TLB work
-    PG_CROSS_TLB2,       // Check TLB for second half
-    PG_CROSS_WALK2,      // Page walk for second half
-    PG_CROSS_LOOKUP2,    // Wait for lookup slot before second-half launch
-    PG_CROSS_WAIT2,      // Second half sent to BIU, waiting for completion
-    PG_PF_WALKING,       // Page walk for prefetch TLB miss
-    PG_PF_LOOKUP,        // Wait for lookup slot before prefetch launch
-    PG_PF_BIU_WAIT       // Prefetch BIU read in progress
+    PG_IDLE        = 4'd0,
+    PG_MEM_TLB     = 4'd1,   // Registered demand-memory TLB/permission cycle
+    PG_WALKING     = 4'd2,   // Page walk in progress (mem/IO)
+    PG_CROSS_WAIT1 = 4'd4,   // First half sent to BIU, waiting for completion
+    PG_CROSS_PREP2 = 4'd5,   // One-cycle handoff before second-half TLB work
+    PG_CROSS_TLB2  = 4'd6,   // Check TLB for second half
+    PG_CROSS_WALK2 = 4'd7,   // Page walk for second half
+    PG_CROSS_WAIT2 = 4'd9,   // Second half sent to BIU, waiting for completion
+    PG_PF_WALKING  = 4'd10,  // Page walk for prefetch TLB miss
+    PG_PF_BIU_WAIT = 4'd12   // Prefetch BIU read in progress
 } pg_state_t;
 
 pg_state_t state;
@@ -467,9 +466,8 @@ reg        opr_suppress_r;  // Suppress OPR_R update (INTA first cycle)
 reg [1:0]  opr_phys_low_r;   // Physical address [1:0] for byte extraction
 reg        opr_is_walk_r;    // Is walker request (no OPR_R)
 
-// PIPT cache completion is deliberately registered through mem_servicing clear.
-// Do not feed cache response/tag-compare timing back into the microsequencer.
-assign mem_complete_now = 1'b0;
+// PIPT cache completion is deliberately registered through mem_servicing
+// clear: no combinational completion path back into the microsequencer.
 assign mem_read_complete = dcache_read_complete && !opr_is_walk_r &&
                            !opr_is_write_r && !opr_suppress_r;
 
@@ -482,7 +480,6 @@ wire [31:0] idle_request_linear = idle_inta_req ? mem_inta_addr : linear_addr;
 wire idle_x87_io_req = mem_is_io &&
                        (idle_request_linear[31:3] == 29'h1000_001f) &&
                        (idle_request_linear[1:0] == 2'b00);
-wire cache_lookup_granted = 1'b1;
 wire idle_mem_ready = s_idle && !mem_servicing;
 assign demand_idle = idle_mem_ready;
 wire req_tlb_dirty_ok = !req_is_write || tlb_dirty;
@@ -490,8 +487,7 @@ wire req_can_translate = !pg_enable || (tlb_hit && slow_tlb_access_ok && req_tlb
 wire req_perm_fault = pg_enable && tlb_hit && !slow_tlb_access_ok;
 wire [31:0] req_mem_phys = pg_enable ? {tlb_physical_addr[31:12], req_linear[11:0]} : req_linear;
 wire req_mem_dcache_candidate = (state == PG_MEM_TLB) && req_can_translate &&
-                                !req_perm_fault && !req_check_only &&
-                                cache_lookup_granted;
+                                !req_perm_fault && !req_check_only;
 wire req_mem_dcache_accept = req_mem_dcache_candidate && dcache_req_accepted;
 
 // A response in the accept cycle itself (the bus contract allows it; the memory
@@ -540,7 +536,7 @@ wire pf_spec_pcd = pg_enable && (pf_xlat_hit ? pf_xlat_pcd : tlb_is_pcd);
 wire pf_spec_attr_ok = icache_req_spec_ok && !pf_spec_pcd && !cr0[30] &&
                        !z486_page_in_window(fast_pf_phys[31:12], VGA_BASE, VGA_TOP);
 wire pf_spec_known = !pg_enable || pf_xlat_hit || pf_tlb_match;
-wire fast_pf_candidate = idle_pf_req && cache_lookup_granted && pf_xlat_ok &&
+wire fast_pf_candidate = idle_pf_req && pf_xlat_ok &&
                          (!pf_spec || pf_spec_attr_ok);
 wire pf_spec_refuse = idle_pf_req && pf_spec && pf_spec_known &&
                       (!pf_xlat_ok || !pf_spec_attr_ok);
@@ -1165,7 +1161,7 @@ always_ff @(posedge clk or negedge reset_n) begin
             end
 
             PG_WALKING: begin
-                if (walker_issue_ready && cache_lookup_granted)
+                if (walker_issue_ready)
                     emit_walker_biu_req();
 
                 if (walk_done) begin
@@ -1177,7 +1173,7 @@ always_ff @(posedge clk or negedge reset_n) begin
                         end else begin
                             complete_mem_request();
                         end
-                    end else if (cache_lookup_granted) begin
+                    end else begin
                         automatic logic [31:0] phys = {walk_result_pfn, req_linear[11:0]};
                         if (req_crossing) begin
                             emit_first_half(phys, walk_result_pcd);
@@ -1188,22 +1184,6 @@ always_ff @(posedge clk or negedge reset_n) begin
                             fast_path_pending <= 1'b1;
                             state <= PG_IDLE;
                         end
-                    end else begin
-                        state <= PG_WALK_LOOKUP;
-                    end
-                end
-            end
-
-            PG_WALK_LOOKUP: begin
-                if (cache_lookup_granted) begin
-                    automatic logic [31:0] phys = {walk_result_pfn, req_linear[11:0]};
-                    if (req_crossing) begin
-                        emit_first_half(phys, walk_result_pcd);
-                        state <= PG_CROSS_WAIT1;
-                    end else begin
-                        emit_single(phys, walk_result_pcd);
-                        fast_path_pending <= 1'b1;
-                        state <= PG_IDLE;
                     end
                 end
             end
@@ -1228,14 +1208,14 @@ always_ff @(posedge clk or negedge reset_n) begin
                 end else if (!pg_enable) begin
                     if (req_check_only) begin
                         complete_check_only();
-                    end else if (cache_lookup_granted) begin
+                    end else begin
                         emit_second_half(req_linear2, 1'b0);
                         state <= PG_CROSS_WAIT2;
                     end
                 end else if (tlb_hit && slow_tlb_access_ok && (!req_is_write || tlb_dirty)) begin
                     if (req_check_only) begin
                         complete_check_only();
-                    end else if (cache_lookup_granted) begin
+                    end else begin
                         emit_second_half(tlb_physical_addr, tlb_is_pcd);
                         state <= PG_CROSS_WAIT2;
                     end
@@ -1248,7 +1228,7 @@ always_ff @(posedge clk or negedge reset_n) begin
             end
 
             PG_CROSS_WALK2: begin
-                if (walker_issue_ready && cache_lookup_granted)
+                if (walker_issue_ready)
                     emit_walker_biu_req();
 
                 if (walk_done) begin
@@ -1256,21 +1236,11 @@ always_ff @(posedge clk or negedge reset_n) begin
                         raise_walk_fault(req_linear2, walk_fault_code);
                     end else if (req_check_only) begin
                         complete_check_only();
-                    end else if (cache_lookup_granted) begin
+                    end else begin
                         automatic logic [31:0] phys2 = {walk_result_pfn, req_linear2[11:0]};
                         emit_second_half(phys2, walk_result_pcd);
                         state <= PG_CROSS_WAIT2;
-                    end else begin
-                        state <= PG_CROSS_LOOKUP2;
                     end
-                end
-            end
-
-            PG_CROSS_LOOKUP2: begin
-                if (cache_lookup_granted) begin
-                    automatic logic [31:0] phys2 = {walk_result_pfn, req_linear2[11:0]};
-                    emit_second_half(phys2, walk_result_pcd);
-                    state <= PG_CROSS_WAIT2;
                 end
             end
 
@@ -1280,7 +1250,7 @@ always_ff @(posedge clk or negedge reset_n) begin
             end
 
             PG_PF_WALKING: begin
-                if (walker_issue_ready && cache_lookup_granted)
+                if (walker_issue_ready)
                     emit_walker_biu_req();
 
                 if (walk_done) begin
@@ -1299,31 +1269,12 @@ always_ff @(posedge clk or negedge reset_n) begin
                         // re-selected each cycle and may hold another by now.
                         ack_prefetch_fault(pf_linear_addr, walk_fault_code);
                         state <= PG_IDLE;
-                    end else if (cache_lookup_granted) begin
+                    end else begin
                         // Walk succeeded, emit BIU request with translated address
                         automatic logic [31:0] pf_phys = {walk_result_pfn, pf_linear_addr[11:0]};
                         emit_pf_biu_req(pf_phys, walk_result_pcd);
                         state <= PG_PF_BIU_WAIT;
-                    end else begin
-                        state <= PG_PF_LOOKUP;
                     end
-                end
-            end
-
-            PG_PF_LOOKUP: begin
-                if (pf_redirect_queued) begin
-                    pf_ack_toggle_r <= ~pf_ack_toggle_r;
-                    state <= PG_IDLE;
-                end else if (walk_stale) begin
-                    // CR3 changed while waiting for a lookup slot: re-walk.
-                    req_is_write <= 1'b0;
-                    req_cpl <= pf_cpl;
-                    walk_request <= 1'b1;
-                    state <= PG_PF_WALKING;
-                end else if (cache_lookup_granted) begin
-                    automatic logic [31:0] pf_phys = {walk_result_pfn, pf_linear_addr[11:0]};
-                    emit_pf_biu_req(pf_phys, walk_result_pcd);
-                    state <= PG_PF_BIU_WAIT;
                 end
             end
 

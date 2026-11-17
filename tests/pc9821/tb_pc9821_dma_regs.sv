@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The uPD71071's eight address/count ports are four 16-bit PAIRS behind ONE shared byte flip-flop, not eight independent byte latches - a single write then two reads returns the written byte then the untouched high half, two different writes then two reads return both bytes in order, a write to a neighbouring channel does not leak into 0x01, and the flip-flop is genuinely shared so a write to 0x01 moves which half a later write to 0x03 lands in - while the ITF's own doubled self-test (BANK4@0x3E9) still passes, which eight latches satisfied by accident. Plus 0x19, the 8237's clear-byte-pointer: writing it resets the shared flip-flop to LOW (NP2kai dmac_o19, io/dmac.c:196-200) so the next byte write lands the low half (FAIL-FIRST against an undecoded 0x19, which lands it in the wrong half silently); 0x19 is not one of the eight register ports, so it does not itself toggle the flip-flop and its read is the write-only port's 0xFF.
+// The uPD71071's eight address/count ports are four 16-bit PAIRS behind ONE shared byte flip-flop, not eight independent byte latches - a single write then two reads returns the written byte then the untouched high half, two different writes then two reads return both bytes in order, a write to a neighbouring channel does not leak into 0x01, every channel's address and count hold their own two distinct bytes once all eight are written and master clear zeroes all eight (NP2kai io/dmac.c:128-157, 202-215), and the flip-flop is genuinely shared so a write to 0x01 moves which half a later write to 0x03 lands in - while the ITF's own doubled self-test (BANK4@0x3E9) still passes, which eight latches satisfied by accident. Plus 0x19, the 8237's clear-byte-pointer: writing it resets the shared flip-flop to LOW (NP2kai dmac_o19, io/dmac.c:196-200) so the next byte write lands the low half (FAIL-FIRST against an undecoded 0x19, which lands it in the wrong half silently); 0x19 is not one of the eight register ports, so it does not itself toggle the flip-flop and its read is the write-only port's 0xFF.
 //
-// The uPD71071's eight address/count ports are four 16-bit PAIRS behind ONE shared byte flip-flop, not eight independent byte latches - a single write then two reads returns the written byte then the untouched high half, two different writes then two reads return both bytes in order, a write to a neighbouring channel does not leak into 0x01, and the flip-flop is genuinely shared so a write to 0x01 moves which half a later write to 0x03 lands in - while the ITF's own doubled self-test (BANK4@0x3E9) still passes, which eight latches satisfied by accident. Plus 0x19, the 8237's clear-byte-pointer: writing it resets the shared flip-flop to LOW whatever parity it was left at (NP2kai dmac_o19 sets `dmac.lh = DMA16_LOW`, io/dmac.c:196-200), so the next address/count byte lands the low half - where an undecoded 0x19 silently lands it in the wrong half.
+// The uPD71071's eight address/count ports are four 16-bit PAIRS behind ONE shared byte flip-flop, not eight independent byte latches - a single write then two reads returns the written byte then the untouched high half, two different writes then two reads return both bytes in order, a write to a neighbouring channel does not leak into 0x01, every channel's address and count hold their own two distinct bytes once all eight are written and master clear zeroes all eight (NP2kai io/dmac.c:128-157, 202-215), and the flip-flop is genuinely shared so a write to 0x01 moves which half a later write to 0x03 lands in - while the ITF's own doubled self-test (BANK4@0x3E9) still passes, which eight latches satisfied by accident. Plus 0x19, the 8237's clear-byte-pointer: writing it resets the shared flip-flop to LOW whatever parity it was left at (NP2kai dmac_o19 sets `dmac.lh = DMA16_LOW`, io/dmac.c:196-200), so the next address/count byte lands the low half - where an undecoded 0x19 silently lands it in the wrong half.
 //
 // ---- the bench's own account of where each expectation comes from ----
 //
@@ -177,6 +177,7 @@ module tb_pc9821_dma_regs;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -378,6 +379,37 @@ module tb_pc9821_dma_regs;
     rd_is(16'h0001, 8'h11, "16 the write after 0x19 landed LOW");  // FF 1 -> 0, high still 11
     rd_is(16'h0001, 8'h44, "17 ...and the low half holds 44");     // FF 0 -> 1
 
+    // ---- EVERY CHANNEL'S ADDRESS AND COUNT: distinct bytes, both halves ----
+    // NP2kai dmac_o01/dmac_o03 pick the channel as `(port >> 2) & 3` and the half by the shared
+    // `dmac.lh` (io/dmac.c:128-157). Each of the eight registers gets its own two bytes (low
+    // then high, from a cleared flip-flop), and only after ALL eight are written is each read
+    // back: so a pair wired to another channel's port, or the count and address of one channel
+    // swapped, returns another register's bytes. Then master clear (0x1B) zeroes all eight
+    // (NP2kai dmac_o1b, io/dmac.c:202-215: every channel's adrs.d and leng.w = 0).
+    begin : every_register
+      integer r;
+      reg [15:0] p;
+      for (r = 0; r < 8; r = r + 1) begin
+        p = 16'h0001 + 16'(2 * r);
+        wr(16'h0019, 8'h00);                                       // FF -> low
+        wr(p, 8'hA0 + r[7:0]);                                     // low half
+        wr(p, 8'h50 + r[7:0]);                                     // high half
+      end
+      for (r = 0; r < 8; r = r + 1) begin
+        p = 16'h0001 + 16'(2 * r);
+        wr(16'h0019, 8'h00);
+        rd_is(p, 8'hA0 + r[7:0], "15 a register's low half holds its own byte after all eight were written");
+        rd_is(p, 8'h50 + r[7:0], "16 ...and its high half");
+      end
+      wr(16'h001B, 8'h00);
+      for (r = 0; r < 8; r = r + 1) begin
+        p = 16'h0001 + 16'(2 * r);
+        wr(16'h0019, 8'h00);
+        rd_is(p, 8'h00, "17 master clear zeroed this register's low half");
+        rd_is(p, 8'h00, "18 ...and its high half");
+      end
+    end
+
     // ---- THE BANK (0x21..0x27) AND BOUND (0x29) BLOCK -----------------
     // THESE STATE CHECKS NOW READ pc9821_dmac's OWN REGISTERS, because that is where the
     // register file moved: pc9821_iobus instantiates the engine (u_dma) and 0x01..0x29 are
@@ -395,7 +427,7 @@ module tb_pc9821_dma_regs;
     // core's engine, which agree three ways: NP2kai's `((port >> 1) + 1) & 3`
     // (io/dmac.c:236-237), qemu's same formula stated as a contract in its header
     // ("page registers at 0x21/0x23/0x25/0x27 (mapping ch1,2,3,0)",
-    // hw/dma/pc98-dma.c:6,269-272), and pc9821_dmac.sv:204 `cpu_bank_ch = idx[1:0] + 2'd1`. Each port
+    // hw/dma/pc98-dma.c:6,269-272), and pc9821_dmac.sv:213 `cpu_bank_ch = idx[1:0] + 2'd1`. Each port
     // reads its own channel, so no port-visible sequence can tell the rotations apart: the
     // check below is on the STATE, which is exactly what the hand-off moves.
     // FAIL-FIRST: before the alignment 0x21 stored into channel 0.
@@ -421,20 +453,20 @@ module tb_pc9821_dma_regs;
     rd_is(16'h0027, 8'h0C, "20 0x27 reads its own channel's low nibble");
     // 0x29 stores `(dat >> 2) & 3` into the channel `dat & 3` selects (NP2kai
     // `dmac.dmach + (dat & 3)`, io/dmac.c:260-263; qemu `regs[data & 3]`,
-    // hw/dma/pc98-dma.c:269-272) and the READ exposes CHANNEL 0 ALONE
-    // (pc9821_dmac.sv:545 `ch_bound[0]` - neither reference has a 0x29 read at all).
-    // FAIL-FIRST: with one global latch the read followed the LAST write, so
-    // the channel-1 row below read 03 and the channel-0 one read 00.
+    // hw/dma/pc98-dma.c:269-272) and the READ is the four bounds packed, channel n in bits
+    // 2n+1:2n, as the Xe10 reads it (docs/probes/XE10Z-XE10.TXT:205; neither reference has a
+    // 0x29 read at all; tb_pc9821_dmac replays the whole captured sequence). FAIL-FIRST: one
+    // global latch read the LAST write (03 after w0C), and the channel-0-only read 00 after w0D.
     wr(16'h0029, 8'h0D);
     if (dut.u_dma.ch_bound[1] !== 2'd3) begin
       $display("FAIL 21 0x29 write 0D is channel 1's bound 3: ch_bound[1]=%0d",
                dut.u_dma.ch_bound[1]);
       errors = errors + 1;
     end
-    rd_is(16'h0029, 8'h00, "22 0x29 exposes channel 0 alone: a channel-1 write leaves 00");
+    rd_is(16'h0029, 8'h0C, "22 0x29 after w0D reads channel 1's bound in bits 3:2 (XE10Z-XE10.TXT:205)");
     wr(16'h0029, 8'h0C);
-    rd_is(16'h0029, 8'h03, "23 0x29 channel-0 write 0C reads 03 (probes/RDBACK.TXT:157)");
-    rd_is(16'h0029, 8'h03, "24 ...and the read does not consume it");
+    rd_is(16'h0029, 8'h0F, "23 0x29 channel-0 write 0C adds bound 3 in bits 1:0 (probes/RDBACK.TXT:157)");
+    rd_is(16'h0029, 8'h0F, "24 ...and the read does not consume it");
 
   // ==== VERDICT ====
     if (errors == 0) begin

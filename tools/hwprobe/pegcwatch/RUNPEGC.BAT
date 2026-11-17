@@ -41,7 +41,8 @@ REM
 REM  CALIBRATION FIRST (worth 10 seconds): run it with NO argument on the same
 REM  freshly-booted machine -
 REM     RUNPEGC
-REM  - which prints the DOS-prompt state without running a child. On this
+REM  - which prints the DOS-prompt state without running a child (and keeps
+REM  it in PEGCCAL.TXT, so PEGC.TXT is not overwritten). On this
 REM  machine PEGCWATCH BASE should read A0A=00, P6A=00; if it does not, the
 REM  readback rows are suspect and that is the finding to send.
 REM
@@ -59,7 +60,15 @@ IF "%1"=="" GOTO NOARG
 
 ECHO Working directory (the game must be HERE - DOS resolves it from the cwd):
 CD
+REM  /NOP is an option, not the program: the program is then the second argument
+IF "%1"=="/NOP" GOTO CHKNOP
+IF "%1"=="/nop" GOTO CHKNOP
 IF NOT EXIST %1 ECHO *** NOT IN THIS DIRECTORY: %1 - a COMMAND.COM 'file not found' would follow ***
+GOTO RUN
+:CHKNOP
+IF "%2"=="" GOTO NOARG
+IF NOT EXIST %2 ECHO *** NOT IN THIS DIRECTORY: %2 - a COMMAND.COM 'file not found' would follow ***
+:RUN
 ECHO Running: PEGCW %1 %2 %3 %4 %5 %6 %7 %8 %9
 ECHO (the game's screen is its own; the PEGCWATCH rows are printed after it returns)
 PEGCW %1 %2 %3 %4 %5 %6 %7 %8 %9 > PEGC.TXT
@@ -81,7 +90,10 @@ ECHO.
 ECHO To answer the DOOM question, run it from the game's own directory:
 ECHO   RUNPEGC DOOM.EXE        (then, on a fresh boot,)
 ECHO   RUNPEGC DOOM2.EXE
-PEGCW
+ECHO.
+ECHO Calibration rows (also written to PEGCCAL.TXT):
+PEGCW > PEGCCAL.TXT
+TYPE PEGCCAL.TXT
 GOTO END
 
 :NOPROG

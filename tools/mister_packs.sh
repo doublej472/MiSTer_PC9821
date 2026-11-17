@@ -28,6 +28,9 @@
 # env: MISTER_HOST (ssh destination, default root@MiSTer; a bare host name gets root@),
 #      MISTER_PASS (default 1, the stock root password, through sshpass -e; empty = ssh keys)
 set -euo pipefail
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# the header comment up to its first non-comment line (a fixed line range rots)
+usage() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "$SELF"; }
 cd "$(dirname "$0")/.."
 
 HOST=${MISTER_HOST:-root@MiSTer}
@@ -38,6 +41,8 @@ SSHP=""
 MISTER_PASS="${MISTER_PASS-1}"   # the stock MiSTer root password; MISTER_PASS= (empty) uses ssh keys
 if [ -n "$MISTER_PASS" ]; then export SSHPASS="$MISTER_PASS"; SSHP="sshpass -e"; fi
 SSHO="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
+# scp -O: the card's sshd has no sftp subsystem, and a modern scp defaults to sftp.
+SCPO="-O $SSHO"
 run() { $SSHP ssh $SSHO $HOST "$@"; }
 
 # The pack path an MGL names: the <file ...> entry with type="f" (F0 -> file type f at
@@ -112,7 +117,7 @@ stash)
   name=${3:-$(basename "$file")}
   [ -f "$file" ] || { echo "no such file: $file" >&2; exit 1; }
   run "mkdir -p $GAMES/packs"
-  $SSHP scp $SSHO "$file" $HOST:$GAMES/packs/$name >/dev/null
+  $SSHP scp $SCPO "$file" $HOST:$GAMES/packs/$name >/dev/null
   run "wc -c < $GAMES/packs/'$name'" | sed 's/^/  stashed bytes: /'
   ;;
 
@@ -138,5 +143,5 @@ prune)
   ;;
 
 *)
-  sed -n '2,31p' "$0"; exit 1;;
+  usage; exit 1;;
 esac

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_FDC_RESET_INT: a controller reset through the 0x94 DOR, RELEASED (bit 7 falling) by a write with or without the motor bit 0x08 (the real Xe10 interrupts 1.07 ms after both, docs/probes/XE10T-XE10-FDC2A.TXT RST_M and RST_NM), is followed by the uPD765A's drive-poll interrupt at the first poll, within 1.024 ms (8192 clocks of the 8 MHz FDC) of the release and never before 100 us nor later than one more poll - not NP2kai's 6-frame (100 ms) workaround - with ST0 = AI|unit (0xC0|u) pending for each READY drive, drained one per SENSE INTERRUPT STATUS down to the one-byte 0x80, one interrupt per reset; a status pending for a drive that is not ready survives the reset and follows the AI; no interrupt while bit 7 is held set or for a motor-on write with no reset; and a poll that falls inside a command is deferred to the next one; a later control write with bit 7 clear (a repeated 0x18, 0x1C, 0x08) neither cancels nor restarts the poll, which still interrupts at the first poll after the release (MAME upd765.cpp reset_w acts only on a change of the RESET level, NP2kai never cancels int_timer), while a write re-asserting bit 7 stops it until the next release. The stimulus is the Windows 95 floppy driver's own reset (HSFLOP.PDR 4.00.950, NEC build): SENSE DRIVE STATUS reads RDY, DOR 0x98, ten 0x5F waits, DOR 0x18, then it sleeps until the interrupt. FAIL-FIRST: the base controller raised no interrupt after a reset (the Windows 95 Explorer hang), the 6-frame model raised none within the datasheet's window, and NP2kai's motor-bit condition raised none for the 0x90/0x10 reset.
+// TB_PC9821_FDC_RESET_INT: a controller reset through the 0x94 DOR, RELEASED (bit 7 falling) by a write with or without the motor bit 0x08 (the real Xe10 interrupts 1.07 ms after both, docs/probes/XE10T-XE10-FDC2A.TXT RST_M and RST_NM), is followed by the uPD765A's drive-poll interrupt at the first poll, within 1.024 ms (8192 clocks of the 8 MHz FDC) of the release and never before 100 us nor later than the machine's measured 1.07 ms (331 ARTIC ticks, so never at a second poll) - not NP2kai's 6-frame (100 ms) workaround - with ST0 = AI|unit (0xC0|u) pending for each READY drive, drained one per SENSE INTERRUPT STATUS down to the one-byte 0x80, one interrupt per reset; a status pending for a drive that is not ready survives the reset and follows the AI; no interrupt while bit 7 is held set or for a motor-on write with no reset; and a poll that falls inside a command is deferred to the next one; a later control write with bit 7 clear (a repeated 0x18, 0x1C, 0x08) neither cancels nor restarts the poll, which still interrupts at the first poll after the release (MAME upd765.cpp reset_w acts only on a change of the RESET level, NP2kai never cancels int_timer), while a write re-asserting bit 7 stops it until the next release. The stimulus is the Windows 95 floppy driver's own reset (HSFLOP.PDR 4.00.950, NEC build): SENSE DRIVE STATUS reads RDY, DOR 0x98, ten 0x5F waits, DOR 0x18, then it sleeps until the interrupt. FAIL-FIRST: the base controller raised no interrupt after a reset (the Windows 95 Explorer hang), the 6-frame model raised none within the datasheet's window, and NP2kai's motor-bit condition raised none for the 0x90/0x10 reset.
 //
 // THE EXPECTED VALUES:
 //   uPD765A datasheet, drive polling: after a reset every drive is taken as not ready; the
@@ -54,6 +54,11 @@ module tb_pc9821_fdc_reset_int;
   // 1.024 ms at the DUT's 50 MHz (uPD765A: 8192 clocks of 8 MHz), and MAME's earliest poll.
   localparam integer POLL     = 51200;
   localparam integer EARLIEST = 5000;     // 100 us
+  // The latest the machine interrupts: RST_M/RST_NM answer t_irq_art = 330 / 329 ARTIC ticks
+  // after the release (docs/probes/XE10T-XE10-FDC2A.TXT:63,65; the ARTIC counter runs at
+  // 307.2 kHz, 162.76 clk_sys at 50 MHz a tick), 1.07 ms - the datasheet's 1.024 ms poll plus
+  // the probe's own write-to-sample path. One tick of slack over the capture: 331 ticks.
+  localparam integer LATEST   = 53875;    // 331 x 162.76
 
   // A free-running cycle count, so S7 times the interrupt from the RELEASE and not from the
   // later control write.
@@ -158,12 +163,13 @@ module tb_pc9821_fdc_reset_int;
     end
   endtask
 
-  // The line rises inside the datasheet's window after the release that just happened.
+  // The line rises at the first poll after the release that just happened: no later than the
+  // machine's measured 1.07 ms (LATEST), so a second poll (2 x POLL) is a failure.
   task automatic in_window(input [8*80-1:0] what);
     begin
       time_irq(2 * POLL);
-      if (t > 2 * POLL) begin
-        $display("  FAIL: %0s: no interrupt within %0d cycles of the release", what, 2 * POLL);
+      if (t > LATEST) begin
+        $display("  FAIL: %0s: no interrupt within %0d cycles of the release (t=%0d)", what, LATEST, t);
         fails = fails + 1;
       end else if (t < EARLIEST) begin
         $display("  FAIL: %0s: interrupt after %0d cycles, before the first poll", what, t);
@@ -252,7 +258,7 @@ module tb_pc9821_fdc_reset_int;
     check_irq(1'b1, "S4 RECALIBRATE of the empty drive 1 completes");
     wr8(3'd2, 8'h10);
     hsflop_reset;
-    repeat (2 * POLL) @(negedge clk);
+    repeat (LATEST) @(negedge clk);
     check_irq(1'b1, "S4 interrupt after the reset");
     sense_is(8'hC0, "S4 the ready drive 0's AI first");
     sense_is(8'h29, "S4 drive 1's RECALIBRATE status survives (SE|NR|1)");

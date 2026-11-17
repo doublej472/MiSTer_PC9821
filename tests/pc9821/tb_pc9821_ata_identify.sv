@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_IDENTIFY:
-// The ATA IDENTIFY DEVICE page against the machine's own capture (docs/probes/IDE.TXT IDW rows): at the captured drive's 7,880,544-sector capacity and its post-BIOS 8-head/17-sector geometry every one of the 256 words is compared with the capture, the model-specific identity words (serial, firmware, model) carry the core's own documented Quantum identity, the vendor words 7/8 stay 0 (single-sample convention), and the capability words that would advertise a feature the PIO-only core cannot execute (DMA/UDMA in words 49/53/62/63/65-68/88, the security/CFA words, and word 82's extra command bits) stay at the core's honest value with the multiple-mode words 47/59 withdrawn; word 255 is recomputed as the ATA integrity word (0xA5 signature plus the two's-complement checksum over the core's own 255 words) instead of copying the capture's E9; then a non-default INITIALIZE DEVICE PARAMETERS to 16 heads/63 sectors is issued and words 54/55/56/57/58 are asserted against the bench's own integer division floor(capacity/(heads*sectors)) and current capacity equal to that times heads times sectors.
+// The ATA IDENTIFY DEVICE page against the machine's own capture (docs/probes/IDE.TXT IDW rows): at the captured drive's 7,880,544-sector capacity and its post-BIOS 8-head/17-sector geometry every one of the 256 words is compared with the capture, the model-specific identity words (serial, firmware, model) carry the core's own documented Quantum identity, the vendor words 7/8 stay 0 (single-sample convention), and the capability words that would advertise a feature the PIO-only core cannot execute (DMA/UDMA in words 49/53/62/63/65-68/88, the security/CFA words, and word 82's extra command bits) stay at the core's honest value with the multiple-mode words 47/59 withdrawn; word 255 is recomputed as the ATA integrity word (0xA5 signature plus the two's-complement checksum over the core's own 255 words) instead of copying the capture's E9; then a non-default INITIALIZE DEVICE PARAMETERS to 16 heads/63 sectors is issued and words 54/55/56/57/58 are asserted against the bench's own integer division floor(capacity/(heads*sectors)) and current capacity equal to that times heads times sectors. Taking the whole page leaves the Sector Count register at FF over a preloaded 0x5A, as the Xe10's drive does (docs/probes/XE10Y-XE10-K3M.TXT IDENT cmd=EC tf2), where NP2kai leaves the count alone for 0xEC (cbus/ideio.c ideio_r16). Words 60/61 are the LBA28 sector count, the capacity itself up to 0x0FFFFFFF and 0x0FFFFFFF above it (ATA/ATAPI-6's maximum for those words; NP2kai ideio.c's 48-bit build clamps the same way), checked at 0x0FFFFFFE, 0x0FFFFFFF, 2^28 and 2^32-1 sectors.
 
 module tb_pc9821_ata_identify;
 
@@ -227,6 +227,56 @@ module tb_pc9821_ata_identify;
         fail("word 58 not the adopted geometry's capacity");
       end
     end
+
+    // ---- 3. the page leaves the Sector Count at FF ----
+    // The Xe10's drive reads SC 00 at DRQ and FF once the page has been taken, from a preload
+    // of 5A (docs/probes/XE10Y-XE10-K3M.TXT:42 `tf1=00.00.A5.3C.C3.A0.58.00.58
+    // tf2=00.FF.A5.3C.C3.A0.50.00.50`). NP2kai's ideio_r16 leaves the count alone for 0xEC;
+    // the capture outranks it.
+    write_byte(16'h0644, 8'h5A);
+    write_byte(16'h064E, 8'hEC);   // IDENTIFY DEVICE a third time
+    read_byte(16'h074C, value);
+    if (value !== 8'h58) fail("third IDENTIFY did not raise DRQ (status)");
+    for (n = 0; n < 256; n = n + 1) read_word(word_value);
+    read_byte(16'h074C, value);
+    if (value !== 8'h50) fail("the IDENTIFY page did not end (status after the last word)");
+    read_byte(16'h0644, value);
+    cases = cases + 1;
+    if (value !== 8'hFF) begin
+      $display("  Sector Count after IDENTIFY: rtl=0x%02x want=0xff", value);
+      fail("IDENTIFY did not leave the Sector Count at FF (K3M capture)");
+    end
+
+    // ---- 4. words 60/61 are the LBA28 count, at most 0x0FFFFFFF ----
+    // ATA/ATAPI-6 (words 60-61, total number of user addressable sectors for the 28-bit
+    // commands): the maximum value is 0FFFFFFFh. NP2kai ideio.c's 48-bit build clamps the same
+    // way (`tmp[60] = (UINT16)0xffff; tmp[61] = (UINT16)0xfff;` once the count needs more than
+    // 28 bits). Below the limit the word is the capacity itself.
+    // FAIL-FIRST: the words carried the image's 32-bit sector count unclamped.
+    for (j = 0; j < 4; j = j + 1) begin
+      case (j)
+        0: want32 = 32'h0FFF_FFFE;
+        1: want32 = 32'h0FFF_FFFF;
+        2: want32 = 32'h1000_0000;
+        default: want32 = 32'hFFFF_FFFF;
+      endcase
+      capacity = want32;
+      repeat (80) @(posedge clk);  // the divider reruns on the capacity change
+      write_byte(16'h064E, 8'hEC);
+      read_byte(16'h074C, value);
+      if (value !== 8'h58) fail("IDENTIFY (large capacity) did not raise DRQ (status)");
+      if (want32 > 32'h0FFF_FFFF) want32 = 32'h0FFF_FFFF;
+      for (n = 0; n < 256; n = n + 1) begin
+        read_word(word_value);
+        if ((n == 60 && word_value !== want32[15:0]) || (n == 61 && word_value !== want32[31:16])) begin
+          $display("  capacity 0x%08x word %0d: rtl=0x%04x want=0x%04x", capacity, n, word_value,
+                   (n == 60) ? want32[15:0] : want32[31:16]);
+          fail("words 60/61 are not the LBA28 count (clamped to 0x0FFFFFFF)");
+        end
+      end
+      cases = cases + 1;
+    end
+    capacity = 32'd7880544;
 
     // ==== VERDICT ====
     if (errors == 0) begin

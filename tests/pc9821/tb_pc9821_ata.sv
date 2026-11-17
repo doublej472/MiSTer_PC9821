@@ -77,6 +77,11 @@ module tb_pc9821_ata;
       @(posedge clk);
       @(negedge clk);
       io_wr = 0;
+      // One idle cycle: separate I/O accesses on the real bus are at least five clk_sys apart
+      // (pc9821_iobus S_BYTE -> S_REPLY -> S_HOLD -> S_IDLE -> S_IOWAIT -> S_BYTE), and the ATA's
+      // CHS range check is two stages behind the task file (pc9821_ata u_chs, u_lba_room), so a
+      // command two cycles after a task-file write is a spacing the bus never produces.
+      @(negedge clk);
     end
   endtask
 

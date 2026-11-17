@@ -1,7 +1,7 @@
 `timescale 1ps/1ps
 
 // ==== WHAT THIS PROVES ====
-// The analog video leaves the core on an exact dot-locked video clock with a CONSTANT pixel period and a CONSTANT line and frame period in every analog mode, at every clk_sys: with clk_sys at 80, 100 and 120 MHz (three lanes in one simulation) and the core's own dot enable (pc9821_dot_ce) driving a 848 x 440 raster (640 x 400 active, the default SYNC block's geometry) into pc9821_video_out, the CLK_VIDEO it hands the framework runs at 2 x 400/19 MHz (period 23 750 ps) and over three whole frames after the output has settled every CE_PIXEL period, every hsync period and every vsync period is one and the same number of video clocks: native 2 clocks a pixel and 1696 a line (848 x 47.5 ns = 40.28 us, 24.83 kHz), doubled 1 clock a pixel and 848 a line (49.66 kHz), each frame 440 x 1696 = 746 240 native clocks (56.42 Hz) whatever the mode; and in every mode every active pixel is the raster's own dot in order (none dropped, repeated or reordered across the crossing); and over a LONG doubled run (100 frames, at each clk_sys) there is no FIFO re-centre or underflow, every frame is exactly 880 lines x 848 clocks with a 3-LINE VSYNC (the doubled picture's compatibility pulse: the replayed 16-line one lost sync on a VGA monitor under composite sync; FAIL-FIRST on the 16-line output), every VSYNC edge lands on an HSYNC leading edge, every VS-delimited frame holds exactly 800 DE lines (what the framework's scaler frames on, sys/ascal.vhd), and DE is never high inside HSYNC or VSYNC. The figures are the dot clock's (400/19 MHz = 50 MHz x 8/19, docs/pc9821-port-status.md "Pixel clock and the video pipeline") and the raster's, never read out of the DUT. FAIL-FIRST: on the fractional-enable design (CLK_VIDEO = clk_sys, CE_PIXEL a 24-bit accumulator carry) the video clock is clk_sys and every pixel period takes two values (3 or 4 clocks at 80 MHz), so the clock, pixel and line checks all fail.
+// The analog video leaves the core on an exact dot-locked video clock with a CONSTANT pixel period and a CONSTANT line and frame period in every analog mode, at every clk_sys: with clk_sys at 80, 90 (the shipped CLOCK_RATE_HZ), 100 and 120 MHz (four lanes in one simulation) and the core's own dot enable (pc9821_dot_ce) driving a 848 x 440 raster (640 x 400 active, the default SYNC block's geometry) into pc9821_video_out, the CLK_VIDEO it hands the framework runs at 2 x 400/19 MHz (period 23 750 ps) and over three whole frames after the output has settled every CE_PIXEL period, every hsync period and every vsync period is one and the same number of video clocks: native 2 clocks a pixel and 1696 a line (848 x 47.5 ns = 40.28 us, 24.83 kHz), doubled 1 clock a pixel and 848 a line (49.66 kHz), each frame 440 x 1696 = 746 240 native clocks (56.42 Hz) whatever the mode; and in every mode every active pixel is the raster's own dot in order (none dropped, repeated or reordered across the crossing); and over a LONG doubled run (100 frames, at each clk_sys) there is no FIFO flush, re-centre or underflow (the module's own fifo_ev port), every frame is exactly 880 lines x 848 clocks with a 3-LINE VSYNC (the doubled picture's compatibility pulse: the replayed 16-line one lost sync on a VGA monitor under composite sync; FAIL-FIRST on the 16-line output), every VSYNC edge lands on an HSYNC leading edge, every VS-delimited frame holds exactly 800 DE lines (what the framework's scaler frames on, sys/ascal.vhd), and DE is never high inside HSYNC or VSYNC. The figures are the dot clock's (400/19 MHz = 50 MHz x 8/19, docs/pc9821-port-status.md "Pixel clock and the video pipeline") and the raster's, never read out of the DUT. FAIL-FIRST: on the fractional-enable design (CLK_VIDEO = clk_sys, CE_PIXEL a 24-bit accumulator carry) the video clock is clk_sys and every pixel period takes two values (3 or 4 clocks at 80 MHz), so the clock, pixel and line checks all fail.
 //
 // WHY. A VGA monitor's horizontal PLL locks to the hsync period and its pixel sampling sees the DAC
 // update on every CE_PIXEL; when either moves by a clk_sys period line to line, the picture shimmers
@@ -75,7 +75,7 @@ module tb_pc9821_video_clk_lane #(
     vid_rst = 1'b0;
   end
 
-  wire       clk_video, ce_out, hs_out, vs_out, de_out, dbl_active;
+  wire       clk_video, ce_out, hs_out, vs_out, de_out, dbl_active, fifo_ev;
   wire [7:0] r_out, g_out, b_out;
   // ==== DUT ====
   pc9821_video_out #(.DBL_EN(1'b1)) dut (
@@ -85,7 +85,7 @@ module tb_pc9821_video_clk_lane #(
     .clk_vid(clk_vid), .vclk_31(1'b0), .vid_rst(vid_rst),
     .clk_video(clk_video), .ce_out(ce_out),
     .r_out(r_out), .g_out(g_out), .b_out(b_out), .hs_out(hs_out), .vs_out(vs_out), .de_out(de_out),
-    .dbl_active(dbl_active)
+    .dbl_active(dbl_active), .fifo_ev(fifo_ev)
   );
 
   // ---- the long-run integrity counters (read hierarchically by the top) ----
@@ -96,11 +96,9 @@ module tb_pc9821_video_clk_lane #(
   longint vs_off_ref = -1;
   integer dlpf_cnt = 0, dlpf_lo = 0, dlpf_hi = 0;
   reg     de_q2 = 1'b0;
-  reg     prim_q = 1'b0;
-  always @(posedge clk_vid) begin
-    prim_q <= dut.primed;
-    if (measure && (dut.recentre || (prim_q && !dut.primed))) n_fifo_ev = n_fifo_ev + 1;
-  end
+  // The module's own diagnostic port (pc9821_video_out.sv:66 `a flush, re-centre or underflow`),
+  // one clk_vid pulse per event: no reach into its internals.
+  always @(posedge clk_vid) if (measure && fifo_ev) n_fifo_ev = n_fifo_ev + 1;
 
   // ---- measurement, in clocks of the CLK_VIDEO the module hands the framework ----
   longint   clk_n = 0, last_ce = -1, last_hs = -1, last_vs = -1;
@@ -191,7 +189,8 @@ endmodule
 
 module tb_pc9821_video_clk;
   reg run_dbl = 1'b0, measure = 1'b0;
-  wire [31:0] ce_lo [3], ce_hi [3], hs_lo [3], hs_hi [3], vs_lo [3], vs_hi [3], hs_n [3], vs_n [3], vps [3], pbad [3], pok [3];
+  localparam integer NL = 4;
+  wire [31:0] ce_lo [NL], ce_hi [NL], hs_lo [NL], hs_hi [NL], vs_lo [NL], vs_hi [NL], hs_n [NL], vs_n [NL], vps [NL], pbad [NL], pok [NL];
 
   tb_pc9821_video_clk_lane #(.SYS_HZ(80_000_000),  .LANE(0)) l80  (run_dbl, measure,
     ce_lo[0], ce_hi[0], hs_lo[0], hs_hi[0], vs_lo[0], vs_hi[0], hs_n[0], vs_n[0], vps[0], pbad[0], pok[0]);
@@ -199,16 +198,19 @@ module tb_pc9821_video_clk;
     ce_lo[1], ce_hi[1], hs_lo[1], hs_hi[1], vs_lo[1], vs_hi[1], hs_n[1], vs_n[1], vps[1], pbad[1], pok[1]);
   tb_pc9821_video_clk_lane #(.SYS_HZ(120_000_000), .LANE(2)) l120 (run_dbl, measure,
     ce_lo[2], ce_hi[2], hs_lo[2], hs_hi[2], vs_lo[2], vs_hi[2], hs_n[2], vs_n[2], vps[2], pbad[2], pok[2]);
+  // The SHIPPED clk_sys: z486_mister.sv's CLOCK_RATE_HZ, 90 MHz.
+  tb_pc9821_video_clk_lane #(.SYS_HZ(90_000_000),  .LANE(3)) l90  (run_dbl, measure,
+    ce_lo[3], ce_hi[3], hs_lo[3], hs_hi[3], vs_lo[3], vs_hi[3], hs_n[3], vs_n[3], vps[3], pbad[3], pok[3]);
 
   // One frame of the raster: 848 x 440 dots of 47.5 ns (19/400 us) = 17.7232 ms.
   localparam longint FRAME_PS = 64'd848 * 64'd440 * 64'd47_500;
   integer fails = 0;
-  integer sys_mhz [3] = '{80, 100, 120};
+  integer sys_mhz [NL] = '{80, 100, 120, 90};
 
   // ==== CHECKS ====
   task automatic check_mode(input string name, input integer vclk_exp_ps, input integer ce_n,
                             input integer hs_n_exp, input integer vs_n_exp, input integer lines);
-    for (int i = 0; i < 3; i++) begin
+    for (int i = 0; i < NL; i++) begin
       $display("  %s @ clk_sys %0d MHz: video clock %0d ps, CE %0d..%0d, hsync %0d..%0d (%0d lines), vsync %0d..%0d (%0d frames), %0d/%0d pixels right",
                name, sys_mhz[i], vps[i], ce_lo[i], ce_hi[i], hs_lo[i], hs_hi[i], hs_n[i], vs_lo[i], vs_hi[i], vs_n[i], pok[i], pok[i] + pbad[i]);
       if (vps[i] != 32'(vclk_exp_ps)) begin
@@ -275,16 +277,17 @@ module tb_pc9821_video_clk;
     measure = 1'b1;
     #(FRAME_PS * 100 + FRAME_PS / 10);
     measure = 1'b0;
-    $display("  scaler framing (DE lines between VS leading edges): 80 MHz %0d..%0d, 100 MHz %0d..%0d, 120 MHz %0d..%0d",
-             l80.dlpf_lo, l80.dlpf_hi, l100.dlpf_lo, l100.dlpf_hi, l120.dlpf_lo, l120.dlpf_hi);
+    $display("  scaler framing (DE lines between VS leading edges): 80 MHz %0d..%0d, 100 MHz %0d..%0d, 120 MHz %0d..%0d, 90 MHz %0d..%0d",
+             l80.dlpf_lo, l80.dlpf_hi, l100.dlpf_lo, l100.dlpf_hi, l120.dlpf_lo, l120.dlpf_hi, l90.dlpf_lo, l90.dlpf_hi);
     if (l80.dlpf_lo != 800 || l80.dlpf_hi != 800 || l100.dlpf_lo != 800 || l100.dlpf_hi != 800 ||
-        l120.dlpf_lo != 800 || l120.dlpf_hi != 800) begin
+        l120.dlpf_lo != 800 || l120.dlpf_hi != 800 || l90.dlpf_lo != 800 || l90.dlpf_hi != 800) begin
       $display("FAIL: the doubled picture is not 800 DE lines in every VS-delimited frame");
       fails++;
     end
     check_long(0, l80.n_fifo_ev,  l80.n_vs_off,  l80.n_de_sync,  l80.lpf_lo,  l80.lpf_hi,  l80.vsw_lo,  l80.vsw_hi,  l80.n_frames);
     check_long(1, l100.n_fifo_ev, l100.n_vs_off, l100.n_de_sync, l100.lpf_lo, l100.lpf_hi, l100.vsw_lo, l100.vsw_hi, l100.n_frames);
     check_long(2, l120.n_fifo_ev, l120.n_vs_off, l120.n_de_sync, l120.lpf_lo, l120.lpf_hi, l120.vsw_lo, l120.vsw_hi, l120.n_frames);
+    check_long(3, l90.n_fifo_ev,  l90.n_vs_off,  l90.n_de_sync,  l90.lpf_lo,  l90.lpf_hi,  l90.vsw_lo,  l90.vsw_hi,  l90.n_frames);
     check_mode("doubled, 100 frames", 23_750, 1, 848, 2 * 848 * 440, 100 * 880);
     // ==== VERDICT ====
     if (fails != 0) $fatal(1, "TB_PC9821_VIDEO_CLK: %0d check(s) failed", fails);

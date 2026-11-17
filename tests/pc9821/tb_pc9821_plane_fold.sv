@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The four-plane column folded to a palette index the way the machine orders it, exhaustively: all 16 plane-bit combinations at all 8 dot positions. GVRAM is four planes (0 = blue at 0xA8000, 1 = red at 0xB0000, 2 = green at 0xB8000, 3 = intensity at 0xE0000), the index is {E,G,R,B} in bits 3..0, the column is one byte per plane MSB first so dot 0 is bit 7. Also checks NP2kai's relation (B = i&1, R = (i>>1)&1, G = (i>>2)&1) over every index the fold can produce, so a red/green swap cannot pass, and names the blue and intensity lanes individually.
+// The four-plane column folded to a palette index the way the machine orders it, exhaustively: all 16 plane-bit combinations at all 8 dot positions. GVRAM is four planes (0 = blue at 0xA8000, 1 = red at 0xB0000, 2 = green at 0xB8000, 3 = intensity at 0xE0000), the index is {E,G,R,B} in bits 3..0, the column is one byte per plane MSB first so dot 0 is bit 7. Also walks every dot of 512 random multi-dot columns against the per-dot rule (so a fold that mixes in a neighbouring dot cannot pass), round-trips every index through a column built from its bits in NP2kai's order (B = i&1, R = (i>>1)&1, G = (i>>2)&1), so a red/green swap cannot pass, and names the blue and intensity lanes individually.
 //
 // ---- the bench's own account of where each expectation comes from ----
 // The four-plane column is folded to a palette index the way the MACHINE orders
@@ -24,10 +24,10 @@
 //   0xA8/AA/AC/AE = 37/15/26/04; an earlier review
 //   states the same order as "B = bit 0, R = bit 1, G = bit 2, E = bit 3"]
 //
-// The NP2kai relation is what makes this checkable as a WHOLE rather than
-// per-bit: an index i must be reproducible from its own bits, so for every value
-// the fold produces, B = i&1, R = (i>>1)&1 and G = (i>>2)&1 must hold. A module
-// that swapped red and green would pass a single-plane walk and fail that.
+// The index round trip is what makes this checkable as a WHOLE rather than per-bit: a
+// column built from index i's bits (B = i&1, R = (i>>1)&1, G = (i>>2)&1) must fold back to
+// i, so a module that swapped red and green fails it. A random multi-dot walk then checks
+// every dot of columns with many dots set, which a one-dot-per-column walk cannot see.
 
 module tb_pc9821_plane_fold;
   reg  [31:0] column;
@@ -49,10 +49,9 @@ module tb_pc9821_plane_fold;
     for (d = 0; d < 8; d = d + 1) begin
       for (p = 0; p < 16; p = p + 1) begin
         dot = d[2:0];
-        // Build a column whose four plane bytes each carry the same 8-bit
-        // pattern p in every dot, so the dot select is what is being tested and
-        // each lane is distinguishable from the others: lane n gets p rotated by
-        // n, which makes a cross-lane wire swap visible.
+        // Build a column whose plane n carries bit n of p at dot d and zero at every
+        // other dot, so the dot select and each lane's place in the index are what is
+        // being tested (the multi-dot walk below covers columns with other dots set).
         column = { 8'h00, 8'h00, 8'h00, 8'h00 };
         for (i = 0; i < 4; i = i + 1) begin
           bit_of_plane = (p >> i) & 1;
@@ -71,9 +70,38 @@ module tb_pc9821_plane_fold;
       end
     end
 
-    // ---- the NP2kai relation, over every index the fold can produce ----
-    // For each index value, build the column that should produce it and check the
-    // relation B = i&1, R = (i>>1)&1, G = (i>>2)&1 against what comes out.
+    // ---- MULTI-DOT columns: every dot of a random column, against the per-dot rule ----
+    // The walk above sets one dot per column, so a fold that ORed a neighbouring dot in, or
+    // mis-selected when several dots are set, would pass it. Here every plane byte is random
+    // and each of the 8 dots must give {E,G,R,B} = bit (7 - dot) of planes 3..0.
+    begin : multi_dot
+      reg [31:0] rng;
+      reg [7:0]  pb;
+      integer    n, k;
+      rng = 32'h1F2E_3D4C;
+      for (k = 0; k < 512; k = k + 1) begin
+        rng = rng ^ (rng << 13); rng = rng ^ (rng >> 17); rng = rng ^ (rng << 5);   // xorshift32
+        column = rng;
+        for (d = 0; d < 8; d = d + 1) begin
+          dot = d[2:0];
+          #1;
+          for (n = 0; n < 4; n = n + 1) begin
+            pb = column[8*n +: 8];
+            want[n] = pb[7 - d];
+          end
+          if (idx !== want) begin
+            if (errors < 8)
+              $display("FAIL multi-dot column %08x dot %0d: idx=%b, expected %b", column, d, idx, want);
+            errors = errors + 1;
+          end
+        end
+      end
+    end
+
+    // ---- the index round trip, over every index the fold can produce ----
+    // For each index value i, the column whose dot-0 bits are i's bits must fold back to i:
+    // B = i&1, R = (i>>1)&1, G = (i>>2)&1, E = (i>>3)&1 (NP2kai's degpal1 order), so a
+    // red/green swap fails here.
     for (i = 0; i < 16; i = i + 1) begin
       dot = 3'd0;
       column = { 8'h00, 8'h00, 8'h00, 8'h00 };
@@ -84,10 +112,6 @@ module tb_pc9821_plane_fold;
       #1;
       if (idx !== i[3:0]) begin
         $display("FAIL index round trip for %0d: idx=%0d", i, idx);
-        errors = errors + 1;
-      end
-      if (i[0] !== ((i >> 0) & 1) || i[1] !== ((i >> 1) & 1) || i[2] !== ((i >> 2) & 1)) begin
-        $display("FAIL NP2kai bit relation for index %0d", i);
         errors = errors + 1;
       end
     end

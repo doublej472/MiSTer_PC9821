@@ -1,8 +1,8 @@
 // NEC's uPD71071: 8237-compatible, four channels, PC-98 addressing; register behaviour is
 // NP2kai's io/dmac.c (chip: nec-core-survey section 6; windows: IO-11).
 
-// NO CONSUMER, DELIBERATELY: the FDC is absent, the CS4231 is unmodelled, and the PC-9801-86's
-// sample path is PIO. The chip exists because the machine has it and the ITF programs it.
+// ONE CONSUMER, THE FDC: its DRQ and DACK sit on channel 2 or 3 as its strap selects (pc9821_iobus
+// `.dma_dack(fdc_strap_2hd ? dma_dev_dack[2] : dma_dev_dack[3])`). The CS4231 is unmodelled and the PC-9801-86's sample path is PIO.
 
 // THE MACHINE OUTRANKS THE MODEL ON READS: write-only registers answer rather than float - 0xFF
 // at 0x13/0x15/0x17/0x19/0x1D/0x1F, 0x00 at 0x11/0x1B. 0x1B does NOT clear the
@@ -77,6 +77,11 @@ module pc9821_dmac (
     // the request's accept (dma_ready reaches the CPU's snoop input combinationally).
     output wire [31:0] mem_addr_nx,
     output wire        mem_load,
+    // THE DIRECTION OF THE BYTE mem_load LOADS, valid in the load cycle. mem_we is a request
+    // qualifier (mem_req && ...) and is low in both load cycles - S_FIRST and S_DEV precede
+    // S_MEM - so the subsystem's route decode, which runs on the load, cannot take it from
+    // mem_we: a port-to-memory byte would be decoded as a read and a ROM window's store kept.
+    output wire        mem_load_we,
     output wire        mem_we,
     output wire [3:0]  mem_be,
     output reg  [31:0] mem_din,
@@ -139,6 +144,8 @@ module pc9821_dmac (
   wire [39:0] org_q = {org_qc1, org_qc0, org_qa2, org_qa1, org_qa0};
   reg [7:0]  ch_mode [0:3];
   reg [1:0]  ch_bound[0:3];
+  // The 0x29 read: the four bounds packed, channel 0 lowest (see the read arm).
+  wire [7:0] bound_rd = {ch_bound[3], ch_bound[2], ch_bound[1], ch_bound[0]};
 
   // The 8237's low/high byte flip-flop. GLOBAL to the chip, not per channel, and it
   // toggles on every address or count access - which is why the ITF's
@@ -161,9 +168,11 @@ module pc9821_dmac (
                    S_MEM   = 3'd2, // presenting the request, waiting for the ACCEPT
                    S_RESP  = 3'd5, // a read: waiting for the COMPLETION
                    S_DEV   = 3'd3, // the strobe cycle: the device's byte moves
-                   S_FIN   = 3'd4; // advance the address and count, maybe report TC
+                   S_FIN   = 3'd4, // advance the address and count, maybe report TC
+                   S_SEL   = 3'd6; // the byte's address held for its route decode (THE ADDRESS SNAPSHOT)
   reg [2:0]  state;
   reg [1:0]  cur;
+  reg [30:0] cur_addr_q;   // ch_addr[cur] in every cycle (THE ENGINE CHANNEL'S ADDRESS below)
   reg        cur_read;   // the byte comes from memory and goes to the device
   reg        cur_verify;
   reg [7:0]  cur_byte;
@@ -327,7 +336,7 @@ module pc9821_dmac (
     end else begin
       // The folded updates for the state the CPU arms and S_FIN BOTH write (see the
       // event folds above): one NBA per register per cycle, with collisions resolved by
-      // the fold's boolean rather than by source order (race-idiom R2).
+      // the fold's boolean rather than by source order (docs/single-cycle-event-discipline.md R2).
       stat   <= (stat & ~stat_clr) | stat_set;
       mask   <= ((mask | mask_tc_set) & ~mask_cpu_wr) | (mask_cpu_val & mask_cpu_wr);
       sw_req <= ((sw_req & ~sw_tc_clr) & ~sw_cpu_wr) | (sw_cpu_val & sw_cpu_wr);
@@ -447,7 +456,15 @@ module pc9821_dmac (
           // guest-visible byte. CHANNEL MAP: `((port >> 1) + 1) & 3` (see the write arm).
           5'd16, 5'd17, 5'd18, 5'd19:
             dout <= {4'b0000, ch_addr[idx[1:0] + 2'd1][19:16]};
-          R_BOUND: dout <= {6'b000000, ch_bound[0]};
+          // 0x29 reads ALL FOUR channels' bounds, channel n in bits 2n+1:2n. The Xe10 reads
+          // `00 0C 0C 8C 8E 86 86 50` after the writes 0D (ch1 = 3), 02 (ch2 = 0), 0B (ch3 = 2),
+          // 08 (ch0 = 2), 05 (ch1 = 1), none, then 00 01 06 07 (ch0 = ch1 = 0, ch2 = ch3 = 1)
+          // (docs/probes/XE10Z-XE10.TXT:205 `D29 asfound w0D w02 w0B w08 w05 again final = 00 0C
+          // 0C 8C 8E 86 86 50`; tools/hwprobe/xe10z/xe10z.s sec_d29): each read is that packed
+          // byte, and a channel-0 write alone reads its bound in bits 1:0
+          // (docs/probes/RDBACK.TXT:157 `after 04/08/0C = 01 02 03`). NP2kai and qemu-pc98 have
+          // no read handler for 0x29 (io/dmac.c:336-338; hw/dma/pc98-dma.c:273-276).
+          R_BOUND: dout <= bound_rd;
           5'd9, 5'd10, 5'd11, R_CLEAR_FF, R_ALLMSK: dout <= 8'hFF;
           default: dout <= 8'hFF;
         endcase
@@ -462,8 +479,11 @@ module pc9821_dmac (
           // assignment is the lowest index.
           for (i = 3; i >= 0; i = i - 1)
             if (want[i]) cur <= i[1:0];
-          state <= S_FIRST;
+          state <= S_SEL;
         end
+
+        // The second cycle the snapshot's route decode is given (THE ADDRESS SNAPSHOT, below).
+        S_SEL: state <= S_FIRST;
 
         S_FIRST: begin
           cur_read   <= (ch_mode[cur][3:2] == 2'b10) || (ch_mode[cur][3:2] == 2'b11);
@@ -542,7 +562,7 @@ module pc9821_dmac (
         R_MASTER: dout_comb = 8'h00;
         5'd16, 5'd17, 5'd18, 5'd19:
           dout_comb = {4'b0000, ch_addr[idx[1:0] + 2'd1][19:16]};
-        R_BOUND: dout_comb = {6'b000000, ch_bound[0]};
+        R_BOUND: dout_comb = bound_rd;
         default: dout_comb = 8'hFF;
       endcase
     end
@@ -576,9 +596,94 @@ module pc9821_dmac (
 
   // The two mem_addr loads below: S_FIRST of a memory-to-port channel (mode bits 3:2 = 10/11)
   // and S_DEV of a port-to-memory one.
-  assign mem_addr_nx = {1'b0, ch_addr[cur]};
-  assign mem_load    = ((state == S_FIRST) && ch_mode[cur][3]) ||
-                       ((state == S_DEV) && !(cur_read || cur_verify));
+  assign mem_addr_nx = {1'b0, ld_addr};
+
+  // ==== THE ENGINE CHANNEL'S ADDRESS, ONE STEP AHEAD ====
+  // mem_addr_nx feeds pc9821_memory_subsystem's DMA route decode, which registers the byte's
+  // backend address and route class through the whole memory map at mem_load. Read as
+  // ch_addr[cur], that was a single-cycle path from S_IDLE's `cur` choice (S_FIRST of a
+  // memory-to-port channel loads in the very next cycle) through the 31-bit channel mux and the
+  // map into dma_be_addr/dma_cls, and it missed setup in STA on every seed of every sweep (xt:
+  // -3.69 ns, rr1: -4.39 ns). cur_addr_q is a REGISTER that equals ch_addr[cur] in every cycle:
+  // it is loaded with the next value of ch_addr at the next `cur` - S_IDLE's want priority
+  // choosing the channel, S_FIN's folded advance for the channel the engine is on, and every
+  // other cycle the CPU's raw writes to that channel (an address half, a bank byte, the master
+  // clear), which are the only other writers of ch_addr. No state moves and no byte changes
+  // timing; tools/check_seq_equiv.py --proof dmac_cur_addr proves the module cycle-identical to
+  // the ch_addr[cur] form, with cur_addr_q == ch_addr[cur] as the induction's invariant.
+  wire [1:0] cur_nx = (state == S_IDLE && any_want) ? (want[0] ? 2'd0 : want[1] ? 2'd1 :
+                                                      want[2] ? 2'd2 : 2'd3) : cur;
+  reg  [30:0] cur_addr_nx;
+  always @* begin
+    cur_addr_nx = ch_addr[cur_nx];
+    if (state == S_FIN)
+      cur_addr_nx = addr_hit ? addr_cpu_val : addr_base;    // cur_nx == cur here
+    else if (cpu_master)
+      cur_addr_nx = 31'd0;
+    else if (cpu_addr_half && (cpu_chan == cur_nx)) begin
+      if (lh) cur_addr_nx[15:8] = din;
+      else    cur_addr_nx[7:0]  = din;
+    end else if (cpu_bank && (cpu_bank_ch == cur_nx)) begin
+      cur_addr_nx[23:16] = din;
+      cur_addr_nx[30:24] = 7'd0;
+    end
+  end
+  always @(posedge clk) cur_addr_q <= reset ? 31'd0 : cur_addr_nx;
+
+  // ==== THE ADDRESS SNAPSHOT (owner decision 2026-11-13, docs/trade-candidates.md T89) ====
+  // The byte's address (cur_addr_q alone above) still reached pc9821_memory_subsystem's DMA route
+  // decode in ONE cycle: cur_addr_q -> the whole memory map -> dma_be_addr/dma_cls, 13.3-14.9 ns of
+  // data on an 11.1 ns clk_sys (the pf2-755a892d census, every seed). The map does not fit a cycle.
+  // So the address the load uses is a snapshot, ld_addr, taken two cycles before the load, and
+  // S_SEL (one state between S_IDLE and S_FIRST, +1 clk_sys per DMA byte) gives the second cycle:
+  //   * memory-to-port (S_FIRST loads): ld_addr is taken at S_IDLE's accept, from ch_addr[cur] as
+  //     the accept's edge leaves it (cur_addr_nx) - the address S_FIRST loaded before S_SEL existed;
+  //   * port-to-memory (S_DEV loads, two states after S_SEL): ld_addr is taken again in S_SEL, which
+  //     is the cycle the parent's S_FIRST occupied, so a CPU write to the channel's address up to that
+  //     cycle is seen, as it was.
+  // So each byte loads the address the parent loaded, one clk_sys later. ld_addr is written nowhere
+  // else, and no load happens within two cycles of either snapshot (S_SEL -> S_FIRST, and S_SEL ->
+  // S_FIRST -> S_DEV), so ld_addr -> the subsystem's load registers is an exact two-cycle path: the
+  // SDC's pc9821_mc_dmaaddr multicycle (tools/profile_gen.py CEN_MULTICYCLES, sdc_exceptions.tsv
+  // mc_dmaaddr_*), and the SIM-ONLY check below asserts the premise at every load.
+  reg [30:0] ld_addr;
+  wire       ld_we = (state == S_IDLE && any_want) || (state == S_SEL && !ch_mode[cur][3]);
+  always @(posedge clk)
+    if (reset) ld_addr <= 31'd0;
+    else if (ld_we)
+      ld_addr <= cur_addr_nx;
+  // synthesis translate_off
+  // The multicycle's premise, at every load: a load in cycle L captures at the edge ending L, and
+  // -setup 2 allows a launch no later than the edge ending L-2, so ld_addr must not be WRITTEN at the
+  // edge between L-1 and L (its write enable low in L-1), whatever value a write would carry, and its
+  // value in L equals its value in L-1.
+  reg [30:0] ld_addr_d1;
+  reg        ld_we_d1, ld_live;
+  always @(posedge clk) begin
+    ld_addr_d1 <= ld_addr;
+    ld_we_d1   <= ld_we && !reset;
+    ld_live    <= !reset;
+    if (ld_live && !reset && mem_load && (ld_we_d1 || (ld_addr != ld_addr_d1)))
+      $fatal(1, "pc9821_dmac: the byte's address snapshot was written inside its two-cycle window (%08h -> %08h, state %0d)",
+             ld_addr_d1, ld_addr, state);
+  end
+  // synthesis translate_on
+  // synthesis translate_off
+  // The invariant the cut rests on, every cycle after a reset: the shadow IS ch_addr[cur].
+  /* verilator lint_off PROCASSINIT */   // 0 until the first reset has set it
+  reg cur_addr_live = 1'b0;
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    cur_addr_live <= cur_addr_live || reset;
+    if (cur_addr_live && !reset && (cur_addr_q != ch_addr[cur]))
+      $fatal(1, "pc9821_dmac: cur_addr_q %08h differs from ch_addr[%0d] %08h (state %0d)",
+             cur_addr_q, cur, ch_addr[cur], state);
+  end
+  // synthesis translate_on
+  // The port-to-memory load is the store's: its byte is written at S_MEM (mem_we above). The
+  // S_FIRST load is a memory-to-port channel's read, so it carries no direction bit.
+  assign mem_load_we = (state == S_DEV) && !(cur_read || cur_verify);
+  assign mem_load    = ((state == S_FIRST) && ch_mode[cur][3]) || mem_load_we;
 
   assign mem_be = (mem_addr[1:0] == 2'd0) ? 4'b0001 :
                   (mem_addr[1:0] == 2'd1) ? 4'b0010 :

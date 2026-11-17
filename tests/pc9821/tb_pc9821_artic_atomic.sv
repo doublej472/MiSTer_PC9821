@@ -135,6 +135,7 @@ module tb_pc9821_artic_atomic;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -229,6 +230,13 @@ module tb_pc9821_artic_atomic;
       $finish;
     end
     else $fatal(1, "TB_PC9821_ARTIC_ATOMIC: FAIL (%0d)", werrors);
+  end
+
+  // A DUT that never answers (a wait above that never ends) fails with a verdict here rather
+  // than hanging until the runner's outer timeout. Far above the bench's own run time.
+  initial begin
+    #100_000_000;
+    $fatal(1, "TB_PC9821_ARTIC_ATOMIC: TIMEOUT");
   end
 
 endmodule

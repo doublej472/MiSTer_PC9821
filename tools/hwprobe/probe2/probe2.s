@@ -7386,7 +7386,7 @@ tm_pd_half:
  * window bounded by the ARTIC counter (9216 ticks = 30 ms at the documented
  * 307200 Hz, longer than any possible 16-bit count period).  The absolute
  * latch word tears (scans returned 0xFFFA/0xFFEA-class
- * words that cannot be a count of the BIOS's 0x6000 divisor - item 10's
+ * words that cannot be a count of the BIOS's 0x6000 divisor - the
  * self-rejected /PIT run), so each candidate is now sampled TWICE back to
  * back and only a coherent pair (words within 64 counts) is accepted; the
  * largest accepted word is the divisor or one step below it.  [tm_divok] is
@@ -11742,11 +11742,11 @@ msg_time_pits:  .asciz "\r\n  PIT channel 0 latch/read, three samples = "
 msg_time_pitmax: .asciz "\r\n    measured divisor = "
 msg_time_pitd:  .asciz " (largest count over a 20 ms scan; mode 3 sweeps divisor..0 in steps of 2)\r\n"
 msg_time_divzero: .asciz " ** the counter never changed over 20 ms: the PIT read is not working on this machine,\r\n    so every PIT column below (and in /TIMEREF) is meaningless **"
-msg_divbad:     .asciz " ** PIT DIVISOR OUT OF RANGE: not a documented mode-3 count (0x6000 = 2.4576 MHz,\r\n    0x4E00 = 1.9968 MHz at BANK7@0x5DE3, so the band is 0x4000..0x7000). The xBASE\r\n    ratios below stay valid; every ABSOLUTE PIT figure is only as good as this word.\r\n    A value at the very top of the 16-bit range with the scan's pairs coherent is a\r\n    MACHINE reading to report (item 10), NOT proof the latch read is broken; a low\r\n    coherent ratio means the read tore. THE RUN EXITS 1 ON THIS EITHER WAY. **\r\n"
+msg_divbad:     .asciz " ** PIT DIVISOR OUT OF RANGE: not a documented mode-3 count (0x6000 = 2.4576 MHz,\r\n    0x4E00 = 1.9968 MHz at BANK7@0x5DE3, so the band is 0x4000..0x7000). The xBASE\r\n    ratios below stay valid; every ABSOLUTE PIT figure is only as good as this word.\r\n    A value at the very top of the 16-bit range with the scan's pairs coherent is a\r\n    MACHINE reading (channel 0's as-found 65536-tick wrap), NOT proof the latch read is broken; a low\r\n    coherent ratio means the read tore. THE RUN EXITS 1 ON THIS EITHER WAY. **\r\n"
 /* Read the divisor line's own `coherent pairs = ACC/TRY`: ACC/TRY == 1 means the
- * scan's sampled pairs agreed, so the value is what the machine returns (item 10's
- * open hardware question - the 2026-09-25 captures return ~0xFFEx, one pair-spacing
- * below a 16-bit reload), while a low ratio means the latch read itself tore. */
+ * scan's sampled pairs agreed, so the value is what the machine returns (the
+ * 2026-09-25 captures return ~0xFFEx: samples of channel 0's as-found mode 0, which counts
+ * through a 65536-tick wrap, docs/probes/XE10T-XE10.TXT:20 `vmax=65535 vmin=0`), while a low ratio means the latch read itself tore. */
 msg_divbad_note: .asciz "    The coherent pairs = ACC/TRY on the line above says which: ACC/TRY = 1 means the "
     .asciz "pairs agreed and the value is what the machine returns (report it, do not "
     .asciz "read it as the BIOS's divisor); a low ratio means the latch read itself tore.\r\n"

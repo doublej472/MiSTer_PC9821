@@ -50,9 +50,9 @@ every window (`own_cross_check`), and THAT is the authority: `ok` and the
 documented `WRAP` are consistent, a sub-tick window cannot be refereed, and only
 a real disagreement refuses.  The probe's own `SELFCHECK` tally is a SECONDARY
 diagnostic - when it fails while the fields agree, the capture is quoted and the
-output names `INSTRUMENT DEFECT (probe self-check), DATA CONSISTENT` (TODO 89:
-the one-trip build scaled the PIT column and failed all 58 windows on data that
-was never in doubt).  A capture whose run is INCOMPLETE (a BEGIN: with no END:, a
+output names `INSTRUMENT DEFECT (probe self-check), DATA CONSISTENT` (the
+one-trip build's chk_pair scaled the PIT column and failed all 58 windows on data
+that was never in doubt; idelat.s chk_pair carries the fix).  A capture whose run is INCOMPLETE (a BEGIN: with no END:, a
 section missing, or no `IDELAT DONE` trailer) is refused: its rows are partial
 data that look like constants.  A refusal exits 1; a quoted-but-defective capture
 exits 0.
@@ -76,10 +76,15 @@ import argparse
 import re
 import statistics
 import sys
+from pathlib import Path
 
-PIT_HZ = 2_457_600                 # switched to 1_996_800 when PITDIV ~= 0x4E00
-ARTIC_HZ = 307_200
-ARTIC_NS = 1e9 / ARTIC_HZ      # 3255.208 ns per tick
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import hwtime  # noqa: E402  (tools/hwprobe/hwtime.py: the shared time bases and referee)
+import markers  # noqa: E402  (tools/hwprobe/markers.py: the anchored BEGIN:/END: split)
+
+PIT_HZ = hwtime.PIT_HZ_24576       # switched to PIT_HZ_19968 when PITDIV ~= 0x4E00
+ARTIC_HZ = hwtime.ARTIC_HZ
+ARTIC_NS = hwtime.ARTIC_NS     # 3255.208 ns per tick
 TM_N = 1024
 
 # True while decoding a capture whose READ-row ARTIC deltas are the pre-fix
@@ -100,64 +105,16 @@ AXIS_81_NS = 1620.0
 
 
 def sections(text: str) -> tuple[dict[str, list[str]], list[str], list[str]]:
-    """Split a capture by BEGIN:/END: markers.
-
-    Returns (found, opens, closes): found maps a section name to its lines, opens
-    and closes are the marker names in order.  A name in opens with no matching
-    close is the section that hung.
-
-    A marker must START its own line (the same anchor ioprobe_decode.py uses).
-    Without it, prose that names the markers becomes a phantom section - the
-    ioprobe banner's `Sections are BEGIN:IO<port><mode>/...` sentence decoded a
-    complete capture as `HUNG: IO`.  idelat's own banner
-    line 8 (`Sections are BEGIN:/END: bracketed: ...`) carries a slash after the
-    colon, so it is matched by neither form and every archived capture decodes
-    identically under the anchor.
-    """
-    found: dict[str, list[str]] = {}
-    opens: list[str] = []
-    closes: list[str] = []
-    cur: str | None = None
-    for line in text.splitlines():
-        m = re.match(r"\s*BEGIN:([A-Z0-9]+)\s*$", line)
-        if m:
-            cur = m.group(1)
-            opens.append(cur)
-            found.setdefault(cur, [])
-            continue
-        m = re.match(r"\s*END:([A-Z0-9]+)\s*$", line)
-        if m:
-            closes.append(m.group(1))
-            cur = None
-            continue
-        if cur is not None:
-            found[cur].append(line)
-    return found, opens, closes
+    """Split a capture by its line-anchored BEGIN:/END: markers: (found, opens, closes), as
+    tools/hwprobe/markers.py documents (a name in opens with no close is the section that hung)."""
+    return markers.sections(text)
 
 
 def referee(pit: int, art: int) -> tuple[str, str]:
-    """(which column to trust, health label) for one raw window.
-
-    Prefer ARTIC whenever its delta is >= 1 tick (no wrap/tear at
-    these scales); keep PIT only for sub-tick windows.  The 8:1 cross-check is
-    a health label at the machine-measured agreement band (0.5-5%): 'ok',
-    'WRAP' for the -8192-count reload signature (explicitly rejected), 'neq'
-    beyond 5%, 'sub' when the window is sub-tick and PIT serves.
-
-    Small-window rule: the absolute floors (16 counts,
-    32 for the WRAP check) exist for latch-read quantization, but they are
-    CLAMPED to ref so the effective band never exceeds +/-100% on windows
-    below ~320 counts (art=1 tick, ref=8: 'ok' now spans pit 0..16, not
-    0..24).  Label-only: ns still come from ARTIC at art >= 1.
-    """
-    if art >= 1:
-        ref = max(art * 8, 1)
-        if abs(pit - ref) <= min(max(16, 0.05 * ref), ref):
-            return "art", "ok"
-        if abs(ref - pit - 8192) <= min(max(32, 0.02 * ref), ref):
-            return "art", "WRAP"
-        return "art", "neq"
-    return "pit", "sub"
+    """(which column to trust, health label) for one raw window: ARTIC whenever its delta is
+    >= 1 tick, PIT for a sub-tick window; the label is hwtime.referee()'s at the 8:1 law."""
+    label = hwtime.referee(pit, art)
+    return ("pit" if label == "sub" else "art"), label
 
 
 def pick(pit: int, art: int) -> tuple[float, str]:
@@ -355,8 +312,8 @@ def own_cross_check(
     one probe build's arithmetic.  The probe's own SELFCHECK tally is a SECONDARY
     diagnostic: a tally that fails while this cross-check passes is an instrument
     defect in the probe, and refusing a good capture is as bad as quoting a torn
-    one (TODO 89: `IDELAT-fixed.TXT` - the probe scaled the PIT delta, all 58 of
-    its windows fail, and every one of them is consistent here).
+    one (an earlier probe build scaled the PIT delta: all 58 of its windows
+    failed, and every one was consistent here; that capture is not kept in the tree).
     """
     agree = checked = degen = skipped = 0
     failing: list[str] = []
@@ -626,15 +583,15 @@ def decode(text: str) -> bool:
     an incomplete run, or a failure of THIS decoder's own row-by-row 8:1
     cross-check.  The probe's SELFCHECK tally is a secondary diagnostic - when it
     fails while the cross-check passes, the capture is quoted and the instrument
-    defect is named (TODO 89).  main() exits non-zero on a refusal."""
+    defect is named (the chk_pair scaled-PIT defect).  main() exits non-zero on a refusal."""
     global PIT_HZ, ART_DEGENERATE
-    PIT_HZ = 2_457_600
+    PIT_HZ = hwtime.PIT_HZ_24576
     ART_DEGENERATE = False
     found, opens, closes = sections(text)
     cal_rows, r1_rows, rn_rows, rn_ends = parse_all(found)
     bad_read = degenerate_read_rows(r1_rows, rn_rows, rn_ends)
     ART_DEGENERATE = any(v >= ART_NEGATIVE for _, v in bad_read)
-    m = re.search(r"SELFCHECK windows=(\d+) ok=(\d+) fail=(\d+) sub=(\d+)", text)
+    m = SELFCHECK_RE.search(text)
     selfcheck = tuple(int(x) for x in m.groups()) if m else None
     # The decoder's OWN cross-check of the printed fields is the authority; the
     # probe's tally is a secondary diagnostic (see own_cross_check).
@@ -672,7 +629,7 @@ def decode(text: str) -> bool:
         # BIOS work-area 0501 bit-7 strap selects the 1.9968 MHz oscillator and
         # every PIT-derived figure moves 19% (2.4576/1.9968).
         if 0x4800 <= div <= 0x5400:
-            PIT_HZ = 1_996_800
+            PIT_HZ = hwtime.PIT_HZ_19968
             print("  PIT STRAP: divisor ~= 0x4E00 -> the 1.9968 MHz oscillator"
                   " (work-area 0501 bit 7); PIT rate switched to 1996800 counts/s")
         elif 0x5A00 <= div <= 0x6600:
@@ -703,10 +660,10 @@ def decode(text: str) -> bool:
                     f"  Signature: the probe printed `8 x ARTIC delta={claimed:08X}` for\n"
                     f"  `PIT delta={pit:08X}` - {claimed:08X} = {pit:08X} x 8, i.e. it scaled the PIT\n"
                     "  column (the two operands rode in one register: a 16-bit `mov` into AX after\n"
-                    "  loading EAX from the ARTIC array leaves EAX holding the PIT). TODO 89; the\n"
-                    "  probe is fixed, and the constants below are quoted from the fields as printed."
+                    "  loading EAX from the ARTIC array leaves EAX holding the PIT). idelat.s\n"
+                    "  chk_pair is fixed, and the constants below are quoted from the fields as printed."
                 )
-            if PIT_HZ != 2_457_600:
+            if PIT_HZ != hwtime.PIT_HZ_24576:
                 print_strap_note()
             print(
                 "  The DECISION CONSTANTS below are QUOTED: they come from the printed fields,\n"
@@ -719,7 +676,7 @@ def decode(text: str) -> bool:
                 "  the 8:1 law, so neither can be quoted. The DECISION CONSTANTS are REFUSED.\n"
                 "  Re-run IDELAT.COM (the probe exits 1 on this too). ***"
             )
-            if PIT_HZ != 2_457_600:
+            if PIT_HZ != hwtime.PIT_HZ_24576:
                 print(
                     "  NOTE (strap): this capture's PITDIV says the 1.9968 MHz strap (0x4E00),\n"
                     "  where the law is 6.5 raw counts per ARTIC tick, NOT 8: chk_pair assumes the\n"
@@ -768,7 +725,7 @@ def decode(text: str) -> bool:
                 f"done={'yes' if done else 'no'}."
                 "\n  Re-run IDELAT.COM and decode the new capture."
             )
-        if not incomplete and PIT_HZ != 2_457_600:
+        if not incomplete and PIT_HZ != hwtime.PIT_HZ_24576:
             print_strap_note()
     else:
         print_decisions(cal, r1, rn)

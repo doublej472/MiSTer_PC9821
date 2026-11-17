@@ -29,6 +29,8 @@ module tb_pc9821_tram_bridge;
   // arm, and the byte port is idle there (the module never strokes byte_rd/byte_we on this
   // route), so byte_dout/byte_hold are the trivially-quiet inputs.
   reg         route_cg = 0;
+  reg         timing_xe10 = 0, gfx_scan_on = 0;   // the Fast table: the walk's own pace
+  reg   [1:0] xe10_mode = 2'd0;                 // the Xe10 table's display-mode column (Fast reads none)
   wire [4:0]  byte_sel;
   wire        byte_rd;
   reg  [7:0]  byte_dout = 8'h00;

@@ -12,7 +12,7 @@
  *     bytes back, and proves the whole user-CG store is unchanged against a snapshot.
  *   /IDE (items 21, 27): 0x0432 sweep, 0x074E with the slave selected, 0x0433 with an IDE
  *     interrupt pending (CHECK POWER MODE). Each row's ROW line is committed first.
- *   /W4A0 (item 157): the EGC word read `in ax,0x4A0`, the read that is suspected of freezing
+ *   /W4A0 (item 82): the EGC word read `in ax,0x4A0`, the read that is suspected of freezing
  *     the machine once. FLAGGED: run it last, in its own batch, and power-cycle after it.
  *
  * Buffers live above the image in the program's own 64 KiB segment (a .COM owns it).
@@ -863,7 +863,7 @@ cgwr_mode:
     ret
 
 /* ---------------------------------------------------------------------------------------- */
-/* /W4A0 (item 157): FLAGGED - the EGC word read                                             */
+/* /W4A0 (item 82):  FLAGGED - the EGC word read                                             */
 /* ---------------------------------------------------------------------------------------- */
 w4a0_mode:
     mov     dx, offset s_row_b
@@ -1805,7 +1805,14 @@ p6c_af:     .byte 0
 p6c_r:      .byte 0
 i2b:        .space 12
 ide_banks:  .byte 0x00, 0x01, 0x02, 0x03, 0x2A, 0x80, 0xFF   /* item 27's set */
+    .ifndef CG3
 xku:        .byte 0x01, 0x10, 0x22, 0x5C, 0x09, 0x0C, 0x58, 0xFF  /* ku 0x21, 0x30, 0x42, 0x7C; kit 2 adds 0x29, 0x2C, 0x78 (the video-xe10 lane's CG rows) */
+    .else
+/* XE10CG3.COM (--defsym CG3=1, kit 3): the kit-3 CGX rows as well - A3 = 0x0A 0x0B 0x0D 0x0E 0x0F
+ * 0x59 0x5A 0x5B 0x5D 0x5E 0x5F after kit 2's seven; 18 x 48 x 12 = 10368 bytes of XBUF (0x4000-0x687F,
+ * below CGBUF) */
+xku:        .byte 0x01, 0x10, 0x22, 0x5C, 0x09, 0x0C, 0x58, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x59, 0x5A, 0x5B, 0x5D, 0x5E, 0x5F, 0xFF
+    .endif
 xrawlist:   .byte 0x00, 0x01, 0x1F, 0x20, 0x21, 0xFF
 c_a1:       .byte 0
 c_a3:       .byte 0

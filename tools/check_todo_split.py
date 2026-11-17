@@ -19,9 +19,14 @@ THE FAILURE THIS GUARDS. An edit that loses an item, duplicates a number, reuses
 retired one, or leaves a reference pointing at a number that no longer exists. None of
 those shows up as a compile error, a failing bench or a lint warning.
 
+The item table's TITLES must also match the theme files' headings (the heading is the
+source of truth), and README's `## Sections` map, not the whole README, must name every
+theme file.
+
 Nothing here is a copy: every expected value is read out of the tree. `--selftest` plants
-a lost number, a retired-but-present number, a duplicate and a dangling reference in a
-temporary copy of the list and requires each to be caught.
+a lost number, a retired-but-present number, a duplicate, a dangling reference, an empty
+section map and a drifted index title in a temporary copy of the list and requires each to
+be caught.
 
 Exit 0 when the four agree; non-zero, naming the disagreement, when they do not.
 """
@@ -37,7 +42,9 @@ TODO_DIR = ROOT / "todo"
 RETIRED_LINE = re.compile(r"^Retired numbers:\s*(.*)$", re.MULTILINE)
 
 ITEM_HEADER = re.compile(r"^(\d+)\. \*\*")
-README_ROW = re.compile(r"^\|\s*(\d+)\s*\|.*\|\s*`todo/([0-9A-Za-z._-]+\.md)`\s*\|\s*$")
+# The heading's bold title: `NN. **Title.** **TAG.** ...` -> `Title.`
+ITEM_TITLE = re.compile(r"^(\d+)\. \*\*(.+?)\*\*")
+README_ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*)\|\s*`todo/([0-9A-Za-z._-]+\.md)`\s*\|\s*$")
 TODO_FILE = re.compile(r"todo/([0-9A-Za-z._-]+\.md)")
 REFERENCE = re.compile(r"\bitems?\s+(\d+(?:\s*[\u2013/-]\s*\d+)*)", re.IGNORECASE)
 
@@ -63,6 +70,31 @@ def fail(msg: str) -> None:
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def titles_in_todo() -> dict[int, str]:
+    """number -> the heading's bold title, over every item header in todo/*.md (not README)."""
+    out: dict[int, str] = {}
+    for path in sorted(TODO_DIR.glob("*.md")):
+        if path.name == "README.md":
+            continue
+        for line in read(path).splitlines():
+            m = ITEM_TITLE.match(line)
+            if m:
+                out.setdefault(int(m.group(1)), m.group(2).strip())
+    return out
+
+
+def section_lines(name: str) -> list[str]:
+    """The lines of todo/README.md's `## <name>` section (empty when it is absent)."""
+    lines = read(TODO_DIR / "README.md").splitlines()
+    try:
+        start = lines.index(f"## {name}")
+    except ValueError:
+        return []
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].startswith("## ")), len(lines))
+    return lines[start:end]
 
 
 def items_in_todo() -> tuple[dict[int, str], dict[str, list[int]]]:
@@ -132,14 +164,16 @@ def check_readme_table(by_number: dict[int, str]) -> None:
     end = next((i for i in range(start + 1, len(lines))
                 if lines[i].startswith("## ")), len(lines))
     seen: dict[int, str] = {}
+    row_title: dict[int, str] = {}
     for line in lines[start:end]:
         m = README_ROW.match(line)
         if not m:
             continue
-        n, fn = int(m.group(1)), m.group(2)
+        n, fn = int(m.group(1)), m.group(3)
         if n in seen:
             fail(f"todo/README.md lists item {n} twice")
         seen[n] = fn
+        row_title[n] = m.group(2).strip()
     if not seen:
         fail("todo/README.md has no item -> file table (no rows matched)")
         return
@@ -152,6 +186,13 @@ def check_readme_table(by_number: dict[int, str]) -> None:
     for n in sorted(seen):
         if n not in by_number:
             fail(f"todo/README.md lists item {n}, which exists in no todo/*.md file")
+    # The theme file's heading is the source of truth for an item's title; the index row
+    # is the lookup route for `item NN`, so a row that drifted from it misleads the reader.
+    titles = titles_in_todo()
+    for n in sorted(set(row_title) & set(titles)):
+        if row_title[n] != titles[n]:
+            fail(f"item {n}: todo/README.md's title {row_title[n]!r} differs from the heading "
+                 f"{titles[n]!r} in todo/{by_number.get(n, '?')} -- copy the heading")
 
 
 def check_file_lists(by_number: dict[int, str]) -> None:
@@ -162,8 +203,10 @@ def check_file_lists(by_number: dict[int, str]) -> None:
             fail(f"todo/{f} exists but is not named by the repo-root TODO.md index")
         for f in sorted(root_named - on_disk):
             fail(f"the repo-root TODO.md names todo/{f}, which does not exist")
-    # README's section map must name every DATA file (README itself is the index).
-    readme_named = set(TODO_FILE.findall(read(TODO_DIR / "README.md")))
+    # README's section map must name every DATA file (README itself is the index). Only the
+    # `## Sections` table counts: the item table names every file too, so reading the whole
+    # README would let an empty section map pass.
+    readme_named = set(TODO_FILE.findall("\n".join(section_lines("Sections"))))
     data = on_disk - {"README.md"}
     for f in sorted(data - readme_named):
         fail(f"todo/{f} is not named by todo/README.md's section map")
@@ -267,11 +310,32 @@ def selftest(real_root: Path) -> int:
     def dangling(r: Path) -> None:          # code cites a retired number
         (r / "src" / "bad.sv").write_text(f"// see item {gone}\n")
 
+    def empty_sections(r: Path) -> None:    # the section map loses its rows
+        t = read(readme(r))
+        out, skip = [], False
+        for line in t.splitlines():
+            if line == "## Sections":
+                skip = True
+            elif line.startswith("## "):
+                skip = False
+            if skip and line.startswith("| ") and "`todo/" in line:
+                continue
+            out.append(line)
+        readme(r).write_text("\n".join(out) + "\n")
+
+    def drift_title(r: Path) -> None:       # an index row's title drifts from its heading
+        t = read(readme(r))
+        row = re.compile(rf"^\|\s*{live}\s*\|.*$", re.MULTILINE)
+        readme(r).write_text(row.sub(f"| {live} | A planted wrong title. | `todo/{by_number[live]}` |",
+                                     t, count=1))
+
     ok = all([
         plant("a retired number dropped from the list (lost)", drop_retired, "MISSING"),
         plant("a retired number reused by a live item", reuse_retired, "RETIRED but still present"),
         plant("one number in two files", duplicate, "appears in BOTH"),
         plant("a reference to a retired number", dangling, f"cites item {gone}"),
+        plant("an empty section map", empty_sections, "not named by todo/README.md's section map"),
+        plant("an index title that differs from its heading", drift_title, "differs from the heading"),
     ])
     # and the unplanted copy must be clean apart from the real tree's own references
     print(f"TODO SPLIT SELFTEST: {'PASS' if ok else 'FAIL'}")

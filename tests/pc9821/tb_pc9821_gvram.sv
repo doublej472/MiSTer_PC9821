@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GVRAM:
-// The one four-plane GVRAM datapath: a CPU plane-window store becomes one D1 column access per enabled byte and lands in that plane's byte lane of the byte-interleaved word at gvram_base + page*0x20000 + 4*column, the per-plane byte enables gate writes, the GRCG and the EGC BOTH reach all four planes through the same port (a TDW fill, an RMW merge with and without the old value, the active-low plane mask, the four-window fold, and an EGC 0x1400 WS_PATREG fill), and the scanout fetches 80 columns of a line into a ping-pong buffer one line ahead at no more than one request per 8 clk_sys and advances that buffer EXACTLY ONCE per line tick, however wide the producer's pulse is -- a multi-clk_sys LEVEL (which pc9821_system used to send, and which is why games bounced) must not advance it twice. It does NOT cover the pixel pipeline, the palette or the compositor, which are a later lane's.
+// The one four-plane GVRAM datapath: a CPU plane-window store becomes one D1 column access per enabled byte and lands in that plane's byte lane of the byte-interleaved word at gvram_base + page*0x20000 + 4*column, the per-plane byte enables gate writes, a page-1 store lands on page 1 and leaves page 0 alone, the GRCG and the EGC BOTH reach all four planes through the same port (a TDW fill, an RMW merge with and without the old value, the active-low plane mask including the all-disabled no-op, the fold of a GRCG store through the R, G and E windows to all four planes, and an EGC 0x1400 WS_PATREG fill), and the scanout fetches 80 columns of a line into a ping-pong buffer one line ahead (its request rate is not measured) and advances that buffer EXACTLY ONCE per line tick, however wide the producer's pulse is -- a multi-clk_sys LEVEL (which pc9821_system used to send, and which is why games bounced) must not advance it twice. It does NOT cover the pixel pipeline, the palette or the compositor, which are a later lane's.
 module tb_pc9821_gvram;
   reg clk = 0;
   always #5 clk = ~clk;
@@ -310,7 +310,11 @@ module tb_pc9821_gvram;
     // ------------------------------------------------------------------
     access_page = 1;
     cpu_store(2'd0, 15'h0100, 32'hDEAD_BEEF, 4'hF);
+    // Page 1 holds the store in the B lane and nothing else ...
+    expect_planes(15'h0100, 32'hDEAD_BEEF, 32'h0, 32'h0, 32'h0);
     access_page = 0;
+    // ... and page 0's same column still holds section 1's B and G bytes.
+    expect_planes(15'h0100, 32'h1122_3344, 32'h0, 32'h5566_7788, 32'h0);
 
     // ------------------------------------------------------------------
     // 4. The GRCG, through the same port. master.lib's graph_clear: a TDW with
@@ -335,6 +339,17 @@ module tb_pc9821_gvram;
     cpu_store(2'd3, 15'h0500, 32'hFFFF_FFFF, 4'hF);
     expect_planes(15'h0500, 32'h5555_5555, 32'h5555_5555,
                   32'h5555_5555, 32'h5555_5555);
+    // The R and G windows fold the same way.
+    port_w(8'h7C, 8'h80);
+    put_tiles(8'h66, 8'h67, 8'h68, 8'h69);
+    cpu_store(2'd1, 15'h0510, 32'h0000_0000, 4'hF);
+    expect_planes(15'h0510, 32'h6666_6666, 32'h6767_6767,
+                  32'h6868_6868, 32'h6969_6969);
+    port_w(8'h7C, 8'h80);
+    put_tiles(8'h9A, 8'h9B, 8'h9C, 8'h9D);
+    cpu_store(2'd2, 15'h0520, 32'h0000_0000, 4'hF);
+    expect_planes(15'h0520, 32'h9A9A_9A9A, 32'h9B9B_9B9B,
+                  32'h9C9C_9C9C, 32'h9D9D_9D9D);
 
     // RMW with data 0xFF is the tile whatever the old value was, so it needs no
     // read: TH01's own clear (th01/hardware/graph.cpp:257-264).
@@ -353,9 +368,10 @@ module tb_pc9821_gvram;
     expect_planes(15'h0700, 32'hFAFA_FAFA, 32'hFBFB_FBFB,
                   32'hFCFC_FCFC, 32'hFDFD_FDFD);
 
-    // The active-low plane mask: 0xCE leaves only B (TH04's super_plane puts).
+    // The active-low plane mask (bit CLEAR = plane enabled): 0x8E is TDW with only bit 0 clear,
+    // so it leaves only B (TH04's super_plane puts).
     fill_all(32'h0000_0000);
-    port_w(8'h7C, 8'h80 | 8'hCE);
+    port_w(8'h7C, 8'h8E);
     put_tiles(8'h3C, 8'h3C, 8'h3C, 8'h3C);
     cpu_store(2'd0, 15'h0800, 32'hFFFF_FFFF, 4'hF);
     expect_planes(15'h0800, 32'h3C3C_3C3C, 32'h0, 32'h0, 32'h0);
@@ -366,6 +382,9 @@ module tb_pc9821_gvram;
     put_tiles(8'h77, 8'h77, 8'h77, 8'h77);
 
     cpu_store(2'd0, 15'h0900, 32'hFFFF_FFFF, 4'hF);
+    // Mode bits 0-3 all SET disable all four planes (NP2kai grcg: a plane is written only while
+    // its bit is clear), so nothing at 0x0900 changes - neither the tiles nor the CPU's 0xFF.
+    expect_planes(15'h0900, 32'h0, 32'h0, 32'h0, 32'h0);
 
     // With mode bit 7 clear a store is a plain single-plane write again -- the
     // regression pin the pre-GRCG behaviour rests on.

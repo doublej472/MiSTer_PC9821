@@ -1,7 +1,7 @@
 `timescale 1ps/1ps
 
 // ==== WHAT THIS PROVES ====
-// When 0x09A8 bit 0 switches the raster to the 31 kHz dot clock, the video PLL follows it and the analog picture leaves at the Xe10's own 31 kHz rates with the crossing FIFO locked: with clk_sys at 80 MHz, the core's dot enable (pc9821_dot_ce) driving the BIOS 31 kHz raster (800 x 449, 640 x 400 active: NP2kai bios/bios18.c gdcmastersync[2], the block HSB.EXE IGDC:31 and the crt31k probe send) into pc9821_video_out, and the real pc9821_vpll_ctl reprogramming a PLL model whose output is the frequency its N/M/K/C0 words decode to (Altera's Cyclone V reconfiguration map), the CLK_VIDEO after the switch runs at 2 x the capture's 25 168 031 Hz within 3 ppm (docs/probes/CRT31K.TXT, calibrated), and over the whole run after the relock every CE_PIXEL period is 2 clocks, every line 1600 clocks (31.460 kHz, the capture's line rate within 3 ppm) and every frame 449 lines with a 2-line VSYNC (70.067 Hz, the capture's frame within 3 ppm), with the OSD's Doubled setting asking all the while: the doubler stands aside for a 31 kHz raster, which is already VGA-rate; there is no FIFO re-centre or underflow over 40 frames after the relock (the two sides' dot rates are one ratio of the 50 MHz reference); and switching back to 24 kHz relocks the PLL to 2 x 400/19 MHz and brings the doubled 24 kHz picture back (848 clocks a line, 880 lines a frame) with no FIFO event over 20 frames. FAIL-FIRST: before the 31 kHz clock pc9821_video_out has no 31 kHz input and pc9821_vpll_ctl no 0x09A8 one, so the bench cannot build; and with the dot enable's 31 kHz rate one fraction step (1/4096 of M) away from the PLL's, the FIFO slips within a frame.
+// When 0x09A8 bit 0 switches the raster to the 31 kHz dot clock, the video PLL follows it and the analog picture leaves at the Xe10's own 31 kHz rates with the crossing FIFO locked: with clk_sys at 80 MHz, the core's dot enable (pc9821_dot_ce) driving the BIOS 31 kHz raster (800 x 449, 640 x 400 active: NP2kai bios/bios18.c gdcmastersync[2], the block HSB.EXE IGDC:31 and the crt31k probe send) into pc9821_video_out, and the real pc9821_vpll_ctl reprogramming a PLL model whose output is the frequency its N/M/K/C0 words decode to (Altera's Cyclone V reconfiguration map), the CLK_VIDEO after the switch runs at 2 x the capture's 25 168 031 Hz within 3 ppm (docs/probes/CRT31K.TXT, calibrated), and over the whole run after the relock every CE_PIXEL period is 2 clocks, every line 1600 clocks (31.460 kHz, the capture's line rate within 3 ppm) and every frame 449 lines with a 2-line VSYNC (70.067 Hz, the capture's frame within 3 ppm), with the OSD's Doubled setting asking all the while: the doubler stands aside for a 31 kHz raster, which is already VGA-rate; there is no FIFO re-centre or underflow over 40 frames after the relock (the two sides' dot rates are one ratio of the 50 MHz reference); and switching back to 24 kHz relocks the PLL to 2 x 400/19 MHz and brings the doubled 24 kHz picture back (848 clocks a line, 880 lines a frame) with no FIFO event over 20 frames. FAIL-FIRST: before the 31 kHz clock pc9821_video_out has no 31 kHz input and pc9821_vpll_ctl no 0x09A8 one, so the bench cannot build; and with the dot enable's 31 kHz rate one fraction step (1/65536 of M) away from the PLL's, the FIFO slips within the 40 frames.
 //
 // THE FIGURES are the capture's (CRT31K.TXT `RUN frames=70 ticks=306930` with the ARTIC calibrated by
 // its 24 kHz rows, as tools/hwprobe/crt31k/crt31k_decode.py does) and the BIOS SYNC block's geometry,
@@ -60,7 +60,9 @@ module tb_pc9821_crt31k_video;
 
   // ---- the reconfiguration core and the PLL: the output is what the written words decode to ----
   localparam real LOCK_NS = 30_000.0;
-  reg  [31:0] r_n = 32'h0001_0000, r_m = 32'h0002_0A09, r_k = 32'h20B0_0000, r_c = 32'h0002_0A09;
+  // The generated (24 kHz) configuration, as tools/profile_gen.py reads rtl/vpll back: M 10+10,
+  // K 904200192, C0 12+12, N bypassed.
+  reg  [31:0] r_n = 32'h0001_0000, r_m = 32'h0000_0A0A, r_k = 32'h35E5_0000, r_c = 32'h0000_0C0C;
   wire        mgmt_write;
   wire [5:0]  mgmt_address;
   wire [31:0] mgmt_writedata;
@@ -95,7 +97,7 @@ module tb_pc9821_crt31k_video;
   // clk_vid: every edge at its exact time from the setting's start (no accumulated rounding), the old
   // setting running on until the relock.
   reg  clk_vid = 1'b0;
-  real vhalf_ps = 1.0e12 / (2.0 * 50.336015e6);   // the generated (31 kHz) setting
+  real vhalf_ps = 1.0e12 / (2.0 * (50.0e6 * (20.0 + 904200192.0 / 4294967296.0) / 24.0));   // the generated (24 kHz) setting
   real v_t0 = 0.0;
   longint v_n = 0;
   initial begin
@@ -121,10 +123,10 @@ module tb_pc9821_crt31k_video;
   end
 
   wire vclk_31, busy;
-  pc9821_vpll_ctl #(.SETTLE(256)) vpll_ctl (
+  pc9821_vpll_ctl #(.SETTLE(256), .STABLE(0)) vpll_ctl (
     .clk(clk50), .want_31k(c31), .pll_locked(pll_locked),
     .mgmt_waitrequest(waitreq), .mgmt_write(mgmt_write), .mgmt_address(mgmt_address),
-    .mgmt_writedata(mgmt_writedata), .vclk_31(vclk_31), .busy(busy)
+    .mgmt_writedata(mgmt_writedata), .pll_rst(), .vclk_31(vclk_31), .busy(busy)
   );
 
   // ==== DUT ====
@@ -245,10 +247,11 @@ module tb_pc9821_crt31k_video;
 
   real fvid, fline, fframe;
   initial begin
-    // ---- power-up: the controller takes the PLL from its generated (31 kHz) setting to 24 kHz ----
+    // ---- power-up: the PLL comes up in its generated 24 kHz setting and stays there ----
     wait_settled();
-    check(!vclk_31 && fout() > 2.0 * DOT24 - 1.0e-3 && fout() < 2.0 * DOT24 + 1.0e-3,
-          $sformatf("power-up: the PLL is at 24 kHz, %.6f Hz (2 x 400/19 MHz)", fout()));
+    check(!vclk_31 && (fout() - 2.0 * DOT24) / (2.0 * DOT24) * 1.0e6 < 0.05 &&
+          (fout() - 2.0 * DOT24) / (2.0 * DOT24) * 1.0e6 > -0.05,
+          $sformatf("power-up: the PLL is at 24 kHz, %.6f Hz (2 x 400/19 MHz within 0.05 ppm)", fout()));
 
     // ---- 0x09A8 bit 0 set ----
     c31 = 1'b1;

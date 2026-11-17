@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PEGVRAM:
-// With the 15-16 MiB system-space hole on (port 0x043B bit 2 cleared, as the ITF's phase-2 test requests with `out 0x43B,0`) the PEGC's 512 KiB extended VRAM exists at physical 0xF00000-0xF7FFFF: a 512 KiB fill of 0xFFFFFFFF completes and reads back, then a fill of 0 reads back, at real sdram.v timing, through the ordinary mapper route; and the same window with the hole OFF is ordinary RAM that leaves no trace in the PEGC store. The aperture is gated by the register file's [0xE0102] bit 0 (NP2kai memvgaf_rd8/wr8; MAME pegc_vram_view): with it clear a read answers 0xFF and a store leaves no trace (FAIL-FIRST row: before the gate landed the store reached the backend), and the machine's own enable flow - open the PEGC view, write [0xE0102]=1 through the register file - turns it on. The two packed windows (0xA8000 with bank 0xE0004, 0xB0000 with bank 0xE0006) reach the SAME store at {bank, offset[14:0]} (NP2kai memvga.c VGARD8/VGAWR8, qemu (bank & 0x0f) * 0x8000) and round-trip against the flat aperture, up to the store's top - banks 14 and 15, where the 640x480 frame at the Win95 driver's 1024-byte pitch ends (line 479 at 0x77C00) - and against the 0xFFF00000 alias (NP2kai i386c/cpumem.c memp_read8 -> memvgaf) in both directions. The ITF's own phase-2 block fills and verifies exactly this range at 0xF00000 after clearing 0x043B bit 2 and setting [0xE0102]=1, and its failure prints the warn-only "EXTENDED GVRAM ERROR". The size and the address are qemu-pc98's (PEGC_POST_SIZE = 0x80000 decoded at 0xf00000, hw/display/pc98-vga.c pegc_post_readb/writeb) and NP2kai's (memvgaf over vramex[0x80000], mem/memvga.c), both 512 KiB flat RAMs.
+// With the 15-16 MiB system-space hole on (port 0x043B bit 2 cleared, as the ITF's phase-2 test requests with `out 0x43B,0`) the PEGC's 512 KiB extended VRAM exists at physical 0xF00000-0xF7FFFF: a 512 KiB fill of 0xFFFFFFFF completes and reads back, then a fill of 0 reads back, at real sdram.v timing, through the ordinary mapper route; and the same window with the hole OFF is ordinary RAM that leaves no trace in the PEGC store, with the [0xE0102] enable set or clear (a store reads back as stored, not as the closed aperture's 0xFF). The aperture is gated by the register file's [0xE0102] bit 0 (NP2kai memvgaf_rd8/wr8; MAME pegc_vram_view): with it clear a read answers 0xFF and a store leaves no trace (FAIL-FIRST row: before the gate landed the store reached the backend), and the machine's own enable flow - open the PEGC view, write [0xE0102]=1 through the register file - turns it on. The two packed windows (0xA8000 with bank 0xE0004, 0xB0000 with bank 0xE0006) reach the SAME store at {bank, offset[14:0]} (NP2kai memvga.c VGARD8/VGAWR8, qemu (bank & 0x0f) * 0x8000) and round-trip against the flat aperture, up to the store's top - banks 14 and 15, where the 640x480 frame at the Win95 driver's 1024-byte pitch ends (line 479 at 0x77C00) - and against the 0xFFF00000 alias (NP2kai i386c/cpumem.c memp_read8 -> memvgaf) in both directions. The ITF's own phase-2 block fills and verifies exactly this range at 0xF00000 after clearing 0x043B bit 2 and setting [0xE0102]=1, and its failure prints the warn-only "EXTENDED GVRAM ERROR". The size and the address are qemu-pc98's (PEGC_POST_SIZE = 0x80000 decoded at 0xf00000, hw/display/pc98-vga.c pegc_post_readb/writeb) and NP2kai's (memvgaf over vramex[0x80000], mem/memvga.c), both 512 KiB flat RAMs.
 
 // ==== DUT ====
 // pc9821_memory_subsystem with its backend answered by sdram_backend_model at the timing
@@ -190,15 +190,26 @@ module tb_pc9821_pegvram;
       cpu_burstcount = 8'd1; cpu_valid = 1;
       g = 0; while (!cpu_ready && g < 400) begin @(negedge clk); g = g + 1; end
       if (!cpu_ready) $fatal(1, "TB_PC9821_PEGVRAM: no ready for read %08x", a);
+      // Drop the request after its accept edge, as z486 does (src/z486/bus_unit.sv clears
+      // ext_valid_r at the accept): a request still held while the response is awaited is a
+      // SECOND read, which the subsystem presents and which then outlives the task.
+      @(negedge clk); cpu_valid = 0;
       g = 0; while (!cpu_resp_valid && g < 400) begin @(negedge clk); g = g + 1; end
       if (!cpu_resp_valid) $fatal(1, "TB_PC9821_PEGVRAM: no response for read %08x", a);
       d = cpu_dout;
-      @(negedge clk); cpu_valid = 0;
+      @(negedge clk);
     end
   endtask
 
   reg [31:0] rd;
   integer i, bad;
+  integer hole_accepts = 0;
+  reg     hole_watch = 0;
+  always @(posedge clk)
+    if (hole_watch && mem_valid && mem_ready && mem_write && (mem_din == 32'hCAFE_F00D)) begin
+      $display("NOTE CHK-5: backend accepted the hole store at %08x", mem_addr);
+      hole_accepts = hole_accepts + 1;
+    end
 
   // The ITF's phase-2 fill/verify over the whole 512 KiB: fill `pattern`, read every dword
   // back and require it. Returns the number of mismatches in `bad`.
@@ -261,6 +272,25 @@ module tb_pc9821_pegvram;
       errors = errors + 1;
     end
 
+    // ---- CHK-0b: with the hole OFF the [0xE0102] gate has nothing to gate. 0x043B bit 2 set
+    // makes 15-16 MiB ordinary RAM (tb_pc9821_sys16m), so with the VRAM enable still clear a
+    // store to 0xF00000 reads back as stored - not the closed aperture's 0xFF - and the PEGC
+    // store stays untouched. A window decode that ignored the hole would answer open bus here.
+    sys16m_en = 0;
+    cpu_store(32'h00F0_0000, 32'h1357_9BDF, 4'hF);
+    cpu_load(32'h00F0_0000, rd);
+    if (rd !== 32'h1357_9BDF) begin
+      $display("FAIL CHK-0b: 0xF00000 with the hole OFF and [0xE0102] clear read %08x, want the RAM's 13579bdf",
+               rd);
+      errors = errors + 1;
+    end
+    if (backend.peek(PEG_BASE) !== 32'h0000_0000) begin
+      $display("FAIL CHK-0b: a store to 0xF00000 with the hole OFF reached the PEGC store (%08x)",
+               backend.peek(PEG_BASE));
+      errors = errors + 1;
+    end
+    sys16m_en = 1;
+
     // The machine's own enable flow, exactly as the ITF's phase-2 block runs it
     // (BANK4@0x1434-0x144C disassembled from the firmware pack: out 0x6A 07/21/68/06
     // brackets the mode select, then [0xE0102] = 1 before the fill): open the PEGC
@@ -303,6 +333,13 @@ module tb_pc9821_pegvram;
     // guest) and the PEGC store keeps CHK-3's bytes. ----
     sys16m_en = 0;
     cpu_store(32'h00F0_0000, 32'hDEAD_BEEF, 4'hF);
+    // Read it back first: the load drains any posted store, so the peek below cannot run ahead
+    // of a store that leaked into the PEGC store, and the RAM must hold what was stored.
+    cpu_load(32'h00F0_0000, rd);
+    if (rd !== 32'hDEAD_BEEF) begin
+      $display("FAIL CHK-4: with the hole OFF 0xF00000 read %08x, want deadbeef (plain RAM)", rd);
+      errors = errors + 1;
+    end
     if (backend.peek(PEG_BASE) !== 32'h0000_00A5) begin
       $display("FAIL CHK-4 control: a store to 0xF00000 with the hole OFF reached the PEGC store (%08x)",
                backend.peek(PEG_BASE));
@@ -313,14 +350,17 @@ module tb_pc9821_pegvram;
 
     // ---- CHK-5: the hole's own remaining range is still no route at all. 0xF80000 must not
     // reach PEG storage nor be answered as the PEGC window. ----
-    cpu_valid = 1; cpu_write = 1; cpu_addr = 32'h00F8_0000; cpu_din = 32'hCAFE_F00D;
-    #1;
-    if (!(mem_valid === 1'b0)) begin
-      $display("FAIL CHK-5: 0xF80000 must stay the hole, got mem_valid=%b mem_addr=%08x",
-               mem_valid, mem_addr);
+    // A full store handshake, then a load elsewhere that drains anything posted: no backend
+    // request may be ACCEPTED for the hole's address in that time.
+    hole_accepts = 0; hole_watch = 1;
+    cpu_store(32'h00F8_0000, 32'hCAFE_F00D, 4'hF);
+    cpu_load(32'h00F0_0000, rd);
+    hole_watch = 0;
+    if (hole_accepts != 0) begin
+      $display("FAIL CHK-5: 0xF80000 must stay the hole, but the backend accepted %0d write(s) of its datum",
+               hole_accepts);
       errors = errors + 1;
     end
-    cpu_valid = 0; cpu_write = 0;
 
     // ---- CHK-6: the packed windows reach the same store at {bank, offset[14:0]}
     // (NP2kai memvga.c VGARD8/VGAWR8 `(mio1[p*2] & 15) << 15`; qemu pc98-vga.c

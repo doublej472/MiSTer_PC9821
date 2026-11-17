@@ -73,12 +73,13 @@ import sys
 
 ARTIC_HZ = 307_200.0
 
-# Every row kind this decoder recognises. Keep this list in step with the emitter's
-# own message table, so a row the decoder reads and the emitter never prints cannot
-# ship as a silent "no observation".
-KINDS = ("BEGIN", "USAGE", "BASE", "CMD", "HOOK", "MEM", "MODE", "MODES",
+# Every row kind the emitter prints (pegcwatch.s's message table, msg_begin..msg_usage4).
+# report() names any other kind it meets, so a row the emitter gained (or a garbled one)
+# is not silently ignored.
+KINDS = ("BEGIN", "USAGE", "BASE", "POST", "CMD", "HOOK", "MEM", "MODE", "MODES",
          "I18", "PLANE", "PLREG", "SAMP", "RUN", "VEC", "NOFAIL", "FAIL",
          "WARN", "END")
+KIND_WORD = re.compile(r"^[A-Z0-9]+$")
 
 # 0x9A0 index -> what the bit means (NP2kai io/gdc.c gdc_i9a0; the same table is
 # in this core's pc9821_iobus.sv gdc_ff2_query).
@@ -106,7 +107,9 @@ WINDOW_GROUP = {
     0x0114: "PLANE ENGINE palette compare 1",
     0x0118: "PLANE ENGINE palette compare 2",
 }
-ENGINE_OFFSETS = {o for o, d in WINDOW_GROUP.items() if d.startswith("PLANE")}
+ENGINE_OFFSETS = {0x0104, 0x0108, 0x0109, 0x010C, 0x0110, 0x0112, 0x0114, 0x0118}
+WINDOW_OFFSETS = {0x0004, 0x0006}
+assert ENGINE_OFFSETS | WINDOW_OFFSETS == set(WINDOW_GROUP)
 
 ROW = re.compile(r"^PEGCWATCH\s+(\S+)\s*(.*)$")
 KV = re.compile(r"([A-Z0-9_]+)=(\S+)")
@@ -261,16 +264,21 @@ def report(cap: Capture, show_rows: bool) -> int:
         print(f"  ever-non-zero bitmask NZ={plane.get('NZ')}")
     nz_rows: list[tuple[int, int, int]] = []
     for kv in plreg:
-        addr = int(kv.get("ADDR", "0"), 16)  # printed as 0E<off>
+        addr = hexint(kv, "ADDR")             # printed as 0E<off>
+        last = hexint(kv, "LAST")
+        nz = hexint(kv, "NZ")
+        if addr is None or last is None or nz is None:
+            print(f"  (a PLREG row could not be read - torn or noisy: {kv})")
+            continue
         off = addr & 0xFFFF
-        last = int(kv.get("LAST", "0"), 16)
-        nz = int(kv.get("NZ", "0"), 16)
         grp = WINDOW_GROUP.get(off, "?")
         mark = ""
         if nz and off in ENGINE_OFFSETS:
             mark = "   <== PLANE ENGINE USED"
-        elif nz:
+        elif nz and off in WINDOW_OFFSETS:
             mark = "   <== window paging only (the cheap half)"
+        elif nz:
+            mark = "   <== UNCLASSIFIED offset (neither the engine nor the window registers)"
         if nz:
             nz_rows.append((off, last, nz))
         print(f"  0E{off:04X}  LAST={last:02X}  NZ={nz}  {grp}{mark}")
@@ -292,6 +300,9 @@ def report(cap: Capture, show_rows: bool) -> int:
     unrestored = [rest for _, rest in vecs if "BAD" in rest]
     if unrestored:
         print("!! VECTOR NOT RESTORED: " + "; ".join(unrestored))
+    unknown = sorted({k for k in cap.kinds if KIND_WORD.match(k) and k not in KINDS})
+    if unknown:
+        print("!! row kind(s) this decoder does not know: " + ", ".join(unknown))
     if "FAIL" in cap.kinds:
         print(f"!! self-check FAIL present: {cap.of('FAIL')}")
     if not cap.complete:
@@ -358,7 +369,8 @@ def report(cap: Capture, show_rows: bool) -> int:
         return 0
 
     grp_engine = [o for o, _, _ in nz_rows if o in ENGINE_OFFSETS]
-    grp_window = [o for o, _, _ in nz_rows if o not in ENGINE_OFFSETS]
+    grp_window = [o for o, _, _ in nz_rows if o in WINDOW_OFFSETS]
+    grp_other = [o for o, _, _ in nz_rows if o not in ENGINE_OFFSETS and o not in WINDOW_OFFSETS]
     if grp_engine:
         print("  DISPLAY + PLANE ENGINE: the engine's own registers were seen non-zero:")
         print("    " + ", ".join(f"0E{o:04X}" for o in grp_engine))
@@ -367,6 +379,11 @@ def report(cap: Capture, show_rows: bool) -> int:
                   + ", ".join(f"0E{o:04X}" for o in grp_window) + ")")
         print("  Budget the full 69-76 LABs, not the display half.")
         return 0
+    if grp_other:
+        print("  UNCLASSIFIED: a sampled register outside both groups was seen non-zero ("
+              + ", ".join(f"0E{o:04X}" for o in grp_other) + "); no verdict on the half")
+        print("  until the emitter's offset table and WINDOW_GROUP agree.")
+        return 2
     print("  DISPLAY + WINDOW PAGING ONLY: only the PPM bank registers were seen")
     print("  non-zero (" + ", ".join(f"0E{o:04X}" for o in grp_window) + "), which is a driver")
     print("  PAGING GVRAM to write pixels - still the cheap half; no engine register")

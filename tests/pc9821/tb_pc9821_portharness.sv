@@ -167,6 +167,7 @@ module tb_pc9821_portharness;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -201,7 +202,7 @@ module tb_pc9821_portharness;
 
   // device_rd_wait models the DEVICE side of the read handshake: only the GDC's arrays
   // are in block RAM, so only its reads are answered a cycle after the strobe
-  // (pc9821_system.sv:1264, `device_rd_wait = gdc_cs || opna_rd_wait`). Copied from the core's decode; +RD_WAIT_NONE disables it.
+  // (pc9821_system.sv:1317, `device_rd_wait = gdc_cs || opna_rd_wait`). Copied from the core's decode; +RD_WAIT_NONE disables it.
   reg rd_wait_gdc = 1'b1;
   function automatic bit is_gdc_port(input [15:0] p);
     begin

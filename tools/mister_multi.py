@@ -134,7 +134,7 @@ def main() -> int:
 
 def selftest() -> int:
     import tempfile
-    assert norm_host("mister") == "root@mister" and norm_host("u@h") == "u@h"
+    assert norm_host("card") == "root@card" and norm_host("u@h") == "u@h"
     assert split_items(["a", "b", "c"], ["h1", "h2"], "split") == {"h1": ["a", "c"], "h2": ["b"]}
     assert split_items(["a", "b"], ["h1", "h2"], "repeat") == {"h1": ["a", "b"], "h2": ["a", "b"]}
     assert pop_option(["--x", "--items", "a,b", "--y"], "--items") == (["--x", "--y"], "a,b")

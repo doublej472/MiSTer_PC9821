@@ -1,4 +1,4 @@
-// TEST REFERENCE: a frozen copy of src/pc9821/video/pc9821_pegc.sv before its area rewrite, kept as the equivalence reference of tb_pc9821_pegc_equiv; not maintained.
+// TEST REFERENCE: a frozen copy of src/pc9821/video/pc9821_pegc.sv before its area rewrite, kept as the equivalence reference of tb_pc9821_pegc_equiv; not maintained, except that the bank registers' read-back (bits 5-0, 0xE0005/0xE0007 read 0) is mirrored from the shipped module so the pair stays comparable.
 // PC-9821 PEGC register file: the 0xE0000 MMIO window as this machine exposes it,
 // the mode/view state it exports, and the registered responder that answers CPU
 // accesses to it.

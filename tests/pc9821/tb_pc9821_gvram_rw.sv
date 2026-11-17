@@ -1,17 +1,17 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_RW: The GVRAM storage carries a CPU store's bytes to the plane lanes the byte enables name and returns them unchanged on a later read, at BOTH access pages and ALL FOUR plane windows, at byte, word and DWORD widths, at the start and the END of each plane, and a one-plane store preserves the other three lanes -- all of it THROUGH the SDRAM backend, whose byte-enable write is the read-modify-write a DQM-less module needs.
+// TB_PC9821_GVRAM_RW: The GVRAM storage carries a CPU store's bytes to the plane lanes the byte enables name and returns them unchanged on a later read, at BOTH access pages and ALL FOUR plane windows, at byte, word (either half of a dword, and misaligned across lanes 1-2) and DWORD widths, each store writing exactly its own lanes over a seeded dword, at the start and the END of each plane (the last byte 0x7FFF, word 0x7FFE and dword 0x7FFC), and a one-plane byte or dword store preserves the other three planes -- all of it through the real arbiter on the block-RAM array (pc9821_gvram_mem).
 //
 // WHY THIS EXISTS. A CPU read-after-write of GVRAM
 // was NEVER tested in this tree: the map bench checked only the SDRAM address translation, and the
 // gvram benches observed a stubbed backend rather than the bytes that came back. That gap is
 // exactly the operation the authentic ITF performs at POST stage 0x1B - fill a plane, read it back
 // - and it is the operation a MiSTer HUNG ON: the CPU sat in a rep stosd fill of 32 KiB at
-// ES=0xA800 while the watchdog reported 'W' every 200 ms. The storage left block RAM again in
-// the design, so this bench drives the real pc9821_gvram datapath and observes the bytes IN THE
-// BACKEND MODEL behind it: a byte-granular store becomes one byte-enable transaction, which is
-// what makes the read-modify-write path (src/memory/sdram.v's RMW_*) the thing under test.
+// ES=0xA800 while the watchdog reported 'W' every 200 ms. This bench drives the real GVRAM
+// datapath (pc9821_gvram_dut: the arbiter over the pc9821_gvram_mem block-RAM array) and reads
+// the bytes back through the CPU port: a store of any width must reach exactly the lanes its byte
+// enables name.
 //
 // IT DOES NOT COVER the plane decode, the GRCG, the EGC or the scanout fetch. Those are
 // tb_pc9821_gvram's, tb_pc9821_grcg's and tb_pc9821_egc's. This is the storage contract alone.
@@ -75,9 +75,6 @@ module tb_pc9821_gvram_rw;
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .line_data(line_data), .line_sel(line_sel), .line_ready(line_ready));
 
-  // The backend: one transaction at a time, shared storage, byte-enabled writes - sdram.v's own
-  // shape, and the reason a one-plane store can be checked for preserving the other three.
-  
 
   integer errors = 0;
   integer checks = 0;
@@ -156,8 +153,67 @@ module tb_pc9821_gvram_rw;
     end
   endtask
 
+  // A store or read of any width inside one dword: `col` is the column of the dword's lane 0 plus
+  // the lowest enabled lane (win_offset carries the column, the enables the lanes - the plain path
+  // forms c_col = {win_offset[14:2], c_lane}), `be` the lanes and `dw` the dword image on the bus.
+  task automatic put_be(input [1:0] plane, input page, input [14:0] col, input [3:0] be,
+                        input [31:0] dw);
+    begin
+      @(negedge clk);
+      access_page = page; win_plane = plane; win_offset = col;
+      cpu_din = dw; cpu_be = be; cpu_write = 1; cpu_valid = 1;
+      @(posedge clk);
+      #1;
+      while (!cpu_ready) begin @(posedge clk); #1; end
+      @(negedge clk);
+      cpu_valid = 0; cpu_write = 0; cpu_be = 4'hF; access_page = 0;
+      repeat (3) @(posedge clk);
+    end
+  endtask
+
+  task automatic get_dw(input [1:0] plane, input page, input [14:0] col, output [31:0] dw);
+    begin
+      @(negedge clk);
+      access_page = page; win_plane = plane; win_offset = {col[14:2], 2'b00};
+      cpu_be = 4'hF; cpu_write = 0; cpu_valid = 1;
+      @(posedge clk);
+      #1;
+      while (!cpu_ready) begin @(posedge clk); #1; end
+      @(negedge clk);
+      cpu_valid = 0;
+      #1;
+      while (!cpu_resp_valid) begin @(posedge clk); #1; end
+      dw = cpu_dout;
+      access_page = 0;
+      repeat (3) @(posedge clk);
+    end
+  endtask
+
+  // The plane is a byte array (NP2kai's grph planes are byte arrays): a store of width w at a
+  // column writes exactly those w bytes and no other, so the dword that holds them reads back as
+  // the seed with the enabled lanes replaced.
+  task automatic check_wide(input [1:0] plane, input page, input [14:0] col, input [3:0] be,
+                            input [31:0] dw, input [31:0] seed);
+    reg [31:0] got, want;
+    integer l;
+    begin
+      put_be(plane, page, {col[14:2], 2'b00}, 4'hF, seed);
+      put_be(plane, page, col, be, dw);
+      for (l = 0; l < 4; l = l + 1)
+        want[l*8 +: 8] = be[l] ? dw[l*8 +: 8] : seed[l*8 +: 8];
+      get_dw(plane, page, col, got);
+      checks = checks + 1;
+      if (got !== want) begin
+        $display("FAIL wide store plane %0d page %0d col %04x be %b: got %08x want %08x",
+                 plane, page, col, be, got, want);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
   integer p, k;
   reg [7:0] b0, b1, b2, b3;
+  reg [31:0] d0, d1, d2, d3;
 
   initial begin
     repeat (4) @(posedge clk);
@@ -215,6 +271,35 @@ module tb_pc9821_gvram_rw;
                  15'h0200 + k[14:0], b0, k[7:0] ^ 8'h5A);
         errors = errors + 1;
       end
+    end
+
+    // CHK-7: WORD and DWORD widths and the plane's LAST byte. A word in the low and in the high
+    // half of a dword, a dword, a misaligned word straddling lanes 1-2, and the last byte (0x7FFF),
+    // last word (0x7FFE) and last dword (0x7FFC) of every plane on both pages: each store writes
+    // exactly its own lanes over a distinct seed, and the dword reads back as seed-plus-store.
+    for (p = 0; p < 4; p = p + 1) begin
+      check_wide(p[1:0], 0, 15'h0300, 4'b0011, 32'h0000BEEF ^ p, 32'h11223344);
+      check_wide(p[1:0], 0, 15'h0302, 4'b1100, 32'hCAFE0000 ^ (p << 16), 32'h55667788);
+      check_wide(p[1:0], 1, 15'h0304, 4'b1111, 32'h89ABCDEF ^ p, 32'h99AABBCC);
+      check_wide(p[1:0], 0, 15'h0309, 4'b0110, 32'h00A55A00 ^ (p << 8), 32'hDDEEFF00);
+      check_wide(p[1:0], 0, 15'h7FFF, 4'b1000, 32'hE7000000 ^ (p << 24), 32'h0F1E2D3C);
+      check_wide(p[1:0], 1, 15'h7FFF, 4'b1000, 32'hF8000000 ^ (p << 24), 32'h4B5A6978);
+      check_wide(p[1:0], 0, 15'h7FFE, 4'b1100, 32'h13570000 ^ (p << 16), 32'h8796A5B4);
+      check_wide(p[1:0], 1, 15'h7FFC, 4'b1111, 32'h2468ACE0 ^ p, 32'hC3D2E1F0);
+    end
+    // A one-plane DWORD store leaves the other three planes' dwords alone.
+    put_be(2'd0, 0, 15'h0600, 4'hF, 32'hA0A1A2A3);
+    put_be(2'd1, 0, 15'h0600, 4'hF, 32'hB0B1B2B3);
+    put_be(2'd2, 0, 15'h0600, 4'hF, 32'hC0C1C2C3);
+    put_be(2'd3, 0, 15'h0600, 4'hF, 32'hD0D1D2D3);
+    get_dw(2'd0, 0, 15'h0600, d0);
+    get_dw(2'd1, 0, 15'h0600, d1);
+    get_dw(2'd2, 0, 15'h0600, d2);
+    get_dw(2'd3, 0, 15'h0600, d3);
+    checks = checks + 1;
+    if (d0 !== 32'hA0A1A2A3 || d1 !== 32'hB0B1B2B3 || d2 !== 32'hC0C1C2C3 || d3 !== 32'hD0D1D2D3) begin
+      $display("FAIL dword plane isolation at col 0x0600: %08x %08x %08x %08x", d0, d1, d2, d3);
+      errors = errors + 1;
     end
 
     // CHK-6: the scanout's requester reads the SAME storage while the CPU writes it. Put a byte,

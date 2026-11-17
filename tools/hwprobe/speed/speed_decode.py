@@ -191,6 +191,23 @@ def selftest() -> int:
     other = Capture(SELFTEST.replace('crc=D291BA6A', 'crc=00000000'), 'other')
     chk(not same_binary(c, other) and same_binary(c, fast), 'binary identity')
     chk(f'{zlib.crc32(b"123456789"):08X}' == 'CBF43926', 'CRC-32 convention (the probe computes the same)')
+    # --image: the binary's CRC and size decide, whatever the row-format version; a wrong
+    # argument count is usage, not a capture named '--image'
+    import contextlib
+    import io
+    import os
+    import tempfile
+    blob = bytes(range(256)) * 7
+    idl = f'ID SPEED v2 crc={zlib.crc32(blob):08X} size={len(blob)}'
+    with tempfile.TemporaryDirectory() as td:
+        pi, pc = os.path.join(td, 'S.COM'), os.path.join(td, 'S.TXT')
+        open(pi, 'wb').write(blob)
+        open(pc, 'w').write(SELFTEST.replace('ID SPEED v1 crc=D291BA6A size=27424', idl, 1))
+        with contextlib.redirect_stdout(io.StringIO()):
+            r_match = main(['--image', pi, pc])
+            r_other = main(['--image', pi, os.path.join(os.path.dirname(__file__) or '.', 'speed_decode.py')])
+            r_usage = main(['--image', pi])
+    chk((r_match, r_other, r_usage) == (0, 1, 2), f'--image match/mismatch/usage {(r_match, r_other, r_usage)}')
     print('SELFTEST PASS' if ok else 'SELFTEST FAILED')
     return 0 if ok else 1
 
@@ -198,12 +215,17 @@ def selftest() -> int:
 def main(argv) -> int:
     if argv[:1] == ['--selftest']:
         return selftest()
-    if argv[:1] == ['--image'] and len(argv) == 3:
+    if argv[:1] == ['--image']:
+        if len(argv) != 3:
+            print(__doc__)
+            return 2
         img = open(argv[1], 'rb').read()
         c = Capture(open(argv[2], encoding='ascii', errors='replace').read(), argv[2])
-        want = (1, f'{zlib.crc32(img):08X}', len(img))
-        print(f'image crc={want[1]} size={want[2]}; capture {c.id}')
-        return 0 if c.id == want else 1
+        # the image is identified by its CRC and size; the capture's ID version is the probe's
+        # row-format version, not part of the binary's identity
+        want = (f'{zlib.crc32(img):08X}', len(img))
+        print(f'image crc={want[0]} size={want[1]}; capture {c.id}')
+        return 0 if c.id and tuple(c.id[1:]) == want else 1
     if len(argv) not in (1, 2):
         print(__doc__)
         return 2

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_MEMORY_SUBSYSTEM:
-// ROM loading and bus arbitration: the CPU is held until the ROM has loaded, and the load/arbitration handshake grants the bus correctly afterwards. The absent ROM area at 0xC0000-0xD7FFF is a route of its own: a read returns all ones in z486's accept-then-respond phases with no backend transaction, an instruction fetch returns four all-ones words, and a store is swallowed. THE 12 KiB HOLE BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF, is the same shape, because the machine reads 0xFF there and discards stores (docs/probes/VRAM.TXT:141-142): the direct address must not reach the backend, must answer all ones, and must swallow its stores, while 0xA4FFF stays the CG window's and 0xA8000 the B plane's, and window 0 at 0x0461 = 0x0A claims none of them, its page being RAM of its own on the machine (docs/probes/DMAROUTE-XE10.TXT W1/W2). It also carries the JIS KU-BANK SWEEP: one JIS code from each bank of the FONT.ROM grid, driven through the real pack download, must land at the font store word the text scanout computes for that code and carry FONT.ROM's own bytes there, so a word offset that is a bit too narrow puts a whole ku bank at another bank's word and the log names the misplaced bank. THE 0x1E8E-GATED IDE WORK RAM AT 0xDA000-0xDBFFF IS THE MACHINE'S OWN GATE (docs/probes/SHADOWW.TXT:226-231: the 1E8E read-back runs FE FF FE through the 0x80/0x81/restore writes, the DA000 marker reads back FFFF under 0x80 and 5AA5 under 0x81, and the IDE ROM's work bytes reappear under 0x81): with the gate clear the window takes the absent route's own shape - all ones, stores swallowed, no backend transaction - and with it set the same address is ordinary RAM that takes the store at 0xDA000 and answers the read from it. THE TAIL ABOVE IT, 0xDC000-0xDFFFF, IS ABSENT IN BOTH GATE STATES (docs/probes/SHADOW.TXT:201-213 reads 0xFF over all 12 x 2 KiB blocks of the DA000..DFFFF region with the gate clear, ffblocks=000C; QEMU models the rest of the 0xD8000 window as rom_empty): all ones and swallowed stores whatever 0x1E8E holds, the gate-ON state measured as well (docs/probes/XE10CFG-XE10-CFGWR.TXT:9-13: with 0x1E8E written 0x81 the sixteen bytes at 0xDC000 read FF as found, gated, after a marker write and restored). THE DOWNLOAD GATE HAS NO LIVE ioctl TERM (docs/timing.md, the download gate): in the cycle the ioctl_download of a reload rises the CPU still runs and the loader does not own the backend, in the next cycle the CPU is held and the loader owns it, cpu_run rises in the second cycle after the download falls, a platform reset with the pack loaded keeps cpu_run high, and an out-of-range word keeps the CPU held after the download.
+// ROM loading and bus arbitration: the CPU is held until the ROM has loaded, and the load/arbitration handshake grants the bus correctly afterwards. The absent ROM area at 0xC0000-0xD7FFF is a route of its own: a read returns all ones in z486's accept-then-respond phases with no backend transaction, an instruction fetch returns four all-ones words, and a store is swallowed. THE 12 KiB HOLE BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF, is the same shape, because the machine reads 0xFF there and discards stores (docs/probes/VRAM.TXT:141-142): the direct address must not reach the backend, must answer all ones, and must swallow its stores, while 0xA4FFF stays the CG window's and 0xA8000 the B plane's, and window 0 at 0x0461 = 0x0A claims none of them, its page being RAM of its own on the machine (docs/probes/DMAROUTE-XE10.TXT W1/W2). It also carries the JIS KU-BANK SWEEP, the LOADER half of the font contract: one JIS code from each bank of the FONT.ROM grid and the region's top word, driven through the real pack download, each reach SDRAM at their own pack address (0x81800 + the bank's offset) and none reaches the font store, so a word slice that is a bit too narrow (aliasing a bank onto another's store word) fails and the log names the bank; the scanout half (the walker's fetch renders the dump's bytes) is tb_pc9821_gdc_text's. THE 0x1E8E-GATED IDE WORK RAM AT 0xDA000-0xDBFFF IS THE MACHINE'S OWN GATE (docs/probes/SHADOWW.TXT:226-231: the 1E8E read-back runs FE FF FE through the 0x80/0x81/restore writes, the DA000 marker reads back FFFF under 0x80 and 5AA5 under 0x81, and the IDE ROM's work bytes reappear under 0x81): with the gate clear the window takes the absent route's own shape - all ones, stores swallowed, no backend transaction - and with it set the same address is ordinary RAM that takes the store at 0xDA000 and answers the read from it. THE TAIL ABOVE IT, 0xDC000-0xDFFFF, IS ABSENT IN BOTH GATE STATES (docs/probes/SHADOW.TXT:201-213 reads 0xFF over all 12 x 2 KiB blocks of the DA000..DFFFF region with the gate clear, ffblocks=000C; QEMU models the rest of the 0xD8000 window as rom_empty): all ones and swallowed stores whatever 0x1E8E holds, the gate-ON state measured as well (docs/probes/XE10CFG-XE10-CFGWR.TXT:9-13: with 0x1E8E written 0x81 the sixteen bytes at 0xDC000 read FF as found, gated, after a marker write and restored). THE DOWNLOAD GATE HAS NO LIVE ioctl TERM (docs/timing.md, the download gate): in the cycle the ioctl_download of a reload rises the CPU still runs and the loader does not own the backend, in the next cycle the CPU is held and the loader owns it, cpu_run rises in the second cycle after the download falls, a platform reset with the pack loaded keeps cpu_run high, and an out-of-range word keeps the CPU held after the download.
 
 
 module tb_pc9821_memory_subsystem;
@@ -132,7 +132,7 @@ module tb_pc9821_memory_subsystem;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -170,6 +170,7 @@ module tb_pc9821_memory_subsystem;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -191,10 +192,10 @@ module tb_pc9821_memory_subsystem;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -738,6 +739,30 @@ module tb_pc9821_memory_subsystem;
     end
   endtask
 
+  // The open-bus responder's phases for a single read held from a negedge (the same three
+  // the 0xA5000 hole read checks): nothing in the presentation cycle, the ready in the next,
+  // the response - and only it - in the one after. Checking resp_valid is what keeps a stale
+  // all-ones cpu_dout from a previous read from passing a route that never answers.
+  task automatic ob_phases;
+    begin
+      @(negedge clk);
+      if (cpu_ready || cpu_resp_valid) begin
+        $display("FAIL %08x answered in its presentation cycle: ready=%b resp=%b", cpu_addr, cpu_ready, cpu_resp_valid);
+        errors = errors + 1;
+      end
+      @(negedge clk);
+      if (!cpu_ready || cpu_resp_valid) begin
+        $display("FAIL %08x acceptance phase: ready=%b resp=%b", cpu_addr, cpu_ready, cpu_resp_valid);
+        errors = errors + 1;
+      end
+      @(negedge clk);
+      if (cpu_ready || !cpu_resp_valid) begin
+        $display("FAIL %08x response phase: ready=%b resp=%b", cpu_addr, cpu_ready, cpu_resp_valid);
+        errors = errors + 1;
+      end
+    end
+  endtask
+
   // ==== CHECKS ====
 
   initial begin
@@ -905,7 +930,7 @@ module tb_pc9821_memory_subsystem;
     cpu_line_read = 0;
     cpu_write = 0;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);                   // bounded: the response arrives
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid) begin
       $display("FAIL absent area reached the backend: mem_addr=%08x mem_valid=%b",
                mem_addr, mem_valid);
@@ -985,7 +1010,7 @@ module tb_pc9821_memory_subsystem;
     win0_sel = 8'h0C;
     cpu_addr = 32'h0008_0000;                    // -> 0xC0000
     cpu_valid = 1;
-    repeat (3) @(negedge clk);
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid || cpu_dout !== 32'hFFFF_FFFF) begin
       $display("FAIL window-0 0x0C alias of 0xC0000: mem_valid=%b data=%08x",
                mem_valid, cpu_dout);
@@ -1032,7 +1057,7 @@ module tb_pc9821_memory_subsystem;
     cpu_line_read = 0;
     cpu_write = 0;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);                   // bounded: the response arrives
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid) begin
       $display("FAIL gate-off 0xDA000 reached the backend: mem_addr=%08x", mem_addr);
       errors = errors + 1;
@@ -1139,7 +1164,7 @@ module tb_pc9821_memory_subsystem;
     cpu_line_read = 0;
     cpu_write = 0;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);                   // bounded: the response arrives
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid) begin
       $display("FAIL gate-off 0xDC000 reached the backend: mem_addr=%08x", mem_addr);
       errors = errors + 1;
@@ -1154,7 +1179,7 @@ module tb_pc9821_memory_subsystem;
     cpu_addr = 32'h000D_C800;
     cpu_write = 0;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid || cpu_dout !== 32'hFFFF_FFFF) begin
       $display("FAIL gate-off 0xDC800: mem_valid=%b data=%08x, want FF (SHADOW.TXT ffblocks=000C)",
                mem_valid, cpu_dout);
@@ -1164,7 +1189,7 @@ module tb_pc9821_memory_subsystem;
     repeat (2) @(negedge clk);
     cpu_addr = 32'h000D_E000;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid || cpu_dout !== 32'hFFFF_FFFF) begin
       $display("FAIL gate-off 0xDE000: mem_valid=%b data=%08x, want FF (SHADOW.TXT ffblocks=000C)",
                mem_valid, cpu_dout);
@@ -1174,7 +1199,7 @@ module tb_pc9821_memory_subsystem;
     repeat (2) @(negedge clk);
     cpu_addr = 32'h000D_FFFF;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid || cpu_dout !== 32'hFFFF_FFFF) begin
       $display("FAIL gate-off 0xDFFFF: mem_valid=%b data=%08x, want FF (SHADOW.TXT ffblocks=000C)",
                mem_valid, cpu_dout);
@@ -1225,7 +1250,7 @@ module tb_pc9821_memory_subsystem;
     cpu_addr = 32'h000D_FFFF;
     cpu_write = 0;
     cpu_valid = 1;
-    repeat (3) @(negedge clk);
+    ob_phases();                                 // accept-then-respond, as at 0xA5000
     if (mem_valid || cpu_dout !== 32'hFFFF_FFFF) begin
       $display("FAIL gate-on 0xDFFFF: mem_valid=%b data=%08x, want FF (rom_empty shape)",
                mem_valid, cpu_dout);
@@ -1476,9 +1501,9 @@ module tb_pc9821_memory_subsystem;
     // ---- THE JIS KU-BANK SWEEP: one code per bank, NONE may reach M10K ----
     // The JIS region lives in the pack's SDRAM copy now, so each bank's pack word must reach
     // SDRAM and NOT the font store. tb_pc9821_gdc_text pins the SCANOUT half (the walker's
-    // per-cell fetch renders the dump's own bytes); this pins the loader half: the region is
-    // still written to SDRAM (at pack 0x81800 + rel) and the fmem reader's own address
-    // arithmetic (font base 0x1800 + row*0xC00 + ten*0x20) names that same pack address.
+    // per-cell fetch renders the dump's own bytes); this pins the loader half only: each word
+    // of the region reaches SDRAM at its own pack address (0x81800 + rel) and no word of it
+    // reaches the font store. The fmem reader's address arithmetic is not checked here.
     begin : jis_banks
       integer bi;
       reg [26:0] b_pack;
@@ -1509,7 +1534,7 @@ module tb_pc9821_memory_subsystem;
                  font_writes - w0, last_write_addr);
         errors = errors + 1;
       end
-      $display("  JIS ku-bank sweep: %0d codes + the region tail checked against FONT.ROM", NJIS);
+      $display("  JIS ku-bank sweep: %0d codes + the region tail reached SDRAM at their pack addresses, none the font store", NJIS);
     end
 
     // ---- two accesses to one route with cpu_valid HELD ------------------

@@ -208,6 +208,17 @@ class Dos:
         uc.reg_write(UC_X86_REG_EFLAGS, fl & ~1)
 
 
+def file_ok_rows(t: str) -> int:
+    """The FILE rows that end in OK (not any ' OK' in the text)."""
+    return sum(1 for ln in t.splitlines() if ln.startswith('FILE ') and ln.rstrip().endswith(' OK'))
+
+
+# Request header lengths per MSCDEX command, as integ.s builds them (integ.s:1305/1328 IOCTL
+# input 26, :1355 PLAY AUDIO 22, :1426 STOP AUDIO 13; MSCDEX 2.x device-driver request
+# layouts: a 13-byte static header, IOCTL input +13, PLAY AUDIO +9, STOP AUDIO none).
+REQ_LEN = {3: 26, 132: 22, 133: 13}
+
+
 def run(com: bytes, dos: Dos, tail: str, max_ins=200_000_000):
     uc = Uc(UC_ARCH_X86, UC_MODE_16)
     uc.mem_map(0, 0x200000)
@@ -271,7 +282,7 @@ def main():
     d = Dos(vol())
     t = run(com, d, 'V')
     check(d.exit_code == 0 and 'INTEG END FAILS=0000' in t, "V clean: FAILS=0, exit 0", t)
-    check(t.count(' OK') == 4 and 'BAD  ' not in t, "V clean: four FILE rows OK, no BAD row", t)
+    check(file_ok_rows(t) == 4 and 'BAD  ' not in t, "V clean: four FILE rows OK, no BAD row", t)
     check(d.wrote == [] and d.created == [], "V writes nothing")
     check(getattr(d, 'vectors', {}).get(0x24) is not None, "INT 24h is hooked (a Not-ready drive must not block on Abort/Retry/Fail)")
 
@@ -279,7 +290,14 @@ def main():
     starman = im.manifest_text(((p, d_) for p, d_ in files.items()), '*:').encode()
     d = Dos(dict(vol(), **{'INTEG.MAN': starman}))
     t = run(com, d, 'V /D:C')
-    check(d.exit_code == 0 and t.count(' OK') == 4 and 'FILE C:\\GAME\\BIG.DAT' in t, "V /D:C resolves '*:' paths to C:", t)
+    check(d.exit_code == 0 and file_ok_rows(t) == 4 and 'FILE C:\\GAME\\BIG.DAT' in t, "V /D:C resolves '*:' paths to C:", t)
+    # the same with LF-only line ends: the '*' substitution must not lose the path's terminator
+    # (it used AL, so the LF that ended the path was forgotten and the next 'B' line skipped)
+    lfman = starman.replace(b'\r\n', b'\n')
+    d = Dos(dict(vol(), **{'INTEG.MAN': lfman}))
+    t = run(com, d, 'V /D:C')
+    check(d.exit_code == 0 and file_ok_rows(t) == 4 and 'INTEG END FAILS=0000' in t,
+          "V /D:C with an LF-only '*:' manifest: every FILE row OK", t)
     d = Dos(dict(vol(), **{'INTEG.MAN': starman}))
     t = run(com, d, 'V')
     check(d.exit_code != 0 and 'OPENFAIL' in t, "V with '*:' paths and no /D: fails loudly", t)
@@ -391,7 +409,9 @@ def main():
         want_n = (0x14 * 4500) - (5 * 4500 + 0x10 * 75)
         check(r[0] == 22 and r[13] == 1 and r[14:18] == want_start and n == want_n,
               f"PLAY AUDIO: Red Book, first AUDIO track (2), start {start:08X}, {n} sectors to the lead-out", t)
-    check(all(r[0] in (26,) or r[2] in (132, 133) for _, r in d.requests), "every request length is the documented one")
+    check(bool(d.requests) and all(REQ_LEN.get(r[2]) == r[0] for _, r in d.requests),
+          "every request length is the documented one: "
+          + ", ".join(f"cmd {r[2]} len {r[0]}" for _, r in d.requests))
     check('PLAY OK DRV=04 TRACK=02' in t, "PLAY row names the drive and track", t)
     check(d.exit_code == 0, "V /PLAY on a clean volume: exit 0", t)
 

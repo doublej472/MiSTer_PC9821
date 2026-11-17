@@ -124,8 +124,11 @@ at run time by the OSD's `Analog video` field: `pc9821_line_doubler` sends each 
 PLL's clock (`CLK_VIDEO`, `rtl/vpll`, generated like the main PLL from
 `tools/profile/vpll_template.v`), an exact multiple of the dot rate, so every analog pixel and sync
 period is a constant number of clocks (`tb_pc9821_video_clk`). The video PLL is fractional-N and
-reconfigurable in every build: `pc9821_vpll_ctl` moves it to twice the 31 kHz dot clock whenever
-the guest sets port `0x09A8` bit 0 (`tb_pc9821_crt31k_video`); the settings live in
+reconfigurable in every build, generated at twice the 24 kHz dot clock (the setting the guest starts
+in, so a core load reconfigures nothing; the SDC times the video domain at the faster 31 kHz
+setting): `pc9821_vpll_ctl` moves it to twice the 31 kHz dot clock whenever the guest sets port
+`0x09A8` bit 0 (`tb_pc9821_crt31k_video`), and resets and reprograms it when a write or a relock
+has not completed in 5 ms (`tb_pc9821_vpll_ctl`); the settings live in
 `src/pc9821/video/pc9821_vclk_pkg.sv`, and `tools/profile_gen.py` VCLK_SETTINGS must agree
 (`build_profile.py --check`). A 31 kHz raster always leaves undoubled. There is no 15 kHz TV or
 composite/S-Video output.

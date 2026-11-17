@@ -16,7 +16,8 @@
 //      12 0x11 (IRQ9 IDE)  13 0x15 (IRQ13 mouse)  14 other slave 0x10-0x17 (not 0x11/0x14/0x15)
 //      15 VSYNC IRQ pulses raised  16 port 0x64 writes  17 master IMR  18 master IRR  19 master ISR
 //      20 ATA block reads  21 flags {PE, VM, IF, INTR, 4'b0}  22 port 0xA0 reads
-//      23 cycles with INTR high in the window, >>12, saturating  24 acks of 0x14 (IRQ12 sound)
+//      23 cycles with INTR high in the window, >>12, saturating at 0xFF (2^20 cycles: the default
+//         10 ms window is 900,000 cycles at 90 MHz, byte 219)  24 acks of 0x14 (IRQ12 sound)
 //      25 slave IMR  26 slave ISR  27 gate reads at an IDT slot of vector 6 (addr[11:0] == 0x030)
 //         or the real-mode IVT entry 0x18 (addr[11:0] == 0x018)  28-29 CS  30-31 EIP[15:0] at the last
 //      32 the sample sequence number (low 8 bits; it counts every tick, so a gap is a skipped
@@ -251,13 +252,17 @@ module pc9821_dbg_cpu #(
   wire [1:0] lost_inc = {1'b0, (SNOOP_EN != 0) && any_ev && eq_full} +
                         {1'b0, (SNOOP_EN != 0) && two_left} +
                         {1'b0, (SNOOP_EN != 0) && rq_drop};
+  // The count including this cycle's losses. The LOST record snapshots THIS, not ev_lost: the
+  // clear lands a cycle after the snapshot, so the losses of the snapshot cycle itself would
+  // otherwise be in neither the record nor the count that restarts after it.
+  wire [15:0] ev_lost_nxt = (ev_lost > 16'hFFFC) ? 16'hFFFF : ev_lost + {14'd0, lost_inc};
   always @(posedge clk) begin
     if (lost_clr) begin
       ev_lost <= {14'd0, lost_inc};          // events lost in the clearing cycle still count
       if (lost_inc != 2'd0) lost_cyc <= cyc;
     end else if (lost_inc != 2'd0) begin
       if (ev_lost == 16'd0) lost_cyc <= cyc;
-      ev_lost <= (ev_lost > 16'hFFFC) ? 16'hFFFF : ev_lost + {14'd0, lost_inc};
+      ev_lost <= ev_lost_nxt;
     end
   end
 
@@ -268,7 +273,9 @@ module pc9821_dbg_cpu #(
   always @(posedge clk) if (ms_tick) win_ms <= (win_ms == WIN_LAST) ? 8'd0 : win_ms + 8'd1;
   wire vec_ok = inta_ready && (inta_vec != 8'h00);
   reg [7:0] c0 = 0, c6 = 0, c12 = 0, c1 = 0, c2 = 0, cm = 0, c9 = 0, c13 = 0, cs = 0, cv = 0, c64 = 0, cata = 0, ca0 = 0;
-  reg [19:0] chi = 0;
+  // 21 bits: byte 23 is chi[19:12], so the count must reach 2^20 before the byte saturates; a
+  // 20-bit counter stopping at bit 19 pinned the byte at 0xFF from 2^19 cycles (5.8 ms at 90 MHz).
+  reg [20:0] chi = 0;
   wire vec6 = gate_read && (gate_addr[11:0] == 12'h030 || gate_addr[11:0] == 12'h018);
   reg [15:0] ud_cs = 16'd0, ud_ip = 16'd0;
   always @(posedge clk) if (SAMPLER_EN != 0 && vec6) begin ud_cs <= cpu_cs; ud_ip <= cpu_eip[15:0]; end
@@ -280,7 +287,7 @@ module pc9821_dbg_cpu #(
   wire [271:0] s_new = {8'hA5, 8'h20, ms, cpu_cs, cpu_eip[15:0],
       c0, c1, c2, cm, c9, c13, cs, cv, c64, imr, irr, isr, cata,
       cpu_pe, cpu_vm, cpu_if, cpu_intr, 4'b0000, ca0,
-      (chi[19:12] == 8'hFF || chi[19]) ? 8'hFF : chi[19:12],
+      chi[20] ? 8'hFF : chi[19:12],
       c12, s_imr, s_isr, c6, ud_cs, ud_ip, s_seq, 8'h5A};
   // A counter cleared at the snapshot restarts from the event of that same cycle, so no event is
   // lost to the window boundary (the sum of a counter over all records is the event total).
@@ -310,8 +317,8 @@ module pc9821_dbg_cpu #(
     c64 <= inc2(c64, io_wr && io_addr == 16'h0064, snap);
     cata <= inc2(cata, ata_block_read, snap);
     ca0 <= inc2(ca0, io_rd && io_addr == 16'h00A0, snap);
-    if (snap) chi <= {19'd0, cpu_intr};
-    else if (cpu_intr && !chi[19]) chi <= chi + 20'd1;
+    if (snap) chi <= {20'd0, cpu_intr};
+    else if (cpu_intr && !chi[20]) chi <= chi + 21'd1;
   end
 
   // ---- the trace and its triggers ----
@@ -485,7 +492,7 @@ module pc9821_dbg_cpu #(
     end else if (room) begin
       bi <= 6'd0;
       if (SNOOP_EN != 0 && ev_lost != 16'd0) begin
-        kind <= K_LST; lst_snap <= {lost_cyc, ev_lost}; lost_clr <= 1'b1;
+        kind <= K_LST; lst_snap <= {lost_cyc, ev_lost_nxt}; lost_clr <= 1'b1;
       end else if (SNOOP_EN != 0 && !eq_empty) begin
         kind <= K_EVT; ld <= 1'b1;
       end else if (take_smp) begin

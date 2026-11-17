@@ -92,8 +92,9 @@ start:
 probe_valid:
     mov eax, [es:ebx]           ; valid expand-down range -> must NOT fault
 valid_after:
-    ; If no fault was taken, EAX holds the preloaded pattern.  On HEAD the
-    ; handler resumes here with EAX clobbered; MARK_VALID then fails the test.
+    ; If no fault was taken, EAX holds the preloaded pattern.  A core that
+    ; faults here resumes from the handler with EAX clobbered; MARK_VALID then
+    ; fails the test.
     cmp eax, EXPECTED
     je .data_ok
     mov dword [ds:MARK_DATA], 1
@@ -134,7 +135,7 @@ fail_data:
     mov eax, 3
     jmp fail
 fail_other:
-    mov eax, 3
+    mov eax, 4
 
 fail:
     shl eax, 8

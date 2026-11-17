@@ -60,14 +60,24 @@ def classify(w, r):
     return "other"
 
 
-SELFTEST = """BEGIN:PEGCRD
-MODE 6A=00 9A0_04=01 9A0_07=00 9A0_08=00 9A0_0A=00
-16  ENTRY=5A WROTE_R=11 G=22 B=33 READ_R=01 G=02 B=03
-16  ENTRY=A5 WROTE_R=44 G=55 B=66 READ_R=04 G=05 B=06
-ALIAS16 ENTRY=0A WROTE_R=07 G=08 B=09 READ_R=01 G=02 B=03
-ALIAS16 ENTRY=05 WROTE_R=0D G=0E B=0C READ_R=04 G=05 B=06
-END:PEGCRD
-"""
+# ALIAS16: each 16-entry marker written at 0A/05 is read back after the 5A/A5 write. With a
+# 4-bit index the aliased write lands on it (the read is 5A's/A5's low nibbles); with an 8-bit
+# index the marker survives.
+ALIAS_SOURCE = {0x0A: 0x5A, 0x05: 0xA5}
+
+
+def selftest_capture(alias_reads):
+    """A PEGCRD capture whose two ALIAS16 rows read back alias_reads[0x0A] / [0x05]."""
+    def rd(e):
+        return "READ_R=%02X G=%02X B=%02X" % alias_reads[e]
+    return "\n".join([
+        "BEGIN:PEGCRD",
+        "MODE 6A=00 9A0_04=01 9A0_07=00 9A0_08=00 9A0_0A=00",
+        "16  ENTRY=5A WROTE_R=11 G=22 B=33 READ_R=01 G=02 B=03",
+        "16  ENTRY=A5 WROTE_R=44 G=55 B=66 READ_R=04 G=05 B=06",
+        "ALIAS16 ENTRY=0A WROTE_R=07 G=08 B=09 " + rd(0x0A),
+        "ALIAS16 ENTRY=05 WROTE_R=0D G=0E B=0C " + rd(0x05),
+        "END:PEGCRD", ""])
 
 
 def selftest() -> int:
@@ -76,17 +86,17 @@ def selftest() -> int:
     import os
     import tempfile
     fails = 0
-    for text, want in ((SELFTEST, "VERDICT: 4-bit index"),
-                       (SELFTEST.replace("READ_R=01 G=02 B=03\nALIAS16 ENTRY=05", "READ_R=07 G=08 B=09\nALIAS16 ENTRY=05")
-                                .replace("ENTRY=05 WROTE_R=0D G=0E B=0C READ_R=04 G=05 B=06", "ENTRY=05 WROTE_R=0D G=0E B=0C READ_R=0D G=0E B=0C"),
-                        "VERDICT: 8-bit index")):
+    four_bit = selftest_capture({0x0A: (0x01, 0x02, 0x03), 0x05: (0x04, 0x05, 0x06)})
+    eight_bit = selftest_capture({0x0A: (0x07, 0x08, 0x09), 0x05: (0x0D, 0x0E, 0x0C)})
+    for text, want, other in ((four_bit, "VERDICT: 4-bit index", "VERDICT: 8-bit index"),
+                              (eight_bit, "VERDICT: 8-bit index", "VERDICT: 4-bit index")):
         with tempfile.NamedTemporaryFile("w", suffix=".TXT", delete=False) as f:
             f.write(text)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            main(["x", f.name])
+            rc = main(["x", f.name])
         os.unlink(f.name)
-        ok = want in buf.getvalue()
+        ok = rc == 0 and want in buf.getvalue() and other not in buf.getvalue()
         print(f'{"PASS" if ok else "FAIL"} {want}')
         fails += 0 if ok else 1
     print(f'{"PASS" if not fails else "FAIL"}: pegcrd_decode selftest ({fails} failing)')
@@ -208,7 +218,7 @@ def main(argv):
         pat = {e: w for e, w, _, _ in rows["16"]}
         verdicts = []
         for entry, w, r, _ in rows["ALIAS16"]:
-            src = pat.get(entry | 0x50 if entry == 0x0A else 0xA5 if entry == 0x05 else -1)
+            src = pat.get(ALIAS_SOURCE.get(entry, -1))
             alias = tuple(x & 0x0F for x in src) if src else None
             if r == tuple(x & 0x0F for x in w):
                 v = "marker kept -> 8-bit index"

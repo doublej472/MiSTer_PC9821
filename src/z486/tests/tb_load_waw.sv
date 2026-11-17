@@ -434,7 +434,7 @@ module tb_load_waw;
                      eax, NEW_VALUE);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S1 PASS eax=%08x", eax);
         end
@@ -459,7 +459,7 @@ module tb_load_waw;
                      eax, ecx);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S2 PASS eax=%08x ecx=%08x", eax, ecx);
         end
@@ -484,7 +484,7 @@ module tb_load_waw;
                      eax);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S3 PASS eax=%08x", eax);
         end
@@ -509,7 +509,7 @@ module tb_load_waw;
                      eax);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S4 PASS eax=%08x", eax);
         end
@@ -534,7 +534,7 @@ module tb_load_waw;
                      eax);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S5 PASS eax=%08x", eax);
         end
@@ -561,7 +561,7 @@ module tb_load_waw;
         if (eax !== NEW_VALUE) begin
             $display("LOAD WAW TEST FAIL S6 wb edge eax=%08x expected=%08x",
                      eax, NEW_VALUE);
-            test_failed = 1'b1; test_done = 1'b1; $finish;
+            test_failed = 1'b1; test_done = 1'b1; $fatal(1, "LOAD WAW TEST FAIL");
         end
         // Stalled cycle with no write-back: OPR_R now holds a younger operand.
         idle_inputs();
@@ -573,7 +573,7 @@ module tb_load_waw;
                      eax, NEW_VALUE);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S6 PASS eax=%08x", eax);
         end
@@ -597,7 +597,7 @@ module tb_load_waw;
         if (eax !== OLD_VALUE) begin
             $display("LOAD WAW TEST FAIL S7 commit edge eax=%08x expected=%08x",
                      eax, OLD_VALUE);
-            test_failed = 1'b1; test_done = 1'b1; $finish;
+            test_failed = 1'b1; test_done = 1'b1; $fatal(1, "LOAD WAW TEST FAIL");
         end
         idle_inputs();
         opr_r = NEW_VALUE;           // the younger fast read's data
@@ -608,7 +608,7 @@ module tb_load_waw;
                      eax, OLD_VALUE);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S7 PASS eax=%08x", eax);
         end
@@ -641,7 +641,7 @@ module tb_load_waw;
         if (eax !== NEW_VALUE) begin
             $display("LOAD WAW TEST FAIL S8 wb edge eax=%08x expected=%08x",
                      eax, NEW_VALUE);
-            test_failed = 1'b1; test_done = 1'b1; $finish;
+            test_failed = 1'b1; test_done = 1'b1; $fatal(1, "LOAD WAW TEST FAIL");
         end
         idle_inputs();
         @(posedge clk);
@@ -651,7 +651,7 @@ module tb_load_waw;
                      eax, shift_data_latched, NEW_VALUE);
             test_failed = 1'b1;
             test_done = 1'b1;
-            $finish;
+            $fatal(1, "LOAD WAW TEST FAIL");
         end else begin
             $display("LOAD WAW S8 PASS eax=%08x", eax);
         end
@@ -666,6 +666,6 @@ module tb_load_waw;
         $display("LOAD WAW TEST FAIL timeout");
         test_failed = 1'b1;
         test_done = 1'b1;
-        $finish;
+        $fatal(1, "LOAD WAW TEST FAIL");
     end
 endmodule

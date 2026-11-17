@@ -174,7 +174,7 @@ module pc9821_sdram_phase_ctl #(
   wire busy = pending || (offset != target);
   assign dout = (addr == 16'h5FF2) ? offset : {4'hA, fault, reverted, busy, armed};
 
-`ifndef SYNTHESIS
+  // synthesis translate_off
   always @(posedge clk) begin
     if (ack_edge && !pending)
       $fatal(1, "pc9821_sdram_phase_ctl: a step acknowledged with none in flight");
@@ -183,7 +183,7 @@ module pc9821_sdram_phase_ctl #(
     if (wdog_fire && any_wr)
       $fatal(1, "pc9821_sdram_phase_ctl: the watchdog fired in a write's cycle");
   end
-`endif
+  // synthesis translate_on
 endmodule
 /* verilator lint_on PROCASSINIT */
 

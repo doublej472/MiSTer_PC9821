@@ -135,7 +135,7 @@ class Vectors:
         self.covered[row.id] = family
 
 
-def ramp_family(ids_by_key, xe10, mister, vectors, family):
+def ramp_family(ids_by_key):
     """Reconstruct one 16-pixel colour pattern from single-bit-hit masks.
 
     ids_by_key: {key: row}. Returns (data quad, colours list)."""
@@ -152,7 +152,7 @@ def ramp_family(ids_by_key, xe10, mister, vectors, family):
     return quad_of_colours(colours), colours
 
 
-def solve_shared_quad(rows, fg_free, access_of):
+def solve_shared_quad(fg_free, access_of):
     """Solve (data quad, one FG per row) for a family sharing one stored quad.
 
     The single-plane rows give each plane's data up to the FG bit, so trying the 16 FG colours
@@ -203,7 +203,7 @@ def build(xe10, mister):
         for key in range(n):
             rid = f"{prefix}{key:X}"
             got[key] = xe(rid)
-        ramp_sets.append((prefix, ramp_family(got, xe10, mister, v, "ramp")))
+        ramp_sets.append((prefix, ramp_family(got)))
     ramps = {}
     for prefix, res in ramp_sets:
         if res is None:
@@ -241,7 +241,7 @@ def build(xe10, mister):
     quad_rows += [(xe(f"RD17_M_{k}"), int(k, 16)) for k in ("0", "5", "A", "F")]
     quad_rows += [(xe("RD21_BG"), 5)]
     am_rows = [(xe(f"RD20_AM_{k:X}"), 5) for k in range(16)]
-    quad = solve_shared_quad(quad_rows + am_rows, quad_rows + am_rows,
+    quad = solve_shared_quad(quad_rows + am_rows,
                              lambda row: int(row.id[-1], 16) if row.id.startswith("RD20_AM_") else 0)
     if quad is None:
         raise SystemExit("the shared-quad family does not solve for any FG colour")
@@ -286,13 +286,13 @@ def build(xe10, mister):
     v.free.append("RD16_SEQ1")
 
     # ---- family 5: the colour-key WRITE (CK00_*_DST / CK01_*_DST) and CK01's five mask rows.
-    ck_write(xe10, v)
+    ck_write(xe10, mister, v)
     ck01_mask(xe10, v)
 
     return v
 
 
-def ck_write(xe10, v):
+def ck_write(xe10, mister, v):
     """CK00_*_DST / CK01_*_DST: the colour-key WRITE, replayed end to end.
 
     This family is NOT a hardware write overlay, and the capture says so. Its three columns are
@@ -344,16 +344,21 @@ def ck_write(xe10, v):
         pred = tuple((src[p] & ~mask) | (data[p] & mask) for p in range(4))
         if pred != dst:
             raise SystemExit(f"{rid}: the masked-write model gives {pred}, the hardware {dst}")
-        wit = MISTER.get(rid)
-        if wit is not None:
-            # The pre-fix core's own DST came from ITS read value, so the same model must
-            # reproduce it too - the strongest available statement of the sequence.
-            wmask = MISTER[rid + "_MASK"][0].act[0]
-            wpred = tuple((src[p] & ~wmask) | (data[p] & wmask) for p in range(4))
-            if wpred != tuple(wit.act):
-                raise SystemExit(f"{rid}: the pre-fix core's DST {tuple(wit.act)} is not the "
-                                 f"masked-write model of its own read value {wmask:04X}"
-                                 f" ({wpred}), so this sequence is not the one modelled")
+        # The capture's ids are the column ids (`CK00_3_DST`, `CK00_3_MASK`), never the
+        # bare row base, so the witness is looked up by its column.
+        wit = mister.get(rid + "_DST")
+        if wit is None or rid + "_MASK" not in mister:
+            raise SystemExit(f"{rid}: the pre-fix core's capture has no {rid}_DST/_MASK row, so "
+                             f"the second witness cannot be checked")
+        wit = wit[0]
+        # The pre-fix core's own DST came from ITS read value, so the same model must
+        # reproduce it too - the strongest available statement of the sequence.
+        wmask = mister[rid + "_MASK"][0].act[0]
+        wpred = tuple((src[p] & ~wmask) | (data[p] & wmask) for p in range(4))
+        if wpred != tuple(wit.act):
+            raise SystemExit(f"{rid}: the pre-fix core's DST {tuple(wit.act)} is not the "
+                             f"masked-write model of its own read value {wmask:04X}"
+                             f" ({wpred}), so this sequence is not the one modelled")
     for i, (rid, src, mask, dst) in enumerate(rows):
         fgs = [fg for fg in range(16) if mask_of(src, fg, 0) == mask]
         if not fgs:
@@ -426,8 +431,6 @@ def read_colour_gate(xe10):
     the fix rather than pass vacuously."""
     out = []
     for prefix, sel in (("W00_FG_", 0x40), ("W01_BG_", 0x20)):
-        for key in range(0, 16, 5):
-            pass
         for key in (0x0, 0x5, 0xA, 0xF):
             row = xe10[f"{prefix}{key:X}"][0]
             quad = tuple(0xFFFF if (key >> p) & 1 else 0x0000 for p in range(4))
@@ -436,9 +439,6 @@ def read_colour_gate(xe10):
                                  f"{tuple(row.exp)}")
             out.append((row, sel, key, (key ^ 0xF) & 0xF))
     return out
-
-
-QSTR = 'localparam [63:0] EGCX_ID [0:%d] = \'{ %s};\n'
 
 
 def fmt_id(text):
@@ -532,7 +532,7 @@ def emit(v, pat, gate):
     return "".join(L)
 
 
-def coverage(v, xe10):
+def coverage(v, xe10, mister):
     """Row accounting: what the vectors cover out of the capture's oracle rows."""
     have = {rid for rid in v.covered}
     gap = 0
@@ -542,7 +542,7 @@ def coverage(v, xe10):
         row = rows[0]
         if row.status != "PASS":
             continue
-        mir = MISTER.get(rid)
+        mir = mister.get(rid)
         if mir is None or mir[0].status == "PASS":
             continue
         gap += 1
@@ -553,9 +553,6 @@ def coverage(v, xe10):
     return have, gap, covered_gap, missed
 
 
-MISTER = {}
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -563,9 +560,8 @@ def main():
                     help="verify the committed file matches a fresh generation")
     args = ap.parse_args()
 
-    global MISTER
     xe10 = read_capture("xe10")
-    MISTER = read_capture("mister")
+    mister = read_capture("mister")
 
     # A row present in two capture files must agree byte for byte, or the capture is not one run.
     for rid, rows in xe10.items():
@@ -574,12 +570,12 @@ def main():
                 raise SystemExit(f"{rid}: {rows[0].grp} and {row.grp} disagree "
                                  f"({rows[0].act} vs {row.act})")
 
-    v = build(xe10, MISTER)
+    v = build(xe10, mister)
     pat = read_pat_family(xe10)
     gate = read_colour_gate(xe10)
     text = emit(v, pat, gate)
 
-    have, gap, covered_gap, missed = coverage(v, xe10)
+    have, gap, covered_gap, missed = coverage(v, xe10, mister)
     total_oracle = sum(1 for rows in xe10.values() if rows[0].status == "PASS")
     print(f"rows with a hardware oracle in the Xe10 capture : {total_oracle}")
     print(f"rows replayed as vectors                       : {len(v.cmp)}")

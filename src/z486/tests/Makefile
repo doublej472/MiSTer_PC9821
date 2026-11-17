@@ -157,6 +157,15 @@ all: build
 # The local release gate is deliberately serial: several Verilator targets
 # share obj_dir and compile common support objects with different trace flags.
 # External SingleStepTests/test386 and vendor timing are separate requirements.
+# $(call run_bench,<binary>,<log>,<marker>,<message>): run a bench to its log,
+# then require both a zero exit status and the PASS marker.  The log is read
+# after the run, never through `| tee | grep -q`: under pipefail grep -q's early
+# exit can SIGPIPE tee and fail a passing bench.
+define run_bench
+rc=0; $(1) > $(2) 2>&1 || rc=$$?; \
+if [ $$rc -ne 0 ] || ! grep -q $(3) $(2); then cat $(2); echo $(4) "(exit $$rc)"; exit 1; fi
+endef
+
 test-release:
 	$(MAKE) -j1 check-reset-lists check-pragmas check-rom-columns check-shift-ucode check-generators check-runner check-equiv
 	$(MAKE) -j1 test-l1-cache test-l1-icache test-memory-order test-mem-resp test-load-waw test-gpr-merge test-gpr-hazard test-data-access test-memmap-template test-interrupt-nmi test-paging-walker test-paging-tlb test-cache-flush test-cache-coherence test-reset-restart test-reset-dtr
@@ -379,9 +388,7 @@ obj_dir/Vtb_addr_unit_reloc_equiv: $(Z486_DIR)/z486_pkg.sv $(Z486_DIR)/address_u
 
 test-addr-unit-reloc: obj_dir/Vtb_addr_unit_reloc_equiv
 	@echo "Running address_unit relocation equivalence bench..."
-	@./obj_dir/Vtb_addr_unit_reloc_equiv | tee obj_dir/z486_addr_unit_reloc_equiv.out \
-		| grep -q "TB_ADDR_UNIT_RELOC_EQUIV: PASS" \
-		|| (echo "address_unit relocation equivalence bench FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_addr_unit_reloc_equiv,obj_dir/z486_addr_unit_reloc_equiv.out,"TB_ADDR_UNIT_RELOC_EQUIV: PASS","address_unit relocation equivalence bench FAIL")
 
 # A one-cycle reset at every offset through a short program must restart from
 # the reset vector and reach the same result.  A private --Mdir keeps this
@@ -399,11 +406,11 @@ obj_dir_reset_sweep/Vtb_reset_sweep: $(RTL_SRCS) $(RTL_DEPS) $(TB_RESET_SWEEP_SR
 
 test-reset-sweep: obj_dir_reset_sweep/Vtb_reset_sweep
 	@echo "Running reset-at-cycle sweep bench..."
-	@./obj_dir_reset_sweep/Vtb_reset_sweep > obj_dir_reset_sweep/z486_reset_sweep.out 2>&1 || true
-	@grep -v -e '%Fatal' -e 'Verilog $$stop' -e '%Warning: ignoring' \
-		obj_dir_reset_sweep/z486_reset_sweep.out
-	@grep -q "TB_RESET_SWEEP: PASS" obj_dir_reset_sweep/z486_reset_sweep.out \
-		|| (echo "reset-at-cycle sweep FAIL"; exit 1)
+	@rc=0; ./obj_dir_reset_sweep/Vtb_reset_sweep > obj_dir_reset_sweep/z486_reset_sweep.out 2>&1 || rc=$$?; \
+	grep -v -e '%Fatal' -e 'Verilog $$stop' -e '%Warning: ignoring' \
+		obj_dir_reset_sweep/z486_reset_sweep.out || true; \
+	if [ $$rc -ne 0 ] || ! grep -q "TB_RESET_SWEEP: PASS" obj_dir_reset_sweep/z486_reset_sweep.out; then \
+		echo "reset-at-cycle sweep FAIL (exit $$rc)"; exit 1; fi
 
 # Full-core PC-98 map at the external port: each window's line-fill vs
 # single-beat shape, DIRECT-write I$ invalidation (launch pulse, snoop
@@ -650,8 +657,7 @@ test-mem-resp: obj_dir/Vtb_mem_resp
 # an older hardwired load's deferred MEM token retiring in the same cycle.
 test-load-waw: obj_dir/Vtb_load_waw
 	@echo "Running same-cycle load write-arbitration unit test..."
-	@./obj_dir/Vtb_load_waw | tee obj_dir/z486_load_waw.out | grep -q "LOAD WAW TEST PASS" \
-		|| (echo "load write-arbitration test FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_load_waw,obj_dir/z486_load_waw.out,"LOAD WAW TEST PASS","load write-arbitration test FAIL")
 
 # Static checks revived from the fork: they guard the microcode/PLA images and
 # the synthesis pragmas, none of which any RTL bench covers.
@@ -682,8 +688,7 @@ test-gpr-hazard: obj_dir/Vtb_gpr_hazard
 # The shared producer arbitration: one order for the commit and all views.
 test-gpr-merge: obj_dir/Vtb_gpr_write_merge
 	@echo "Running GPR write-merge unit bench..."
-	@./obj_dir/Vtb_gpr_write_merge | tee obj_dir/z486_gpr_merge.out | grep -q "GPR WRITE MERGE TEST PASS" \
-		|| (echo "GPR write-merge test FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_gpr_write_merge,obj_dir/z486_gpr_merge.out,"GPR WRITE MERGE TEST PASS","GPR write-merge test FAIL")
 
 test-memmap-template: obj_dir/Vtb_memmap_template
 	@echo "Running memory-map template unit test..."
@@ -693,21 +698,15 @@ test-memmap-template: obj_dir/Vtb_memmap_template
 # is latched but not re-dispatched nested; CLRNMI (the IRET unmask) releases it.
 test-interrupt-nmi: obj_dir/Vtb_interrupt_nmi
 	@echo "Running interrupt-controller NMI deferred-delivery bench..."
-	@./obj_dir/Vtb_interrupt_nmi | tee obj_dir/z486_interrupt_nmi.out \
-		| grep -q "TB_INTERRUPT_NMI: PASS" \
-		|| (echo "interrupt NMI bench FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_interrupt_nmi,obj_dir/z486_interrupt_nmi.out,"TB_INTERRUPT_NMI: PASS","interrupt NMI bench FAIL")
 
 test-paging-walker: obj_dir/Vtb_paging_walker
 	@echo "Running page-walker A/D write-back bench..."
-	@./obj_dir/Vtb_paging_walker | tee obj_dir/z486_paging_walker.out \
-		| grep -q "PAGING WALKER TEST PASS" \
-		|| (echo "page-walker A/D write-back bench FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_paging_walker,obj_dir/z486_paging_walker.out,"PAGING WALKER TEST PASS","page-walker A/D write-back bench FAIL")
 
 test-paging-tlb: obj_dir/Vtb_paging_tlb_lru
 	@echo "Running paging TLB replacement bench..."
-	@./obj_dir/Vtb_paging_tlb_lru | tee obj_dir/z486_paging_tlb_lru.out \
-		| grep -q "PAGING TLB TEST PASS" \
-		|| (echo "paging TLB replacement bench FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_paging_tlb_lru,obj_dir/z486_paging_tlb_lru.out,"PAGING TLB TEST PASS","paging TLB replacement bench FAIL")
 
 test-cache-coherence: obj_dir/Vtb_cache_coherence
 	@echo "Running I-cache store/DMA coherence bench..."
@@ -715,9 +714,7 @@ test-cache-coherence: obj_dir/Vtb_cache_coherence
 
 test-cache-flush: obj_dir/Vtb_cache_flush
 	@echo "Running whole-L1 flush controller bench..."
-	@./obj_dir/Vtb_cache_flush | tee obj_dir/z486_cache_flush.out \
-		| grep -q "TB_CACHE_FLUSH: PASS" \
-		|| (echo "cache-flush controller bench FAIL"; exit 1)
+	@$(call run_bench,./obj_dir/Vtb_cache_flush,obj_dir/z486_cache_flush.out,"TB_CACHE_FLUSH: PASS","cache-flush controller bench FAIL")
 
 test-x87-bridge: obj_dir/Vtb_x87_bridge
 	@echo "Running x87 bridge unit test..."

@@ -94,7 +94,8 @@
  *   - DOS is only called (puts/putc) OUTSIDE the cli windows; the measurements
  *     buffer into variables first. No command is issued to any device.
  *
- * Built by build_ioprobe.sh: GNU as --32, linked at 0x100, .text only.
+ * Built by tools/hwprobe/Makefile (make -C tools/hwprobe ioprobe/ioprobe.com): GNU as --32,
+ * linked at 0x100, .text only.
  */
     .code16
     .intel_syntax noprefix
@@ -1169,7 +1170,7 @@ lbl_mouse7fd9:  .ascii "MOUSE7FD$"
 lbl_mousebfdb:  .ascii "MOUSEBFD$"
 
 msg_banner:
-    .ascii "IOPROBE - PC-9821 real-machine I/O wait-state probe (tools/hwprobe/ioprobe.s)\r\n"
+    .ascii "IOPROBE - PC-9821 real-machine I/O wait-state probe (tools/hwprobe/ioprobe/ioprobe.s)\r\n"
     .ascii "Each row: TM_N=1024 back-to-back accesses in a cli window, timed with the PIT\r\n"
     .ascii "channel-0 counter and an interleaved control (pit-/base-), with the ARTIC counter\r\n"
     .ascii "(artic-/bartic-) as the cross-check. pit/base are RAW counts (1 count = 406.9 ns,\r\n"

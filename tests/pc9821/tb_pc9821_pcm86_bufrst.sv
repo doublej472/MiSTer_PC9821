@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The 86-PCM's 0xA468 bit-3 buffer reset is AUTHORITATIVE while the buffer is RUNNING: for every one of the sample period's phases, a reset issued while the drain engine is mid-frame still leaves the byte count at zero rather than at 0xFFFE, because the engine's own rdptr/count update sits later in the same always block and otherwise subtracts a frame from a count the reset has just zeroed. And the full+write+D_DONE collision (datapaths.md F7 / buffers.md F6): a guest byte written on the EXACT cycle a draining frame completes while the ring is FULL survives as the newest byte and keeps count == wrptr - rdptr (mod 0x8000) - in NP2kai's serialized order (the drain runs at sound_sync before the port write, cbus/pcm86io.c pcm86_oa46c), so the frame leaves first, the ring is no longer full and no slip is owed: count = 0x8000 - nbyte + 1 - swept over nbyte 1, 2 and 4 and compared byte-for-byte against that golden stream.
+// The 86-PCM's 0xA468 bit-3 buffer reset is AUTHORITATIVE while the buffer is RUNNING: for every one of the sample period's phases, a reset issued while the drain engine is mid-frame still leaves the byte count at zero rather than at 0xFFFE, because the engine's own rdptr/count update sits later in the same always block and otherwise subtracts a frame from a count the reset has just zeroed. And the full+write+D_DONE collision: a guest byte written on the EXACT cycle a draining frame completes while the ring is FULL survives as the newest byte and keeps count == wrptr - rdptr (mod 0x8000) - in NP2kai's serialized order (the drain runs at sound_sync before the port write, cbus/pcm86io.c pcm86_oa46c), so the frame leaves first, the ring is no longer full and no slip is owed: count = 0x8000 - nbyte + 1 - swept over nbyte 1, 2 and 4 and compared byte-for-byte against that golden stream.
 //
 // The 86-PCM's 0xA468 bit-3 buffer reset is AUTHORITATIVE while the buffer is RUNNING: for every one of the sample period's phases, a reset issued while the drain engine is mid-frame still leaves the byte count at zero rather than at 0xFFFE, because the engine's own rdptr/count update sits later in the same always block and otherwise subtracts a frame from a count the reset has just zeroed.
 //
@@ -246,7 +246,7 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(CLK_HZ)) dut (
     end
 
     // =================================================================
-    // 3. THE FULL + WRITE + D_DONE COLLISION (datapaths.md F7 / buffers.md F6)
+    // 3. THE FULL + WRITE + D_DONE COLLISION
     // =================================================================
     // The ring is filled to EXACTLY 0x8000 with playback off, playback starts,
     // and one guest byte (0x5A) is written on the EXACT cycle the first frame's

@@ -153,4 +153,11 @@ module tb_pc9821_ata_err_sticky;
     else $fatal(1, "TB_PC9821_ATA_ERR_STICKY: FAIL (%0d errors)", errors);
   end
 
+  // A DUT that never answers (a wait above that never ends) fails with a verdict here rather
+  // than hanging until the runner's outer timeout. Far above the bench's own run time.
+  initial begin
+    #10_000_000;
+    $fatal(1, "TB_PC9821_ATA_ERR_STICKY: TIMEOUT");
+  end
+
 endmodule

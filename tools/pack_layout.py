@@ -208,6 +208,24 @@ class Dumps:
     font: Path
     banks: Path | None = None
 
+    def bank_paths(self) -> list[Path] | None:
+        """BANK0..BANK7.BIN in the banks directory, matched case-insensitively.
+
+        discover() accepts any case, so every reader of the banks resolves the names the
+        same way instead of re-opening a literal upper-case name (which a case-sensitive
+        filesystem does not have).
+        """
+        if self.banks is None:
+            return None
+        found = {entry.name.upper(): entry for entry in self.banks.iterdir()}
+        paths = []
+        for index in range(8):
+            path = found.get(f"BANK{index}.BIN")
+            if path is None:
+                raise SystemExit(f"--banks: {self.banks} has no BANK{index}.BIN")
+            paths.append(path)
+        return paths
+
     @staticmethod
     def discover(directory: Path) -> "Dumps":
         """One dump directory: BANK0..BANK7.BIN, BIOS.ROM, FONT.ROM.
@@ -364,8 +382,8 @@ def build(dumps: Dumps, rhythm: Path | None = None,
 
     banks = None
     if dumps.banks is not None:
-        banks = [exact(dumps.banks / f"BANK{i}.BIN", BANK_SIZE, f"BANK{i}")
-                 for i in range(8)]
+        banks = [exact(path, BANK_SIZE, f"BANK{i}")
+                 for i, path in enumerate(dumps.bank_paths())]
 
     pack = bytearray([0xFF]) * PACK_SIZE
     pack[0x00000:0x08000] = itf

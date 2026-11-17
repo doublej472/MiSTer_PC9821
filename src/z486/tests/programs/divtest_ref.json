@@ -14,5 +14,5 @@
   "d_init": 0,
   "page_tables": [],
   "mem_latency": 5,
-  "cycles": 400000
+  "cycles": 500000
 }

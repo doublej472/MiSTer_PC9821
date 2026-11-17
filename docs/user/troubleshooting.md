@@ -64,6 +64,16 @@ Common problems, by what you see, and the core's known issues. Per-title notes a
   reset, then the **DIP Switch** page's settings apply again. SETUP items for hardware the core
   lacks (built-in PCM sound, serial port, window accelerator, power management) do nothing; the
   PC-9801-86 board is always present.
+- The character-generator window reads rows 0x58 and 0x5D-0x5F of the user-character codes as
+  fixed bytes; on the real machine their odd page and port reads return unstable, CG-RAM-like data.
+- Two read-back details of the YM2608 differ from the machine: bits 6-2 of the status at port
+  0x188 and the first read of 0x18A after start-up. The sound itself is unaffected.
+- The core reads each line of the graphics screen one line ahead of the display. A graphics write
+  to a line that has already been read shows from the next frame; on the real machine, which reads
+  graphics memory as it scans, it can show in the same frame. Only effects timed to the beam
+  within a line or two can see the difference.
+- A few titles do not take input at their first menu; their entries in the
+  [compatibility list](compatibility.md) say which.
 - No PC key gives VF3-VF5, and VF2 is on F12, which opens the MiSTer menu.
 - In MiSTer release 20261010, the Japanese keyboard's ろ (`_`) key arrives as カナ, toggling kana
   input; this is fixed in the next Main_MiSTer release.

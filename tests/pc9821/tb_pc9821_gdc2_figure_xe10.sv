@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The graphics GDC's figure commands draw what the Xe10 drew: 1,450 rows of the real machine's conformance capture (docs/probes/gdc-conformance/xe10-2.5MHz GDCDRAW, GDCROP and GDCGCHR, re-encoded by tools/gen_gdc_draw_vectors.py) are replayed through pc9821_gdc2 and the real GVRAM (share, arbiter, byte-lane memory) over the 0xA0/0xA2 ports - ROP select, TEXTW pattern, ZOOM, CSRW, FIGS, then FIGD or GCHRD - and every row's GVRAM outcome and cursor are the machine's own: the FIGD dot at all 16 dADs and all 8 directions, 288 canonical and 12 raw-DDA lines (the D/D1/D2 decision walk the machine runs, which refutes NP2kai gdcsub_vectl's division), the A53C line pattern, the rectangles in all 8 directions including the zero-length sides that sweep 16,384 dots and carry into the next plane, the 192 FIGD_ROP and 324 FIGD_PATTERN rows (REPLACE/COMPLEMENT/CLEAR/SET of the pattern's bit through the one-hot cursor mask), and GCHRD's 512 one-hot PRAM-bit rows in all 8 directions, solid area fills from 1x1 to 16x16 and 17x5, ZOOM 1..16, the slanted character in all 8 directions and the PRAM start bytes 0x78-0x7F. A row whose change list is complete must match the whole of GVRAM page 0 word for word (nothing else written, in any plane); a row the suite truncated must match its listed words and its total count of changed R-plane words. The five bytes the CURD read-back answers - {EAD[7:0], EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]} - are the machine's own raw_curd after every row, and the 0xA0 status shows DRAWING (bit 3) while the figure runs and clears it when the draw is done.
+// The graphics GDC's figure commands draw what the Xe10 drew: 2,374 rows of the real machine's conformance capture (docs/probes/gdc-conformance/xe10-2.5MHz GDCDRAW, GDCROP, GDCGCHR and the PITCH/DGD chunks GDPIT0-3, re-encoded by tools/gen_gdc_draw_vectors.py) are replayed through pc9821_gdc2 and the real GVRAM (share, arbiter, byte-lane memory) over the 0xA0/0xA2 ports - PITCH, ROP select, TEXTW pattern, ZOOM, CSRW, MASK, FIGS, then FIGD, GCHRD or WDAT - and every row's GVRAM outcome and cursor are the machine's own: the FIGD dot at all 16 dADs and all 8 directions, 288 canonical and 12 raw-DDA lines (the D/D1/D2 decision walk the machine runs, which refutes NP2kai gdcsub_vectl's division), the A53C line pattern, the rectangles in all 8 directions including the zero-length sides that sweep 16,384 dots and carry into the next plane, the 192 FIGD_ROP and 324 FIGD_PATTERN rows (REPLACE/COMPLEMENT/CLEAR/SET of the pattern's bit through the one-hot cursor mask), and GCHRD's 512 one-hot PRAM-bit rows in all 8 directions, solid area fills from 1x1 to 16x16 and 17x5, ZOOM 1..16, the slanted character in all 8 directions and the PRAM start bytes 0x78-0x7F, and GDPIT's 924 rows: the dot, vertical and horizontal FIGD line, GCHRD and one-hot and full-MASK WDAT at PITCH 0 to 255 (22 values), DGD 0 and 1 and all 8 directions, so every draw's y step is the PITCH command's value at 2.5 MHz, half of it (the odd bit dropped) with FIGS P3's DGD bit, and DGD is not part of DC. A row whose change list is complete must match the whole of GVRAM page 0 word for word (nothing else written, in any plane); a row the suite truncated must match its listed words and its total count of changed R-plane words. The five bytes the CURD read-back answers - {EAD[7:0], EAD[15:8], 0xF0|EAD[18:16], MASK[7:0], MASK[15:8]} - are the machine's own raw_curd after every row, and the 0xA0 status shows DRAWING (bit 3) while the figure runs and clears it when the draw is done.
 
 module tb_pc9821_gdc2_figure_xe10;
   reg clk_sys = 0;
@@ -154,7 +154,8 @@ module tb_pc9821_gdc2_figure_xe10;
   initial begin : replay
     integer r, k, l, w, nch, nseed, choff, sdoff, nchanged, drawing_seen, polls;
     reg [GDX_CFGW-1:0] c;
-    reg [7:0] cmd, p1, st, b0, b1, b2, b3, b4, curd_b2;
+    reg [7:0] cmd, p1, st, b0, b1, b2, b3, b4, curd_b2, pitch;
+    reg dgd, mask_ffff;
     reg [13:0] dc, d, d2, d1, dm;
     reg [15:0] ead, curd_ead, curd_mask, n_changed, got, ex;
     reg [3:0] dad, zoom;
@@ -170,6 +171,7 @@ module tb_pc9821_gdc2_figure_xe10;
     for (r = 0; r < GDX_N; r = r + 1) begin
       c = GDX_CFG[r] >> 8;          // the low byte is the machine's raw CURD byte 2
       curd_b2 = GDX_CFG[r][7:0];
+      pitch = c[282:275]; dgd = c[274]; mask_ffff = c[273];
       cmd = c[272:265]; p1 = c[264:257]; dc = c[256:243]; d = c[242:229];
       d2 = c[228:215]; d1 = c[214:201]; dm = c[200:187]; ead = c[186:171];
       dad = c[170:167]; ra = c[166:103]; zoom = c[102:99]; rop = c[98:97];
@@ -194,19 +196,22 @@ module tb_pc9821_gdc2_figure_xe10;
       end
 
       // ---- the row's program ----
+      io_a2(8'h47); io_a0(pitch);            // PITCH (40, the reset value, except GDPIT)
       io_a2(8'h28 | {6'd0, rop});            // the WRITE family's ROP (no data byte)
       io_a2(8'h78);                          // TEXTW: PRAM RA8..RA15
       for (k = 0; k < 8; k = k + 1) io_a0(ra[63 - 8*k -: 8]);
       io_a2(8'h46); io_a0({4'd0, zoom});     // ZOOM
       io_a2(8'h49); io_a0(ead[7:0]); io_a0(ead[15:8]); io_a0({dad, 4'd0});   // CSRW
+      if (mask_ffff) begin io_a2(8'h4A); io_a0(8'hFF); io_a0(8'hFF); end     // MASK FFFF
       io_a2(8'h4C);                          // FIGS
       io_a0(p1);
-      io_a0(dc[7:0]); io_a0({2'd0, dc[13:8]});
+      io_a0(dc[7:0]); io_a0({1'b0, dgd, dc[13:8]});   // P3 bit 6: DGD
       io_a0(d[7:0]);  io_a0({2'd0, d[13:8]});
       io_a0(d2[7:0]); io_a0({2'd0, d2[13:8]});
       io_a0(d1[7:0]); io_a0({2'd0, d1[13:8]});
       io_a0(dm[7:0]); io_a0({2'd0, dm[13:8]});
-      io_a2(cmd);                            // FIGD / GCHRD
+      io_a2(cmd);                            // FIGD / GCHRD / WDAT
+      if ((cmd & 8'hE0) == 8'h20) begin io_a0(8'hFF); io_a0(8'hFF); end   // WDAT's data word
 
       // ---- the guest's wait: poll 0xA0 until DRAWING (bit 3) clears ----
       drawing_seen = 0; polls = 0;
@@ -297,7 +302,7 @@ module tb_pc9821_gdc2_figure_xe10;
   end
 
   initial begin
-    #2_000_000_000;
+    #6_000_000_000;
     $fatal(1, "TB_PC9821_GDC2_FIGURE_XE10: TIMEOUT");
   end
 endmodule

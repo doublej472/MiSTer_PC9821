@@ -58,9 +58,20 @@
 
 `default_nettype none
 
-module pc9821_window_responder (
+module pc9821_window_responder #(
+    parameter integer SYS_CLOCK_HZ = 50_000_000
+) (
     input wire clk,
     input wire reset,
+    // OSD I/O timing = Xe10 (status[79], pc9821_gvram_arb's timing_xe10) and the graphics GDC's
+    // scan window (pc9821_gvram_arb's gfx_scan_on): the text RAM's CPU access period below. Both
+    // are levels, registered here; Fast (0) keeps the walk's own pace exactly as before.
+    input wire timing_xe10,
+    input wire gfx_scan_on,
+    // The Xe10 table's display-mode column (pc9821_memory_subsystem's xe10_mode: 0 = 24 kHz,
+    // 1 = 31 kHz, 2 = 31 kHz with the 256-colour display on, 3 = 24 kHz with it on), registered
+    // here; Xe10 only.
+    input wire [1:0] xe10_mode,
 
     // 0 = the TRAM route (0xA0000-0xA3FFF), 1 = the CG byte-window route (0xA4000-0xA4FFF).
     // In the design this is the memory map's one-hot route select, held for the life of the
@@ -133,12 +144,14 @@ module pc9821_window_responder (
     output reg   [7:0] byte_din,
     output reg         byte_we
 );
+  import pc9821_xe10_timing_pkg::*;
 
   localparam S_IDLE = 4'd0, S_READ_ISSUE = 4'd1, S_READ_WAIT = 4'd2,
              S_READ_CAPTURE = 4'd3, S_WRITE = 4'd4,
              S_WRITE_COMMIT = 4'd5, S_HOLD = 4'd6, S_RESP = 4'd7,
              S_DMA_WAIT = 4'd8, S_DMA_CAPTURE = 4'd9,
-             S_DMA_CG_ISSUE = 4'd10, S_DMA_CG_WAIT = 4'd11, S_DMA_CG_CAPTURE = 4'd12;
+             S_DMA_CG_ISSUE = 4'd10, S_DMA_CG_WAIT = 4'd11, S_DMA_CG_CAPTURE = 4'd12,
+             S_LATW = 4'd13;   // Xe10: a word read's data is in, its response waits out the hold
 
   reg [3:0] state;
   reg [13:2] base_addr;   // the transfer's dword-aligned base (its low two bits are always 0)
@@ -159,6 +172,16 @@ module pc9821_window_responder (
   // line's LAST word, which nothing consumes (the beats are strobed as they complete).
   assign cpu_dout = read_data;
   reg line_request;
+  // The ROUTE OF THE ACCESS IN FLIGHT, latched at its start. Every walk state reads it, never the
+  // live `route_cg`: in Xe10 a text store is POSTED (its ready is its accept), so the CPU's NEXT
+  // request - possibly to the CG window - is presented while this walk still runs, and the live
+  // select then names that request, not this one. In Fast the CPU holds its request until the
+  // walk's ready, so the latch equals the live select for the whole walk.
+  reg route_cg_q;
+  wire walk_cg = route_cg_q;
+  // This store's ready was its accept (Xe10 on the text route): the walk's end must not pulse it
+  // again, or z486 would take that second ready for its next request's accept.
+  reg posted_q;
 
   // base_addr is lane-aligned on the transfer's base and byte_index walks lanes from it, so
   // this is the byte the backend is asked for. For the CG route cpu_addr[13:12] are zero
@@ -183,17 +206,121 @@ module pc9821_window_responder (
   // (it reads back 0xFF regardless); the CG route offers every enabled lane and the GDC
   // discards the reference's dummy page.
   wire current_write_enabled = write_be[byte_index[1:0]] &&
-                               (route_cg ? 1'b1 : !attr_half_byte);
+                               (walk_cg ? 1'b1 : !attr_half_byte);
   // The lane a read returns: 0xFF for an odd TRAM attribute byte, the backend's byte otherwise.
   // The lane's own address is available while the answer is captured (byte_index is held across
   // S_READ_ISSUE/S_READ_WAIT/S_READ_CAPTURE), so the test is per byte of the transfer.
-  wire [7:0] read_lane = route_cg ? byte_dout
-                                  : (attr_half_byte ? 8'hFF : tram_dout);
+  wire [7:0] read_lane = walk_cg ? byte_dout
+                                 : (attr_half_byte ? 8'hFF : tram_dout);
   wire last_byte = line_request ? (byte_index == 4'hF) : (byte_index[1:0] == 2'b11);
   // memtram_wr8's attribute rule for the DMA byte: an odd byte at or above 0xA2000 is dropped,
   // and memtram_rd8 answers the CPU's own 0xFF there (the read_lane rule above).
   wire dma_attr_odd = dma_addr[13] && dma_addr[0];
   reg  dma_rd_odd;
+
+  // ---- THE TEXT RAM'S XE10 PRICING (timing_xe10 only; the CG window and the DMA are not paced) ----
+  // Every CPU access to the text RAM is priced from the ONE generated class table
+  // (pc9821_xe10_timing_pkg, tools/xe10_classes.csv: the rows' captures are cited there and
+  // tools/check_xe10_table.py re-derives them). The class is the direction, the WIDTH (one 16-bit
+  // word, or two: enables in both halves of the dword, as a dword or a word at dword offset 1; a
+  // line read is two words: z486 presents it with all four enables, R8 below), the raster (on a graphics line, gfx_scan_q: the graphics GDC's
+  // fetch slows the text RAM as it does the GVRAM, and the off-screen and on-screen rows read the
+  // same, XE10X /RDLAT XCR against XCRS/XARS) and the display mode (mode_q: 24 kHz, 31 kHz,
+  // 31 kHz with the 256-colour display on, 24 kHz with it on).
+  // THE TWO SHAPES (XE10X /RDLAT, docs/probes/XE10X-XE10-RDLAT1.TXT, every class swept with 0..64
+  // nops between accesses):
+  //   * a READ is LATENCY-shaped: the CPU's work after it ADDS (XCR_24V 646.1 ns at nop 0, 1300.2
+  //     at nop 64, :274-280; hidden_frac 0.02-0.09 in every mode), so its RESPONSE is held to the
+  //     table's net time after the request, less the core CPU's own cycles around the port
+  //     (XE10_MEM_CPU_CYC): the core's unpaced text read costs 232.1-233.6 ns net = 21 clk_sys at
+  //     90 MHz (docs/probes/core/XE10X-CORE-h6-85942c3c-s3-FAST-RDLAT1.TXT:72-78, XCR_24O) and this
+  //     port answers it in 13 under the same condition, work between reads
+  //     (tb_pc9821_xe10_latency's Fast pin `.F_RD64(13)`; the back-to-back 14 includes the port's
+  //     own turnaround edge), so 21 - 13 = 8 are the CPU's - the GVRAM's 8 too
+  //     (pc9821_gvram_arb's XE10 TABLE). The rate-shaped period this replaces hid the work instead
+  //     (docs/probes/core/XE10X-CORE-h6-85942c3c-s3-XE10-RDLAT1.TXT:274-280: 651.7 -> 972.0);
+  //   * a STORE is RATE-shaped on the machine (hidden_frac 0.81-0.87, XCW/XCWS/XAWS in every mode):
+  //     the work between stores hides in the store's period. So in Xe10 a text store is POSTED - its
+  //     ready is its accept, the byte walk completes behind the CPU, exactly as the GVRAM's
+  //     decoupled store - and the next access starts no sooner than the table's period after it.
+  //     The un-posted store this replaces exposed the walk to the CPU (MIXED, hidden_frac 0.22-0.40;
+  //     839.2 ns at nop 64 against the machine's 685.1, the RDLAT1 XCW rows). Fast keeps the
+  //     un-posted walk exactly.
+  // A word across a dword boundary is two accesses (the MISAL2 `_3` rows are 1.93-1.95 x the `_0`
+  // ones), priced one class each.
+  // The two-word store is BIMODAL like the GVRAM's plain one (pc9821_gvram_arb.sv): XCW_1_V reads
+  // 198.7 (docs/probes/XE10W-XE10-MIS2RUN1.TXT:386 `pit=249/250/257`) where XAW_1_V reads 282.9;
+  // the period is the upper mode.
+  localparam integer XE10_MEM_CPU_CYC = 8;   // the CPU's share of a read (see above)
+  // The port's own cycles around the read's hold, from the first rising edge that samples the
+  // request to the one that samples the response strobe: the hold is armed at the start (the
+  // S_IDLE accept, that same edge), the ready follows the edge it runs out (S_LATW), the response
+  // strobe one after that (S_RESP). A hold of N intervals answers N + 2 after the request;
+  // tb_pc9821_xe10_latency pins that to the table's time less the CPU's share. A read presented in
+  // the cycle the previous strobe is seen waits one more edge (S_HOLD), the port's own turnaround,
+  // as the Fast read shows (14 clk_sys back to back, 13 with work between).
+  localparam integer XE10_RD_PORT_TX = 2;
+  // The widest load is the table's widest text entry (the generator's max over the rows), each
+  // entry converted here by the table's rule (pc9821_xe10_timing_pkg): the nearest clk_sys.
+  localparam [63:0]  TX_MAX  = (64'(SYS_CLOCK_HZ) * 64'(XE10_TX_MAX_NS_X10) + 64'd5_000_000_000) /
+                               64'd10_000_000_000;
+  localparam integer TX_BITS = ($clog2(TX_MAX + 1) < 1) ? 1 : $clog2(TX_MAX + 1);
+  reg  timing_xe10_q, gfx_scan_q;
+  reg  [1:0] mode_q;
+  reg  [TX_BITS-1:0] tx_left;          // idle intervals before the next CPU text access may start
+  wire tx_busy = (tx_left != {TX_BITS{1'b0}});
+  // THE CURRENT ROW per class (0 read 1w, 1 read 2w, 2 store 1w, 3 store 2w), registered from the
+  // quasi-static mode and raster levels: the load the start cycle writes into tx_left. A store's
+  // is its period less one (start to start is then the period, or the walk if longer); a read's
+  // the table time less the CPU's share and the port's cycles, floored at 0.
+  wire [2:0] tx_sel = {mode_q, 1'b0} + {2'b00, gfx_scan_q};   // 2 * mode + phase
+  wire [4*TX_BITS-1:0] tx_ld;
+  genvar tc;
+  generate
+    for (tc = 0; tc < 4; tc = tc + 1) begin : g_tx_row
+      localparam integer BASE = XE10_TX_RD_1W + XE10_PER_CLASS * tc;
+      localparam integer SUBI = (tc < 2) ? (XE10_MEM_CPU_CYC + XE10_RD_PORT_TX) : 1;
+      localparam [63:0]  SUB  = 64'(SUBI);
+      wire [XE10_PER_CLASS*16-1:0] e;
+      genvar te;
+      for (te = 0; te < XE10_PER_CLASS; te = te + 1) begin : g_e
+        localparam [63:0] C = (64'(SYS_CLOCK_HZ) * {48'd0, XE10_NS_X10[16 * (BASE + te) +: 16]} + 64'd5_000_000_000) / 64'd10_000_000_000;
+        assign e[16 * te +: 16] = 16'((C > SUB) ? (C - SUB) : 64'd0);
+      end
+      reg [TX_BITS-1:0] ld;
+      always @(posedge clk) ld <= TX_BITS'(e[16 * tx_sel +: 16]);
+      assign tx_ld[TX_BITS * tc +: TX_BITS] = ld;
+    end
+  endgenerate
+  // No line-read term: z486's line reads are its cache fills alone, an uncached I-fetch included
+  // (src/z486/bus_unit.sv:301 `assign line_read  = ext_valid_r`), each with enables 1111 (src/z486/
+  // l1_cache.sv:1105 `mem_be_r <= 4'hF;`, l1_icache.sv:144 `assign mem_be = 4'hF;`): two-word. R8 below.
+  wire tx_2w   = (|cpu_be[1:0]) && (|cpu_be[3:2]);
+  wire [TX_BITS-1:0] tx_load = tx_ld[TX_BITS * {cpu_write, tx_2w} +: TX_BITS];
+  // A CPU request starts in S_IDLE only when the period has run out (Xe10 on the text route).
+  wire cpu_start_ok = !(timing_xe10_q && !route_cg && tx_busy);
+  // Xe10 on the text route: the access being started is priced (and, a store, posted).
+  wire tx_priced    = timing_xe10_q && !route_cg;
+  // The read in flight waits for its hold (the walk's own route, latched at its start).
+  wire rd_hold      = timing_xe10_q && !walk_cg && tx_busy;
+
+  always @(posedge clk) begin
+    if (reset) begin
+      timing_xe10_q <= 1'b0;
+      gfx_scan_q    <= 1'b0;
+      mode_q        <= 2'd0;
+      tx_left       <= {TX_BITS{1'b0}};
+    end else begin
+      timing_xe10_q <= timing_xe10;
+      gfx_scan_q    <= gfx_scan_on;
+      mode_q        <= xe10_mode;
+      // The start cycle loads the class's hold; it counts down every cycle, DMA bytes included.
+      if (state == S_IDLE && !dma_valid && cpu_valid && cpu_start_ok && tx_priced)
+        tx_left <= tx_load;
+      else if (tx_busy)
+        tx_left <= tx_left - 1'b1;
+    end
+  end
 
   always @(posedge clk) begin
     if (reset) begin
@@ -217,6 +344,8 @@ module pc9821_window_responder (
       byte_rd <= 1'b0;
       byte_din <= 8'd0;
       byte_we <= 1'b0;
+      route_cg_q <= 1'b0;
+      posted_q <= 1'b0;
     end else begin
       cpu_ready <= 1'b0;
       cpu_resp_valid <= 1'b0;
@@ -248,7 +377,7 @@ module pc9821_window_responder (
           dma_ready <= 1'b1;
           dma_rd_odd <= dma_attr_odd;
           state <= dma_write ? S_HOLD : S_DMA_WAIT;
-        end else if (cpu_valid) begin
+        end else if (cpu_valid && cpu_start_ok) begin
           base_addr <= cpu_line_read ? {cpu_addr[13:4], 2'b00}
                                      : cpu_addr[13:2];
           write_data <= cpu_din;
@@ -259,6 +388,10 @@ module pc9821_window_responder (
           // write does not touch it. Every beat is strobed on the edge after its fourth byte
           // lands, so the beat word is complete and stable when cpu_line_word_valid is high.
           line_request <= cpu_line_read;
+          route_cg_q <= route_cg;
+          // XE10: a text store is POSTED - ready now (the next cycle), the walk behind the CPU.
+          posted_q <= cpu_write && tx_priced;
+          if (cpu_write && tx_priced) cpu_ready <= 1'b1;
           // A LINE READ IS ACCEPTED AT THE WALK'S START: the CPU's fill is a four-beat
           // counter loaded at the accept, and the beats stream through the walk below, so the
           // request is ready one cycle after it is presented instead of after the last byte.
@@ -268,7 +401,7 @@ module pc9821_window_responder (
         end
 
         S_READ_ISSUE: begin
-          if (route_cg) byte_rd <= 1'b1;
+          if (walk_cg) byte_rd <= 1'b1;
           else          tram_addr <= indexed_addr;
           state <= S_READ_WAIT;
         end
@@ -277,7 +410,7 @@ module pc9821_window_responder (
         // tram_addr). A JIS glyph burst holds the CG byte: the class table has already held the
         // position and the GDC's own registered read answers in the same two-cycle cadence the
         // strobe set up, unless byte_hold says its code is still in flight.
-        S_READ_WAIT: if (route_cg ? !byte_hold : 1'b1) state <= S_READ_CAPTURE;
+        S_READ_WAIT: if (walk_cg ? !byte_hold : 1'b1) state <= S_READ_CAPTURE;
 
         S_READ_CAPTURE: begin
           read_data[{byte_index[1:0], 3'b000} +: 8] <= read_lane;
@@ -293,12 +426,24 @@ module pc9821_window_responder (
             // direct read path registers the accept and clears its in-flight flag on the
             // response, so a same-cycle response wedges the CPU. Matches the open-bus responder.
             // A line read was accepted at the walk's start and has beaten all four words out.
-            if (!line_request) cpu_ready <= 1'b1;
-            state <= S_RESP;
+            // XE10: a word read's accept waits out its latency hold in S_LATW (the data is in).
+            if (!line_request && rd_hold) state <= S_LATW;
+            else begin
+              if (!line_request) cpu_ready <= 1'b1;
+              state <= S_RESP;
+            end
           end else begin
             byte_index <= byte_index + 4'd1;
             state <= S_READ_ISSUE;
           end
+        end
+
+        // XE10's read latency: the word is in read_data; the accept (and the response a cycle
+        // after it, in S_RESP) waits until the hold its start loaded runs out. `rd_hold` is a
+        // LEVEL (the counter's non-zero state under Xe10), so a reset or a flip to Fast releases it.
+        S_LATW: if (!rd_hold) begin
+          cpu_ready <= 1'b1;
+          state <= S_RESP;
         end
 
         S_RESP: begin
@@ -308,7 +453,7 @@ module pc9821_window_responder (
 
         S_WRITE: begin
           if (current_write_enabled) begin
-            if (route_cg) begin
+            if (walk_cg) begin
               byte_din <= write_data[{byte_index[1:0], 3'b000} +: 8];
               byte_we  <= 1'b1;
             end else begin
@@ -318,7 +463,7 @@ module pc9821_window_responder (
             end
             state <= S_WRITE_COMMIT;
           end else if (last_byte) begin
-            cpu_ready <= 1'b1;
+            if (!posted_q) cpu_ready <= 1'b1;
             state <= S_HOLD;
           end else begin
             byte_index <= byte_index + 4'd1;
@@ -328,7 +473,7 @@ module pc9821_window_responder (
         // The backend samples the registered strobe/address/data on this edge.
         S_WRITE_COMMIT: begin
           if (last_byte) begin
-            cpu_ready <= 1'b1;
+            if (!posted_q) cpu_ready <= 1'b1;
             state <= S_HOLD;
           end else begin
             byte_index <= byte_index + 4'd1;
@@ -368,6 +513,13 @@ module pc9821_window_responder (
       endcase
     end
   end
+
+  // synthesis translate_off
+  // R8: a line read carries all four byte enables (tx_2w above has no line-read term).
+  always @(posedge clk)
+    if (!reset && cpu_valid && cpu_line_read && (cpu_be != 4'hF))
+      $error("pc9821_window_responder: a line read with byte enables %b (z486 presents 1111)", cpu_be);
+  // synthesis translate_on
 
 endmodule
 

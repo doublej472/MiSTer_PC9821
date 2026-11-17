@@ -219,9 +219,22 @@ module tb_pc9821_gvram_line_page;
       errors = errors + 1;
     end
 
+    // The mirror: clear page 1's target again, so a page-0 visit store that strays onto page 1
+    // is seen there.
+    cpu_op(1'b1, 2'd0, 15'h1000, 1'b1, 32'h0000_0000, d);
     line_read(1'b1, 2'd2, BASE, 1'b1, 1'b0);
     if (!granted_mid_walk) fail("the page-0 visit was not granted during the page-1 line walk (vacuous case)");
     check_line(1'b1, 2'd2, "page 1 line, page 0 visit granted mid-walk");
+    cpu_op(1'b0, 2'd0, 15'h1000, 1'b0, 32'd0, d);
+    if (d !== 32'h5A5A_5A5A) begin
+      $display("FAIL the page-0 visit's store: page 0 plane 0 0x1000 reads %08x, want 5a5a5a5a", d);
+      errors = errors + 1;
+    end
+    cpu_op(1'b1, 2'd0, 15'h1000, 1'b0, 32'd0, d);
+    if (d !== 32'h0000_0000) begin
+      $display("FAIL the page-0 visit's store reached page 1: plane 0 0x1000 reads %08x, want 00000000", d);
+      errors = errors + 1;
+    end
 
 // ==== VERDICT ====
     if (errors != 0) begin

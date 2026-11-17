@@ -2,7 +2,6 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_DEVICE_SELECT: Every one of the 65,536 port addresses gets the device-bus select vector the decode it replaced produced, plus the PC-9801-118 game port: the whole 10-bit vector is compared against a fixture of the addresses that assert.
-// Every one of the 65,536 port addresses gets the same device-bus select vector it got from the decode this module replaced: the whole 9-bit vector is compared against a fixture of the addresses that assert.
 //
 // THE CLAIM, SPLIT BY WARRANT CLASS (the fixture used to be one
 // golden "captured from the expressions this module replaced", which proved refactor
@@ -16,10 +15,14 @@
 //     be cited as "the decode is right".
 //   * OPEN QUESTION: filed under the existing hwprobe open questions (see each
 //     note) - the ranges no reference above backs.
-// A RE-DERIVATION FINDING, named: NP2kai attaches 0x1E8E ("some IDE BIOSes freeze
-// without it", cbus/ideio.c:2034-2040) which this decode does NOT assert ata_cs on -
-// a port-level divergence from the primary reference, left open (the sweep pins the
-// landed decode; closing the gap is a decode change, not a bench change).
+// A RE-DERIVATION FINDING, DECIDED: NP2kai attaches 0x1E8E to its IDE block (cbus/ideio.c
+// iocore_attachout/attachinp `0x1e8e`, ideio_o1e8e/ideio_i1e8e), and this decode does NOT
+// assert ata_cs (nor any device select) there. That is by design, not a gap: the port is
+// answered inside pc9821_iobus (hit[HX_1E8E]: the IDE work-RAM gate, read back as
+// {7'b1111_111, ide_ram_gate}, machine-exact per docs/probes/SHADOWW.TXT and R10.TXT's
+// 0x1E8E = FE, which tb_pc9821_system_integration asserts), so no device on the bus owns
+// it. The sweep asserts that explicitly at 0x1E8E (and that the GDC complement, which
+// iobus's own hit overrides, is all that is left there).
 //
 // The fixture is compact because the decode is sparse: 62 addresses assert
 // anything and gdc_cs, which is the complement of the rest, is checked against
@@ -252,6 +255,15 @@ module tb_pc9821_device_select;
         $fatal(1, "port %04x: %0d chip selects assert at once", addr, hot);
       if (interrupt_cs !== (pic_master_cs | pic_slave_cs | pit_cs))
         $fatal(1, "port %04x: interrupt_cs is not the 8259/PIT OR", addr);
+
+      // ---- 0x1E8E: answered by pc9821_iobus itself, never a device select --------------
+      // NP2kai hangs it on its IDE block; here the iobus's own hit[HX_1E8E] answers it (the
+      // work-RAM gate), so the ATA must NOT be selected and no device may own the port.
+      if (addr == 16'h1E8E) begin
+        if (ata_cs !== 1'b0 || mask_full !== 11'd0 || dev_bus_cs !== 1'b0)
+          $fatal(1, "port 1e8e: a device select (ata_cs=%b vector=%03x dev_bus=%b) claims the port pc9821_iobus answers itself",
+                 ata_cs, mask_full, dev_bus_cs);
+      end
 
       // ---- the SDRAM phase instrument: off, nothing; on, exactly its two ports ----------
       if (sdph_cs !== 1'b0)

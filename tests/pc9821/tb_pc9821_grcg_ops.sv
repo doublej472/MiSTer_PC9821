@@ -163,7 +163,7 @@ module tb_pc9821_grcg_ops;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a GVRAM access never became ready: the datapath stopped answering");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG_OPS: FAIL (hang: a GVRAM access never became ready: the datapath stopped answering)");
         end
       end
       if (!wr) begin
@@ -173,7 +173,7 @@ module tb_pc9821_grcg_ops;
           wd = wd + 1;
           if (wd == 400) begin
             fail("a GVRAM read never returned a response");
-            $finish;
+            $fatal(1, "TB_PC9821_GRCG_OPS: FAIL (hang: a GVRAM read never returned a response)");
           end
         end
         #1; dout = cpu_dout;
@@ -186,7 +186,7 @@ module tb_pc9821_grcg_ops;
         wd = wd + 1;
         if (wd == 400) begin
           fail("the GVRAM datapath never returned to idle");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG_OPS: FAIL (hang: the GVRAM datapath never returned to idle)");
         end
       end
       repeat (2) @(posedge clk);

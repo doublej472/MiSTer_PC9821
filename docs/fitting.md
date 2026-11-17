@@ -53,7 +53,10 @@ untracked non-ignored files under 1 MiB) to `<host>:~/fits/<run-id>/tree`, start
 there in its own session under a shared `host_slots` ceiling (`--slot-max`, default 12, with a load gate at the host's core count, `--max-load`; slots in
 `~/.fit-slots`, counting every running container), waits, then rsyncs the whole `sweep/` back to
 `.build/remote-fit/<run-id>/` (every `seedNNN/output_files`, `summary.txt`, `metrics.json`, logs) and
-prints the ranking. Nothing is deleted on either side. `--no-wait` returns at once; `status`,
+prints the ranking. The fetch fails on an rsync partial transfer (exit 23; 24, vanished files, is
+tolerated) and when a seed whose `summary.txt` says `verdict=passed` came back without
+`output_files/*.rbf` or `output_files/sdram_io.txt`, so the ranking never names a seed it cannot
+deploy. Nothing is deleted on either side. `--no-wait` returns at once; `status`,
 `fetch`, `report` and `list` take `--run-id` (default: the last launch); `--selftest` covers the
 snapshot and argument logic. The `pll_hdmi` deploy gate (`--min-other-setup`, `--min-positive`,
 `--min-seeds`) is forwarded to the sweep on the host AND applied to the report fetched back, and

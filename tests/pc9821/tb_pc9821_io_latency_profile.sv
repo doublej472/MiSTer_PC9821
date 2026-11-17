@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_IO_LATENCY_PROFILE: The OSD's I/O timing field (pc9821_iobus io_timing_xe10), measured end to end through the real pc9821_iobus at 50 MHz: FAST (0, the default) is today's table EXACTLY - every class but the 8253 WRITE is the FSM floor IO_MIN_HOLD = 4 (0x005F both ways: its write is posted), the 8253 write the ITF self-test's one 2.4576 MHz tick (21 clk), and a word access two floors; XE10 (1) makes each WHOLE I/O instruction - the bus time measured here plus the core CPU's own 8 clk_sys around it (docs/probes/core/KIT2-CORE-SPEED.TXT: `in al,dx` 12 clk in Fast around a 4-clk access) - the Xe10's measured time within one clk and never short of it, every value the net_ns of an XE10T /IO row (docs/probes/XE10T-XE10.TXT): default read 791.5 / write 823.3 ns, 0x5F read 788.4 (its write posted, the floor), EGC 0x6A read 349.7, the fast write class 314.7-317.9 on 0x6A, 0x7E, 0x64 and 0xA4, text GDC 413.3, graphics GDC 639.0, the 8253 read 791.5 and write at the default write, the EGC file's even read 5989.1 and odd read 791.5, 0x09A0/0x09A8 352.9 and 0x0FAA 254.3 - and a 16-bit access costs ONE class (R16_005C 791.5, R16_0188 788.4, W16_04A8 314.7; within two clk, the high lane's walk cycle included), and `in al,dx` at 0x02 and 0xA0 sits on kit 2's SPEED (docs/probes/KIT2-XE10-SPEED.TXT: 802.30 and 650.77 ns net) within XE10T's own disagreement with it plus one clk; no Xe10 access is faster than its Fast one, and a third iobus whose input is flipped at run time, with no reset, measures Fast's list before the flip and Xe10's after it, access for access. FAIL-FIRST: before the field the bus had no Xe10 table at run time (IO_LATENCY_PROFILE was a compile-time parameter), and the faithful table it replaces charged IO.TXT's times on the bus alone, 8 clk (160 ns) over the machine's instruction, and two classes for a word.
+// TB_PC9821_IO_LATENCY_PROFILE: The OSD's I/O timing field (pc9821_iobus io_timing_xe10), measured end to end through the real pc9821_iobus at 50 MHz: FAST (0, the default) is today's table EXACTLY - every class but the 8253 WRITE is the FSM floor IO_MIN_HOLD = 4 (0x005F both ways: its write is posted), the 8253 write the ITF self-test's one 2.4576 MHz tick (21 clk), and a word access two floors; XE10 (1) makes each WHOLE I/O instruction - the bus time measured here plus the core CPU's own 8 clk_sys around it (docs/probes/core/KIT2-CORE-SPEED.TXT: `in al,dx` 12 clk in Fast around a 4-clk access) - the Xe10's measured time within one clk and never short of it, every value the net_ns of an XE10T /IO row (docs/probes/XE10T-XE10.TXT): default read 791.5 / write 823.3 ns, 0x5F read 788.4 (its write posted, the floor), EGC 0x6A read 349.7, the fast write class 314.7-317.9 on 0x6A, 0x7E, 0x64 and 0xA4, text GDC 413.3, graphics GDC 639.0, the 8253 read 791.5 and write at the default write, the EGC file's even read 5989.1 and odd read 791.5, 0x09A0/0x09A8 352.9 and 0x0FAA 254.3 - and a 16-bit access costs ONE class (R16_005C 791.5, R16_0188 788.4, W16_04A8 314.7; within two clk, the high lane's walk cycle included); XE10W /MISAL2's word I/O (docs/probes/XE10W-XE10-MIS2RUN1.TXT and -MIS2RUN2.TXT) holds within two clk too: the CG latches 0xA3 and 0xA5 write at the fast class (0xA3 317.8 ns, IOOB_3 699.4 less W8_00A4 314.7 and IOIB_3's inc/dec 66.9), a word WRITE at lanes 1-2 costs one class like a pair (IOOW_5 `out dx,ax` at 0xA5 317.9 = IOOW_4 at 0xA4 317.9), and a word READ there both lanes' classes less 127.1 ns (IOIW_1 `in ax,dx` at 0x31 1455.9 against IOIW_0/IOIW_2 at 0x30/0x32 791.5), with Fast's floors unmoved; and `in al,dx` at 0x02 and 0xA0 sits on kit 2's SPEED (docs/probes/KIT2-XE10-SPEED.TXT: 802.30 and 650.77 ns net) within XE10T's own disagreement with it plus one clk; no Xe10 access is faster than its Fast one, and a third iobus whose input is flipped at run time, with no reset, measures Fast's list before the flip and Xe10's after it, access for access. FAIL-FIRST: before the field the bus had no Xe10 table at run time (IO_LATENCY_PROFILE was a compile-time parameter), and the faithful table it replaces charged IO.TXT's times on the bus alone, 8 clk (160 ns) over the machine's instruction, and two classes for a word; before XE10W the default write class priced 0xA3 (840 ns) and 0xA5, and the odd word paid two full classes (IOOW_5 1160 ns, IOIW_1 1600 ns).
 
 `default_nettype none
 
@@ -56,6 +56,22 @@ module tb_pc9821_io_latency_profile;
   // `in al,dx` at 0x02 (the default class) and 0xA0 (the graphics GDC) less its dec/jnz shell.
   localparam integer NS_SPEED_IN02 = 802;
   localparam integer NS_SPEED_INA0 = 651;
+  // XE10W /MISAL2's word I/O rows, the Xe10's net_ns (docs/probes/XE10W-XE10-MIS2RUN1.TXT and
+  // -MIS2RUN2.TXT, decoded by xe10t_decode.py; n = 1024 accesses per row, both runs alike):
+  //   IOOW_4 `out dx,ax` at 0xA4      317.9 / 317.9  - an even pair: one fast write class
+  //   IOOW_5 `out dx,ax` at 0xA5      317.9 / 314.7  - lanes 1-2 (0xA5, 0xA6): STILL one class
+  //   IOOB_3 `out dx,al` 0xA3, inc dx, `out dx,al` 0xA4, dec dx   699.4 / 693.0
+  //   IOIW_0 `in ax,dx` at 0x30, IOIW_2 at 0x32   791.5 - one default read class each
+  //   IOIW_1 `in ax,dx` at 0x31       1455.9 / 1455.9 - lanes 1-2: two classes less 127.1
+  //   IOIB_3 `in al,dx` 0x33, inc dx, `in al,dx` 0x34, dec dx     1649.9 / 1653.0
+  // The 0xA3 byte write is IOOB_3 less W8_00A4 (314.7, XE10T) and the inc/dec, which IOIB_3
+  // prices at 1649.9 - 2 x 791.5 = 66.9: 699.4 - 314.7 - 66.9 = 317.8, the fast write class.
+  localparam integer NS_IOOW_4 = 318;
+  localparam integer NS_IOOW_5 = 318;
+  localparam integer NS_A3_W   = 318;
+  localparam integer NS_IOIW_0 = 792;
+  localparam integer NS_IOIW_2 = 792;
+  localparam integer NS_IOIW_1 = 1456;
 
   // THE CORE CPU'S OWN SHARE OF AN I/O INSTRUCTION, which the Xe10 table takes off the bus so
   // the WHOLE instruction costs the machine's time. A measurement of THIS core, not a hardware
@@ -77,7 +93,7 @@ module tb_pc9821_io_latency_profile;
 
   reg reset = 1'b1;
 
-  localparam integer NM = 23;   // the measurement list in lat_probe (M_* below)
+  localparam integer NM = 29;   // the measurement list in lat_probe (M_* below)
   // ---- three DUTs at one clock: Fast (io_timing_xe10 tied 0), Xe10 (tied 1), and a third
   // ---- whose input the bench FLIPS at run time, with no reset, between two measurement runs.
   wire [15:0] f_c [0:NM-1];
@@ -92,7 +108,9 @@ module tb_pc9821_io_latency_profile;
                      M_GDC1_R = 9, M_GDC2_R = 10, M_PIT_R = 11, M_PIT_W = 12,
                      M_EGCF_EVEN_R = 13, M_EGCF_ODD_R = 14, M_9A0_R = 15, M_9A8_R = 16,
                      M_FAA_R = 17, M_W16_5C = 18, M_W16_188 = 19, M_W16_4A8_W = 20,
-                     M_02_R = 21, M_A0_R = 22;
+                     M_02_R = 21, M_A0_R = 22,
+                     M_A3_W = 23, M_W16_A4_W = 24, M_W16_A5_W = 25,
+                     M_W16_30 = 26, M_W16_32 = 27, M_W16_31 = 28;
 
   lat_probe #(.HZ(CLK_HZ), .NM(NM)) p_fast (.clk(clk), .reset(reset), .xe10(1'b0), .go(f_go),
                                             .done(f_done), .c(f_c));
@@ -214,6 +232,13 @@ module tb_pc9821_io_latency_profile;
     check_cyc("Fast word write 0x4A8", f_c[M_W16_4A8_W], 2 * MIN_FLOOR);
     check_cyc("Fast 0x0002 read",   f_c[M_02_R],   MIN_FLOOR);
     check_cyc("Fast 0x00A0 read",   f_c[M_A0_R],   MIN_FLOOR);
+    check_cyc("Fast 0x00A3 write",  f_c[M_A3_W],   MIN_FLOOR);
+    check_cyc("Fast word write 0xA4", f_c[M_W16_A4_W], 2 * MIN_FLOOR);
+    check_cyc("Fast word write 0xA5", f_c[M_W16_A5_W], 2 * MIN_FLOOR);
+    // 0x30's word read is terminated at 0x31 (its one walk cycle, no class), as in io_class.
+    check_cyc("Fast word read 0x30", f_c[M_W16_30], MIN_FLOOR + 1);
+    check_cyc("Fast word read 0x32", f_c[M_W16_32], MIN_FLOOR + 1);
+    check_cyc("Fast word read 0x31", f_c[M_W16_31], 2 * MIN_FLOOR);
 
     $display("  ---- Xe10 (io_timing_xe10 1): the machine's whole-instruction times ----");
     check_x("default read",   x_c[M_DEF_R],  NS_DEF_R, 1);
@@ -241,6 +266,16 @@ module tb_pc9821_io_latency_profile;
     check_x("word write 0x4A8", x_c[M_W16_4A8_W], NS_FAST_W, 2);
     check_x("0x0002 read",    x_c[M_02_R],   NS_DEF_R, 1);
     check_x("0x00A0 read",    x_c[M_A0_R],   NS_GDC2_R, 1);
+    // XE10W /MISAL2: the CG latches 0xA3/0xA5 write at the fast class, a word write at lanes
+    // 1-2 costs one class like a pair, and a word read there costs two classes less the
+    // measured 127.1 ns overlap. FAIL-FIRST against the default-class 0xA3/0xA5 and the
+    // two-class odd word: 823 ns for 0xA3, 0xA5's 823 + 0xA6's 318 for IOOW_5, 2 x 792 for IOIW_1.
+    check_x("0x00A3 write",      x_c[M_A3_W],     NS_A3_W, 1);
+    check_x("word write 0xA4",   x_c[M_W16_A4_W], NS_IOOW_4, 2);
+    check_x("word write 0xA5",   x_c[M_W16_A5_W], NS_IOOW_5, 2);
+    check_x("word read 0x30",    x_c[M_W16_30],   NS_IOIW_0, 2);
+    check_x("word read 0x32",    x_c[M_W16_32],   NS_IOIW_2, 2);
+    check_x("word read 0x31",    x_c[M_W16_31],   NS_IOIW_1, 2);
     check_speed("in al,dx 0x02", x_c[M_02_R], NS_DEF_R, NS_SPEED_IN02);
     check_speed("in al,dx 0xA0", x_c[M_A0_R], NS_GDC2_R, NS_SPEED_INA0);
     // Nothing in Xe10 is faster than Fast: the posted 0x5F write is the floor in both, and
@@ -253,6 +288,9 @@ module tb_pc9821_io_latency_profile;
              x_c[M_GDC1_R], x_c[M_GDC2_R], x_c[M_PIT_R], x_c[M_PIT_W],
              x_c[M_EGCF_EVEN_R], x_c[M_EGCF_ODD_R], x_c[M_9A0_R], x_c[M_FAA_R],
              x_c[M_W16_5C], x_c[M_W16_188], x_c[M_W16_4A8_W], CPU_CYC);
+    $display("    Xe10 bus clk, MISAL2 rows: A3 %0d IOOW_4 %0d IOOW_5 %0d IOIW_0 %0d IOIW_2 %0d IOIW_1 %0d (+%0d CPU)",
+             x_c[M_A3_W], x_c[M_W16_A4_W], x_c[M_W16_A5_W], x_c[M_W16_30], x_c[M_W16_32],
+             x_c[M_W16_31], CPU_CYC);
 
     // ==== VERDICT ====
     if (errors == 0) begin
@@ -278,7 +316,7 @@ endmodule
 // ------------------------------------------------------------------
 `default_nettype none
 module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
-                   parameter integer NM = 23) (
+                   parameter integer NM = 29) (
     input  wire        clk,
     input  wire        reset,
     input  wire        xe10,
@@ -378,6 +416,7 @@ module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -462,6 +501,12 @@ module lat_probe #(parameter [31:0] HZ = 32'd50_000_000,
       measure(16'h04A8, 4'b0011, 1'b1, c[20]);        // `out 0x4A8,ax`: W16_04A8
       measure(16'h0002, be1(16'h0002), 1'b0, c[21]);  // SPEED's IN02: the master PIC's mask
       measure(16'h00A0, be1(16'h00A0), 1'b0, c[22]);  // SPEED's INA0: the graphics GDC status
+      measure(16'h00A3, be1(16'h00A3), 1'b1, c[23]);  // `out 0xA3,al`: the CG code-low latch
+      measure(16'h00A4, 4'b0011, 1'b1, c[24]);        // IOOW_4: `out dx,ax` at 0xA4
+      measure(16'h00A5, 4'b0110, 1'b1, c[25]);        // IOOW_5: `out dx,ax` at 0xA5 (0xA5, 0xA6)
+      measure(16'h0030, 4'b0011, 1'b0, c[26]);        // IOIW_0: `in ax,dx` at 0x30
+      measure(16'h0032, 4'b1100, 1'b0, c[27]);        // IOIW_2: `in ax,dx` at 0x32
+      measure(16'h0031, 4'b0110, 1'b0, c[28]);        // IOIW_1: `in ax,dx` at 0x31 (0x31, 0x32)
       done = 1'b1;
       wait (!go);
       done = 1'b0;

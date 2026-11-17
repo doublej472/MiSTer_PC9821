@@ -53,7 +53,12 @@ module pc9821_pic #(
     // Lines whose latched request is withdrawn by the device line's falling edge
     // whether masked or not: the acking-register-read lines (IRQ1), whose falling
     // edge MEANS the request was consumed. See the header.
-    parameter [7:0] WD_UNMASKED = 8'h00
+    parameter [7:0] WD_UNMASKED = 8'h00,
+    // Withdraw lines (of WD_MASK / WD_UNMASKED) whose falling edge withdraws only once the
+    // line has stayed low for a SECOND cycle, so a producer's one-cycle bubble (SCED R6: a
+    // line dropped for one cycle to give a new event its rising edge) never withdraws a
+    // request that is still pending. See the WD_FILTER note at ir_wd_eff.
+    parameter [7:0] WD_FILTER = 8'h00
 ) (
     input wire clk,
     input wire rst_n,
@@ -110,6 +115,7 @@ module pc9821_pic #(
   reg [2:0] pry;           // OCW2 priority pointer
   reg     [7:0] ir_latch;
   reg     [7:0] ir_prev;  // registered IR inputs (rising-edge detector)
+  reg     [7:0] ir_prev2; // ir_prev one cycle later (the WD_FILTER lines' held-low test)
   reg     [2:0] int_hold; // cycles to keep INT deasserted after an ack
 
   // the highest-priority unmasked, unserviced request (declared before ir_clr,
@@ -139,7 +145,7 @@ module pc9821_pic #(
   wire    [7:0] isr_blk_src = sfnm_cascade ? (isr_eff & 8'h7F) : isr_eff;
   // PRIORITY IS COUNTED FROM THE OCW2 POINTER, NOT FROM IRQ0. Rotate the
   // in-service levels so rotated index 0 IS the level `pry` makes highest - the order
-  // the `highest` scan above already walks - then a cumulative OR over that order is a
+  // the `highest` scan below (first_from) walks - then a cumulative OR over that order is a
   // cumulative OR over priority, and rotating the result back names the levels it
   // blocks. QEMU reaches the same answer by comparing the request's priority against
   // the one derived from the ISR relative to s->priority_add (hw/intc/i8259.c:80-105).
@@ -175,17 +181,25 @@ module pc9821_pic #(
   // see the WD_MASK header note). ir_fall and ir_set can never name the same bit,
   // so there is no set-vs-withdraw collision to resolve.
   wire    [7:0] ir_fall   = ~ir_in & ir_prev;
-  wire    [7:0] ir_wd_eff = ir_fall & ((WD_MASK & imr) | WD_UNMASKED);
+  // WD_FILTER: on these lines the withdraw is taken one cycle later, when the line is STILL
+  // low (high, low, low), so a one-cycle bubble (high, low, high) withdraws nothing. The
+  // bubble is how pc9821_irq_share and pc9821_pcm86 give an event under an already-high INT5
+  // line its own rising edge; its falling edge withdrawing the latched IR4 (and, through the
+  // slave's int_out, the master's IR7) let an INTA in those cycles take INT 17h or INT 0Fh
+  // for a request that was pending all along. NP2kai has no such gap: a second event while a
+  // request is pending only sets the IRR bit again (io/pic.c:262 `pi[1].irr |= bit;`).
+  // tb_pc9821_irq_share_race. A held-low cycle has ir_in = 0, so ir_set cannot name the bit.
+  wire    [7:0] ir_fall_held = ~ir_in & ~ir_prev & ir_prev2;
+  wire    [7:0] ir_wd_fall   = (ir_fall & ~WD_FILTER) | (ir_fall_held & WD_FILTER);
+  wire    [7:0] ir_wd_eff = ir_wd_fall & ((WD_MASK & imr) | WD_UNMASKED);
   wire    [7:0] ir_clr_all = ir_clr | ir_wd_eff;
   assign int_irq = highest;
 
   // OCW2's level and the request scan both start at the priority pointer and wrap
   // (NP2kai io/pic.c:156-166 and :295-305: `num = pry; while(!(mir & (1<<num)))
-  // num = (num+1) & 7;`). k = 7..0 with idx = (pry+k)&7 makes pry win last, i.e.
-  // highest priority.
+  // num = (num+1) & 7;`), so `pry` is the highest priority.
   // The first set level counting up from `pry` and wrapping: the lowest set bit at or above
-  // `pry`, else the lowest set bit overall (two fixed priority encoders and a select, where the
-  // 8-step scan indexed by pry + k built eight 8:1 muxes).
+  // `pry`, else the lowest set bit overall (two fixed priority encoders and a select).
   function automatic [3:0] low_enc(input [7:0] x);   // {valid, index of the lowest set bit}
     begin
       low_enc = x[0] ? 4'b1000 : x[1] ? 4'b1001 : x[2] ? 4'b1010 : x[3] ? 4'b1011 :
@@ -238,6 +252,7 @@ module pc9821_pic #(
       pry           <= 3'd0;
       ir_latch      <= 8'h00;
       ir_prev       <= 8'h00;
+      ir_prev2      <= 8'h00;
       int_out       <= 1'b0;
       int_hold      <= 3'd0;
       int_vec       <= 8'h00;
@@ -246,20 +261,23 @@ module pc9821_pic #(
     end else begin
       // 8259 edge-triggered request latch: set on a rising edge of IR, held until INTA
       // clears the serviced bit. A still-held level does NOT re-set after INTA (no new
-      // edge), and a falling edge does not withdraw an unacknowledged request (short PIT
-      // pulses survive).
+      // edge). A falling edge withdraws an unacknowledged request ONLY on the lines
+      // WD_MASK (while masked) and WD_UNMASKED name (ir_wd_eff above; the header's
+      // IRQWD measurements); on every other line a short pulse survives to INTA.
       //
       // SINGLE assignment: the edge latch and the INTA clear are folded into one
-      // expression. A separate `ir_latch[highest] <= 1'b0` NBA races with this
-      // whole-vector update - the clear is lost and every interrupt re-asserts forever.
-      // SET WINS on a same-bit collision (race-idiom R3): a rising edge landing on the
+      // expression. A separate `ir_latch[highest] <= 1'b0` would be a second NBA to the
+      // same vector, overridden by this whole-vector update: the clear would be lost and
+      // every interrupt would re-assert forever.
+      // SET WINS on a same-bit collision (docs/single-cycle-event-discipline.md R3): a rising edge landing on the
       // acknowledge edge of the same level is a NEW request - the ack consumed the old
       // one - and `(latch | set) & ~clr` ate it, losing one interrupt per acknowledge
       // window with no way for an edge source to re-request. tb_pc9821_pic's
       // same-cycle collision case pins this.
       ir_prev  <= ir_in;
+      ir_prev2 <= ir_prev;
       // clear = INTA (ir_clr) OR the machine's masked falling-edge withdraw
-      // (ir_wd_eff); SET WINS on a same-bit collision (race-idiom R3).
+      // (ir_wd_eff); SET WINS on a same-bit collision (docs/single-cycle-event-discipline.md R3).
       ir_latch <= (ir_latch & ~ir_clr_all) | ir_set;
 
       // I/O write
@@ -288,6 +306,16 @@ module pc9821_pic #(
             smm         <= 1'b0;
             pry         <= 3'd0;
             rotate_on_aeoi <= 1'b0;
+            // IC4=0: no ICW4 follows, and the ICW4 functions are zeroed rather than
+            // kept from the previous ICW4 (Intel 8259A data sheet, ICW1 sequence item f:
+            // "If IC4 = 0, then all functions selected in ICW4 are set to zero";
+            // QEMU's ICW1 runs pic_reset_common, hw/intc/i8259_common.c:48
+            // `s->auto_eoi = 0;` and :50 `s->special_fully_nested_mode = 0;`). With
+            // IC4=1 the ICW4 that follows writes both. NP2kai models neither flag.
+            if (!din[0]) begin
+              aeoi      <= 1'b0;
+              icw4_sfnm <= 1'b0;
+            end
           end else if (din[3]) begin
             // OCW3: A0=0, D4=0, D3=1
             // RIS selects the ISR only when RR is set as well (QEMU hw/intc/i8259.c and
@@ -369,8 +397,7 @@ module pc9821_pic #(
             3'd7: isr[7] <= 1'b1;
           endcase
         end
-        // ir_latch is cleared only via ir_clr in the single vector NBA
-        // above; a second per-bit NBA raced with it.
+        // ir_latch is cleared only via ir_clr in the single vector NBA above (see there).
         // AEOI rotate-on-acknowledge (ao486 pic.v): the not-spurious ack advances the
         // priority pointer so the just-serviced level becomes lowest priority. It must advance
         // from the level ACTUALLY acknowledged, not from the old base: QEMU's pic_intack sets

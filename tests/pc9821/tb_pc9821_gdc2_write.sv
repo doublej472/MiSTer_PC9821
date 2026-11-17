@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The graphics GDC's WRITE command executes against the ITF's own GVRAM pattern test: the exact BANK4@0xFA70F stream (GRCG TDW tiles 0x33/0x55, VECTW then CSRW 00 40 08, WRITE FF FF) reads back the tile words 0x3333 at 0xA8000 and 0x5555 at 0xB0000 exactly as the Xe10 does - the test that SETS BIOS work-area 0000:054D bit 6, the FLAMEZAP boot check - and with the GRCG never armed those tile words are ABSENT, so the bit becomes correct because the test genuinely passes and never because it is forced. The write's data path is the machine's own WDAT_WORD/GDCWG rows: the uPD7220's internal bit order lands per-byte bit-reversed in CPU VRAM (GDCCURS's MASK_0001 reads expected-cpu=0080), CURS.WG - bit 3 of CSRW's third byte - selects the WDAT word directly or the 7220's bit-0 replication of it, and the four ROPs paint the mask bits with the pattern exactly as the STRICT capture rows say (W_0_FFFF_0000_0001 lands FF7F, W_2_FFFF_0001_A55A lands 5AA5, which refutes NP2kai gdcsub_write's clear formula; the capture wins) - fifteen capture vectors replayed byte for byte. Multi-unit draws walk ONE DOT along the VECTW direction per unit and advance the cursor, exactly WDAT_STEP's observed pixels (dir 0 paints word 0x0800 and leaves the cursor at 0x0828 = +40 words, dir 1 paints (0x0800,D7) and (0x0828,D8), dir 2 paints D7 then D8 inside word 0x0800, dir 3 paints (0x0800,D7) and (0x07D8,D8); directions 4-7 and the three-unit draws replay the same capture's STEP_DC01_D4..D7 and STEP_DC02_D1..D7 rows), with the cursor write-back readable over CSRR's first two bytes (the raw_curd EAD the machine reports); a second draw queued while the first walks lands its own capture outcome and nothing is dropped, and three WRITEs chained with no CSRW between them while the first still walks run in order on the cursor each one leaves (one 48-row dir-0 column from word 0x0800, every word 0x0001 as WDAT_STEP's rows paint it) with a CURD written behind them answering the advanced cursor 0x8F80, as the uPD7220's FIFO and NP2kai gdc_work's in-order execution (io/gdc.c:347-349) do. The GRCG-RMW and EGC routes carry each unit as ONE store visit on the GVRAM port share - the route latched per draw exactly as NP2kai's gdcpset_prepare latches its pset functions (io/gdc_pset.c:117-137) - and are checked DIFFERENTIALLY against the CPU path's own store of the same word, so no expected pixel is ever derived from this repo's RTL. It does not cover the FIFO/drawing-busy timing (the conformance capture's FIFO_TURN/STATE rows), the CURD read-back's five-byte shape, or the FIGD/line/rect/arc command space.
+// The graphics GDC's WRITE command executes against the ITF's own GVRAM pattern test: the exact BANK4@0xFA70F stream (GRCG TDW tiles 0x33/0x55, VECTW then CSRW 00 40 08, WRITE FF FF) reads back the tile words 0x3333 at 0xA8000 and 0x5555 at 0xB0000 exactly as the Xe10 does - the test that SETS BIOS work-area 0000:054D bit 6, the FLAMEZAP boot check - and with the GRCG never armed those tile words are ABSENT, so the bit becomes correct because the test genuinely passes and never because it is forced. The write's data path is the machine's own WDAT_WORD/GDCWG rows: the uPD7220's internal bit order lands per-byte bit-reversed in CPU VRAM (GDCCURS's MASK_0001 reads expected-cpu=0080), CURS.WG - bit 3 of CSRW's third byte - selects the WDAT word directly or the 7220's bit-0 replication of it, and the four ROPs paint the mask bits with the pattern exactly as the STRICT capture rows say (W_0_FFFF_0000_0001 lands FF7F, W_2_FFFF_0001_A55A lands 5AA5, which refutes NP2kai gdcsub_write's clear formula; the capture wins) - fifteen capture vectors replayed byte for byte. Multi-unit draws walk ONE DOT along the VECTW direction per unit and advance the cursor, exactly WDAT_STEP's observed pixels (dir 0 paints word 0x0800 and leaves the cursor at 0x0828 = +40 words, dir 1 paints (0x0800,D7) and (0x0828,D8), dir 2 paints D7 then D8 inside word 0x0800, dir 3 paints (0x0800,D7) and (0x07D8,D8); directions 4-7 and the three-unit draws replay the same capture's STEP_DC01_D4..D7 and STEP_DC02_D1..D7 rows), with the cursor write-back readable over CSRR's first two bytes (the raw_curd EAD the machine reports); a second draw queued while the first walks lands its own capture outcome and nothing is dropped, and three WRITEs chained with no CSRW between them while the first still walks run in order on the cursor each one leaves (one 48-row dir-0 column from word 0x0800, every word 0x0001 as WDAT_STEP's rows paint it) with a CURD written behind them answering the advanced cursor 0x8F80, as the uPD7220's FIFO and NP2kai gdc_work's in-order execution (io/gdc.c:347-349) do. The GRCG-RMW and EGC routes carry each unit as ONE store visit on the GVRAM port share - the route latched per draw exactly as NP2kai's gdcpset_prepare latches its pset functions (io/gdc_pset.c:117-137) - and are checked DIFFERENTIALLY against the CPU path's own store of the same word, so no expected pixel is ever derived from this repo's RTL. Two-unit draws replay the Xe10's GDCADDR ADDR_BOUNDARY and ADDR_PITCH_CARRY rows (docs/probes/gdc-conformance/xe10-2.5MHz/GDCADDR.CSV): a full MASK FFFF stays FFFF along x with the EAD stepping a whole word per unit (BND_04000_D2 paints B:0000 and B:0001), the walk carries and borrows into the plane bits (BND_03FFF_D2 paints E:3FFF then B:0000 and ends at 04001; BND_03FFF_D6, BND_04000_D6, BND_07FFF_D2/D6, BND_0BFFF_D2, BND_0C000_D6, BND_0FFFF_D2 and BND_10000_D6 likewise), and the y step is the PITCH command's value at 2.5 MHz (VP_001, VP_039, VP_040, VP_041, VP_080 and VP_255, dir 0 and 4: VP_039_D0 paints E:3FF0 then B:0017 and ends at 0403E) - each row's two painted words, a word the plane-local or PITCH-40 walk would paint instead left clear, and the CSRR EAD, byte 2 and MASK read back as the row's curd column, byte 2's low bits carrying and borrowing with the EAD past bit 15 (all 22 ADDR_BOUNDARY rows: BND_0FFFF_D2 reads F1, BND_1FFFF_D2 F2, BND_3FFFF_D2 F4, BND_3FFFF_D6 F3). Three parameter pairs under one WDAT are three draws on the advancing cursor (GDCWDAT WDAT_STREAM_3: R:0800..0803 read FFFF/0000/FFFF/0000, CURD 08803, MASK FFFF). It does not cover the FIFO/drawing-busy timing (the conformance capture's FIFO_TURN/STATE rows), the 5 MHz drawing step, a streamed byte-width WDAT, or the FIGD/line/rect/arc command space.
 
 module tb_pc9821_gdc2_write;
   reg clk_sys = 0;
@@ -292,6 +292,65 @@ module tb_pc9821_gdc2_write;
     end
   endtask
 
+  // The full CSRR answer: the EAD (bytes 0-1), byte 2 and the MASK (bytes 3-4) - the
+  // capture's `curd` column, e.g. `01-40-F0-FF-FF`.
+  task automatic csrr_all(output [15:0] ead, output [7:0] b2, output [15:0] msk);
+    reg [7:0] b [0:4];
+    integer k;
+    begin
+      io_a2(8'hE0);
+      for (k = 0; k < 5; k = k + 1) begin
+        @(negedge clk_sys);
+        io_addr = 8'hA2; io_rd = 1'b1;
+        @(negedge clk_sys);
+        io_rd = 1'b0;
+        @(negedge clk_sys);
+        b[k] = io_dout;
+      end
+      ead = {b[1], b[0]};
+      b2  = b[2];
+      msk = {b[4], b[3]};
+    end
+  endtask
+
+  // A GDCADDR ADDR_BOUNDARY / ADDR_PITCH_CARRY row replayed (docs/probes/gdc-conformance/
+  // xe10-2.5MHz/GDCADDR.CSV): PITCH `pitch`, CSRW `ead` (dAD 3, WG 0), MASK `mask`, VECTW
+  // `dir` DC 1, WDAT SET FFFF - two units. The two painted words are the row's `changes`
+  // ({GDC plane, word}: E = 0, B = 1, R = 2, G = 3; every one 0000>FFFF, `total_words=2`),
+  // and the cursor is its `curd` column: the EAD's low 16 bits, MASK and - when `chk_b2` -
+  // CSRR byte 2. `stray` is a word the row leaves unchanged (the plane-local wrap target),
+  // checked still clear.
+  task automatic addr_case(input [1023:0] name, input [7:0] pitch, input [2:0] dir,
+                           input [15:0] mask, input [17:0] ead,
+                           input [15:0] w0, input [15:0] w1, input [15:0] stray,
+                           input [15:0] exp_ead, input [15:0] exp_mask,
+                           input chk_b2, input [7:0] exp_b2);
+    reg [15:0] w, rd_ead, rd_msk;
+    reg [7:0]  rd_b2;
+    begin
+      cpu_wr_word(w0[15:14] - 2'd1, {w0[13:0], 1'b0}, 16'h0000);   // GDC plane n = lane n-1
+      cpu_wr_word(w1[15:14] - 2'd1, {w1[13:0], 1'b0}, 16'h0000);
+      cpu_wr_word(stray[15:14] - 2'd1, {stray[13:0], 1'b0}, 16'h0000);
+      io_a2(8'h47); io_a0(pitch);                              // PITCH
+      io_a2(8'h49); io_a0(ead[7:0]); io_a0(ead[15:8]);         // CSRW, dAD 3, WG 0
+      io_a0({4'h3, 2'b00, ead[17:16]});
+      gdc_mask(mask);
+      gdc_vectw(dir, 16'd1);
+      gdc_write2(8'h23, 8'hFF, 8'hFF);
+      gdc_wait_idle;
+      cpu_rd_word(w0[15:14] - 2'd1, {w0[13:0], 1'b0}, w);
+      check16(w, 16'hFFFF, name);
+      cpu_rd_word(w1[15:14] - 2'd1, {w1[13:0], 1'b0}, w);
+      check16(w, 16'hFFFF, name);
+      cpu_rd_word(stray[15:14] - 2'd1, {stray[13:0], 1'b0}, w);
+      check16(w, 16'h0000, name);
+      csrr_all(rd_ead, rd_b2, rd_msk);
+      check16(rd_ead, exp_ead, name);
+      check16(rd_msk, exp_mask, name);
+      if (chk_b2) check16({8'd0, rd_b2}, {8'd0, exp_b2}, name);
+    end
+  endtask
+
   // ==== CHECKS ====
   initial begin
     reg [15:0] w, exp_cpu;
@@ -303,8 +362,8 @@ module tb_pc9821_gdc2_write;
 
     // ---- Section 1: the ITF's own GVRAM pattern test (BANK4@0xFA70F-0xFA757) ----
     // Expected values: the ITF's own comparison constants (0x3333/0x5555, the words
-    // the machine passes its test with - BIOS054D=50 on the Xe10, gdc-clock-REPORT
-    // section 4/5) and NP2kai's withtdw (io/gdc_pset.c:51-61: the tile word to every
+    // the machine passes its test with - BIOS054D=50 on the Xe10,
+    // docs/probes/KIT2-XE10-AUDIT2.TXT:6 `bda054D=50`) and NP2kai's withtdw (io/gdc_pset.c:51-61: the tile word to every
     // enabled plane per drawn unit). FAIL-FIRST: on the pre-change pc9821_gdc2 no
     // draw executes and both words read 0x0000, so this section fails there.
     $display("CHECK 1: the ITF's VECTW/CSRW/WRITE pattern test (flamezap-egc 7.1)");
@@ -575,6 +634,85 @@ module tb_pc9821_gdc2_write;
       end
       cpu_rd_word(2'd1, (15'h1000 + 15'd80 * 15'd48), w);
       check16(w, 16'h0000, "chain: the row past the last unit stays clear");
+    end
+
+    // ---- Section 9: the GDCADDR boundary and PITCH rows (the Xe10, 2.5 MHz) ----
+    // docs/probes/gdc-conformance/xe10-2.5MHz/GDCADDR.CSV, the ADDR_BOUNDARY and
+    // ADDR_PITCH_CARRY rows, each `wdat ... dc=1` (two units, every word 0000>FFFF). The
+    // machine's three facts: (a) a full MASK FFFF stays FFFF along x and the EAD steps one
+    // whole word per unit (BND_04000_D2 paints B:0000 and B:0001, curd `02-40-F0-FF-FF`);
+    // (b) the EAD carries and borrows into the plane bits 15:14 (BND_03FFF_D2 paints E:3FFF
+    // then B:0000 and ends at 04001); (c) the y step is the PITCH command's value
+    // (VP_039_D0: E:3FF0 then B:0017 = 03FF0 + 39, ending 0403E). `stray` is the word a
+    // plane-local wrap or the reset PITCH 40 would paint instead; the row changes only its
+    // two words, so it stays clear. CSRR byte 2 is the row's own: its low bits follow the
+    // EAD's carry past bit 15 (every ADDR_BOUNDARY row is replayed).
+    $display("CHECK 9: the GDCADDR boundary and PITCH rows");
+    //        name            pitch  dir  mask      ead       w0        w1        stray     EAD       MASK      b2?   b2
+    addr_case("BND_03FFF_D2", 8'd40, 3'd2, 16'hFFFF, 18'h03FFF, 16'h3FFF, 16'h4000, 16'h0000, 16'h4001, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_03FFF_D6", 8'd40, 3'd6, 16'hFFFF, 18'h03FFF, 16'h3FFE, 16'h3FFF, 16'h3FFD, 16'h3FFD, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_04000_D2", 8'd40, 3'd2, 16'hFFFF, 18'h04000, 16'h4000, 16'h4001, 16'h4002, 16'h4002, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_04000_D6", 8'd40, 3'd6, 16'hFFFF, 18'h04000, 16'h3FFF, 16'h4000, 16'h7FFF, 16'h3FFE, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_07FFF_D2", 8'd40, 3'd2, 16'hFFFF, 18'h07FFF, 16'h7FFF, 16'h8000, 16'h4000, 16'h8001, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_07FFF_D6", 8'd40, 3'd6, 16'hFFFF, 18'h07FFF, 16'h7FFE, 16'h7FFF, 16'h7FFD, 16'h7FFD, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_0BFFF_D2", 8'd40, 3'd2, 16'hFFFF, 18'h0BFFF, 16'hBFFF, 16'hC000, 16'h8000, 16'hC001, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_0C000_D6", 8'd40, 3'd6, 16'hFFFF, 18'h0C000, 16'hBFFF, 16'hC000, 16'hFFFF, 16'hBFFE, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_08000_D2", 8'd40, 3'd2, 16'hFFFF, 18'h08000, 16'h8000, 16'h8001, 16'h8002, 16'h8002, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_08000_D6", 8'd40, 3'd6, 16'hFFFF, 18'h08000, 16'h7FFF, 16'h8000, 16'hBFFF, 16'h7FFE, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_0BFFF_D6", 8'd40, 3'd6, 16'hFFFF, 18'h0BFFF, 16'hBFFE, 16'hBFFF, 16'hBFFD, 16'hBFFD, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_0C000_D2", 8'd40, 3'd2, 16'hFFFF, 18'h0C000, 16'hC000, 16'hC001, 16'hC002, 16'hC002, 16'hFFFF, 1'b1, 8'hF0);
+    // From here the EAD crosses 0x10000: CSRR byte 2's low bits carry and borrow with it
+    // (F1, F2, and F4 past 0x3FFFF - BND_3FFFF_D2 reads 01-00-F4, a bit 18).
+    addr_case("BND_0FFFF_D2", 8'd40, 3'd2, 16'hFFFF, 18'h0FFFF, 16'hFFFF, 16'h0000, 16'hC000, 16'h0001, 16'hFFFF, 1'b1, 8'hF1);
+    addr_case("BND_0FFFF_D6", 8'd40, 3'd6, 16'hFFFF, 18'h0FFFF, 16'hFFFE, 16'hFFFF, 16'hFFFD, 16'hFFFD, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_10000_D2", 8'd40, 3'd2, 16'hFFFF, 18'h10000, 16'h0000, 16'h0001, 16'h0002, 16'h0002, 16'hFFFF, 1'b1, 8'hF1);
+    addr_case("BND_10000_D6", 8'd40, 3'd6, 16'hFFFF, 18'h10000, 16'hFFFF, 16'h0000, 16'h3FFF, 16'hFFFE, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("BND_1FFFF_D2", 8'd40, 3'd2, 16'hFFFF, 18'h1FFFF, 16'hFFFF, 16'h0000, 16'hC000, 16'h0001, 16'hFFFF, 1'b1, 8'hF2);
+    addr_case("BND_1FFFF_D6", 8'd40, 3'd6, 16'hFFFF, 18'h1FFFF, 16'hFFFE, 16'hFFFF, 16'hFFFD, 16'hFFFD, 16'hFFFF, 1'b1, 8'hF1);
+    addr_case("BND_20000_D2", 8'd40, 3'd2, 16'hFFFF, 18'h20000, 16'h0000, 16'h0001, 16'h0002, 16'h0002, 16'hFFFF, 1'b1, 8'hF2);
+    addr_case("BND_20000_D6", 8'd40, 3'd6, 16'hFFFF, 18'h20000, 16'hFFFF, 16'h0000, 16'h3FFF, 16'hFFFE, 16'hFFFF, 1'b1, 8'hF1);
+    addr_case("BND_3FFFF_D2", 8'd40, 3'd2, 16'hFFFF, 18'h3FFFF, 16'hFFFF, 16'h0000, 16'hC000, 16'h0001, 16'hFFFF, 1'b1, 8'hF4);
+    addr_case("BND_3FFFF_D6", 8'd40, 3'd6, 16'hFFFF, 18'h3FFFF, 16'hFFFE, 16'hFFFF, 16'hFFFD, 16'hFFFD, 16'hFFFF, 1'b1, 8'hF3);
+    addr_case("VP_001_D0",    8'd1,  3'd0, 16'hFFFF, 18'h03FF0, 16'h3FF0, 16'h3FF1, 16'h0018, 16'h3FF2, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_001_D4",    8'd1,  3'd4, 16'hFFFF, 18'h04010, 16'h400F, 16'h4010, 16'h7FE8, 16'h400E, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_039_D0",    8'd39, 3'd0, 16'hFFFF, 18'h03FF0, 16'h3FF0, 16'h4017, 16'h0017, 16'h403E, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_039_D4",    8'd39, 3'd4, 16'hFFFF, 18'h04010, 16'h3FE9, 16'h4010, 16'h7FE9, 16'h3FC2, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_040_D0",    8'd40, 3'd0, 16'hFFFF, 18'h03FF0, 16'h3FF0, 16'h4018, 16'h0018, 16'h4040, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_041_D0",    8'd41, 3'd0, 16'hFFFF, 18'h03FF0, 16'h3FF0, 16'h4019, 16'h0019, 16'h4042, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_041_D4",    8'd41, 3'd4, 16'hFFFF, 18'h04010, 16'h3FE7, 16'h4010, 16'h7FE7, 16'h3FBE, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_080_D0",    8'd80, 3'd0, 16'hFFFF, 18'h03FF0, 16'h3FF0, 16'h4040, 16'h0040, 16'h4090, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_080_D4",    8'd80, 3'd4, 16'hFFFF, 18'h04010, 16'h3FC0, 16'h4010, 16'h7FC0, 16'h3F70, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_255_D0",    8'd255,3'd0, 16'hFFFF, 18'h03FF0, 16'h3FF0, 16'h40EF, 16'h00EF, 16'h41EE, 16'hFFFF, 1'b1, 8'hF0);
+    addr_case("VP_255_D4",    8'd255,3'd4, 16'hFFFF, 18'h04010, 16'h3F11, 16'h4010, 16'h7F11, 16'h3E12, 16'hFFFF, 1'b1, 8'hF0);
+    io_a2(8'h47); io_a0(8'd40);   // PITCH back to its reset value
+
+    // ---- Section 10: parameter pairs streamed under one WDAT ----
+    // GDCWDAT.CSV `WDAT_STREAM_3,WDAT_STREAM,INFO,OBS,0,word,0000,multi,FFFF,-,-,
+    // FFFF/0000/FFFF/0000,03-88-F0-FF-FF/08803/MFFFF/D-,three parameter pairs under one WDAT`:
+    // REPLACE, word transfer, old 0000, MASK FFFF; words R:0800..0803 read FFFF/0000/FFFF/0000
+    // and the cursor ends at 08803 - each pair after the WDAT is one more DC + 1 = 1 unit along
+    // dir 2 (a full mask steps a word per unit, CHECK 9). The pairs are FFFF, 0000, FFFF.
+    $display("CHECK 10: three parameter pairs under one WDAT (WDAT_STREAM_3)");
+    begin : stream
+      reg [15:0] e10, m10;
+      reg [7:0]  b10;
+      for (k = 0; k < 4; k = k + 1) cpu_wr_word(2'd1, 15'h1000 + {k[13:0], 1'b0}, 16'h0000);
+      gdc_csrw(16'h8800, 8'h00);            // plane R word 0x0800, WG 0
+      gdc_mask(16'hFFFF);
+      gdc_vectw(3'd2, 16'd0);               // dir 2, DC 0
+      io_a2(8'h20);                         // WDAT, REPLACE, word
+      io_a0(8'hFF); io_a0(8'hFF);
+      io_a0(8'h00); io_a0(8'h00);
+      io_a0(8'hFF); io_a0(8'hFF);
+      gdc_wait_idle;
+      cpu_rd_word(2'd1, 15'h1000, w); check16(w, 16'hFFFF, "WDAT_STREAM_3 word 0800");
+      cpu_rd_word(2'd1, 15'h1002, w); check16(w, 16'h0000, "WDAT_STREAM_3 word 0801");
+      cpu_rd_word(2'd1, 15'h1004, w); check16(w, 16'hFFFF, "WDAT_STREAM_3 word 0802");
+      cpu_rd_word(2'd1, 15'h1006, w); check16(w, 16'h0000, "WDAT_STREAM_3 word 0803");
+      csrr_all(e10, b10, m10);
+      check16(e10, 16'h8803, "WDAT_STREAM_3 CURD EAD");
+      check16({8'd0, b10}, 16'h00F0, "WDAT_STREAM_3 CURD byte 2");
+      check16(m10, 16'hFFFF, "WDAT_STREAM_3 CURD MASK");
     end
 
     // ==== VERDICT ====

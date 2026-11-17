@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// With the 15-16 MiB system-space window ON (port 0x043B bit 2 cleared, which is the guest's request: reset leaves the window OFF so 15-16 MiB is RAM) the machine puts no SYSTEM RAM at 0xF00000-0xFFFFFF, and the subsystem splits it three ways: 0xFA0000-0xFFFFFF reaches the same route and the same address as the low 0xA0000-0xFFFFF it aliases, 0xF00000-0xF7FFFF is the PEGC's 512 KiB extended VRAM served by the mapper as one ordinary backend access at peg_base = pack_base + PACK_BYTES + 0x80000 - but ONLY with the register file's [0xE0102] bit 0 set (NP2kai memvgaf_rd8/wr8's VRAM-enable gate; the ITF sets it inside its own 0x6A 0x21 bracket before filling), and open bus with it clear - and only 0xF80000-0xF9FFFF reaches NO memory at all; with the window OFF the same addresses are ordinary identity RAM. Both references put the alias base at 0xFA0000 and not at 0xF00000 - qemu-pc98 aliases lowmem[0xa0000..0x100000] at 0xfa0000 (hw/i386/pc98-mem.c sys16m_mirror) and decodes its 512 KiB PEGC POST store (PEGC_POST_SIZE) at 0xf00000, and NP2kai reduces the address by 0xF00000 but selects that path only for address bits 19:17 = 5..7 (i386c/cpumem.c memsys_* vs memvgaf/memnc), its own 512 KiB memvgaf extended VRAM (vramex[0x80000]) covering the rest - so 0xF80000-0xF9FFFF is the part of the hole the ITF subtracts as the 15-16 MiB system-space hole (pc98-mem.c mem_sync_sys16m_workarea, ram[0x401] -= 8).
+// With the 15-16 MiB system-space window ON (port 0x043B bit 2 cleared, which is also the reset state: pc9821_iobus resets sys16m_en = 1, 0x043B reading 0xFB, as qemu's pc98_mem_reset and the Xe10's as-found 0x043B = FB do; setting bit 2 makes 15-16 MiB RAM) the machine puts no SYSTEM RAM at 0xF00000-0xFFFFFF, and the subsystem splits it three ways: 0xFA0000-0xFFFFFF reaches the same route and the same address as the low 0xA0000-0xFFFFF it aliases, 0xF00000-0xF7FFFF is the PEGC's 512 KiB extended VRAM served by the mapper as one ordinary backend access at peg_base = pack_base + PACK_BYTES + 0x80000 - but ONLY with the register file's [0xE0102] bit 0 set (NP2kai memvgaf_rd8/wr8's VRAM-enable gate; the ITF sets it inside its own 0x6A 0x21 bracket before filling), and open bus with it clear - and only 0xF80000-0xF9FFFF reaches NO memory at all; with the window OFF the same addresses are ordinary identity RAM. Both references put the alias base at 0xFA0000 and not at 0xF00000 - qemu-pc98 aliases lowmem[0xa0000..0x100000] at 0xfa0000 (hw/i386/pc98-mem.c sys16m_mirror) and decodes its 512 KiB PEGC POST store (PEGC_POST_SIZE) at 0xf00000, and NP2kai reduces the address by 0xF00000 but selects that path only for address bits 19:17 = 5..7 (i386c/cpumem.c memsys_* vs memvgaf/memnc), its own 512 KiB memvgaf extended VRAM (vramex[0x80000]) covering the rest - so 0xF80000-0xF9FFFF is the part of the hole the ITF subtracts as the 15-16 MiB system-space hole (pc98-mem.c mem_sync_sys16m_workarea, ram[0x401] -= 8).
 
 // ==== DUT ====
 // pc9821_memory_subsystem, which owns the translation. It MUST happen ahead of
@@ -72,7 +72,7 @@ module tb_pc9821_sys16m;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -163,6 +163,7 @@ module tb_pc9821_sys16m;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -188,7 +189,7 @@ module tb_pc9821_sys16m;
   // The PEGC view select (pc9821_crtc's mode2_256col): opened only for the
   // [0xE0102] write below (the register file lives behind the view), then closed.
   reg        pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -281,8 +282,29 @@ module tb_pc9821_sys16m;
     end
   endtask
 
+  // One CPU read with the full handshake (the request dropped after its accept, as z486 does),
+  // returning the datum the route answered with.
+  task automatic cpu_read(input [31:0] a, input en, output [31:0] d);
+    integer g;
+    begin
+      drain;
+      sys16m_en = en;
+      @(negedge clk);
+      cpu_addr = a; cpu_din = 32'd0; cpu_be = 4'hF; cpu_write = 0; cpu_line_read = 0;
+      cpu_burstcount = 8'd1; cpu_valid = 1;
+      g = 0; while (!cpu_ready && g < 40) begin @(negedge clk); g = g + 1; end
+      if (!cpu_ready) $fatal(1, "TB_PC9821_SYS16M: no accept for read %08x", a);
+      @(negedge clk); cpu_valid = 0;
+      g = 0; while (!cpu_resp_valid && g < 40) begin @(negedge clk); g = g + 1; end
+      if (!cpu_resp_valid) $fatal(1, "TB_PC9821_SYS16M: no response for read %08x", a);
+      d = cpu_dout;
+    end
+  endtask
+
   reg        ref_mem_valid;
   reg [31:0] ref_mem_addr;
+  reg [31:0] rd_lo, rd_hi;
+  integer    ti;
 
   initial begin
     repeat (3) @(posedge clk);
@@ -383,6 +405,24 @@ module tb_pc9821_sys16m;
                mem_valid, mem_addr, ref_mem_valid, ref_mem_addr);
       errors = errors + 1;
     end
+
+    // CHK-7a (data): the same TEXT RAM answers both. The text RAM model holds a distinct
+    // byte per cell, so a read of 0xFA0000 + k must return what 0xA0000 + k returns - a
+    // mirror that reached no route, another route or another cell reads differently.
+    for (ti = 0; ti < 16384; ti = ti + 1) tram[ti] = 8'(ti * 7 + (ti >> 8) + 8'h3C);
+    cpu_read(32'h000A_0000, 1'b1, rd_lo);
+    cpu_read(32'h00FA_0000, 1'b1, rd_hi);
+    if (rd_hi !== rd_lo) begin
+      $display("FAIL CHK-7a data: 0xFA0000 read %08x, 0xA0000 read %08x (the mirror must reach the same text RAM cells)", rd_hi, rd_lo);
+      errors = errors + 1;
+    end
+    cpu_read(32'h000A_1234, 1'b1, rd_lo);
+    cpu_read(32'h00FA_1234, 1'b1, rd_hi);
+    if (rd_hi !== rd_lo || rd_lo === 32'hFFFF_FFFF) begin
+      $display("FAIL CHK-7a data: 0xFA1234 read %08x, 0xA1234 read %08x (want equal text RAM data)", rd_hi, rd_lo);
+      errors = errors + 1;
+    end
+    drain;
 
     // CHK-6: WINDOW OFF, 0xFA0000 is ordinary identity RAM.
     drive_addr(32'h00FA_0000, 1'b0);

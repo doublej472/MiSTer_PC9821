@@ -1,14 +1,14 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GVRAM array-access FSM's two-word write tail (G_W2B) wraps its second word at the 15-bit plane offset inside its own page (aliases.md A8): the array key is {page, offset[14:0]}, so the plain b_addr_q + 16'd1 carried into the page bit at {page, 0x7FFF} and wrote the OTHER page's offset 0, where every GVRAM path in NP2kai wraps at 15 bits (LOW15, mem/memvram.c:42,114,136, mem/memegc.c:1131,1327) and this module's own c_col column walk already wraps the same way. Driven at the arbiter's EGC client port with the two-word burst shape burst_fits names. FAIL-FIRST: the second word lands at the other page's offset 0 on both pages; PASS: it lands at the same page's offset 0 and the off-boundary pair is unchanged.
+// The GVRAM array-access FSM's two-word write tail (G_W2B) wraps its second word at the 15-bit plane offset inside its own page: the array key is {page, offset[14:0]}, so the plain b_addr_q + 16'd1 carried into the page bit at {page, 0x7FFF} and wrote the OTHER page's offset 0, where every GVRAM path in NP2kai wraps at 15 bits (LOW15, mem/memvram.c:42,114,136, mem/memegc.c:1131,1327) and this module's own c_col column walk already wraps the same way. Driven at the arbiter's EGC client port with the two-word burst shape burst_fits names. FAIL-FIRST: the second word lands at the other page's offset 0 on both pages; PASS: it lands at the same page's offset 0 and the off-boundary pair is unchanged.
 //
 // The GVRAM array-access FSM's two-word write tail (G_W2B) wraps its second word at the
 // 15-bit plane offset, inside its own page: a unit pair whose first dword is at plane
 // offset 0x7FFF writes its second dword to THE SAME page's offset 0, never to the other
 // page's offset 0. The 16-bit array key is {page, offset[14:0]}, so the plain
 // `b_addr_q + 16'd1` carried into the page bit at {page, 0x7FFF} and aliased the other
-// page (aliases.md A8). NP2kai wraps every GVRAM offset at 15 bits (LOW15,
+// page. NP2kai wraps every GVRAM offset at 15 bits (LOW15,
 // mem/memvram.c:42,114,136 and mem/memegc.c:1131,1327) and this module's own column
 // walk c_col already wraps the same way; G_W2B (and only G_W2B, G_RBC's columns never
 // reach the boundary) is the one place the carry escapes.
@@ -61,7 +61,8 @@ module tb_pc9821_gvram_w2b_wrap;
   // tied high. It stays so the conversion is the real clock's if that exemption ever changes.
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(100_000_000)) u_arb (
       .clk(clk),
-      .timing_xe10(1'b0), .gfx_scan_on(1'b0),   // Fast: the pre-field periods .reset(reset),
+      .reset(reset),
+      .timing_xe10(1'b0), .gfx_scan_on(1'b0),   // Fast: the pre-field periods
       .access_page(1'b0),
       .win_plane(2'd0), .win_offset(15'd0),
       .cpu_din(32'd0), .cpu_din_z(4'hF), .cpu_din_f(4'h0), .cpu_be(4'hF), .cpu_line_read(1'b0),

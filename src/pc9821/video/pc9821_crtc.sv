@@ -23,17 +23,19 @@ module pc9821_crtc (
     input wire clk_sys,
     input wire rst_n_sys,
     // The RASTER POSITION COUNTER's own reset, freed from `rst_n_sys` (which is
-    // `!(reset || !cpu_run)`): pc9821_system drives this from `!reset` (`wire rst_n_vid =
-    // !(reset || cpu_run_rise);`, with a one-cycle
-    // re-seed when cpu_run rises, so the phase a guest then sees is unchanged), so the
-    // power-on defsyncm24 raster runs as soon as the core is out of reset, pack or no pack.
+    // `!(reset || !cpu_run)`): pc9821_system drives it as
+    // `wire rst_n_vid = !(rst_q[R_CRTC] || cpu_run_rise);` - NOT tied to cpu_run, so the
+    // power-on defsyncm24 raster runs as soon as the core is out of reset, pack or no pack,
+    // and re-seeded for ONE cycle when cpu_run rises, so the phase a guest then sees is
+    // unchanged.
     // The analog OSD is drawn in the core's own timing (sys_top.v vga_osd), so with
     // no firmware pack the framework otherwise measures a 0x0 mode, the analog OSD
     // cannot be placed, and a ROM cannot be loaded from that OSD. EVERY OTHER block
     // in this module (the status flops, the scanout, the geometry) stays on
     // `rst_n_sys`, so this changes no guest-visible value: with `!cpu_run` no guest
-    // can be running. See docs/policies.md's rule that the raster comes from the GDC's own
-    // SYNC parameters (the defsyncm24 reset values).
+    // can be running. See docs/policies.md "The rules that bind every change" (rates come
+    // from the device): the raster comes from the GDC's own SYNC parameters (the defsyncm24
+    // reset values).
     input wire rst_n_vid,
     input wire pixel_ce,       // the dot enable (one clk_sys per pixel shown)
     // The SLAVE is displaying the current raster line: its START latch is on and the line is in
@@ -434,7 +436,8 @@ module pc9821_crtc (
   // high, every field 10 bits:
   localparam integer G_HTOT_M1 = 0,  G_HS_ON = 10,   G_HS_OFF = 20,  G_VTOT_M1 = 30,
                      G_VACT_M1 = 40, G_VS_ON = 50,   G_VS_OFF = 60,  G_WK_SLOT = 70,
-                     G_WK_SNAP = 80, G_VFP = 90,     G_VSYNC_W = 100, G_W = 110;
+                     G_WK_SNAP = 80, G_VFP = 90,     G_VSYNC_W = 100, G_HBLANK = 110,
+                     G_W = 120;
   function automatic [G_W-1:0] crtc_d;
     input [7:0] x; input [9:0] y; input [9:0] hactive; input [9:0] vactive;
     input [7:0] b2, b3, b4, b5;
@@ -476,7 +479,7 @@ module pc9821_crtc (
       // Each operand is the 10-bit value its consumer compared against before (the pulses'
       // bounds were 10-bit sums in a 10-bit compare; the "- 1" bounds are exact because
       // HTOTAL >= 720 and VTOTAL >= 400 never wrap).
-      crtc_d = {vsync_w, vfp, wk_slot - 10'd1, wk_slot,
+      crtc_d = {hblank, vsync_w, vfp, wk_slot - 10'd1, wk_slot,
                 vactive + vfp + vsync_w, vactive + vfp, vactive - 10'd1,
                 vtotal - 10'd1,
                 hactive + hfp + hsync_w, hactive + hfp, htotal - 10'd1};
@@ -513,13 +516,18 @@ module pc9821_crtc (
   wire [9:0] VFP      = geom_d[G_VFP     +: 10];
   wire [9:0] VSYNC_W  = geom_d[G_VSYNC_W +: 10];
   /* verilator lint_on UNUSEDSIGNAL */
+  wire [9:0] HBLANK   = geom_d[G_HBLANK  +: 10];   // HTOTAL - HACTIVE: the line's blank dots
   wire [5:0] VBP      = v_sync[7][7:2];           // the block's vbp field (o_vbp)
 
   // ---------------------------------------------------------------
   // Video timing counters
   // ---------------------------------------------------------------
-  reg [9:0] hdot;
-  reg [9:0] vline;
+  // Power-up values: the counter has no level reset (pc9821_raster_reseed restarts it on a clock),
+  // so it starts at the frame's origin rather than at whatever the device powers up with.
+  /* verilator lint_off PROCASSINIT */
+  reg [9:0] hdot = 10'd0;
+  reg [9:0] vline = 10'd0;
+  /* verilator lint_on PROCASSINIT */
   wire in_hsync = (hdot >= HS_ON) && (hdot < HS_OFF);
   // The VSYNC PULSE. This is the GDC's vertical sync output: VFP lines of front porch after the
   // last active line, then VSYNC_W lines of sync, then the back porch that is left. The split is
@@ -584,8 +592,8 @@ module pc9821_crtc (
       geom_d <= crtc_d(s_x_r, s_y_r, s_ha_r, s_va_r, v_sync[2], v_sync[3], v_sync[4], v_sync[5]);
   end
 
-  // The raster position counter is the ONE block reset by `rst_n_vid` (i.e. `!reset`, not
-  // `!(reset || !cpu_run)`): it must walk the defsyncm24 geometry before the firmware pack
+  // The raster position counter is the ONE block reset by `rst_n_vid` (the port comment above:
+  // not tied to cpu_run, re-seeded one cycle at its rise): it must walk the defsyncm24 geometry before the firmware pack
   // loads, so the machine emits a valid raster for the analog OSD with no ROM. geom_d and
   // the sync roots above stay held by `rst_n_sys` at the default block, so the counter walks
   // exactly that geometry; the status flops below stay on `rst_n_sys` so the reset status is
@@ -1080,9 +1088,20 @@ module pc9821_crtc (
   // docs/probes/TIME.TXT `high 1.7% of the time and bit6 23.4%`). NP2kai io/gdc.c gdc_i60
   // `if ((remain % gdc.rasterclock) < gdc.hsyncclock)` raises bit 6 once per LINE, vertical-blank
   // lines included, but for cr/x of it (`gdc.hsyncclock = (gdc.rasterclock * cr) / x;`, about 75%
-  // with the default SYNC), which the probe's 23.4% refutes; its phase in the line is unmeasured,
-  // todo item 23. Bit 0 ~50%. Driving bit 6
+  // with the default SYNC), which the probe's 23.4% refutes. Bit 0 ~50%. Driving bit 6
   // from the real blanking and bit 0 from a DOT-rate toggle makes every guest poll end.
+  //
+  // BIT 6'S PHASE IN THE LINE: on the Xe10 it rises AT the VSYNC fall - the first poll with bit 5
+  // clear has bit 6 set - and stays high about 0.24 of a line, on both GDCs. XE10Y /K3M polls the
+  // status 2048 times from the VSYNC rise and prints (bit 6, bit 5) runs (`<state><polls>`, 3 =
+  // both, 1 = VSYNC only, 2 = blank only):
+  //   docs/probes/XE10Y-XE10-K3M.TXT:38 `319,157,317,157,218,056` (0x60: VSYNC ends into a blank run)
+  //   docs/probes/XE10Y-XE10-K3M.TXT:39 `313,138,212,037` (0xA0, the same)
+  // (and K3M2.TXT/RUN3-KATA.TXT rows 38-39). VSYNC changes at hdot 0 here (vline steps there),
+  // so the blank is the line's FIRST HTOTAL - HACTIVE dots, not the dots after the active 640:
+  // that placed the rise 0.76 of a line after the VSYNC fall
+  // (docs/probes/core/XE10Y-CORE-xt-3409ab24-s3-XE10-K3M.TXT:38 `318,054,217`). Only the status
+  // bit moves: the picture's own blanking (h_active) and the VSYNC pulse stay where they were.
   //
   // BIT 0'S RATE: the toggle is clocked by `pixel_ce` - the PIXEL_HZ-derived dot enable - and
   // NOT by clk_sys, because a clk_sys count is not a time (AGENTS.md's rates rule: raising
@@ -1111,7 +1130,7 @@ module pc9821_crtc (
     end else begin
       vs_sync_ff[0] <= in_vsync;
       vs_sync_ff[1] <= vs_sync_ff[0];
-      de_ff[0] <= h_active;   // bit 6 is the per-line horizontal blank (see above)
+      de_ff[0] <= (hdot >= HBLANK);   // bit 6: the line's first HBLANK dots (see above)
       de_ff[1] <= de_ff[0];
     end
     if (pixel_ce) stat_dr <= ~stat_dr;   // the DOT rate, so clk_sys cannot move it (see above)
@@ -1130,13 +1149,13 @@ module pc9821_crtc (
   // ---------------------------------------------------------------
   reg       cfg_data_d;    // write strobe delayed one cycle
   reg       cfg_dirty;     // a configuration change is waiting to be copied
-  reg       cfg_ack;       // copy acknowledgement, driven from the raster domain
-  reg [1:0] cfg_ack_sync;  // ...synchronised back into clk_sys
+  reg       cfg_ack;       // copy acknowledgement, driven by the pixel_ce-gated raster logic
+  reg [1:0] cfg_ack_sync;  // ...a two-stage delay back to the write side (one clk_sys, no crossing)
   reg       cfg_ack_seen;
   wire      cfg_ack_edge = cfg_ack_sync[1] != cfg_ack_seen;
   // The write epoch the acknowledgement is qualified with (see the clear rule).
   // Two bits are enough: the snapshot is taken on the copy edge and compared on cfg_ack_edge, a
-  // fixed three clk_sys later (cfg_ack -> two synchroniser flops -> cfg_ack_seen), so at most
+  // fixed three clk_sys later (cfg_ack -> two delay flops -> cfg_ack_seen), so at most
   // three writes lie between them and the count's difference is 0..3 - equal mod 4 iff equal.
   reg [1:0] cfg_epoch;       // one count per configuration write (mod 4)
   reg [1:0] cfg_epoch_snap;  // ...as of the copy's own clock edge (raster block below)
@@ -1157,7 +1176,7 @@ module pc9821_crtc (
       // so a write landing on (or the clk before) the copy's edge is NOT in that
       // copy; its announce then arrives after the announce this ack belongs to
       // and the unqualified clear dropped it until some later write re-dirtied
-      // the flag (the window pc9821_gdc2:172-177 admits). Every write moves
+      // the flag (the window pc9821_gdc2's `snap_now` rule, `w_start && cfg_pending`, admits). Every write moves
       // cfg_epoch on the same edge its data moves, the copy snapshots the epoch
       // at its own edge, and the ack clears only when the two agree: a write the
       // copy missed keeps cfg_dirty set and is re-copied at the NEXT frame end
@@ -1220,7 +1239,7 @@ module pc9821_crtc (
   reg [7:0] v_csrform[0:2];
   reg [7:0] v_csread[0:1];
 
-  // The raster half of the configuration handshake: a two-flop synchroniser for the
+  // The raster half of the configuration handshake: a two-stage pixel_ce delay of the
   // dirty flag, plus the copy acknowledgement returned to clk_sys. Both start at
   // zero so clk_sys's power-on cfg_dirty=1 produces exactly one frame-boundary
   // snapshot of the reset configuration.
@@ -1244,8 +1263,8 @@ module pc9821_crtc (
       v_row0_stale <= 1'b0;
       cfg_epoch_snap <= 2'd0;
     end else if (pixel_ce) begin
-      // Two-flop synchroniser for the configuration-dirty flag. The copy below
-      // only runs when the fully synchronised bit is set, so the configuration
+      // Two-stage pixel_ce delay of the configuration-dirty flag. The copy below
+      // only runs when the fully delayed bit is set, so the configuration
       // registers have been stable for at least two dot clocks.
       cfg_dirty_sync <= {cfg_dirty_sync[0], cfg_dirty};
       // Row 0's cache is filled a whole frame before the frame that draws it (the walker's

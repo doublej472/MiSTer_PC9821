@@ -250,6 +250,7 @@ case "${1:-}" in
     decode)  cmd_decode "${2:-}" ;;
     state)   cmd_state ;;
     *)
-        sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        # the header comment up to its first non-comment line (a fixed line range rots)
+        awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
         exit 2 ;;
 esac

@@ -214,7 +214,11 @@ module tb_pc9821_ata_th5load;
   localparam [7:0] TX2_SLICE_SECTORS = 8'd6;  // the playchar slice (~3 KB)
 
   // ==== the guest: the ROM's `insw` cadence (tb_pc9821_ata_throughput's model) ====
-  localparam WORD_CYCLES = 6;
+  // WORD_CYCLES is the 16-bit data-port word tb_pc9821_ata_iowait MEASURES through the real
+  // pc9821_iobus (delivered in 9 clk_sys), as tb_pc9821_ata_throughput and _readahead use;
+  // REP_EXTRA is the loop's own per-word overhead beyond the bus. (An earlier 6-clk word was
+  // a superseded class model.)
+  localparam WORD_CYCLES = 9;
   localparam TF_CYCLES   = 5;
   localparam REP_EXTRA   = 2;
   localparam INT_CYCLES  = 60;   // ISR entry + the 0x0432 bracket + EOI/IRET

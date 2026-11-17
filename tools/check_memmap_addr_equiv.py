@@ -48,6 +48,11 @@ the machine (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17; pc9821_memory_map's win0_
 the new map must assert absent_area, issue no backend request and decode no window (no plane,
 packed, register, not-connected, EMS or shadow arm).
 
+A FOURTH CARVE-OUT: the top-window shadow is shown only in the 0x043D BIOS-top state (top_bank
+9, not bank 7 through 0x043F) and only with the 0x053D bit-1 gate set (docs/probes/SHADOWW.TXT
+st05 and st07; pc9821_memory_map fw_shadow_read). Where the old map served the shadow for a
+read outside that state, the new map must route the read to the pack's BIOS-top slot (pack_base
++ 0x20000, the slot banks 7 and 9 share) with every other output unchanged.
 A SECOND CARVE-OUT: the E plane is an analog-mode window. With `mode2_16color` clear (the
 digital mode; docs/probes/DMAROUTE-XE10.TXT case P4 view V1, docs/probes/VRAM2.TXT's E000 row)
 and the PEGC view off, 0xE0000-0xE7FFF of the first MiB must decode no plane window and assert
@@ -126,6 +131,11 @@ PLANTS = {
                      "assign      e_plane_nc   = dv[3] && dv[16] && !mode2_16color;"),
     # window 0 below page 8: the hole stops one page short (page 06 aliases RAM again)
     "win0_hole_page": ("(win0_sel[7:3] == 5'd0)", "(win0_sel[7:2] == 6'd0)"),
+    # the shadow read loses its 0x053D gate (SHADOWW st07)
+    "shd_gate": ("top_shadow_en && bios_ram_gate &&", "top_shadow_en &&"),
+    # the shadow read on bank 7 through 0x043F again (SHADOWW st05)
+    "shd_bank7": ("wire   fw_bios_top_visible = (top_bank == 4'd9);",
+                  "wire   fw_bios_top_visible = (top_bank == 4'd7) || (top_bank == 4'd9);"),
     # window 0 at 0x0A: the RAM page test off by one page value
     "win0_ram_page": ("(win0_sel == 8'h0A)", "(win0_sel == 8'h0C)"),
     # A3: the EMS splice's bit-15 carry term not inverted (the whole concat, so the
@@ -234,6 +244,13 @@ module wrap(
   // the third carve-out: window 0 below page 8 is a hole (absent, no request, no window)
   wire w0hole = win0_mv && (win0_sel[7:3] == 5'd0);
   wire w0hole_bad = !a2 || v2 || gv2 || ga2 || gb2 || gc2 || en2 || e2 || s2;
+  // the fourth carve-out: an old shadow read outside the BIOS-top state with the gate set is
+  // now the pack's BIOS-top slot (see the docstring)
+  wire fw_win = (d_addr[31:15] == 17'h0001F) || (&d_addr[31:15]);
+  wire shd = fw_win && !cpu_write && top_shadow_en && fw_shadow_dirty &&
+             ((top_bank == 4'd7) || (top_bank == 4'd9)) && !((top_bank == 4'd9) && bios_ram_gate);
+  wire [19:0] shd_lo = 20'h20000 + {5'd0, d_addr[14:0]};
+  wire shd_bad = (v2 && (a_new != {pack_base[31:20], shd_lo})) || others;
   // the second carve-out: the digital-mode E slot is no plane window and is e_plane_nc
   wire e_dig = !mode2_16color && !pegc_256 && !(|d_addr[31:20]) && (d_addr[19:15] == 5'b11100);
   wire gv_bad = e_dig ? gv2 : (gv1 != gv2);
@@ -256,6 +273,11 @@ GE_TERM = "(gar1 != gar2) ||"
 
 
 def git_show(rev):
+    if subprocess.run(["git", "rev-parse", "--verify", "-q", "%s^{commit}" % rev], cwd=REPO,
+                      capture_output=True).returncode:
+        print("SKIP: revision %s is not in this clone (a squashed release carries no history); "
+              "this proof compares against it" % rev)
+        sys.exit(2)
     out = subprocess.run(["git", "show", "%s:%s" % (rev, MAP)], cwd=REPO,
                          capture_output=True, text=True)
     if out.returncode:
@@ -300,7 +322,7 @@ def prove(old_rev, plant=None):
     wrap = wrap.replace("%%GE_TERM%%", GE_TERM if "addr_ge_ram" in old else "")
     wrap = wrap.replace("wire unused = o1;", "").replace("wire o1,o2,o3,o4,o5,o6,o7,o8,o9,o10,o11;", "")
     wrap = wrap.replace("  assign mismatch = v1 && (a_old != a_new);",
-                        "  assign mismatch = w0ram ? w0ram_bad : w0hole ? w0hole_bad :"
+                        "  assign mismatch = w0ram ? w0ram_bad : w0hole ? w0hole_bad : shd ? shd_bad :"
                         " ((v1 && (a_old != a_new)) || others);")
     with tempfile.TemporaryDirectory() as tmp:
         open(os.path.join(tmp, "old.sv"), "w").write(old)

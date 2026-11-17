@@ -1,8 +1,12 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC graphics mode against NP2kai io/gdc.c and vram/makegrph.c (PRIMARY) and QEMU pc98-vga.c: the fixed 24 kHz 848x440 / 640x400 raster in graphics mode (the 15 kHz and 31 kHz selects on 0x6A/0x6E are UNIMPLEMENTED), the CRTC registers 0x70-0x7A (the machine probe reads their reset values back, a reference disagreement the core follows the machine on), the SCROLL display-start word with the partition-2 wrap, the slave CSRFORM line repeat, and the graphics GDC's START/STOP compositor gate. Both Round-3 mismatches are fixed and asserted: the scanout fetch is enabled by mode1[7] (the DISP) and a burst that crosses the 32 KiB plane end clamps per burst instead of reading the next plane.
-// The GDC graphics mode against NP2kai io/gdc.c and vram/makegrph.c (PRIMARY) and QEMU pc98-vga.c: the fixed 24 kHz 848x440 / 640x400 raster in graphics mode (the 15 kHz and 31 kHz selects on 0x6A/0x6E are UNIMPLEMENTED, as the module's own note says), the CRTC registers 0x70-0x7A (NP2kai and QEMU are write-only and answer 0xFF while the machine probe docs/probes/GDC.TXT reads their reset values back, so the core follows the machine and this is a reference disagreement, not a defect), the SCROLL display-start word (byte address = word*2, NP2kai's LOW15(word<<1)) with the partition-2 wrap, the slave CSRFORM line repeat (lr=2 holds each GDC line on two raster lines; mode1[4]'s blank-vs-duplicate arm is not modelled, which the bench records as a known deviation), and the graphics GDC's START/STOP compositor gate. It finds TWO mismatches: (1) a scanout line whose base is within 79 bytes of the 32 KiB plane end does not wrap per column as both references' LOW15/mask do, so its last columns read the NEXT plane; (2) the scanout fetch is gated by the TEXT GDC's DISP+START (pc9821_system's scan_enable) instead of the graphics GDC's START, so a program that starts only the graphics GDC shows black where NP2kai and QEMU show graphics. Every case prints one line with its verdict.
+// The GDC graphics mode against NP2kai io/gdc.c and vram/makegrph.c (PRIMARY) and QEMU pc98-vga.c: the fixed 24 kHz 848x440 / 640x400 raster in graphics mode (the 15 kHz and 31 kHz selects on 0x6A/0x6E are UNIMPLEMENTED), the CRTC registers 0x70-0x7A (a written value reads back five bits wide, NP2kai crtc_o70; the reset values the machine probe reads back are asserted by tb_pc9821_readback_gdc), the SCROLL display-start word with the partition-2 wrap, the slave CSRFORM line repeat, and the graphics GDC's START/STOP compositor gate. Both Round-3 mismatches are fixed and asserted: the scanout fetch is enabled by mode1[7] (the DISP; with both GDCs started, DISP clear blanks the graphics plane) and a burst that crosses the 32 KiB plane end clamps per burst instead of reading the next plane. The four plane windows read back their own lane.
+// HISTORY: when written, this bench found two mismatches, both since fixed and asserted: a
+// scanout line whose base is within 79 bytes of the 32 KiB plane end read its last columns from
+// the NEXT plane (section 8), and the scanout fetch was gated by the TEXT GDC's DISP+START, so a
+// program that started only the graphics GDC showed black (section 1). Section 7 (mode1[4]'s
+// blank arm) and section 3 (the 15/31 kHz selects) pin documented deviations from NP2kai/QEMU.
 
 `default_nettype none
 
@@ -55,7 +59,7 @@ module tb_pc9821_gdc_graphics;
   wire        vsync_irq_arm = 1'b0;
   wire        vsync_irq;
   wire        vsync_edge;   // the frame boundary the vblank IRQ rises on; parked for (.*)
-  wire        disp_on;            // mode1[7] && the TEXT GDC's START: pc9821_system routes this to scan_enable
+  wire        disp_on;            // mode1[7] (DISP) alone: pc9821_system routes this to scan_enable
   wire        gfx_disp;           // the graphics GDC's own START/STOP latch: the mixer's grph_disp
   wire        gfx_egc_gate;
   wire  [6:0] cfg_ram_mib = 7'd0;
@@ -107,8 +111,8 @@ module tb_pc9821_gdc_graphics;
   wire scan_line_tick = gvram_at_last & ~gvram_h_last;
 
   // The four planes and their per-line fetch into the ping-pong line buffer, wired to the raster
-  // exactly as pc9821_system wires them - including scan_enable, which is `disp_on` (the TEXT
-  // GDC's) and not the graphics GDC's latch.
+  // exactly as pc9821_system wires them - including scan_enable, which is `disp_on` (mode1[7],
+  // the DISP bit, independent of either GDC's START) and not the graphics GDC's latch.
   reg  [1:0]  win_plane = 2'd0;
   reg  [14:0] win_offset = 15'd0;
   reg  [31:0] cpu_din = 32'd0;
@@ -148,7 +152,7 @@ module tb_pc9821_gdc_graphics;
 
   // The pixel pipeline: fold -> graphics palette -> compositor, the graphics arm only.
   wire [7:0] r_out, g_out, b_out;
-  // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
+  // The PEGC arm's inputs: tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
   reg        mix_pegc_256 = 1'b0;
   reg        mix_pal256_wr_en = 1'b0;
@@ -471,10 +475,13 @@ module tb_pc9821_gdc_graphics;
     repeat (4) @(posedge clk);
 
     // ---------------------------------------------------------------
-    // 1. The scanout enable is the TEXT GDC's DISP+START, not the graphics GDC's START.
+    // 1. The scanout enable is mode1[7] (DISP), not the TEXT GDC's START.
     //    mode1[7] (DISP) is set, the graphics GDC is STARTed, the text GDC is NOT started;
     //    a painted line 0 must appear (NP2kai scrndraw.c:188-200 and QEMU pc98-vga.c:4476-4495
-    //    gate graphics on mode1[DISP] AND gdc_gfx.start only).
+    //    gate graphics on mode1[DISP] AND gdc_gfx.start only). Then the NEGATIVE: with the text
+    //    GDC started too, DISP cleared must blank the graphics plane (the same references draw
+    //    no graphics without mode1[DISP]), so a scan enable stuck on, or one keyed on a GDC's
+    //    START instead of DISP, fails here.
     // ---------------------------------------------------------------
     write_io(8'h68, 8'h0F);   // mode1 bit7 = DISP on
     write_io(8'h6A, 8'h01);   // 16-colour analogue
@@ -487,15 +494,32 @@ module tb_pc9821_gdc_graphics;
       fail("scanout_enable_graphics_start: raster 0 column 0 was never sampled");
     end else if ({cap_r[0], cap_g[0], cap_b[0]} !== BLUE) begin
       mismatch("scanout_enable_graphics_start: raster 0 col 0");
-      $display("  core=%02x%02x%02x (black: the GVRAM fetch is gated by the TEXT GDC's DISP+START, pc9821_system scan_enable=disp_on), NP2kai scrndraw.c:188-200 + QEMU pc98-vga.c:4476-4495=%02x%02x%02x (graphics shows with mode1[DISP] and the graphics GDC's START alone)",
+      $display("  core=%02x%02x%02x (black: the GVRAM fetch did not follow mode1[DISP] with only the graphics GDC started), NP2kai scrndraw.c:188-200 + QEMU pc98-vga.c:4476-4495=%02x%02x%02x (graphics shows with mode1[DISP] and the graphics GDC's START alone)",
                cap_r[0], cap_g[0], cap_b[0], BLUE[23:16], BLUE[15:8], BLUE[7:0]);
     end else begin
       $display("ok       scanout_enable_graphics_start = %02x%02x%02x", cap_r[0], cap_g[0], cap_b[0]);
     end
 
-    // Now start the text GDC (the BIOS's own boot order), which is what pc9821_system's
-    // scan_enable actually needs before any graphics is fetched.
+    // Now start the text GDC (the BIOS's own boot order) as well.
     write_io(8'h62, 8'h0D);   // text GDC START
+    // The negative: DISP off (0x68 <- 0x0E, flip-flop 7 clear) with BOTH GDCs started must
+    // show no graphics on raster 0; DISP on again restores it.
+    write_io(8'h68, 8'h0E);
+    capture_raster(9'd0);
+    if (!cap_seen[0])
+      fail("scanout_disp_off_blank: raster 0 column 0 was never sampled");
+    else if ({cap_r[0], cap_g[0], cap_b[0]} !== 24'h000000) begin
+      fail("scanout_disp_off_blank: graphics shows on raster 0 with mode1[DISP] clear");
+      $display("  core=%02x%02x%02x, NP2kai scrndraw.c:188-200 + QEMU pc98-vga.c:4495=000000 (no graphics without mode1[DISP])",
+               cap_r[0], cap_g[0], cap_b[0]);
+    end else
+      $display("ok       scanout_disp_off_blank = 000000");
+    write_io(8'h68, 8'h0F);   // DISP on again
+    capture_raster(9'd0);
+    if (!cap_seen[0] || ({cap_r[0], cap_g[0], cap_b[0]} !== BLUE))
+      fail("scanout_disp_on_again: raster 0 col 0 is not blue after DISP is set again");
+    else
+      $display("ok       scanout_disp_on_again = %02x%02x%02x", cap_r[0], cap_g[0], cap_b[0]);
     write_io(8'h68, 8'h08);   // mode1 bit4 clear (400-line)
     scroll(16'h0000, 14'd400, 16'h0000, 14'd0);
     repeat (4) @(posedge clk);

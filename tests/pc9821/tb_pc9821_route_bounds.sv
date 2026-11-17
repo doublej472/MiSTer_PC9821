@@ -98,7 +98,7 @@ module tb_pc9821_route_bounds;
   wire       tram_dma_ready, tram_dma_resp, cgw_dma_ready, cgw_dma_resp;
   wire [7:0] tram_dma_dout, cgw_dma_dout;
   pc9821_window_responder tram (
-      .clk(clk), .reset(reset), .route_cg(1'b0),
+      .clk(clk), .reset(reset), .route_cg(1'b0), .timing_xe10(1'b0), .gfx_scan_on(1'b0),
       .cpu_addr(tb_addr), .cpu_din(tb_din), .cpu_be(tb_be),
       .cpu_line_read(tb_line), .cpu_valid(tb_valid), .cpu_write(tb_write),
       .cpu_dout(tb_dout), .cpu_line_word(tb_line_dout),
@@ -111,7 +111,7 @@ module tb_pc9821_route_bounds;
       .byte_din(tram_byte_din), .byte_we(tram_byte_we));
 
   pc9821_window_responder cgw (
-      .clk(clk), .reset(reset), .route_cg(1'b1),
+      .clk(clk), .reset(reset), .route_cg(1'b1), .timing_xe10(1'b0), .gfx_scan_on(1'b0),
       .cpu_addr({2'b0, cg_addr}), .cpu_din(cg_din), .cpu_be(cg_be),
       .cpu_line_read(cg_line), .cpu_valid(cg_valid), .cpu_write(cg_write),
       .cpu_dout(cg_dout), .cpu_line_word(cg_line_dout),

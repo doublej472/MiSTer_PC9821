@@ -4,6 +4,18 @@
 // The five-state INTA bridge driven through the exact protocol of its own header comments - the first INTA answers with one dummy ready and din=0, the second pulses pic_interrupt_done for exactly one clk and the PIC's acknowledge-latched vector is read back a cycle later before ready drops and the FSM returns to idle - and the five corners that hide a protocol bug pinned: a strobe held high answers the first INTA once, an INTA with no pending request passes the PIC's spurious vector through unchanged, back-to-back interrupts re-arm because inta_responded clears between them, the vector handed over is the one on pic_interrupt_vector at the transfer (the acknowledge latch is the PIC's, not the bridge's - recorded rather than asserted), and reset_n in each of the five states returns to idle without a stray acknowledge.
 //
 // ---- where the sequence comes from ----
+// [the protocol: the 8259A's two-INTA acknowledge] An x86 interrupt acknowledge is TWO INTA
+// bus cycles; the 8259A drives nothing on the first (it freezes its priority resolution)
+// and puts the vector on the bus in the second, which is also when the IRR bit moves to the
+// ISR - so the CPU-side answer is a dummy cycle and then the vector (8259A datasheet, "INTA
+// sequence"; NP2kai models the pair as one call, io/pic.c pic_irq's acknowledge). That is the
+// dummy-first / vector-second shape asserted below.
+// [the one-clk acknowledge] pc9821_pic consumes interrupt_done as a single-cycle event, so
+// the bridge must pulse it for exactly one clk and guard it with inta_responded:
+// docs/single-cycle-event-discipline.md (R1 one consumer, R6 no level-bubble detection).
+// [the bridge's own design contract, not a hardware fact] the held-strobe corner (a strobe
+// held high answers once), the release-between-cycles wait (S_INTA1) and the per-state reset
+// are this bridge's interface with the z486 BIU, taken from its own comments (source 1).
 // [source 1: the module's own comments] src/pc9821/interrupts/pc9821_inta_bridge.sv's
 // header and its per-state comments give the sequence: "z486.inta (1st cycle) to dummy
 // response (ready + din=0)"; "S_INTA1: Wait for inta to deassert (BIU releases between

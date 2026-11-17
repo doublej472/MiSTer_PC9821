@@ -77,7 +77,7 @@ module tb_pc9821_cpu_vram_coherency;
       // L1 on, FPU present: z486 drives these from cache_off_req/x87_off_req, which pc9821_system ties low
       .cache_enable(1'b1), .x87_off(1'b0),
       .device_mmio_enable(1'b0), .device_mmio_base(32'h0),
-      // The fill-exclusion bound and window-0 verdict (aliases.md A1/A5):
+      // The fill-exclusion bound and window-0 verdict:
       // disabled here (this bench pins the F1/F4 classification with the
       // pre-bound cache behaviour; tb_pc9821_l1_alias_fill drives the bound).
       .ram_cache_top(32'hFFFF_FFFF), .win0_unmapped(1'b0),

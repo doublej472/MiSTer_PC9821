@@ -19,6 +19,12 @@ an S_DEVWAIT cycle it holds exactly what `dev_lane` held), and proves by inducti
 instantiates is a stub built from its own port list (tools/iobus_formal.py), so their outputs -
 `device_rd_hold` among them - are free, and every top-level input, the reset included, is free.
 
+A second property proves the lane walk's one-step-ahead registers exact (THE LANE WALK in the
+module, the th05 Music Room timing cut): `port_addr = {base_addr[15:2], lane}` equals the sum
+`base_addr[15:0] + lane` it replaced (base_addr[1:0] is always 0), the registered `lane` equals
+first_lane(pending_be) in every cycle, and the registered chip selects were decoded from the port
+the cycle presents (the decode's address one cycle earlier, port_addr_nx, equals port_addr).
+
 (When the cut landed, the pre-cut module was also proven equivalent to the cut one as a whole; that
 comparison needs the pre-cut revision and is not repeated here. This proof is the invariant that
 makes the cut exact, checked against the current module.)
@@ -40,6 +46,28 @@ PROP = r"""
   always @* if (!reset && state == S_DEVWAIT) assert (lane == lane_chk_held);
 """
 
+PROP_PORT = r"""
+  // ---- check_iobus_lane_inv.py, the lane port (pasted into a copy; never in the tree) ----
+  always @* if (!reset) assert (port_addr == base_addr[15:0] + {14'd0, lane});
+  // the lane walk one step ahead: the registered lane is the combinational one it replaced, and
+  // the registered selects were decoded from the port this cycle presents
+  always @* if (!reset) assert (lane == first_lane(pending_be));
+  reg [15:0] lane_chk_dec;
+  reg        lane_chk_up;
+  always @(posedge clk) begin lane_chk_dec <= port_addr_nx; lane_chk_up <= !reset; end
+  always @* if (!reset && lane_chk_up) assert (lane_chk_dec == port_addr);
+"""
+BASE_LOAD = "            base_addr <= {cpu_addr[31:2], 2'b00};\n"
+LANE_ADV = "                           || ((state == S_DEVWAIT) && !device_rd_hold);\n"
+PORT_PLANTS = [
+    # the dword base keeps the CPU address's low bits (the concatenation would drop a carry)
+    (BASE_LOAD, "            base_addr <= cpu_addr;\n"),
+    # the one-step-ahead lane misses S_DEVWAIT's lane clear
+    (LANE_ADV, "                           ;\n"),
+    # the one-step-ahead lane ignores a held S_DEVWAIT (device_rd_hold)
+    (LANE_ADV, "                           || (state == S_DEVWAIT);\n"),
+]
+
 DEVWAIT_ENTRY = "            state <= S_DEVWAIT;\n"
 DEVWAIT_CAPTURE = ("          if (!device_rd_hold) begin\n"
                    "            read_data[{lane, 3'b000} +: 8] <= lane_rdata;\n")
@@ -59,8 +87,8 @@ PLANTS = [
 ]
 
 
-def prove(plant=None):
-    return iobus_formal.prove_property(PROP, [plant] if plant else [])
+def prove(plant=None, prop=PROP):
+    return iobus_formal.prove_property(prop, [plant] if plant else [])
 
 
 def main():
@@ -70,12 +98,22 @@ def main():
     bad = 0 if ok else 1
     if not ok:
         print(log[-3000:])
+    pok, plog = prove(prop=PROP_PORT)
+    print("iobus lane walk one step ahead (lane, port_addr, selects) == the combinational form: %s"
+          % ("PROVEN" if pok else "FAILED"))
+    if not pok:
+        bad += 1
+        print(plog[-3000:])
     if "--selftest" in sys.argv:
         for a, b in PLANTS:
             pok, _ = prove((a, b))
             first = next(ln for ln, ref in zip(b.splitlines(), a.splitlines() + [""] * 9)
                          if ln != ref)
             print("  plant %s: %s" % ("NOT caught" if pok else "caught", first.strip()[:64]))
+            bad += pok
+        for a, b in PORT_PLANTS:
+            pok, _ = prove((a, b), PROP_PORT)
+            print("  plant %s: %s" % ("NOT caught" if pok else "caught", b.strip()[:64]))
             bad += pok
         print("check_iobus_lane_inv: selftest %s" % ("FAIL" if bad else "PASS"))
     sys.exit(1 if bad else 0)

@@ -22,9 +22,15 @@ module pc9821_kbd #(
     // keybrd.xferclock = pccore.realclock / 1920 (keyboard_changeclock) - one
     // byte-time per 1920 base-clock cycles. pccore.realclock is the base clock
     // at multiple 1 (pccore.h PCBASECLOCK25 = 2,457,600), so the transfer rate
-    // is 2,457,600 / 1920 = 1,280 byte-times per second. That is the DEVICE's
-    // rate - clk_sys only scales the count (the rate rule), and a bench
-    // overrides this parameter to make the window observable.
+    // is 2,457,600 / 1920 = 1,280 byte-times per second. That is NP2kai's MODEL of
+    // the keyboard link, not a measured rate: the link itself is a fixed 19200 bps
+    // (undoc98vol2 io_kb.txt, the keyboard interface header) with a mode word of
+    // 1 stop bit, odd parity and 8 data bits (io_kb.txt, port 0043h mode write),
+    // an 11-bit frame, so the line could carry about 1,745 bytes/s (573 us each,
+    // against this model's 781 us); the keyboard's own pacing between bytes is
+    // not captured. The value is a device rate either way - clk_sys only scales
+    // the count (the rate rule) - and a bench overrides this parameter to make
+    // the window observable.
     parameter [25:0] XFER_TICK_CYCLES = 26'(SYS_CLOCK_HZ / 1280)
 ) (
     input wire clk,
@@ -359,8 +365,24 @@ module pc9821_kbd #(
   // keyctrl.keyrep and keystat_down suppresses repeated makes when it is 0x70;
   // its own keyrepeat_proc ignores the value, which is the divergence fixed
   // here. The parameter's repeat TIMING is not modelled (NP2kai does not
-  // model it either).
+  // model it either). THE SOURCES DISAGREE ON 0x70 and no capture decides it:
+  // undoc98vol2 io_kb.txt (command 9Ch) defines the parameter as bits 6,5 the
+  // delay (11b = 1000 ms, 10b and 01b = 500 ms, 00b = 250 ms) and bits 4-0 the
+  // repeat speed (00001b fastest, the default; 11111b slowest), under which
+  // 0x70 is a 1000 ms delay, not an inhibit. The delay/speed decode waits for a
+  // capture of a real keyboard's typematic stream after each parameter (the
+  // speed field has no documented rate, so it cannot be built from the text).
   reg repeat_inhibit;
+  // Keyboard command 0x95's parameter, the extended key setting (undoc98vol2 io_kb.txt, command
+  // 95h [PC-9801-98/119]: 00h = normal, 03h = the Windows keys and the application key enabled).
+  // Until the guest sends 0x95 0x03 the keyboard sends no code above 0x74: NP2kai keystat.c
+  // keystat_initialize starts at `keyctrl.kbdtype = 1`, case 0x95 stores the parameter
+  // (`keyctrl.kbdtype = dat;`) and keystat_down skips every keycode >= 0x75 while
+  // `keyctrl.kbdtype < 3`. Only the module reset clears it: the 8251 keyboard reset's
+  // keystat_ctrlreset does not touch kbdtype. The parameter's other effect in NP2kai - a
+  // separate right Shift (0x7D) from kbdtype 2 on - is not modelled: both Shift keys give 0x70
+  // in translate() (tb_pc9821_kbd_winkeys).
+  reg winkeys_en;
   // MEMORY TYPE: M10K, NOT MLAB - measured, not a preference. An MLAB is built from a
   // LAB's own ALMs and LABs are this device's BINDING resource (the fit has 88 of 553 M10K
   // blocks free and 4,163 of 4,191 LABs used), so the MLAB form spends the scarce one.
@@ -380,6 +402,10 @@ module pc9821_kbd #(
   // one token per press, milliseconds apart, so this never exceeds 1 in practice -
   // the width is a guard, not a model of reachable backpressure.
   reg [1:0]  tap_brk;
+  // The breaks owed to the guest: one per non-lock key the dedup table holds down (see A FULL
+  // QUEUE NEVER LOSES A BREAK below). At most 128, one per key_state entry, so eight bits
+  // cannot wrap.
+  reg [7:0]  brk_owed;
   // The RE-POKE divider (see the irq assign below): free-running, so the re-strokes
   // are phase-deterministic and the first one after a delivery is at most one
   // transfer tick away.
@@ -516,7 +542,13 @@ module pc9821_kbd #(
   // table's registered read (`key_q`) instead of the live event and a flop array.
   wire key_down_now = wq_we && (wq_addr == ev2_code[6:0]) ? wq_down :
                       (key_q[0] && (key_q[7:1] == key_epoch));   // entry live under THIS epoch
-  wire normal_make = ev2_valid && !ev2_lock && ev2_pressed && !key_down_now;
+  // A make above 0x74 (the Windows keys) is dropped whole while 0x95 0x03 has not been sent: no
+  // byte, no dedup entry and no typematic. Its break then finds the key not down and sends
+  // nothing either. A key made while the setting was on still breaks after a 0x95 0x00 (the
+  // gate is on the make only), where NP2kai's keystat_up skips that break too and leaves the
+  // key down in its own table.
+  wire ext_key_ok  = winkeys_en || (ev2_code < 8'h75);
+  wire normal_make = ev2_valid && !ev2_lock && ev2_pressed && !key_down_now && ext_key_ok;
   wire normal_break = ev2_valid && !ev2_lock && !ev2_pressed && key_down_now;
   wire lock_press = ev2_valid && ev2_lock && ev2_pressed &&
                     !key_down_now;   // M2: one toggle per PHYSICAL press
@@ -543,7 +575,30 @@ module pc9821_kbd #(
   wire st_overrun = !kbd_reset_now && event_valid && !enqueue_key;
   wire st_deliver = !kbd_reset_now && (deliver_resp || deliver_key);
   wire fifo_can_enqueue = (fifo_cnt < 5'd16) || deliver_key;
-  wire event_enqueue = event_valid && fifo_can_enqueue;
+  // ---- A FULL QUEUE NEVER LOSES A BREAK -------------------------------------------------
+  // The real keyboard holds what it has to send until the interface is ready: OE "does not
+  // occur as long as the keyboard handshake is kept" (undoc98vol2 io_kb.txt, port 0043h status
+  // bit 4), so a real keyboard never leaves a released key with a make as the last code the
+  // guest gets. Dropping the NEWEST byte on a full queue (NP2kai keyboard_send, which also
+  // sets OE) would drop a BREAK as readily as a make, and a dropped break leaves the key down
+  // in the guest for good (the dedup table has already marked it up, so nothing re-sends it).
+  // So every byte that will still be owed keeps its slot: `brk_owed` counts the breaks owed to
+  // the guest - one per non-lock key the dedup table holds down, which is exactly the keys
+  // whose make was queued and whose break was not - and `tap_brk` the Pause taps' breaks. A
+  // byte that leaves a break owed (a make, a tap make) is queued only while its own slot AND
+  // its break's fit (fifo_cnt + owed <= 14); a byte that owes nothing new (a lock press, a
+  // typematic make) only while it fits beside every owed break (<= 15); a typematic pair
+  // starts only when both of its bytes fit, so a full queue never splits it. A break, or a
+  // tap's break, then always fits: fifo_cnt + owed <= 16 holds on every clk, and a break
+  // has itself counted in `owed`. A refused make still raises OE (NP2kai) and is not marked
+  // down, so its release sends nothing either - the guest misses the press whole, never half
+  // of it. Which bytes the real keyboard's own buffer refuses is not captured; this keeps the
+  // stream the guest drains consistent (tb_pc9821_kbd_overrun_break).
+  wire [8:0] fifo_owed = {4'd0, fifo_cnt} + {1'b0, brk_owed} + {7'd0, tap_brk};
+  wire       room_1    = (fifo_owed < 9'd16) || (deliver_key && (fifo_owed == 9'd16));
+  wire       room_2    = (fifo_owed < 9'd15) || (deliver_key && (fifo_owed == 9'd15));
+  wire event_enqueue = event_valid && (normal_break ? fifo_can_enqueue :
+                                       normal_make  ? room_2 : room_1);
   // THE hps_io-NORMALIZED PAUSE EVENT IS A TAP, NOT A HELD KEY. Its host stream carries
   // exactly ONE event: Main_MiSTer sends the raw PS/2 Pause make sequence
   // E1 14 77 E1 F0 14 F0 77 at key RELEASE and on every host autorepeat (user_io.cpp
@@ -564,7 +619,8 @@ module pc9821_kbd #(
   wire tap_enqueue = (tap_brk != 2'd0) && fifo_can_enqueue && !event_valid;
   // The typematic pair outranks nothing: a real key event and a Pause tap's break both
   // win, so a held key can never displace a press.
-  wire repeat_push = (rep_pend != 2'd0) && fifo_can_enqueue && !event_valid && !tap_enqueue;
+  wire repeat_push = (rep_pend != 2'd0) && ((rep_pend == 2'd2) ? room_2 : room_1) &&
+                     !event_valid && !tap_enqueue;
   wire [7:0] repeat_push_data = (rep_pend == 2'd2) ? (rep_key | 8'h80) : rep_key;
   wire enqueue_key = event_enqueue || tap_enqueue || repeat_push;
   wire [7:0] enqueue_data = event_enqueue ? event_data :
@@ -728,12 +784,14 @@ module pc9821_kbd #(
       cmd_opcode   <= 8'd0;
       lock_flags   <= 4'd0;
       repeat_inhibit <= 1'b0;
+      winkeys_en   <= 1'b0;
       xfer_div     <= '0;
       pace_div     <= '0;
       rep_key      <= 8'hFF;
       rep_pend     <= 2'd0;
       rep_timer    <= 26'd0;
       tap_brk      <= 2'd0;
+      brk_owed     <= 8'd0;   // the epoch bump forgets every held key at this reset
       // The key state and the 8251 sequence telemetry are reset state too:
       // dedup state kept across a reset would swallow the first make of every key that was
       // down before it (the epoch bump above clears it), and an unreset `ctrl_writes` X-locks the dbg_ctrl0/1 latches in 4-state sim.
@@ -843,6 +901,8 @@ module pc9821_kbd #(
           cmd_pending <= 1'b0;
           case (cmd_opcode)
             8'h95: begin
+              // NP2kai's `keyctrl.kbdtype < 3` test, inverted (see winkeys_en).
+              winkeys_en <= (din >= 8'h03);
               resp_shift <= {16'd0, 8'hFA};
               resp_count <= 2'd1;
             end
@@ -1000,6 +1060,16 @@ module pc9821_kbd #(
       if (kbd_reset_now)    tap_brk <= 2'd0;
       else if (tap_enqueue) tap_brk <= tap_brk - 2'd1;
       else if (tap_brk_set) tap_brk <= tap_brk + 2'd1;
+
+      // The owed-break count's ONE next-state, mirroring the dedup table's write (ev2_kwe /
+      // ev2_kdata): a queued non-tap make marks its key down and owes its break; a break clears
+      // it. The two come from the one staged event, so they cannot coincide. The 8251 keyboard
+      // reset keeps the table (see THE RESET CLEAR), so it keeps the count: a held key's break
+      // is still owed after it.
+      if (!kbd_reset_now && normal_make && event_enqueue && !tap_event)
+        brk_owed <= brk_owed + 8'd1;
+      else if (!kbd_reset_now && normal_break && event_enqueue)
+        brk_owed <= brk_owed - 8'd1;
 
       // The telemetry counts only what survives the fold (the bus-access counts
       // are unconditional: the reset write IS a control write).

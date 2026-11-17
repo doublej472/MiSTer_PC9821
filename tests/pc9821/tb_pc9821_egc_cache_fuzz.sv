@@ -1,20 +1,22 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_CACHE_FUZZ: a seeded, reproducible fuzz of the GVRAM write-combining buffer (8 word slots), the posted EGC write and the GVRAM's per-word fallback walk. It drives many randomized sequences of EGC, GRCG and plain reads and writes over random page-0/page-1 addresses with random byte enables, widths, posted-write-then-read-own-word shapes, dirty evictions and flush interleavings, checks every read against a byte-exact golden image as it returns, and after EVERY sequence flushes the WCB and compares the WHOLE 256 KiB SDRAM image against that golden, so a lost write-back or a stale read cannot hide behind a buffer hit.
+// TB_PC9821_EGC_CACHE_FUZZ: a seeded, reproducible fuzz (seed 0xC0DEC0DE, 200 sequences of 16-64 steps, xorshift32) of the GVRAM's three CPU clients - the posted EGC write, the GRCG and the plain plane path - and the GVRAM's per-word fallback walk, over the block-RAM GVRAM array (the 8-slot write-combining buffer this bench was written for is gone). It drives randomized sequences of non-overlapping EGC, GRCG and plain reads and writes (each step waits for every client to go idle, so the ORDER is randomized, not the overlap) over random page-0/page-1 addresses with random byte enables, widths and posted-write-then-read-own-word shapes, checks every plain and GRCG read against a byte-exact golden image as it returns, holds every EGC store to NP2kai's WS_CPU datum (the CPU byte or word on every plane, memegc.c egc_opeb/egc_opew default) through both the EGC and the plain reader, requires the stream to enter the fallback walk (u_arb.m_mode), and after EVERY sequence compares the WHOLE 256 KiB GVRAM array against that golden, so a lost or misplaced write cannot hide.
 //
-// WHY THIS EXISTS. An earlier review probed the same buffer with 17 hand-named cases and found
-// zero mismatches. This bench is the adversarial half of that result: it does not name the hazard,
-// it generates a seeded random stream that mixes the clients and the widths and lets the buffer's
-// own hazards collide. Reproducibility is the contract - the seed is printed, the RNG is xorshift32,
-// and a mismatch dumps every op of the failing sequence with the expected-vs-actual bytes.
+// WHY THIS EXISTS. An earlier review probed the GVRAM's write-combining buffer with 17 hand-named
+// cases and found zero mismatches; this bench was the adversarial half of that result, a seeded
+// random stream that mixes the clients and the widths. The buffer has since been removed (the
+// GVRAM is block RAM, each store its own access) and the buffer-era shapes (dirty eviction, stale
+// over-fetch, buffer seed) went with it. NOTE THE SCOPE: op() waits for every client to go idle
+// before the next step, so the accesses never overlap in time - the fuzz randomizes the ORDER,
+// widths, lanes and clients of non-overlapping accesses. Reproducibility is the contract - the seed
+// is printed, the RNG is xorshift32, and a mismatch dumps every op of the failing sequence with the
+// expected-vs-actual bytes.
 //
 // THE ORACLE. Plain and GRCG writes have a deterministic byte effect and drive the golden exactly.
-// The EGC's own store DATUM is its contract (its mask/shifter/plane-enable decide it), so an EGC
-// store is checked by READER AGREEMENT - the EGC reader (the SDRAM burst) and
-// the plain (buffer) reader must return the same byte, and the plain value becomes the golden the
-// later SDRAM compare is held to. A wire that served a stale copy separates the
-// two.
+// The EGC stores are WS_CPU stores with every plane enabled and a full mask, whose datum NP2kai
+// fixes (memegc.c egc_opeb/egc_opew `default`: the CPU byte or word on every plane), so they drive
+// the golden exactly too, and both the EGC reader and the plain reader are held to it.
 
 `default_nettype none
 
@@ -91,6 +93,14 @@ module tb_pc9821_egc_cache_fuzz;
 
   integer errors = 0;
   integer checks = 0;
+  // Entries into the GVRAM's per-word fallback walk (u_arb.m_mode rising): the claim names the walk,
+  // so a stream that never reaches it fails rather than passing vacuously.
+  integer walk_entries = 0;
+  reg     m_mode_q = 1'b0;
+  always @(posedge clk) begin
+    if (!reset && dut.u_arb.m_mode && !m_mode_q) walk_entries = walk_entries + 1;
+    m_mode_q <= dut.u_arb.m_mode;
+  end
 
   // ---- the reproducible PRNG: xorshift32, seeded once; every step is a function of it ----
   reg [31:0] rng;
@@ -220,7 +230,7 @@ module tb_pc9821_egc_cache_fuzz;
   endtask
 
   // A partial plain store with an arbitrary byte-enable: lane k writes plane pl at base+k. This
-  // is the shape that dirties a WCB word and the shape a partial-store miss fills from SDRAM.
+  // is the partial-store shape.
   task automatic plain_write_be(input integer pg, input [1:0] pl, input [14:0] base,
                                 input [31:0] dat, input [3:0] be);
     reg [31:0] sink;
@@ -290,25 +300,22 @@ module tb_pc9821_egc_cache_fuzz;
     end
   endtask
 
-  // The EGC's own store DATUM is the EGC's contract, so this bench asserts READER AGREEMENT: the
-  // EGC reader runs FIRST (behind the posted store), the plain (buffer) reader second, and the
-  // plain value becomes the golden the later SDRAM compare is held to.
-  task automatic readers_agree(input integer pg, input [1:0] pl, input [14:0] off,
-                               input [8*70-1:0] tag);
+  // An EGC store's DATUM is NP2kai's: the stores here run WS_CPU (ope 0x0000, so ope&0x1800 is
+  // neither 0x0800 nor 0x1000) with every plane enabled (0x4A0 = 0x0000) and mask 0xFFFF, and
+  // memegc.c's egc_opeb / egc_opew `default` case then writes the CPU byte / word itself to every
+  // plane (pc9821_egc_ref.sv egc_opeb/egc_opew `default:` dqw[p] = value; the word's mask2 ANDs a
+  // srcmask the re-arm just reset to 0xFFFF). So the golden is set to that datum FIRST and both
+  // readers are held to it: the EGC reader (behind the posted store) and then the plain reader.
+  // A dropped, misplaced or wrong-datum EGC store fails here, not only a reader disagreement.
+  task automatic egc_store_chk(input integer pg, input [1:0] pl, input [14:0] off,
+                               input [7:0] want, input [8*70-1:0] tag);
     reg [31:0] d;
-    reg [7:0]  v_egc, v_plain;
     begin
+      gold[gi(pg, pl, off)] = want;
       op(pg, pl, off, 32'd0, 4'b0001 << off[1:0], 1'b0, 1'b1, d);
-      v_egc = d[{off[1:0], 3'b000} +: 8];
+      chk_byte(pg, pl, off, d[{off[1:0], 3'b000} +: 8], tag);
       op(pg, pl, off, 32'd0, 4'b0001 << off[1:0], 1'b0, 1'b0, d);
-      v_plain = d[{off[1:0], 3'b000} +: 8];
-      gold[gi(pg, pl, off)] = v_plain;
-      checks = checks + 1;
-      if (v_egc !== v_plain) begin
-        $display("FAIL [seq %0d step %0d op %0d] %0s: pg%0d pl%0d off %04x EGC %02x plain %02x",
-                 cur_seq, cur_step, cur_op, tag, pg, pl, off, v_egc, v_plain);
-        errors = errors + 1;
-      end
+      chk_byte(pg, pl, off, d[{off[1:0], 3'b000} +: 8], tag);
     end
   endtask
 
@@ -324,7 +331,7 @@ module tb_pc9821_egc_cache_fuzz;
     begin
       egc_put_raw(pg, off, val);
       for (pp = 0; pp < 4; pp = pp + 1)
-        readers_agree(pg, pp[1:0], off, "EGC byte store: readers agree");
+        egc_store_chk(pg, pp[1:0], off, val, "EGC byte store: the CPU byte on every plane");
     end
   endtask
 
@@ -376,18 +383,16 @@ module tb_pc9821_egc_cache_fuzz;
     end
   endtask
 
-  // The EGC's TWO-WORD write burst (cl_burst, wbe 4'hF); the datum is captured by reader agreement.
+  // An EGC word store (be 0011 at a dword base): the CPU word lands on every plane.
   task automatic egc_put_word(input integer pg, input [14:0] off, input [15:0] data);
     reg [31:0] d;
     integer pp;
     begin
       egc_arm;
       op(pg, 2'd0, off, {16'd0, data}, 4'b0011, 1'b1, 1'b1, d);
-      // The SECOND word is read first: a read of the first word's run prefetches the following
-      // words and would fill the second word's buffer slot before it is checked.
       for (pp = 0; pp < 4; pp = pp + 1) begin
-        readers_agree(pg, pp[1:0], off + 1, "EGC word store: readers agree (word 1)");
-        readers_agree(pg, pp[1:0], off + 0, "EGC word store: readers agree (word 0)");
+        egc_store_chk(pg, pp[1:0], off + 1, data[15:8], "EGC word store: high byte on every plane");
+        egc_store_chk(pg, pp[1:0], off + 0, data[7:0],  "EGC word store: low byte on every plane");
       end
     end
   endtask
@@ -482,18 +487,15 @@ module tb_pc9821_egc_cache_fuzz;
     end
   endtask
 
-  // Drain the write-combining buffer: one line tick sets the flush debt; the scanout's own fetch
-  // gate holds until every dirty word is back.
-  task automatic flush_wcb;
+  // A raster line tick between sequences (the write-combining buffer it once flushed is gone).
+  task automatic line_tick;
     begin
       @(negedge clk); scan_line_tick = 1'b1; @(negedge clk); scan_line_tick = 1'b0;
-      @(posedge clk);
-      while (1'b0) @(posedge clk);
-      repeat (4) @(posedge clk);
+      repeat (5) @(posedge clk);
     end
   endtask
 
-  // The whole SDRAM image against the golden model. Only meaningful after a flush.
+  // The whole GVRAM array against the golden model.
   // The GVRAM array is four byte-lane M10K arrays (a synthesis decision), so a word's
   // byte `pl` is lane `pl` of the word at `w`.
   function [7:0] gvmem_byte(input [15:0] w, input [1:0] pl);
@@ -512,7 +514,7 @@ module tb_pc9821_egc_cache_fuzz;
         for (pl = 0; pl < 4; pl = pl + 1) begin
           checks = checks + 1;
           if (gvmem_byte(w[15:0], pl[1:0]) !== gold[(w * 4) + pl]) begin
-            $display("FAIL [seq %0d step %0d op %0d] %0s: SDRAM word %04x plane %0d = %02x want %02x",
+            $display("FAIL [seq %0d step %0d op %0d] %0s: GVRAM word %04x plane %0d = %02x want %02x",
                      cur_seq, cur_step, cur_op, tag, w, pl,
                      gvmem_byte(w[15:0], pl[1:0]), gold[(w * 4) + pl]);
             errors = errors + 1;
@@ -537,7 +539,7 @@ module tb_pc9821_egc_cache_fuzz;
     reg [3:0]  be;
     begin
       cur_step = sx;
-      o    = rnd() % 21;
+      o    = rnd() % 17;
       cur_op = o;
       pg   = rnd() & 1;
       pl   = rnd() & 3;
@@ -568,40 +570,11 @@ module tb_pc9821_egc_cache_fuzz;
         // posted write then read its own word: the EGC store is posted on the accept, so a read of
         // the same word lands behind it and must return the new value on the EGC, plain and line.
         16: begin egc_put_raw(pg, offi[14:0], val);
-                  // the store's DATUM is the EGC's contract: adopt it by reader agreement, then
-                  // check the plain and line readers against the adopted golden.
                   for (k = 0; k < 4; k = k + 1)
-                    readers_agree(pg, k[1:0], offi[14:0], "posted: readers agree");
+                    egc_store_chk(pg, k[1:0], offi[14:0], val, "posted: the CPU byte on every plane");
                   get_byte(pg, pl[1:0], offi[14:0], "posted: plain read own word");
                   egc_get(pg, pl[1:0], offi[14:0], "posted: EGC read own word");
                   line_read(pg, pl[1:0], offi[14:0] & 15'h7FF0, "posted: line read own word"); end
-        17: flush_wcb;
-        // a dirty-eviction burst: twelve one-word partial stores (low byte 0xFF clamps the
-        // read-prefetch to one word) so no clean victim is left, then an EGC read over the words.
-        18: begin for (k = 0; k < 12; k = k + 1)
-                    put_byte(pg, 2'd1, ((offi[14:0] & 15'h7F00) ^ (k[14:0] << 8)) | 15'h00FF,
-                             val + k[7:0]);
-                  egc_get(pg, pl[1:0], offi[14:0], "post-eviction EGC read"); end
-        // seed then re-read: an EGC read seeds the buffer, a store over the same word then a
-        // re-read must return the new byte.
-        19: begin egc_get(pg, pl[1:0], offi[14:0], "buffer seed");
-                  put_byte(pg, pl[1:0], offi[14:0], val);
-                  egc_get(pg, pl[1:0], offi[14:0], "re-read after store"); end
-        // the stale over-fetch + the dirty eviction: a plain read whose prefetch covers a word the
-        // buffer holds DIRTY reads SDRAM's stale value; the write-back that ends the hold - an
-        // EVICTION, not a flush - closes it, so a later reader must see the merge.
-        20: begin
-              offi = (offi[14:0] & 15'h7F00) | 15'h00FF;
-              put_byte(pg, 2'd1, offi[14:0], val);
-              get_byte(pg, 2'd1, offi[14:0] - 15'h1, "prefetch over the dirty word");
-              get_byte(pg, 2'd1, offi[14:0], "dirty word still reads back");
-              for (k = 1; k <= 12; k = k + 1)
-                put_byte(pg, 2'd2, ((offi[14:0] & 15'h7F00) ^ (k[14:0] << 8)) | 15'h00FF,
-                         val + k[7:0]);
-              // the EGC burst reader first (it bypasses the buffer), then the plain walk.
-              egc_get(pg, 2'd1, offi[14:0], "EGC read after the dirty eviction");
-              get_byte(pg, 2'd1, offi[14:0], "plain read after the dirty eviction");
-            end
         default: put_byte(pg, pl[1:0], offi[14:0], val);
       endcase
     end
@@ -634,16 +607,20 @@ module tb_pc9821_egc_cache_fuzz;
       total_steps  = total_steps + nsteps;
       for (s = 0; s < nsteps; s = s + 1)
         do_step(s);
-      flush_wcb;
+      line_tick;
       sdram_chk("sequence end");
       if (errors > seq_errors0) dump_seq;
     end
 
-    flush_wcb;
+    line_tick;
 
     // ==== VERDICT ====
-    $display("NOTE egc_cache_fuzz: %0d sequence(s), %0d step(s), seed 0x%08x, %0d coherence check(s), %0d mismatch(es)",
-             NSEQ, total_steps, SEED, checks, errors);
+    $display("NOTE egc_cache_fuzz: %0d sequence(s), %0d step(s), seed 0x%08x, %0d coherence check(s), %0d mismatch(es), %0d fallback-walk entries",
+             NSEQ, total_steps, SEED, checks, errors, walk_entries);
+    if (walk_entries == 0) begin
+      $display("FAIL: the stream never entered the GVRAM's fallback walk (u_arb.m_mode)");
+      errors = errors + 1;
+    end
     if (errors == 0) begin
       $display("TB_PC9821_EGC_CACHE_FUZZ: PASS");
       $finish;

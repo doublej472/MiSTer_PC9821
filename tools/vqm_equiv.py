@@ -13,19 +13,34 @@ yosys SAT, that two netlists compute the same thing:
       every dffeas whose instance name contains SUB and exists in both: its
       next state (d/ena/sclr/sload/asdata) as a function of every register,
       RAM/DSP output and top-level input (the same net name is the same free
-      variable on both sides). Registers of an FSM Quartus re-encoded are
-      constrained to the encodings map.rpt lists - Quartus may assume those,
-      nothing else. --each proves register by register and names the failures.
+      variable on both sides), its asynchronous controls (clrn/prn/aload, compared
+      as functions too) and its power_up value. Registers of an FSM Quartus
+      re-encoded are constrained to the encodings map.rpt lists - Quartus may
+      assume those, nothing else; the tool prints how many tables it read and
+      how many it applied. --each proves register by register and names the failures.
+      A filter matching no common register exits 2 (nothing proved); a register
+      in only one netlist is DIFFERENT unless --allow-missing is given.
   nets A.vqm B.vqm NETA=NETB[&COND] ...
       the named nets equal (optionally only where COND is 1; COND in A).
   --selftest
       a planted LUT-mask defect must be caught and the unmodified pair proved.
 
-Cell semantics follow Intel's cyclonev_atoms.v (cyclonev_lcell_comb: 6-LUT,
-extended-LUT mode with datag, arithmetic sumout/cout, shared arithmetic) and
-altera_primitives.v (dffeas: ena over sclr over sload). Named comb nets are NOT
-comparable between two syntheses (Quartus reuses names for partial terms);
-registers, (* keep *) wires and top-level ports are.
+Cell semantics follow Intel's simulation models in quartus/eda/sim_lib (Quartus 17.0):
+
+  * cyclonev_atoms.v, module cyclonev_lcell_comb: f0..f3 are lut4 over lut_mask's four
+    16-bit quarters, f1/f3 taking datag in place of datac in extended-LUT mode
+    (`f2_input3`); combout is the 6-LUT mask[{f,e,d,c,b,a}], or in extended mode
+    dataf ? (datae ? f3 : f2) : (datae ? f1 : f0); the adder's second input is sharein
+    under shared_arith, else !lut4(f2 quarter, a, b, c, dataf); sumout = cin ^ f0 ^ that,
+    cout its majority, shareout = f2. The model gives the cell's inputs no pull (plain
+    `buf`), so an input the VQM leaves unconnected is taken as 0 here; Quartus leaves an
+    input unconnected only when the mask does not depend on it (cin is written `gnd`).
+  * altera_primitives.v, module dffeas: ena over sclr over sload (sclr_over_ena "false",
+    the default; a cell that sets it is refused); unconnected aload/sclr/sload/asdata are
+    tri0 and unconnected clrn/prn/ena tri1, which are the defaults used here.
+
+Named comb nets are NOT comparable between two syntheses (Quartus reuses names for
+partial terms); registers, (* keep *) wires and top-level ports are.
 """
 import argparse
 import hashlib
@@ -34,6 +49,10 @@ import re
 import subprocess
 import sys
 import tempfile
+
+# The emitter recurses once per combinational level (net -> cell -> net); a deep cone or a
+# long carry chain must not die at Python's default limit of 1000.
+sys.setrecursionlimit(max(sys.getrecursionlimit(), 200_000))
 
 CELL_RE = re.compile(r'^(cyclonev_\w+|dffeas)\s+(\\\S+\s|\S+)\s*\(')
 
@@ -88,10 +107,16 @@ def parse(path):
 
 
 def fsm_constraints(rpt):
-    """map.rpt 'State Machine' tables -> [(column register nets, encoding rows)]."""
+    """map.rpt 'State Machine' tables -> [(column register nets, encoding rows)].
+
+    The table's hierarchy is `|sys_top|emu:emu|...|<inst>|<state>` and its columns are the
+    one-hot register names; the VQM names the same registers with the same entity:instance
+    path minus the top (`emu:emu|...|<state>.<STATE>`), so only the first component is cut."""
     out = []
-    if not rpt or not os.path.exists(rpt):
+    if not rpt:
         return out
+    if not os.path.exists(rpt):
+        raise SystemExit(f"vqm_equiv: --rpt {rpt}: no such file")
     lines = open(rpt, errors='replace').read().splitlines()
     i = 0
     while i < len(lines):
@@ -99,12 +124,19 @@ def fsm_constraints(rpt):
         if m:
             base = m.group(1).rsplit('|', 1)[0]
             cols = [c.strip() for c in lines[i + 2].strip().strip(';').split(';')][1:]
-            rows, j = [], i + 4
+            rows, j, ok = [], i + 4, True
             while j < len(lines) and lines[j].startswith(';'):
                 f = [c.strip() for c in lines[j].strip().strip(';').split(';')]
-                rows.append([int(x) for x in f[1:]])
+                if len(f) - 1 != len(cols) or any(x not in ('0', '1') for x in f[1:]):
+                    ok = False
+                else:
+                    rows.append([int(x) for x in f[1:]])
                 j += 1
-            out.append(([base + '|' + c for c in cols], rows))
+            if ok and rows:
+                out.append(([base + '|' + c for c in cols], rows))
+            else:
+                print(f"vqm_equiv: WARNING: State Machine table {m.group(1)} in {rpt} is not "
+                      f"0/1 rows over its columns; not applied")
             i = j
         i += 1
     return out
@@ -115,7 +147,7 @@ class Emitter:
 
     def __init__(self, tag, cells, assigns, leaves, lines):
         self.tag, self.c, self.a, self.leaves, self.lines = tag, cells, assigns, leaves, lines
-        self.drv, self.done = {}, set()
+        self.drv, self.done, self.busy = {}, set(), set()
         for inst, (t, ports, _) in cells.items():
             if t == 'cyclonev_lcell_comb':
                 for p in ('combout', 'sumout', 'cout', 'shareout'):
@@ -148,7 +180,15 @@ class Emitter:
     def cell(self, inst):
         if inst in self.done:
             return
+        if inst in self.busy:
+            # a wire used before its declaration: yosys would report an unrelated parse error
+            raise SystemExit(f"vqm_equiv: combinational loop through {inst} ({self.tag})")
+        self.busy.add(inst)
+        self._cell(inst)
+        self.busy.discard(inst)
         self.done.add(inst)
+
+    def _cell(self, inst):
         _, ports, prm = self.c[inst]
         g = lambda p: self.net(ports.get(p)) if ports.get(p) else "1'b0"
         a, b, c, d, e, f, gg = [g('data' + x) for x in 'abcdefg']
@@ -174,11 +214,27 @@ class Emitter:
         L.append(f"wire {I}_shareout = {I}_f2;")
 
     def next_state(self, inst):
-        _, ports, _ = self.c[inst]
+        _, ports, prm = self.c[inst]
+        if prm.get('sclr_over_ena', 'false') != 'false':
+            raise SystemExit(f"vqm_equiv: {inst} sets sclr_over_ena, which this model does not carry")
         g = lambda p, dflt: self.net(ports.get(p)) if ports.get(p) else dflt
         d, ena = g('d', "1'b0"), g('ena', "1'b1")
         sclr, sload, asd, q = g('sclr', "1'b0"), g('sload', "1'b0"), g('asdata', "1'b0"), g('q', "1'b0")
         return f"(({ena}) ? (({sclr}) ? 1'b0 : (({sload}) ? {asd} : {d})) : {q})"
+
+    def async_ctl(self, inst):
+        """{clrn, prn, aload, asdata} as one 4-bit value (the unconnected defaults of
+        altera_primitives.v's dffeas: clrn/prn tri1, aload/asdata tri0)."""
+        _, ports, _ = self.c[inst]
+        g = lambda p, dflt: self.net(ports.get(p)) if ports.get(p) else dflt
+        clrn, prn = g('clrn', "1'b1"), g('prn', "1'b1")
+        aload, asd = g('aload', "1'b0"), g('asdata', "1'b0")
+        return f"{{{clrn}, {prn}, {aload}, (({aload}) & {asd})}}"
+
+    @staticmethod
+    def has_async_of(cells, inst):
+        ports = cells[inst][1]
+        return any(ports.get(p) for p in ('clrn', 'prn', 'aload'))
 
 
 def build_miter(A, B, pairs, rpt=None):
@@ -190,12 +246,16 @@ def build_miter(A, B, pairs, rpt=None):
     labels = []
     for k, (label, fa, fb) in enumerate(pairs):
         x, y = fa(ea), fb(eb)
-        lines.append(f"wire diff{k} = {x} ^ {y};")
+        lines.append(f"wire diff{k} = |({x} ^ {y});")
         labels.append(label)
     legal = []
-    for cols, rows in fsm_constraints(rpt):
+    tables = fsm_constraints(rpt)
+    applied = partial = 0
+    for cols, rows in tables:
         if not any(col in leaves for col in cols):
             continue
+        applied += 1
+        partial += not all(col in leaves for col in cols)
         terms = []
         for r in rows:
             lits = [(leaves[col] if bit else f"~{leaves[col]}") for col, bit in zip(cols, r) if col in leaves]
@@ -204,6 +264,9 @@ def build_miter(A, B, pairs, rpt=None):
     hdr = "module miter(" + ", ".join(['output trig'] + [f"output tdiff{k}" for k in range(len(pairs))]
                                       + [f"input {v}" for v in leaves.values()]) + ");\n"
     body = "\n".join(lines) + "\n"
+    if rpt:
+        print(f"vqm_equiv: {len(tables)} FSM encoding tables read from {rpt}, {applied} applied to "
+              f"this cone ({partial} over only some of their registers: a projection, so looser)")
     body += "wire legal = " + (" & ".join(legal) if legal else "1'b1") + ";\n"
     body += "assign trig = legal & (" + (" | ".join(f"diff{k}" for k in range(len(pairs))) or "1'b0") + ");\n"
     for k in range(len(pairs)):
@@ -231,11 +294,40 @@ def sat(miter_text, targets):
 
 def cmd_regs(args):
     A, B = parse(args.a), parse(args.b)
-    regs = sorted(i for i, c in A[0].items() if c[0] == 'dffeas' and args.filter in i
-                  and i in B[0] and B[0][i][0] == 'dffeas')
-    only = sorted(i for i, c in A[0].items() if c[0] == 'dffeas' and args.filter in i and i not in B[0])
-    print(f"vqm_equiv: {len(regs)} registers common to both, {len(only)} only in A")
+    ra = {i for i, c in A[0].items() if c[0] == 'dffeas' and args.filter in i}
+    rb = {i for i, c in B[0].items() if c[0] == 'dffeas' and args.filter in i}
+    regs = sorted(ra & rb)
+    only_a, only_b = sorted(ra - rb), sorted(rb - ra)
+    print(f"vqm_equiv: {len(regs)} registers common to both, {len(only_a)} only in A, "
+          f"{len(only_b)} only in B")
+    # A proof over no registers is `trig = 0` and proves trivially: a filter that matches
+    # nothing (a typo) must never read EQUAL.
+    if not regs:
+        print(f"vqm_equiv: NO REGISTERS match --filter {args.filter!r} in both netlists: "
+              f"nothing was proved")
+        return 2
+    # A register one synthesis has and the other lacks is a difference the miter cannot see
+    # (it compares only common registers), so it fails unless the caller accepts it.
+    missing = [f"only in A: {r}" for r in only_a] + [f"only in B: {r}" for r in only_b]
+    for m in missing[:20]:
+        print("  MISSING", m)
+    if missing and not getattr(args, 'allow_missing', False):
+        print("vqm_equiv: DIFFERENT (register sets differ; --allow-missing proves the common "
+              "registers only)")
+        return 1
+    # power_up is a parameter, not a function: compared as text ("low" when not written,
+    # the dffeas default being DONT_CARE, which Quartus writes explicitly).
+    pu = [r for r in regs if A[0][r][2].get('power_up') != B[0][r][2].get('power_up')]
+    for r in pu[:20]:
+        print(f"  POWER_UP differs: {r}: {A[0][r][2].get('power_up')} vs {B[0][r][2].get('power_up')}")
+    if pu:
+        print(f"vqm_equiv: DIFFERENT ({len(pu)} register(s) with a different power_up)")
+        return 1
     pairs = [(r, (lambda e, r=r: e.next_state(r)), (lambda e, r=r: e.next_state(r))) for r in regs]
+    # A register's asynchronous controls are compared as functions when either side has one.
+    pairs += [(r + " (clrn/prn/aload)", (lambda e, r=r: e.async_ctl(r)),
+               (lambda e, r=r: e.async_ctl(r)))
+              for r in regs if Emitter.has_async_of(A[0], r) or Emitter.has_async_of(B[0], r)]
     text, labels, leaves = build_miter(A, B, pairs, args.rpt)
     print(f"vqm_equiv: {len(leaves)} free leaves")
     targets = [f"tdiff{k}" for k in range(len(pairs))] if args.each else ['trig']
@@ -304,6 +396,84 @@ assign \__ALT_INV__ra  = ~ \ra ;
 """
 
 
+def _lcell(name, ports, mask, ext="off", shared="off"):
+    """One cyclonev_lcell_comb in VQM text (selftest only)."""
+    body = ",\n".join(f"\t.{k}({v})" for k, v in ports.items())
+    return (f"cyclonev_lcell_comb \\{name}_I (\n{body});\n"
+            f"defparam \\{name}_I .shared_arith = \"{shared}\";\n"
+            f"defparam \\{name}_I .extended_lut = \"{ext}\";\n"
+            f"defparam \\{name}_I .lut_mask = \"{mask}\";\n\n")
+
+
+def _dff(name, ports, power_up=None):
+    body = ",\n".join(f"\t.{k}({v})" for k, v in ports.items())
+    pu = f"defparam \\{name}~I .power_up = \"{power_up}\";\n" if power_up else ""
+    return f"dffeas \\{name}~I (\n{body});\n{pu}\n"
+
+
+# A two-state one-hot FSM table in map.rpt's layout (the registers u|st.S0 and u|st.S1).
+SELFTEST_RPT = """; State Machine - |top|u|st ;
++-------+-------+-------+
+; Name  ; st.S1 ; st.S0 ;
++-------+-------+-------+
+; st.S0 ; 0     ; 1     ;
+; st.S1 ; 1     ; 0     ;
++-------+-------+-------+
+"""
+
+
+def _selftest_cells(td):
+    """The cell-semantics plants: each (label, A text, B text, rpt or None, want rc)."""
+    rf = "\\ra ", "\\rb ", "\\rc ", "\\rg ", "\\re ", "\\rf "
+    ra, rb, rc, rg, re_, rf_ = rf
+    cases = []
+    # Extended LUT: with extended_lut on, f1 reads datag in place of datac. Quarter 1 = F0F0
+    # (input3) and the rest 0 make combout = !f & e & input3, which a plain 6-LUT with the
+    # same mask computes from datac. A wired (c=rc, g=rg) equals B wired (c=rg); a model
+    # that fed f1 datac would see rc and fail the equal pair.
+    m = "00000000F0F00000"
+    a = _lcell("x", dict(dataa=ra, datab=rb, datac=rc, datag=rg, datae=re_, dataf=rf_, combout="\\x "), m, ext="on")
+    b = _lcell("x", dict(dataa=ra, datab=rb, datac=rg, datae=re_, dataf=rf_, combout="\\x "), m)
+    b2 = _lcell("x", dict(dataa=ra, datab=rb, datac=rc, datae=re_, dataf=rf_, combout="\\x "), m)
+    reg = _dff("y", dict(clk="\\clk ", d="\\x ", q="\\y "))
+    cases += [("extended LUT == plain LUT on datag", a + reg, b + reg, None, 0),
+              ("extended LUT != plain LUT on datac", a + reg, b2 + reg, None, 1)]
+    # Shared arithmetic: sumout = cin ^ f0 ^ sharein, against the unshared form whose adder
+    # input is !lut4(quarter 2, a, b, c, dataf). P's shareout (its quarter 2) is AND(a, b);
+    # the unshared cell's quarter 2 is its complement 7777, so both sums are cin ^ f0 ^ ab.
+    p_ = _lcell("p", dict(dataa=ra, datab=rb, shareout="\\p~sh "), "0000888800000000")
+    qa = _lcell("q", dict(dataa=ra, datab=rb, datad=rc, cin="gnd", sharein="\\p~sh ",
+                          sumout="\\q "), "0000000000000F0F", shared="on")
+    qb = _lcell("q", dict(dataa=ra, datab=rb, datad=rc, cin="gnd", sumout="\\q "),
+                "0000777700000F0F")
+    qb2 = _lcell("q", dict(dataa=ra, datab=rb, datad=rc, cin="gnd", sumout="\\q "),
+                 "0000888800000F0F")
+    reg = _dff("z", dict(clk="\\clk ", d="\\q ", q="\\z "))
+    cases += [("shared-arith sum == the unshared sum", p_ + qa + reg, qb + reg, None, 0),
+              ("shared-arith sum != an uncomplemented adder input", p_ + qa + reg, qb2 + reg, None, 1)]
+    # Asynchronous controls and power-up: invisible to the next-state function, so each is
+    # compared on its own.
+    plain = _dff("w", dict(clk="\\clk ", d=ra, q="\\w "))
+    clr = _dff("w", dict(clk="\\clk ", d=ra, clrn=rb, q="\\w "))
+    high = _dff("w", dict(clk="\\clk ", d=ra, q="\\w "), power_up="high")
+    cases += [("a register that gained an asynchronous clear", plain, clr, None, 1),
+              ("the same asynchronous clear on both sides", clr, clr, None, 0),
+              ("a register whose power_up differs", plain, high, None, 1)]
+    # FSM encodings from map.rpt: r = S0 & S1 is 0 on every legal one-hot code, so it equals
+    # a register fed 0 only when the table is applied.
+    st = (_dff("u|st.S0", dict(clk="\\clk ", d=ra, q="\\u|st.S0 ")) +
+          _dff("u|st.S1", dict(clk="\\clk ", d=rb, q="\\u|st.S1 ")))
+    both = _lcell("r~0", dict(dataa="\\u|st.S0 ", datab="\\u|st.S1 ", combout="\\r~0 "), "8888888888888888")
+    ra_ = st + both + _dff("r", dict(clk="\\clk ", d="\\r~0 ", q="\\r "))
+    rb_ = st + _dff("r", dict(clk="\\clk ", d="gnd", q="\\r "))
+    rpt = os.path.join(td, "map.rpt")
+    with open(rpt, "w") as f:
+        f.write(SELFTEST_RPT)
+    cases += [("an FSM-only-reachable difference, with the map.rpt encodings", ra_, rb_, rpt, 0),
+              ("the same difference with no encodings", ra_, rb_, None, 1)]
+    return cases
+
+
 def selftest():
     with tempfile.TemporaryDirectory() as td:
         good = os.path.join(td, 'a.vqm')
@@ -320,6 +490,44 @@ def selftest():
         if r1 != 0 or r2 != 1:
             print("vqm_equiv selftest: FAIL (equal pair", r1, ", planted defect", r2, ")")
             return 1
+        # a filter that matches nothing must not read EQUAL
+        r3 = cmd_regs(ns(a=good, b=same, filter='no_such_reg', rpt=None, each=False))
+        # a register the other netlist lacks is a difference, unless explicitly allowed
+        drop = os.path.join(td, 'd.vqm')
+        text = SELFTEST_VQM.replace('MASK', andmask)
+        cut = text[:text.index('dffeas \\z~I')] + text[text.index('assign '):]
+        open(drop, 'w').write(cut)
+        r4 = cmd_regs(ns(a=good, b=drop, filter='', rpt=None, each=False, allow_missing=False))
+        r5 = cmd_regs(ns(a=good, b=drop, filter='', rpt=None, each=False, allow_missing=True))
+        if r3 != 2 or r4 != 1 or r5 != 0:
+            print("vqm_equiv selftest: FAIL (empty filter", r3, ", missing register", r4,
+                  ", allowed", r5, ")")
+            return 1
+        fails = []
+        for label, ta, tb, rpt, want in _selftest_cells(td):
+            pa, pb = os.path.join(td, 'ca.vqm'), os.path.join(td, 'cb.vqm')
+            open(pa, 'w').write(ta)
+            open(pb, 'w').write(tb)
+            got = cmd_regs(ns(a=pa, b=pb, filter='', rpt=rpt, each=False, allow_missing=False))
+            if got != want:
+                fails.append(f"{label}: rc {got}, want {want}")
+        # a combinational loop is named, not left to yosys as an unrelated parse error
+        loop = (_lcell("l1", dict(dataa="\\l2 ", combout="\\l1 "), "5555555555555555") +
+                _lcell("l2", dict(dataa="\\l1 ", combout="\\l2 "), "5555555555555555") +
+                _dff("k", dict(clk="\\clk ", d="\\l1 ", q="\\k ")))
+        pl = os.path.join(td, 'loop.vqm')
+        open(pl, 'w').write(loop)
+        try:
+            cmd_regs(ns(a=pl, b=pl, filter='', rpt=None, each=False, allow_missing=False))
+            fails.append("a combinational loop was not reported")
+        except SystemExit as e:
+            if "combinational loop" not in str(e):
+                fails.append(f"a combinational loop gave {e}")
+        if fails:
+            print("vqm_equiv selftest: FAIL")
+            for f in fails:
+                print("  -", f)
+            return 1
     print("vqm_equiv selftest: PASS")
     return 0
 
@@ -334,6 +542,8 @@ def main():
     r.add_argument('--filter', default='')
     r.add_argument('--rpt', help='map.rpt of A (FSM encodings)')
     r.add_argument('--each', action='store_true')
+    r.add_argument('--allow-missing', action='store_true',
+                   help='prove the common registers even when one netlist has registers the other lacks')
     n = sub.add_parser('nets')
     n.add_argument('a'); n.add_argument('b'); n.add_argument('pairs', nargs='+')
     args = ap.parse_args()

@@ -554,7 +554,7 @@ module tb_pc9821_readback_gdc;
     read_io(8'hA3, value); check("cg_code_low_second_value",  {8'h00, value}, 16'h0034);
     read_io(8'hA5, value); check("cg_line_second_value",      {8'h00, value}, 16'h0015);
 
-    // ==== THE PEGC 256-COLOUR READ MIRROR (pegc-scope-REPORT.md 4 row 5) ====
+    // ==== THE PEGC 256-COLOUR READ MIRROR ====
     // In 256-colour mode the mirror is 256 entries at the UNMASKED 8-bit index
     // with FULL-byte channels, read back verbatim (NP2kai anareg[16*3 +
     // palnum*4 + c], io/gdc.c:852-904 writes and :922-954 reads). MAME returns 0

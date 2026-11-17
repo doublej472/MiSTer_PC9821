@@ -4,10 +4,11 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// A back-pressured device write is released within 2 cycles of the device freeing its buffer - the S_IOWAIT re-check runs EVERY CYCLE once the bus-time class hold (io_hold) has expired, and the class hold itself is untouched (the strobe is never early). FAIL-FIRST: on the pre-fix iobus the 11-bit io_hold wraps 0 -> 2047 under a still-high device_wr_wait, so the write re-checks the wait only once per 2048 cycles and a 0xA46C write whose wait outlasts the hold lands ~2047 dead cycles after the device freed up. This bench sweeps the wait length around the wrap point (1/2/3/5 cycles, the expiry crossing, and 64/200 cycles past it) and floods 16 back-to-back writes against a device busy 7 cycles of every 8; both name the miss and fail by thousands of cycles on the pre-fix tree. Warrant: pc9821_iobus.sv's own S_DEVWAIT contract (the read wait is re-checked every cycle - the pattern F1 should follow) and NP2kai's direction (a write is applied the moment the device can take it); the bounds are the class's own FSM shape (IO_MIN_HOLD = 4), not a capture.
+// A back-pressured device write is released within 2 cycles of the device freeing its buffer - the write-wait re-check (now the S_BYTE hold) runs EVERY CYCLE once the bus-time class hold (io_hold) has expired, and the class hold itself is untouched (the strobe is never early). FAIL-FIRST: on the pre-fix iobus the 11-bit io_hold wraps 0 -> 2047 under a still-high device_wr_wait, so the write re-checks the wait only once per 2048 cycles and a 0xA46C write whose wait outlasts the hold lands ~2047 dead cycles after the device freed up. This bench sweeps the wait length around the wrap point (1/2/3/5 cycles, the expiry crossing, and 64/200 cycles past it) and floods 16 back-to-back writes against a device that frees one slot every 8 cycles and holds it until a write takes it (a FIFO's back-pressure), never strobing a write while the wait is high; both name the miss and fail by thousands of cycles on the pre-fix tree. Warrant: pc9821_iobus.sv's own S_DEVWAIT contract (the read wait is re-checked every cycle - the pattern F1 should follow) and NP2kai's direction (a write is applied the moment the device can take it); the bounds are the class's own FSM shape (IO_MIN_HOLD = 4), not a capture.
 //
 // TB_PC9821_IOWAIT_RELEASE: a back-pressured device write is released within 2 cycles
-// of the device freeing its buffer - the S_IOWAIT re-check runs EVERY CYCLE once the
+// of the device freeing its buffer - the write-wait re-check (S_IOWAIT's then, the S_BYTE hold
+// since the owner-approved one-cycle latency improvement) runs EVERY CYCLE once the
 // bus-time class hold (io_hold, the real machine's I/O timing) has expired, and the
 // class hold itself is untouched (the strobe is never early).
 //
@@ -19,8 +20,8 @@
 // the device freed up - at 50 MHz up to 41 us of pure avoidable stall per
 // back-pressured write, and a REP OUTSB stream to 0xA46C turns smooth back-pressure
 // into a 2048-cycle heartbeat. This bench sweeps the wait length around the 0->2047
-// wrap point and floods 16 back-to-back writes against a device that is busy 7 cycles
-// of every 8; both fail on the pre-fix tree by thousands of cycles.
+// wrap point and floods 16 back-to-back writes against a device that frees one slot
+// every 8 cycles; both fail on the pre-fix tree by thousands of cycles.
 //
 // Warrant: pc9821_iobus.sv's own S_DEVWAIT contract (the read wait is re-checked every
 // cycle, the pattern the write side follows) and NP2kai's direction - it applies the write
@@ -63,7 +64,7 @@ module tb_pc9821_iowait_release;
   reg         device_rd_wait = 1'b0;
   reg         device_rd_hold = 1'b0;
   reg         device_wr_wait = 1'b0;   // THE SCRIPTED BACK-PRESSURE (pc9821_system's mux)
-    // The GDC FF2 query state (a pc9821_iobus input since readbacks.md P6);
+    // The GDC FF2 query state (a pc9821_iobus input);
     // tied quiet here - this bench is not about the FF2 read-back.
     wire [10:0] gdc_ff2_state = 11'd0;
 
@@ -140,6 +141,7 @@ module tb_pc9821_iowait_release;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -251,10 +253,25 @@ module tb_pc9821_iowait_release;
     $fatal(1, "TB_PC9821_IOWAIT_RELEASE: watchdog expired");
   end
 
-  // The flood's scripted device: busy 7 cycles of every 8.
+  // The flood's scripted device: one slot freed every 8 cycles and HELD until a write
+  // takes it, which is how both real waits behave (pc9821_pcm86_buf's `wr_wait = fifo_full`
+  // over its registered count, the OPNA queue's `wrq_cnt[WRQ_BITS]`): the wait falls when
+  // the device drains and rises again only on the write that fills it. A wait that rose
+  // again on its own a cycle later would be a device dropping a write nobody presented.
   reg flood_active = 0;
+  reg flood_slot = 0;
+  always @(posedge clk)
+    if (!flood_active) flood_slot <= 1'b0;
+    else if (device_io_wr && (device_io_addr[15:0] == 16'hA46C)) flood_slot <= 1'b0;
+    else if (cycle[2:0] == 3'd7) flood_slot <= 1'b1;
   always @(negedge clk)
-    if (flood_active) device_wr_wait = (cycle[2:0] != 3'd7);
+    if (flood_active) device_wr_wait = !flood_slot;
+
+  // No write is ever strobed into a device that is still asserting its wait: that write
+  // is one the device drops (pc9821_opna's wrq_push `!wrq_cnt[WRQ_BITS]` guard).
+  always @(posedge clk)
+    if (device_io_wr && (device_io_addr[15:0] == 16'hA46C) && device_wr_wait)
+      fail("a write was strobed while the device's wait was high (the device drops it)");
 
   integer flood_start, f0;
   initial begin
@@ -282,7 +299,7 @@ module tb_pc9821_iowait_release;
     check_release(class_h + 64, 5);     // io_hold long expired at the fall: the wrap case
     check_release(200, 6);              // ...and far past it
 
-    // ---- the flood: 16 back-to-back writes against a device busy 7 of every 8 ----
+    // ---- the flood: 16 back-to-back writes against a device freeing a slot every 8 ----
     // Every write must land, in order, and the total must be the device's own busy
     // time plus the class holds - not 2048 cycles per re-check miss.
     strobes = 0;

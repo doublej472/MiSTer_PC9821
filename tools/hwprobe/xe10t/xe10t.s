@@ -9,6 +9,9 @@
  *   XE10T /OPNA3 /SWEEP [/STEP n] [/TO n]                   the rhythm level gap sweep, by ear
  *   XE10T /AUDIT                                             word reads, open ports, IRQ lines
  *   XE10T /FDC2 [DA=90|91]   XE10T /FDC2 /M640               the floppy controller's answers
+ *   XE10U /OPNA4  XE10U /AUDIT2  (XE10U.COM)  XE10V /MISAL (XE10V.COM)  the second/third binary
+ *   XE10W /MISAL2 (XE10W.COM: XE10V plus /MISAL2)                       the fourth
+ *   XE10X /RDLAT  (XE10X.COM: XE10W plus /RDLAT)                         the fifth
  *   XE10T /SELFTEST   XE10T /DRY                             internal checks / the plan
  *   XE10T /ALL /SKIP IO   XE10T /ALL /FROM IRQ                 bypass a section / resume
  *
@@ -169,6 +172,9 @@ _start:
     mov     word ptr [out_handle], 1
     mov     word ptr [reps], 5
     mov     dword ptr [pit_mod], 65536
+    .ifdef XE10Y
+    mov     word ptr [rep_n], 1
+    .endif
 
     /* memory: keep 64 KiB, allocate the 256 KiB buffer (128 KiB fallback) */
     mov     bx, 0x1000
@@ -201,6 +207,11 @@ _start:
     je      4f
     call    sec_selftest
 4:  call    sec_cal
+    .ifdef XE10Y
+    /* /REP n (XE10Y): every selected section n times, in table order each pass */
+    mov     word ptr [rep_i], 0
+70:
+    .endif
     /* the selected sections, in table order */
     mov     si, offset sec_tab
 5:  mov     ax, word ptr [si]
@@ -222,7 +233,14 @@ _start:
 56: pop     si
 6:  add     si, SECT_SIZE
     jmp     5b
-7:  call    sec_restore
+7:
+    .ifdef XE10Y
+    inc     word ptr [rep_i]
+    mov     ax, word ptr [rep_i]
+    cmp     ax, word ptr [rep_n]
+    jb      70b
+    .endif
+    call    sec_restore
 run_done:
     mov     byte ptr [in_sec], 0
     mov     byte ptr [crc_on], 0
@@ -274,20 +292,49 @@ sec_tab:
     .word   nm_fdc,   sec_fdc,   tc_fdc,   tl_none,  15
     .word   nm_cd,    sec_cd,    tc_cd,    tl_none,  16
     .endif
+    .ifndef XE10Y
     .word   nm_opna2, sec_opna2, tc_opna2, tl_none,  17
+    .endif
     .ifndef XE10U
     .word   nm_raster, sec_raster, tc_raster, tl_none, 18
     .endif
+    .ifndef XE10Y
     .word   nm_opna3, sec_opna3, tc_opna3, tl_none,  19
     .word   nm_audit, sec_audit, tc_audit, tl_none,  20
+    .endif
     .ifndef XE10U
     .word   nm_fdc2,  sec_fdc2,  tc_fdc2,  tl_none,  21
     .else
     /* XE10U.COM (--defsym XE10U=1): the harness without IDE/FDC/CD/RASTER/FDC2, with /OPNA4
      * (sec_opna4.inc) and /AUDIT2 (sec_audit2.inc); XE10T.COM is built without the symbol and
      * stays byte-identical to the kit-1 binary its /FDC2 captures compare against */
+    .ifndef XE10Y
     .word   nm_opna4, sec_opna4, tc_opna4, tl_none,  22
     .word   nm_audit2, sec_audit2, tc_audit2, tl_none, 23
+    .endif
+    .ifdef XE10V
+    /* XE10V.COM (--defsym XE10U=1 --defsym XE10V=1): XE10U plus /MISAL (sec_misal.inc), so
+     * XE10U.COM stays the binary the kit-2 /OPNA4 and /AUDIT2 captures compare against */
+    .word   nm_misal, sec_misal, tc_misal, tl_misal, 24
+    .ifdef XE10W
+    /* XE10W.COM (XE10V plus --defsym XE10W=1): /MISAL2 (sec_misal2.inc), so XE10V.COM stays the
+     * binary of the XE10V-XE10-MISAL* machine captures */
+    .word   nm_misal2, sec_misal2, tc_misal2, tl_misal2, 25
+    .ifdef XE10X
+    /* XE10X.COM (XE10W plus --defsym XE10X=1): /RDLAT (sec_rdlat.inc), so XE10W.COM stays the
+     * binary of the XE10W-XE10-MIS2RUN* machine captures */
+    .word   nm_rdlat, sec_rdlat, tc_rdlat, tl_rdlat, 26
+    .ifdef XE10Y
+    /* XE10Y.COM (XE10X plus --defsym XE10Y=1, without /OPNA2 /OPNA3 /AUDIT /OPNA4 /AUDIT2):
+     * the kit-3 sections (sec_kit3.inc) and /REP, so XE10X.COM stays the binary of the
+     * XE10X-XE10-RDLAT* machine captures */
+    .word   nm_pkab,  sec_pkab,  tc_pkab,  tl_pkab,  27
+    .word   nm_cells, sec_cells, tc_cells, tl_cells, 28
+    .word   nm_k3m,   sec_k3m,   tc_k3m,   tl_none,  29
+    .endif
+    .endif
+    .endif
+    .endif
     .endif
     .word   0
 
@@ -312,16 +359,43 @@ kw_tab:
     .word   kw_pal, 0, 14
     .word   kw_fdc, 0, 15
     .word   kw_cd, 0, 16
+    .ifndef XE10Y
     .word   kw_opna2, 0, 17
+    .endif
     .word   kw_raster, 0, 18
+    .ifndef XE10Y
     .word   kw_opna3, 0, 19
     .word   kw_audit, 0, 20
+    .endif
     .ifndef XE10U
     .word   kw_fdc2, 0, 21
     .word   kw_m640, 2, m_m640
     .else
+    .ifndef XE10Y
     .word   kw_opna4, 0, 22
     .word   kw_audit2, 0, 23
+    .endif
+    .ifdef XE10V
+    .word   kw_misal, 0, 24
+    .ifdef XE10W
+    .word   kw_misal2, 0, 25
+    .ifdef XE10X
+    .word   kw_rdlat, 0, 26
+    .ifdef XE10Y
+    .word   kw_pkab, 0, 27
+    .word   kw_cells, 0, 28
+    .word   kw_k3m, 0, 29
+    .word   kw_rep, 3, v_rep
+    .word   kw_k3ab, 2, m_k3ab
+    .word   kw_k3d, 2, m_k3d
+    .word   kw_k3n, 2, m_k3n
+    .word   kw_k3ap, 2, m_k3ap
+    .word   kw_k3noap, 2, m_k3noap
+    .word   kw_k3ata, 2, m_k3ata
+    .endif
+    .endif
+    .endif
+    .endif
     .endif
     .word   kw_id, 2, m_dummy
     .word   kw_cal, 2, m_dummy
@@ -577,12 +651,29 @@ pa_num:
 /* v_step / v_to: /OPNA3 /SWEEP's first and last step (1-based; checked by the section) */
 v_step:
     call    pa_num
+    .ifndef XE10Y
     mov     word ptr [o3_from], ax
+    .endif
     ret
 v_to:
     call    pa_num
+    .ifndef XE10Y
     mov     word ptr [o3_to], ax
+    .endif
     ret
+    .ifdef XE10Y
+/* v_rep: /REP n, 1-9 passes of the selected sections (XE10Y) */
+v_rep:
+    call    pa_num
+    cmp     ax, 1
+    jae     3f
+    mov     ax, 1
+3:  cmp     ax, 9
+    jbe     4f
+    mov     ax, 9
+4:  mov     word ptr [rep_n], ax
+    ret
+    .endif
 /* v_skip / v_from: the value is a section keyword (CPU..CD, an optional leading '/'):
  * /SKIP <SEC> leaves that section out (repeatable); /FROM <SEC> leaves out every section
  * before it in table order, to resume a run past a section that hung. */
@@ -718,7 +809,23 @@ header:
     .ifndef XE10U
     PS      " build=gas-xe10t args="
     .else
+    .ifndef XE10V
     PS      " build=gas-xe10u args="
+    .else
+    .ifndef XE10W
+    PS      " build=gas-xe10v args="
+    .else
+    .ifndef XE10X
+    PS      " build=gas-xe10w args="
+    .else
+    .ifndef XE10Y
+    PS      " build=gas-xe10x args="
+    .else
+    PS      " build=gas-xe10y args="
+    .endif
+    .endif
+    .endif
+    .endif
     .endif
     mov     si, offset args_raw
     call    out_s
@@ -1540,17 +1647,33 @@ nib_ch:
     .include "sec_gfx.inc"
     .include "sec_io.inc"
     .include "sec_dev.inc"
+    .ifndef XE10Y
     .include "sec_opna2.inc"
     .include "sec_opna3.inc"
+    .endif
     .ifndef XE10U
     .include "sec_storage.inc"
     .include "sec_fdc2.inc"
     .include "sec_raster.inc"
     .include "sec_audit.inc"
     .else
+    .ifndef XE10Y
     .include "sec_audit.inc"
     .include "sec_opna4.inc"
     .include "sec_audit2.inc"
+    .endif
+    .ifdef XE10V
+    .include "sec_misal.inc"
+    .ifdef XE10W
+    .include "sec_misal2.inc"
+    .ifdef XE10X
+    .include "sec_rdlat.inc"
+    .ifdef XE10Y
+    .include "sec_kit3.inc"
+    .endif
+    .endif
+    .endif
+    .endif
     .endif
 
 /* ======================================================================== data */
@@ -1642,7 +1765,23 @@ dash:       .asciz "-"
     .ifndef XE10U
 def_out:    .asciz "XE10T.TXT"
     .else
+    .ifndef XE10V
 def_out:    .asciz "XE10U.TXT"
+    .else
+    .ifndef XE10W
+def_out:    .asciz "XE10V.TXT"
+    .else
+    .ifndef XE10X
+def_out:    .asciz "XE10W.TXT"
+    .else
+    .ifndef XE10Y
+def_out:    .asciz "XE10X.TXT"
+    .else
+def_out:    .asciz "XE10Y.TXT"
+    .endif
+    .endif
+    .endif
+    .endif
     .endif
 rs_nobuf:   .asciz "nobuffer"
 rs_codebig: .asciz "codesize"
@@ -1744,6 +1883,10 @@ m_dry:      .byte 0
 m_quick:    .byte 0
 m_force:    .byte 0
 m_listen:   .byte 0
+    .ifdef XE10Y
+rep_n:      .word 1
+rep_i:      .word 0
+    .endif
 m_sweep:    .byte 0
 m_dummy:    .byte 0
 bad_arg:    .byte 0

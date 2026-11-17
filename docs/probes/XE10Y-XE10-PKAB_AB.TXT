@@ -1,0 +1,942 @@
+XE10T v1 sha=1ae8793520ce4dc9 crc=E5351F35 imgcrc=E5351F35 size=37508 build=gas-xe10y args= /PKAB /AB /O PKAB_AB.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0032 cr0=00000032 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=70 bda0458=02 bda045C=40 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=10 bda0595=00
+I ID dos=6.20 bufseg=26D1 bufparas=4000 sel=08000000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=0A89
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6146 pit=49166
+P CAL PITWIN i=1 art=6145 pit=49159
+P CAL PITWIN i=2 art=6145 pit=49155
+P CAL PITWIN i=3 art=6149 pit=49194
+P CAL PITWIN i=4 art=6145 pit=49161
+P CAL PITWIN i=5 art=6145 pit=49162
+P CAL PITWIN i=6 art=6145 pit=49158
+P CAL PITWIN i=7 art=6144 pit=49158
+P CAL PITEDGE edges=19 art=155651 vmax=65535 vmin=1
+P CAL VSYNC edges=60 art=326699 pit=2589885 tsc=-
+I CAL pit_mod=65536 ratio_x1000=8000 vsync_x10=54449 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=4C2E
+BEGIN:PKAB
+STATE PKAB egc=off grcg=off a6=0 q07=00 q04=00 q0A=00
+STATE PKAB as_found al=09 bh=01 p9a8=00 q0A=00 bda054C=4F bda054D=50 cr0=00000032 bufparas=4000
+STATE PKAB mode=24 rounds=3 bda054C=CF bda054D=50
+P PKAB RASTER_G frames=8 art=43560 hi=792 to=0
+STATE PKAB round=1
+STATE PKAB grcg=00 gvram reads phase=_M1
+STATE PKAB row=GRW_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRW_0_M1 unit=w n=512 nop=0 rep=5 art=115/116/116 pit=903/906/913 ctl_art=6/6/7 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=115
+STATE PKAB row=GRW_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB GRW_1_M1 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1157/1161/1171 ctl_art=5/6/7 ctl_pit=31/33/39 shell=EFCC bshell=EFCC if1=147
+STATE PKAB row=GRW_3_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB GRW_3_M1 unit=w n=512 nop=0 rep=5 art=221/221/223 pit=1752/1759/1760 ctl_art=6/6/8 ctl_pit=31/31/42 shell=A5A6 bshell=A5A6 if1=222
+STATE PKAB row=GRD_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRD_0_M1 unit=d n=512 nop=0 rep=5 art=147/147/149 pit=1159/1162/1171 ctl_art=6/7/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=146
+STATE PKAB row=GRD_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB GRD_1_M1 unit=d n=512 nop=0 rep=5 art=252/254/254 pit=2001/2008/2016 ctl_art=5/6/7 ctl_pit=31/33/39 shell=EFCC bshell=EFCC if1=253
+STATE PKAB row=GRD_2_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000002 lin=000A8002 al4=2 al16=2 src=16D0:7470
+R PKAB GRD_2_M1 unit=d n=512 nop=0 rep=5 art=221/221/223 pit=1752/1756/1765 ctl_art=6/6/8 ctl_pit=31/33/42 shell=8093 bshell=8093 if1=222
+STATE PKAB row=GRB_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRB_0_M1 unit=b n=512 nop=0 rep=5 art=114/115/116 pit=899/907/910 ctl_art=6/6/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=114
+STATE PKAB row=GLSW_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSW_0_M1 unit=w n=512 nop=0 rep=5 art=110/111/112 pit=866/869/877 ctl_art=3/3/4 ctl_pit=9/10/16 shell=D39C bshell=D39C if1=111
+STATE PKAB row=GLSW_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC27 lin=00025927 al4=3 al16=7 src=A800:0001
+R PKAB GLSW_1_M1 unit=w n=512 nop=0 rep=5 art=182/183/184 pit=1440/1447/1450 ctl_art=3/4/5 ctl_pit=9/10/18 shell=020C bshell=020C if1=182
+STATE PKAB row=GLSD_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSD_0_M1 unit=d n=256 nop=0 rep=5 art=73/74/74 pit=567/573/582 ctl_art=3/3/4 ctl_pit=9/9/16 shell=BE20 bshell=BE20 if1=74
+STATE PKAB row=GLSD_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC27 lin=00025927 al4=3 al16=7 src=A800:0001
+R PKAB GLSD_1_M1 unit=d n=256 nop=0 rep=5 art=128/129/129 pit=1009/1012/1018 ctl_art=3/4/5 ctl_pit=9/11/19 shell=3DA6 bshell=3DA6 if1=130
+STATE PKAB row=GMVR_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0000
+R PKAB GMVR_0_M1 unit=w n=512 nop=0 rep=5 art=138/138/138 pit=1082/1082/1089 ctl_art=3/4/5 ctl_pit=9/10/19 shell=52DC bshell=52DC if1=137
+STATE PKAB row=GMVR_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0001
+R PKAB GMVR_1_M1 unit=w n=512 nop=0 rep=5 art=205/207/208 pit=1623/1639/1643 ctl_art=3/3/5 ctl_pit=9/11/20 shell=494F bshell=494F if1=206
+STATE PKAB row=GMVV_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=A800:0000
+R PKAB GMVV_0_M1 unit=w n=512 nop=0 rep=5 art=146/146/147 pit=1152/1156/1160 ctl_art=3/4/4 ctl_pit=9/10/18 shell=AB9F bshell=AB9F if1=148
+STATE PKAB row=GMVV_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00004001 lin=000AC001 al4=1 al16=1 src=A800:0001
+R PKAB GMVV_1_M1 unit=w n=512 nop=0 rep=5 art=238/239/241 pit=1890/1897/1907 ctl_art=3/4/4 ctl_pit=9/9/18 shell=B29F bshell=B29F if1=239
+STATE PKAB row=TCRW_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRW_0_M1 unit=w n=512 nop=0 rep=5 art=124/125/126 pit=980/981/993 ctl_art=6/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=TCRW_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB TCRW_1_M1 unit=w n=512 nop=0 rep=5 art=168/169/170 pit=1331/1334/1343 ctl_art=6/7/7 ctl_pit=31/33/41 shell=EFCC bshell=EFCC if1=169
+STATE PKAB row=TCRW_3_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB TCRW_3_M1 unit=w n=512 nop=0 rep=5 art=238/238/239 pit=1883/1885/1889 ctl_art=5/6/7 ctl_pit=31/32/39 shell=A5A6 bshell=A5A6 if1=238
+STATE PKAB row=TCRB_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRB_0_M1 unit=b n=512 nop=0 rep=5 art=124/126/127 pit=981/986/993 ctl_art=6/6/8 ctl_pit=31/32/38 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=BLSS_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=26D1:0001
+R PKAB BLSS_0_M1 unit=row n=50 nop=0 rep=5 art=94/95/97 pit=739/741/753 ctl_art=3/4/6 ctl_pit=13/15/25 shell=9A1F bshell=9A1F if1=95
+STATE PKAB row=BLSS_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=26D1:0001
+R PKAB BLSS_1_M1 unit=row n=50 nop=0 rep=5 art=184/185/186 pit=1460/1464/1466 ctl_art=3/4/5 ctl_pit=13/14/25 shell=14B8 bshell=14B8 if1=185
+STATE PKAB row=BLSS_9_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=26D1:0000
+R PKAB BLSS_9_M1 unit=row n=50 nop=0 rep=5 art=184/185/185 pit=1455/1460/1464 ctl_art=4/4/6 ctl_pit=13/13/23 shell=873A bshell=873A if1=184
+STATE PKAB row=XCW_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCW_0_M1 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=211/212/218 ctl_art=6/6/7 ctl_pit=31/32/41 shell=5B3A bshell=5B3A if1=30
+R PKAB XCW_0_M1 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=211/213/225 ctl_art=9/9/10 ctl_pit=56/57/64 shell=DA36 bshell=DA36 if1=28
+R PKAB XCW_0_M1 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=213/214/222 ctl_art=12/13/13 ctl_pit=82/82/92 shell=8666 bshell=8666 if1=29
+R PKAB XCW_0_M1 unit=w n=512 nop=8 rep=5 art=28/29/30 pit=214/215/223 ctl_art=18/19/20 ctl_pit=132/134/143 shell=6A49 bshell=6A49 if1=29
+R PKAB XCW_0_M1 unit=w n=512 nop=16 rep=5 art=35/35/38 pit=263/267/281 ctl_art=31/32/33 ctl_pit=233/237/246 shell=6398 bshell=6398 if1=35
+R PKAB XCW_0_M1 unit=w n=512 nop=32 rep=5 art=59/59/62 pit=461/461/477 ctl_art=56/56/58 ctl_pit=435/437/449 shell=3F45 bshell=3F45 if1=59
+STATE PKAB row=XCW_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001001 lin=000A1001 al4=1 al16=1 src=16D0:7470
+R PKAB XCW_1_M1 unit=w n=512 nop=0 rep=5 art=52/53/54 pit=402/402/410 ctl_art=6/6/8 ctl_pit=31/32/43 shell=7E0F bshell=7E0F if1=52
+R PKAB XCW_1_M1 unit=w n=512 nop=2 rep=5 art=38/38/39 pit=284/288/294 ctl_art=9/10/10 ctl_pit=56/57/64 shell=5204 bshell=5204 if1=38
+R PKAB XCW_1_M1 unit=w n=512 nop=4 rep=5 art=52/53/53 pit=404/405/410 ctl_art=12/13/14 ctl_pit=82/83/90 shell=01D5 bshell=01D5 if1=53
+R PKAB XCW_1_M1 unit=w n=512 nop=8 rep=5 art=38/38/39 pit=288/289/297 ctl_art=18/18/20 ctl_pit=133/134/144 shell=B805 bshell=B805 if1=39
+R PKAB XCW_1_M1 unit=w n=512 nop=16 rep=5 art=53/53/53 pit=401/404/411 ctl_art=31/31/33 ctl_pit=234/236/246 shell=F279 bshell=F279 if1=52
+R PKAB XCW_1_M1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=461/462/476 ctl_art=56/57/58 ctl_pit=435/437/449 shell=A9B1 bshell=A9B1 if1=59
+STATE PKAB row=XCW_3_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001003 lin=000A1003 al4=3 al16=3 src=16D0:7470
+R PKAB XCW_3_M1 unit=w n=512 nop=0 rep=5 art=54/54/55 pit=413/416/424 ctl_art=6/6/7 ctl_pit=31/34/38 shell=3465 bshell=3465 if1=54
+R PKAB XCW_3_M1 unit=w n=512 nop=2 rep=5 art=54/55/56 pit=415/416/423 ctl_art=9/10/11 ctl_pit=56/56/66 shell=5241 bshell=5241 if1=73
+R PKAB XCW_3_M1 unit=w n=512 nop=4 rep=5 art=54/55/55 pit=412/417/425 ctl_art=12/13/13 ctl_pit=82/83/90 shell=1E92 bshell=1E92 if1=54
+R PKAB XCW_3_M1 unit=w n=512 nop=8 rep=5 art=53/55/56 pit=415/417/428 ctl_art=18/19/21 ctl_pit=132/134/144 shell=0CBC bshell=0CBC if1=55
+R PKAB XCW_3_M1 unit=w n=512 nop=16 rep=5 art=54/55/55 pit=414/419/429 ctl_art=31/32/32 ctl_pit=233/234/243 shell=C19A bshell=C19A if1=55
+R PKAB XCW_3_M1 unit=w n=512 nop=32 rep=5 art=66/67/68 pit=509/515/529 ctl_art=56/57/58 ctl_pit=435/435/449 shell=9478 bshell=9478 if1=65
+STATE PKAB row=XCB_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCB_0_M1 unit=b n=512 nop=0 rep=5 art=28/29/29 pit=212/214/222 ctl_art=5/6/7 ctl_pit=31/32/39 shell=5B3A bshell=5B3A if1=29
+R PKAB XCB_0_M1 unit=b n=512 nop=2 rep=5 art=29/29/30 pit=211/212/221 ctl_art=9/9/10 ctl_pit=57/57/66 shell=DA36 bshell=DA36 if1=28
+R PKAB XCB_0_M1 unit=b n=512 nop=4 rep=5 art=28/29/29 pit=213/213/222 ctl_art=12/13/15 ctl_pit=82/83/94 shell=8666 bshell=8666 if1=29
+R PKAB XCB_0_M1 unit=b n=512 nop=8 rep=5 art=29/29/31 pit=213/214/224 ctl_art=18/19/21 ctl_pit=132/132/141 shell=6A49 bshell=6A49 if1=28
+R PKAB XCB_0_M1 unit=b n=512 nop=16 rep=5 art=35/35/37 pit=264/266/277 ctl_art=31/32/34 ctl_pit=233/234/246 shell=6398 bshell=6398 if1=35
+R PKAB XCB_0_M1 unit=b n=512 nop=32 rep=5 art=59/60/62 pit=460/462/474 ctl_art=56/57/58 ctl_pit=435/436/447 shell=3F45 bshell=3F45 if1=59
+STATE PKAB row=XCR_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCR_0_M1 unit=w n=512 nop=0 rep=5 art=114/115/116 pit=903/906/912 ctl_art=6/6/8 ctl_pit=31/31/41 shell=5B3A bshell=5B3A if1=116
+STATE PKAB row=XCR_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001001 lin=000A1001 al4=1 al16=1 src=16D0:7470
+R PKAB XCR_1_M1 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1159/1161/1169 ctl_art=6/7/7 ctl_pit=32/32/39 shell=7E0F bshell=7E0F if1=148
+STATE PKAB row=XCR_3_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001003 lin=000A1003 al4=3 al16=3 src=16D0:7470
+R PKAB XCR_3_M1 unit=w n=512 nop=0 rep=5 art=221/223/223 pit=1755/1758/1769 ctl_art=6/6/8 ctl_pit=31/33/38 shell=3465 bshell=3465 if1=221
+STATE PKAB row=XAW_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001000 lin=000A3000 al4=0 al16=0 src=16D0:7470
+R PKAB XAW_0_M1 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=211/212/222 ctl_art=6/6/8 ctl_pit=31/31/38 shell=1EE6 bshell=1EE6 if1=29
+R PKAB XAW_0_M1 unit=w n=512 nop=2 rep=5 art=28/29/29 pit=208/212/219 ctl_art=9/10/10 ctl_pit=57/58/64 shell=F28E bshell=F28E if1=28
+R PKAB XAW_0_M1 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=210/214/221 ctl_art=12/13/14 ctl_pit=82/84/93 shell=713E bshell=713E if1=29
+R PKAB XAW_0_M1 unit=w n=512 nop=8 rep=5 art=28/29/30 pit=213/215/227 ctl_art=18/19/20 ctl_pit=132/133/142 shell=0058 bshell=0058 if1=29
+R PKAB XAW_0_M1 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=263/267/274 ctl_art=31/32/33 ctl_pit=233/234/245 shell=DA78 bshell=DA78 if1=36
+R PKAB XAW_0_M1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/476 ctl_art=56/57/59 ctl_pit=434/435/447 shell=2B8A bshell=2B8A if1=60
+STATE PKAB row=XAW_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001001 lin=000A3001 al4=1 al16=1 src=16D0:7470
+R PKAB XAW_1_M1 unit=w n=512 nop=0 rep=5 art=52/53/53 pit=401/403/413 ctl_art=6/6/8 ctl_pit=31/32/41 shell=3BD3 bshell=3BD3 if1=52
+R PKAB XAW_1_M1 unit=w n=512 nop=2 rep=5 art=38/38/39 pit=285/286/296 ctl_art=9/10/10 ctl_pit=56/57/64 shell=7ABC bshell=7ABC if1=38
+R PKAB XAW_1_M1 unit=w n=512 nop=4 rep=5 art=52/53/53 pit=399/402/410 ctl_art=12/13/14 ctl_pit=82/82/91 shell=F68D bshell=F68D if1=53
+R PKAB XAW_1_M1 unit=w n=512 nop=8 rep=5 art=37/39/39 pit=286/288/296 ctl_art=18/19/21 ctl_pit=132/135/144 shell=D214 bshell=D214 if1=38
+R PKAB XAW_1_M1 unit=w n=512 nop=16 rep=5 art=52/53/53 pit=402/404/411 ctl_art=31/32/32 ctl_pit=233/234/243 shell=4B99 bshell=4B99 if1=52
+R PKAB XAW_1_M1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/462/476 ctl_art=56/57/59 ctl_pit=434/437/449 shell=BD7E bshell=BD7E if1=59
+STATE PKAB row=XAW_3_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001003 lin=000A3003 al4=3 al16=3 src=16D0:7470
+R PKAB XAW_3_M1 unit=w n=512 nop=0 rep=5 art=54/54/55 pit=414/416/421 ctl_art=5/6/8 ctl_pit=31/33/39 shell=71B9 bshell=71B9 if1=54
+R PKAB XAW_3_M1 unit=w n=512 nop=2 rep=5 art=53/54/55 pit=413/415/425 ctl_art=9/10/11 ctl_pit=56/56/66 shell=7AF9 bshell=7AF9 if1=54
+R PKAB XAW_3_M1 unit=w n=512 nop=4 rep=5 art=54/54/56 pit=413/416/426 ctl_art=12/13/13 ctl_pit=82/82/90 shell=E9CA bshell=E9CA if1=55
+R PKAB XAW_3_M1 unit=w n=512 nop=8 rep=5 art=54/55/56 pit=415/418/424 ctl_art=19/19/21 ctl_pit=132/133/144 shell=66AD bshell=66AD if1=54
+R PKAB XAW_3_M1 unit=w n=512 nop=16 rep=5 art=54/54/56 pit=414/418/433 ctl_art=31/31/32 ctl_pit=234/234/243 shell=787A bshell=787A if1=55
+R PKAB XAW_3_M1 unit=w n=512 nop=32 rep=5 art=65/66/68 pit=510/512/527 ctl_art=56/57/59 ctl_pit=435/437/449 shell=80B7 bshell=80B7 if1=67
+STATE PKAB row=XAR_0_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001000 lin=000A3000 al4=0 al16=0 src=16D0:7470
+R PKAB XAR_0_M1 unit=w n=512 nop=0 rep=5 art=114/116/117 pit=901/908/916 ctl_art=6/6/8 ctl_pit=31/33/38 shell=1EE6 bshell=1EE6 if1=116
+STATE PKAB row=XAR_1_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001001 lin=000A3001 al4=1 al16=1 src=16D0:7470
+R PKAB XAR_1_M1 unit=w n=512 nop=0 rep=5 art=147/147/148 pit=1161/1163/1165 ctl_art=6/6/7 ctl_pit=31/31/41 shell=3BD3 bshell=3BD3 if1=147
+STATE PKAB row=XAR_3_M1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001003 lin=000A3003 al4=3 al16=3 src=16D0:7470
+R PKAB XAR_3_M1 unit=w n=512 nop=0 rep=5 art=221/222/223 pit=1754/1756/1768 ctl_art=6/6/8 ctl_pit=31/31/41 shell=71B9 bshell=71B9 if1=222
+STATE PKAB pegc=256 packed bank0=0 phase=_M1
+STATE PKAB row=PKW_0_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=292 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW_0_M1 unit=w n=512 nop=0 rep=5 art=30/31/31 pit=225/227/233 ctl_art=6/6/7 ctl_pit=31/33/39 shell=BDFC bshell=BDFC if1=30
+R PKAB PKW_0_M1 unit=w n=512 nop=2 rep=5 art=24/24/27 pit=180/182/189 ctl_art=9/9/10 ctl_pit=56/57/66 shell=70B0 bshell=70B0 if1=25
+R PKAB PKW_0_M1 unit=w n=512 nop=4 rep=5 art=30/31/32 pit=225/228/237 ctl_art=12/13/14 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=31
+R PKAB PKW_0_M1 unit=w n=512 nop=8 rep=5 art=25/25/26 pit=182/183/197 ctl_art=18/19/21 ctl_pit=132/134/141 shell=3825 bshell=3825 if1=26
+R PKAB PKW_0_M1 unit=w n=512 nop=16 rep=5 art=34/35/36 pit=259/262/272 ctl_art=31/31/33 ctl_pit=233/235/245 shell=19F2 bshell=19F2 if1=35
+R PKAB PKW_0_M1 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/460/474 ctl_art=56/57/58 ctl_pit=435/436/449 shell=D40C bshell=D40C if1=59
+STATE PKAB row=PKW_1_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=397557 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKW_1_M1 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=225/227/234 ctl_art=6/6/7 ctl_pit=31/33/41 shell=EFCC bshell=EFCC if1=30
+R PKAB PKW_1_M1 unit=w n=512 nop=2 rep=5 art=31/31/31 pit=225/228/234 ctl_art=9/9/10 ctl_pit=56/57/64 shell=4C65 bshell=4C65 if1=31
+R PKAB PKW_1_M1 unit=w n=512 nop=4 rep=5 art=25/25/26 pit=181/183/193 ctl_art=12/12/14 ctl_pit=82/84/92 shell=EA00 bshell=EA00 if1=24
+R PKAB PKW_1_M1 unit=w n=512 nop=8 rep=5 art=31/31/32 pit=227/230/238 ctl_art=18/19/20 ctl_pit=133/133/144 shell=023A bshell=023A if1=30
+R PKAB PKW_1_M1 unit=w n=512 nop=16 rep=5 art=34/35/37 pit=259/262/273 ctl_art=31/32/33 ctl_pit=233/234/245 shell=B143 bshell=B143 if1=35
+R PKAB PKW_1_M1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/476 ctl_art=56/56/59 ctl_pit=434/437/450 shell=E065 bshell=E065 if1=60
+STATE PKAB row=PKW_3_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=795054 drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB PKW_3_M1 unit=w n=512 nop=0 rep=5 art=46/46/47 pit=353/354/362 ctl_art=6/6/8 ctl_pit=31/32/39 shell=A5A6 bshell=A5A6 if1=47
+R PKAB PKW_3_M1 unit=w n=512 nop=2 rep=5 art=58/58/60 pit=448/449/457 ctl_art=9/9/10 ctl_pit=56/57/64 shell=4C20 bshell=4C20 if1=57
+R PKAB PKW_3_M1 unit=w n=512 nop=4 rep=5 art=46/47/48 pit=352/353/362 ctl_art=12/13/13 ctl_pit=82/83/92 shell=F547 bshell=F547 if1=47
+R PKAB PKW_3_M1 unit=w n=512 nop=8 rep=5 art=58/59/60 pit=449/451/463 ctl_art=18/19/20 ctl_pit=133/133/142 shell=B683 bshell=B683 if1=59
+R PKAB PKW_3_M1 unit=w n=512 nop=16 rep=5 art=58/59/60 pit=447/451/465 ctl_art=31/32/32 ctl_pit=234/234/244 shell=82A0 bshell=82A0 if1=59
+R PKAB PKW_3_M1 unit=w n=512 nop=32 rep=5 art=64/65/68 pit=503/505/523 ctl_art=56/57/59 ctl_pit=435/435/450 shell=DDAC bshell=DDAC if1=65
+STATE PKAB row=PKD_0_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1192568 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKD_0_M1 unit=d n=512 nop=0 rep=5 art=30/31/31 pit=227/228/233 ctl_art=6/6/8 ctl_pit=31/32/40 shell=BDFC bshell=BDFC if1=30
+R PKAB PKD_0_M1 unit=d n=512 nop=2 rep=5 art=24/25/26 pit=181/183/191 ctl_art=9/10/11 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=24
+R PKAB PKD_0_M1 unit=d n=512 nop=4 rep=5 art=30/30/31 pit=225/226/236 ctl_art=12/13/13 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=30
+R PKAB PKD_0_M1 unit=d n=512 nop=8 rep=5 art=24/25/26 pit=183/183/194 ctl_art=18/19/21 ctl_pit=132/134/143 shell=3825 bshell=3825 if1=25
+R PKAB PKD_0_M1 unit=d n=512 nop=16 rep=5 art=36/36/37 pit=271/272/282 ctl_art=31/31/32 ctl_pit=233/235/243 shell=19F2 bshell=19F2 if1=36
+R PKAB PKD_0_M1 unit=d n=512 nop=32 rep=5 art=61/62/63 pit=473/473/489 ctl_art=56/57/59 ctl_pit=435/435/449 shell=D40C bshell=D40C if1=61
+STATE PKAB row=PKD_1_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1590032 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKD_1_M1 unit=d n=512 nop=0 rep=5 art=58/59/60 pit=446/448/462 ctl_art=6/7/7 ctl_pit=31/31/39 shell=EFCC bshell=EFCC if1=58
+R PKAB PKD_1_M1 unit=d n=512 nop=2 rep=5 art=58/58/60 pit=446/448/458 ctl_art=9/9/11 ctl_pit=56/58/63 shell=4C65 bshell=4C65 if1=58
+R PKAB PKD_1_M1 unit=d n=512 nop=4 rep=5 art=46/47/48 pit=351/354/362 ctl_art=12/13/14 ctl_pit=82/83/90 shell=EA00 bshell=EA00 if1=47
+R PKAB PKD_1_M1 unit=d n=512 nop=8 rep=5 art=58/59/59 pit=449/451/461 ctl_art=18/19/21 ctl_pit=133/134/144 shell=023A bshell=023A if1=59
+R PKAB PKD_1_M1 unit=d n=512 nop=16 rep=5 art=46/47/49 pit=354/355/369 ctl_art=31/32/33 ctl_pit=233/234/243 shell=B143 bshell=B143 if1=46
+R PKAB PKD_1_M1 unit=d n=512 nop=32 rep=5 art=66/66/69 pit=514/515/533 ctl_art=56/57/59 ctl_pit=434/435/449 shell=E065 bshell=E065 if1=67
+STATE PKAB row=PKR_0_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1987524 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKR_0_M1 unit=w n=512 nop=0 rep=5 art=124/125/127 pit=981/983/992 ctl_art=6/6/7 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=124
+STATE PKAB row=PKR_1_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=2058386 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKR_1_M1 unit=w n=512 nop=0 rep=5 art=125/125/127 pit=983/985/994 ctl_art=5/6/7 ctl_pit=31/34/38 shell=EFCC bshell=EFCC if1=125
+STATE PKAB row=PKR_3_M1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=2129170 drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB PKR_3_M1 unit=w n=512 nop=0 rep=5 art=242/242/244 pit=1922/1924/1932 ctl_art=6/6/7 ctl_pit=31/32/41 shell=A5A6 bshell=A5A6 if1=243
+STATE PKAB row=GRW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRW_R1 unit=w n=512 nop=0 rep=5 art=114/115/116 pit=898/901/911 ctl_art=6/7/8 ctl_pit=31/31/42 shell=BDFC bshell=BDFC if1=116
+R PKAB GRW_R1 unit=w n=512 nop=2 rep=5 art=115/117/117 pit=909/917/923 ctl_art=9/10/10 ctl_pit=56/57/65 shell=70B0 bshell=70B0 if1=116
+R PKAB GRW_R1 unit=w n=512 nop=4 rep=5 art=121/121/122 pit=950/957/964 ctl_art=12/12/14 ctl_pit=81/82/95 shell=1B96 bshell=1B96 if1=121
+R PKAB GRW_R1 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1002/1004/1015 ctl_art=18/19/21 ctl_pit=132/133/142 shell=3825 bshell=3825 if1=127
+R PKAB GRW_R1 unit=w n=512 nop=16 rep=5 art=143/144/145 pit=1127/1133/1139 ctl_art=31/31/34 ctl_pit=233/236/248 shell=19F2 bshell=19F2 if1=144
+R PKAB GRW_R1 unit=w n=512 nop=32 rep=5 art=163/166/169 pit=1295/1317/1333 ctl_art=56/57/58 ctl_pit=435/435/448 shell=D40C bshell=D40C if1=165
+R PKAB GRW_R1 unit=w n=512 nop=64 rep=5 art=214/215/217 pit=1693/1699/1723 ctl_art=107/107/110 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=214
+STATE PKAB row=GRD_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRD_R1 unit=d n=512 nop=0 rep=5 art=147/148/148 pit=1159/1162/1168 ctl_art=5/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=147
+R PKAB GRD_R1 unit=d n=512 nop=2 rep=5 art=148/148/149 pit=1163/1167/1172 ctl_art=9/10/11 ctl_pit=56/59/66 shell=70B0 bshell=70B0 if1=147
+R PKAB GRD_R1 unit=d n=512 nop=4 rep=5 art=153/155/155 pit=1210/1216/1222 ctl_art=12/13/14 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=154
+R PKAB GRD_R1 unit=d n=512 nop=8 rep=5 art=159/160/161 pit=1254/1261/1273 ctl_art=18/19/20 ctl_pit=132/133/144 shell=3825 bshell=3825 if1=160
+R PKAB GRD_R1 unit=d n=512 nop=16 rep=5 art=172/173/174 pit=1361/1365/1377 ctl_art=31/32/32 ctl_pit=233/234/243 shell=19F2 bshell=19F2 if1=173
+R PKAB GRD_R1 unit=d n=512 nop=32 rep=5 art=195/195/198 pit=1543/1546/1565 ctl_art=56/56/58 ctl_pit=434/435/449 shell=D40C bshell=D40C if1=197
+R PKAB GRD_R1 unit=d n=512 nop=64 rep=5 art=242/242/245 pit=1921/1927/1944 ctl_art=106/108/109 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=243
+STATE PKAB row=GW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GW_R1 unit=w n=512 nop=0 rep=5 art=28/28/29 pit=210/212/221 ctl_art=6/6/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=29
+R PKAB GW_R1 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=211/215/220 ctl_art=9/10/11 ctl_pit=56/58/64 shell=70B0 bshell=70B0 if1=28
+R PKAB GW_R1 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=211/215/223 ctl_art=12/12/14 ctl_pit=81/83/92 shell=1B96 bshell=1B96 if1=28
+R PKAB GW_R1 unit=w n=512 nop=8 rep=5 art=28/28/31 pit=211/215/225 ctl_art=18/19/21 ctl_pit=132/134/143 shell=3825 bshell=3825 if1=28
+R PKAB GW_R1 unit=w n=512 nop=16 rep=5 art=35/35/37 pit=263/265/274 ctl_art=31/32/33 ctl_pit=233/234/243 shell=19F2 bshell=19F2 if1=35
+R PKAB GW_R1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/476 ctl_art=56/57/58 ctl_pit=434/435/450 shell=D40C bshell=D40C if1=59
+R PKAB GW_R1 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=863/865/885 ctl_art=107/107/110 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=GLSW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSW_R1 unit=w n=512 nop=0 rep=5 art=110/111/112 pit=869/870/880 ctl_art=3/4/5 ctl_pit=10/12/18 shell=D39C bshell=D39C if1=111
+STATE PKAB row=GMVR_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0000
+R PKAB GMVR_R1 unit=w n=512 nop=0 rep=5 art=137/138/139 pit=1078/1085/1092 ctl_art=3/3/4 ctl_pit=9/11/17 shell=52DC bshell=52DC if1=138
+STATE PKAB row=TCRW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRW_R1 unit=w n=512 nop=0 rep=5 art=125/125/126 pit=981/984/989 ctl_art=5/6/8 ctl_pit=31/34/41 shell=BDFC bshell=BDFC if1=125
+R PKAB TCRW_R1 unit=w n=512 nop=2 rep=5 art=126/126/127 pit=986/987/1000 ctl_art=9/9/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=125
+R PKAB TCRW_R1 unit=w n=512 nop=4 rep=5 art=128/129/129 pit=1011/1015/1020 ctl_art=12/13/13 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=128
+R PKAB TCRW_R1 unit=w n=512 nop=8 rep=5 art=133/134/135 pit=1048/1053/1064 ctl_art=18/19/21 ctl_pit=132/134/144 shell=3825 bshell=3825 if1=134
+R PKAB TCRW_R1 unit=w n=512 nop=16 rep=5 art=147/147/148 pit=1158/1161/1170 ctl_art=31/32/33 ctl_pit=233/234/243 shell=19F2 bshell=19F2 if1=147
+R PKAB TCRW_R1 unit=w n=512 nop=32 rep=5 art=172/174/174 pit=1363/1367/1375 ctl_art=56/57/59 ctl_pit=434/437/450 shell=D40C bshell=D40C if1=173
+R PKAB TCRW_R1 unit=w n=512 nop=64 rep=5 art=222/224/225 pit=1756/1775/1783 ctl_art=107/107/110 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=224
+STATE PKAB row=TDW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TDW_R1 unit=w n=512 nop=0 rep=5 art=32/33/34 pit=245/246/259 ctl_art=6/7/7 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=33
+R PKAB TDW_R1 unit=w n=512 nop=2 rep=5 art=32/34/35 pit=242/249/261 ctl_art=9/10/11 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=33
+R PKAB TDW_R1 unit=w n=512 nop=4 rep=5 art=33/34/34 pit=247/250/254 ctl_art=12/12/14 ctl_pit=81/82/93 shell=1B96 bshell=1B96 if1=33
+R PKAB TDW_R1 unit=w n=512 nop=8 rep=5 art=32/33/35 pit=245/252/262 ctl_art=19/19/20 ctl_pit=132/133/142 shell=3825 bshell=3825 if1=34
+R PKAB TDW_R1 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=266/269/279 ctl_art=31/32/32 ctl_pit=233/234/244 shell=19F2 bshell=19F2 if1=36
+R PKAB TDW_R1 unit=w n=512 nop=32 rep=5 art=59/59/62 pit=460/462/476 ctl_art=56/57/59 ctl_pit=435/437/450 shell=D40C bshell=D40C if1=60
+R PKAB TDW_R1 unit=w n=512 nop=64 rep=5 art=110/111/114 pit=863/864/885 ctl_art=107/107/110 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=RMW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB RMW_R1 unit=w n=512 nop=0 rep=5 art=49/49/51 pit=381/381/387 ctl_art=6/6/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=50
+R PKAB RMW_R1 unit=w n=512 nop=2 rep=5 art=49/50/50 pit=381/383/389 ctl_art=9/10/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=50
+R PKAB RMW_R1 unit=w n=512 nop=4 rep=5 art=49/50/51 pit=380/383/389 ctl_art=12/12/14 ctl_pit=81/81/93 shell=1B96 bshell=1B96 if1=50
+R PKAB RMW_R1 unit=w n=512 nop=8 rep=5 art=50/50/51 pit=380/382/387 ctl_art=18/18/20 ctl_pit=132/133/141 shell=3825 bshell=3825 if1=50
+R PKAB RMW_R1 unit=w n=512 nop=16 rep=5 art=50/50/51 pit=383/383/392 ctl_art=31/32/33 ctl_pit=233/234/246 shell=19F2 bshell=19F2 if1=51
+R PKAB RMW_R1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/477 ctl_art=56/57/58 ctl_pit=434/435/450 shell=D40C bshell=D40C if1=59
+R PKAB RMW_R1 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=863/865/884 ctl_art=106/107/109 ctl_pit=838/838/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=XCR_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCR_R1 unit=w n=512 nop=0 rep=5 art=115/116/116 pit=904/907/918 ctl_art=6/7/7 ctl_pit=34/36/41 shell=5B3A bshell=5B3A if1=116
+R PKAB XCR_R1 unit=w n=512 nop=2 rep=5 art=115/117/117 pit=907/915/920 ctl_art=9/10/11 ctl_pit=59/59/68 shell=DA36 bshell=DA36 if1=115
+R PKAB XCR_R1 unit=w n=512 nop=4 rep=5 art=121/122/123 pit=957/959/967 ctl_art=12/13/14 ctl_pit=84/84/94 shell=8666 bshell=8666 if1=122
+R PKAB XCR_R1 unit=w n=512 nop=8 rep=5 art=128/128/129 pit=1001/1006/1009 ctl_art=19/19/20 ctl_pit=135/137/144 shell=6A49 bshell=6A49 if1=128
+R PKAB XCR_R1 unit=w n=512 nop=16 rep=5 art=143/144/145 pit=1133/1138/1144 ctl_art=31/32/33 ctl_pit=236/236/245 shell=6398 bshell=6398 if1=143
+R PKAB XCR_R1 unit=w n=512 nop=32 rep=5 art=164/168/169 pit=1298/1322/1335 ctl_art=56/57/58 ctl_pit=437/439/452 shell=3F45 bshell=3F45 if1=168
+R PKAB XCR_R1 unit=w n=512 nop=64 rep=5 art=214/215/218 pit=1696/1699/1723 ctl_art=107/107/110 ctl_pit=841/842/860 shell=C07F bshell=C07F if1=214
+STATE PKAB row=XCW_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCW_R1 unit=w n=512 nop=0 rep=5 art=29/29/30 pit=211/216/224 ctl_art=6/6/7 ctl_pit=34/34/41 shell=5B3A bshell=5B3A if1=29
+R PKAB XCW_R1 unit=w n=512 nop=2 rep=5 art=29/30/30 pit=211/216/222 ctl_art=9/10/11 ctl_pit=58/59/68 shell=DA36 bshell=DA36 if1=29
+R PKAB XCW_R1 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=212/215/223 ctl_art=12/12/14 ctl_pit=84/84/92 shell=8666 bshell=8666 if1=29
+R PKAB XCW_R1 unit=w n=512 nop=8 rep=5 art=29/29/31 pit=214/216/225 ctl_art=19/20/21 ctl_pit=135/136/147 shell=6A49 bshell=6A49 if1=28
+R PKAB XCW_R1 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=265/268/279 ctl_art=32/32/34 ctl_pit=236/237/247 shell=6398 bshell=6398 if1=35
+R PKAB XCW_R1 unit=w n=512 nop=32 rep=5 art=60/60/62 pit=462/465/479 ctl_art=56/57/59 ctl_pit=437/438/451 shell=3F45 bshell=3F45 if1=61
+R PKAB XCW_R1 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/867/888 ctl_art=107/108/109 ctl_pit=840/841/859 shell=C07F bshell=C07F if1=110
+STATE PKAB row=XCRS_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00000000 lin=000A0000 al4=0 al16=0 src=16D0:7470
+R PKAB XCRS_R1 unit=w n=512 nop=0 rep=5 art=115/116/117 pit=904/908/915 ctl_art=6/7/7 ctl_pit=33/35/45 shell=FD80 bshell=FD80 if1=115
+R PKAB XCRS_R1 unit=w n=512 nop=2 rep=5 art=116/117/118 pit=911/914/922 ctl_art=9/10/11 ctl_pit=59/60/68 shell=B9F8 bshell=B9F8 if1=116
+R PKAB XCRS_R1 unit=w n=512 nop=4 rep=5 art=121/122/123 pit=956/957/965 ctl_art=12/13/14 ctl_pit=84/84/93 shell=2B22 bshell=2B22 if1=122
+R PKAB XCRS_R1 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1004/1005/1012 ctl_art=18/19/20 ctl_pit=134/136/144 shell=F5A6 bshell=F5A6 if1=128
+R PKAB XCRS_R1 unit=w n=512 nop=16 rep=5 art=143/144/146 pit=1126/1139/1151 ctl_art=31/32/33 ctl_pit=235/236/245 shell=218D bshell=218D if1=144
+R PKAB XCRS_R1 unit=w n=512 nop=32 rep=5 art=165/169/172 pit=1300/1337/1355 ctl_art=56/57/58 ctl_pit=437/438/451 shell=7A1F bshell=7A1F if1=166
+R PKAB XCRS_R1 unit=w n=512 nop=64 rep=5 art=214/215/216 pit=1696/1699/1713 ctl_art=107/107/110 ctl_pit=840/842/860 shell=CC4B bshell=CC4B if1=214
+STATE PKAB row=XCWS_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00000000 lin=000A0000 al4=0 al16=0 src=16D0:7470
+R PKAB XCWS_R1 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=214/217/222 ctl_art=6/7/8 ctl_pit=34/35/43 shell=FD80 bshell=FD80 if1=30
+R PKAB XCWS_R1 unit=w n=512 nop=2 rep=5 art=29/29/30 pit=212/216/222 ctl_art=9/10/11 ctl_pit=59/59/66 shell=B9F8 bshell=B9F8 if1=29
+R PKAB XCWS_R1 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=211/215/225 ctl_art=12/13/14 ctl_pit=83/84/94 shell=2B22 bshell=2B22 if1=29
+R PKAB XCWS_R1 unit=w n=512 nop=8 rep=5 art=28/29/30 pit=211/216/227 ctl_art=19/20/20 ctl_pit=134/136/145 shell=F5A6 bshell=F5A6 if1=29
+R PKAB XCWS_R1 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=266/270/280 ctl_art=32/32/33 ctl_pit=236/236/248 shell=218D bshell=218D if1=36
+R PKAB XCWS_R1 unit=w n=512 nop=32 rep=5 art=60/61/62 pit=463/464/479 ctl_art=56/57/58 ctl_pit=437/437/448 shell=7A1F bshell=7A1F if1=60
+R PKAB XCWS_R1 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/866/886 ctl_art=107/108/110 ctl_pit=840/842/859 shell=CC4B bshell=CC4B if1=111
+STATE PKAB row=XARS_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00000000 lin=000A2000 al4=0 al16=0 src=16D0:7470
+R PKAB XARS_R1 unit=w n=512 nop=0 rep=5 art=115/116/116 pit=907/910/915 ctl_art=6/7/7 ctl_pit=33/34/40 shell=D3BC bshell=D3BC if1=116
+R PKAB XARS_R1 unit=w n=512 nop=2 rep=5 art=115/116/117 pit=904/911/919 ctl_art=9/10/11 ctl_pit=59/59/68 shell=41BB bshell=41BB if1=116
+R PKAB XARS_R1 unit=w n=512 nop=4 rep=5 art=122/122/123 pit=956/958/962 ctl_art=12/13/14 ctl_pit=83/84/91 shell=12CC bshell=12CC if1=121
+R PKAB XARS_R1 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1004/1005/1014 ctl_art=19/19/21 ctl_pit=134/136/144 shell=4B77 bshell=4B77 if1=128
+R PKAB XARS_R1 unit=w n=512 nop=16 rep=5 art=143/144/145 pit=1130/1136/1139 ctl_art=31/32/34 ctl_pit=235/236/247 shell=531B bshell=531B if1=144
+R PKAB XARS_R1 unit=w n=512 nop=32 rep=5 art=164/167/169 pit=1295/1322/1337 ctl_art=56/57/59 ctl_pit=437/437/450 shell=7DF9 bshell=7DF9 if1=166
+R PKAB XARS_R1 unit=w n=512 nop=64 rep=5 art=213/214/217 pit=1694/1698/1716 ctl_art=107/107/109 ctl_pit=840/842/860 shell=17ED bshell=17ED if1=214
+STATE PKAB row=XAWS_R1 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00000000 lin=000A2000 al4=0 al16=0 src=16D0:7470
+R PKAB XAWS_R1 unit=w n=512 nop=0 rep=5 art=29/29/30 pit=214/215/224 ctl_art=6/7/8 ctl_pit=33/35/44 shell=D3BC bshell=D3BC if1=28
+R PKAB XAWS_R1 unit=w n=512 nop=2 rep=5 art=29/29/30 pit=215/215/224 ctl_art=9/9/10 ctl_pit=58/59/67 shell=41BB bshell=41BB if1=29
+R PKAB XAWS_R1 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=211/216/221 ctl_art=12/13/14 ctl_pit=84/84/92 shell=12CC bshell=12CC if1=28
+R PKAB XAWS_R1 unit=w n=512 nop=8 rep=5 art=29/30/31 pit=213/219/228 ctl_art=18/19/20 ctl_pit=134/134/144 shell=4B77 bshell=4B77 if1=29
+R PKAB XAWS_R1 unit=w n=512 nop=16 rep=5 art=35/36/36 pit=264/267/276 ctl_art=31/32/33 ctl_pit=235/236/244 shell=531B bshell=531B if1=36
+R PKAB XAWS_R1 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/463/478 ctl_art=56/57/59 ctl_pit=437/440/450 shell=7DF9 bshell=7DF9 if1=59
+R PKAB XAWS_R1 unit=w n=512 nop=64 rep=5 art=111/111/113 pit=866/868/887 ctl_art=107/108/109 ctl_pit=840/843/860 shell=17ED bshell=17ED if1=110
+STATE PKAB row=PKR_R1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=234 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKR_R1 unit=w n=512 nop=0 rep=5 art=125/126/128 pit=985/989/1000 ctl_art=5/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=125
+R PKAB PKR_R1 unit=w n=512 nop=2 rep=5 art=125/126/127 pit=980/988/996 ctl_art=9/9/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=126
+R PKAB PKR_R1 unit=w n=512 nop=4 rep=5 art=129/131/133 pit=1023/1030/1041 ctl_art=12/13/14 ctl_pit=81/81/92 shell=1B96 bshell=1B96 if1=131
+R PKAB PKR_R1 unit=w n=512 nop=8 rep=5 art=138/138/139 pit=1089/1093/1101 ctl_art=18/19/20 ctl_pit=133/134/143 shell=3825 bshell=3825 if1=139
+R PKAB PKR_R1 unit=w n=512 nop=16 rep=5 art=157/158/160 pit=1241/1249/1263 ctl_art=31/31/32 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=158
+R PKAB PKR_R1 unit=w n=512 nop=32 rep=5 art=171/172/173 pit=1348/1355/1366 ctl_art=56/57/58 ctl_pit=435/436/446 shell=D40C bshell=D40C if1=172
+R PKAB PKR_R1 unit=w n=512 nop=64 rep=5 art=233/235/237 pit=1849/1858/1874 ctl_art=107/107/109 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=233
+STATE PKAB row=PKW_R1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=463159 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW_R1 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=225/229/233 ctl_art=6/6/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=31
+R PKAB PKW_R1 unit=w n=512 nop=2 rep=5 art=24/25/26 pit=180/183/191 ctl_art=9/10/11 ctl_pit=57/59/64 shell=70B0 bshell=70B0 if1=25
+R PKAB PKW_R1 unit=w n=512 nop=4 rep=5 art=30/30/32 pit=228/228/237 ctl_art=12/13/14 ctl_pit=82/82/90 shell=1B96 bshell=1B96 if1=31
+R PKAB PKW_R1 unit=w n=512 nop=8 rep=5 art=25/25/27 pit=181/184/191 ctl_art=18/19/21 ctl_pit=132/134/143 shell=3825 bshell=3825 if1=25
+R PKAB PKW_R1 unit=w n=512 nop=16 rep=5 art=34/34/36 pit=259/260/272 ctl_art=31/32/34 ctl_pit=234/236/245 shell=19F2 bshell=19F2 if1=34
+R PKAB PKW_R1 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/474 ctl_art=56/57/59 ctl_pit=434/435/448 shell=D40C bshell=D40C if1=59
+R PKAB PKW_R1 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=864/864/885 ctl_art=107/107/110 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=PKW1ST_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=241 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW1ST_FA1 unit=w n=512 nop=0 rep=5 art=24/25/26 pit=180/182/190 ctl_art=5/6/7 ctl_pit=31/32/38 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKRF_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=69982 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKRF_FA1 unit=w n=512 nop=0 rep=5 art=125/126/126 pit=982/986/993 ctl_art=6/6/8 ctl_pit=31/31/42 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=PKWAFT_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=140873 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWAFT_FA1 unit=w n=512 nop=0 rep=5 art=24/25/26 pit=181/182/191 ctl_art=6/6/7 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKWLATE_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=543442 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWLATE_FA1 unit=w n=512 nop=0 rep=5 art=24/25/26 pit=181/183/190 ctl_art=6/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKWODD_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=614464 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKWODD_FA1 unit=w n=512 nop=0 rep=5 art=30/30/31 pit=226/227/232 ctl_art=6/6/7 ctl_pit=31/34/39 shell=EFCC bshell=EFCC if1=31
+STATE PKAB row=PKWHI_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=685249 drain=0 winph=1 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWHI_FA1 unit=w n=512 nop=0 rep=5 art=30/30/31 pit=226/228/235 ctl_art=6/7/8 ctl_pit=31/31/39 shell=87BC bshell=87BC if1=30
+STATE PKAB row=PKDF_FA1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=756034 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKDF_FA1 unit=d n=512 nop=0 rep=5 art=24/25/25 pit=179/181/191 ctl_art=6/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKW1ST_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=238 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW1ST_FV1 unit=w n=512 nop=0 rep=5 art=24/25/25 pit=174/176/185 ctl_art=6/7/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKRF_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=70319 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKRF_FV1 unit=w n=512 nop=0 rep=5 art=103/104/104 pit=813/815/821 ctl_art=6/6/8 ctl_pit=31/31/42 shell=BDFC bshell=BDFC if1=105
+STATE PKAB row=PKWAFT_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=141176 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWAFT_FV1 unit=w n=512 nop=0 rep=5 art=23/24/24 pit=169/169/177 ctl_art=6/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKWLATE_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=538337 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWLATE_FV1 unit=w n=512 nop=0 rep=5 art=23/24/25 pit=169/170/179 ctl_art=5/6/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKWODD_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=609355 drain=0 winph=2 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKWODD_FV1 unit=w n=512 nop=0 rep=5 art=24/25/25 pit=175/177/184 ctl_art=6/6/7 ctl_pit=31/31/40 shell=EFCC bshell=EFCC if1=24
+STATE PKAB row=PKWHI_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=680148 drain=0 winph=2 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWHI_FV1 unit=w n=512 nop=0 rep=5 art=24/24/26 pit=174/178/185 ctl_art=6/6/7 ctl_pit=31/32/42 shell=87BC bshell=87BC if1=25
+STATE PKAB row=PKDF_FV1 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=750912 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKDF_FV1 unit=d n=512 nop=0 rep=5 art=23/24/24 pit=169/170/176 ctl_art=5/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=24
+STATE PKAB round=2
+STATE PKAB grcg=00 gvram reads phase=_M2
+STATE PKAB row=GRW_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRW_0_M2 unit=w n=512 nop=0 rep=5 art=114/116/117 pit=899/908/917 ctl_art=6/7/8 ctl_pit=31/34/39 shell=BDFC bshell=BDFC if1=115
+STATE PKAB row=GRW_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB GRW_1_M2 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1159/1161/1167 ctl_art=6/6/7 ctl_pit=31/31/39 shell=EFCC bshell=EFCC if1=147
+STATE PKAB row=GRW_3_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB GRW_3_M2 unit=w n=512 nop=0 rep=5 art=221/222/222 pit=1754/1757/1763 ctl_art=6/6/8 ctl_pit=31/31/41 shell=A5A6 bshell=A5A6 if1=221
+STATE PKAB row=GRD_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRD_0_M2 unit=d n=512 nop=0 rep=5 art=147/147/148 pit=1161/1161/1167 ctl_art=6/6/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=148
+STATE PKAB row=GRD_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB GRD_1_M2 unit=d n=512 nop=0 rep=5 art=252/253/254 pit=1999/2003/2015 ctl_art=6/6/7 ctl_pit=31/32/39 shell=EFCC bshell=EFCC if1=252
+STATE PKAB row=GRD_2_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000002 lin=000A8002 al4=2 al16=2 src=16D0:7470
+R PKAB GRD_2_M2 unit=d n=512 nop=0 rep=5 art=220/222/223 pit=1749/1758/1765 ctl_art=6/6/7 ctl_pit=31/34/41 shell=8093 bshell=8093 if1=222
+STATE PKAB row=GRB_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRB_0_M2 unit=b n=512 nop=0 rep=5 art=115/115/117 pit=906/907/914 ctl_art=6/6/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=116
+STATE PKAB row=GLSW_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSW_0_M2 unit=w n=512 nop=0 rep=5 art=110/111/111 pit=868/869/875 ctl_art=3/3/4 ctl_pit=9/10/19 shell=D39C bshell=D39C if1=110
+STATE PKAB row=GLSW_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC27 lin=00025927 al4=3 al16=7 src=A800:0001
+R PKAB GLSW_1_M2 unit=w n=512 nop=0 rep=5 art=182/183/184 pit=1442/1448/1456 ctl_art=3/3/5 ctl_pit=9/9/18 shell=020C bshell=020C if1=183
+STATE PKAB row=GLSD_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSD_0_M2 unit=d n=256 nop=0 rep=5 art=74/74/75 pit=573/575/580 ctl_art=3/4/4 ctl_pit=9/9/16 shell=BE20 bshell=BE20 if1=73
+STATE PKAB row=GLSD_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC27 lin=00025927 al4=3 al16=7 src=A800:0001
+R PKAB GLSD_1_M2 unit=d n=256 nop=0 rep=5 art=128/128/129 pit=1007/1010/1015 ctl_art=3/4/5 ctl_pit=9/12/19 shell=3DA6 bshell=3DA6 if1=129
+STATE PKAB row=GMVR_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0000
+R PKAB GMVR_0_M2 unit=w n=512 nop=0 rep=5 art=137/137/139 pit=1081/1085/1091 ctl_art=3/4/5 ctl_pit=9/11/19 shell=52DC bshell=52DC if1=137
+STATE PKAB row=GMVR_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0001
+R PKAB GMVR_1_M2 unit=w n=512 nop=0 rep=5 art=205/207/208 pit=1627/1639/1641 ctl_art=3/4/4 ctl_pit=9/10/17 shell=494F bshell=494F if1=206
+STATE PKAB row=GMVV_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=A800:0000
+R PKAB GMVV_0_M2 unit=w n=512 nop=0 rep=5 art=146/146/148 pit=1154/1157/1162 ctl_art=3/4/5 ctl_pit=9/10/19 shell=AB9F bshell=AB9F if1=146
+STATE PKAB row=GMVV_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00004001 lin=000AC001 al4=1 al16=1 src=A800:0001
+R PKAB GMVV_1_M2 unit=w n=512 nop=0 rep=5 art=238/239/240 pit=1880/1896/1899 ctl_art=3/3/5 ctl_pit=9/9/17 shell=B29F bshell=B29F if1=238
+STATE PKAB row=TCRW_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRW_0_M2 unit=w n=512 nop=0 rep=5 art=125/126/126 pit=982/988/990 ctl_art=5/6/7 ctl_pit=31/32/38 shell=BDFC bshell=BDFC if1=126
+STATE PKAB row=TCRW_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB TCRW_1_M2 unit=w n=512 nop=0 rep=5 art=168/169/170 pit=1328/1334/1340 ctl_art=6/6/8 ctl_pit=32/34/42 shell=EFCC bshell=EFCC if1=169
+STATE PKAB row=TCRW_3_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB TCRW_3_M2 unit=w n=512 nop=0 rep=5 art=236/238/239 pit=1879/1888/1891 ctl_art=6/6/8 ctl_pit=31/32/39 shell=A5A6 bshell=A5A6 if1=238
+STATE PKAB row=TCRB_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRB_0_M2 unit=b n=512 nop=0 rep=5 art=125/125/126 pit=983/987/988 ctl_art=6/7/8 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=BLSS_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=26D1:0001
+R PKAB BLSS_0_M2 unit=row n=50 nop=0 rep=5 art=94/94/97 pit=735/739/752 ctl_art=3/4/6 ctl_pit=13/15/25 shell=9A1F bshell=9A1F if1=95
+STATE PKAB row=BLSS_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=26D1:0001
+R PKAB BLSS_1_M2 unit=row n=50 nop=0 rep=5 art=184/185/186 pit=1455/1458/1471 ctl_art=3/4/5 ctl_pit=13/13/23 shell=14B8 bshell=14B8 if1=185
+STATE PKAB row=BLSS_9_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=26D1:0000
+R PKAB BLSS_9_M2 unit=row n=50 nop=0 rep=5 art=184/185/186 pit=1456/1462/1469 ctl_art=4/4/5 ctl_pit=13/13/23 shell=873A bshell=873A if1=186
+STATE PKAB row=XCW_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCW_0_M2 unit=w n=512 nop=0 rep=5 art=28/29/29 pit=211/214/220 ctl_art=5/6/8 ctl_pit=31/31/41 shell=5B3A bshell=5B3A if1=29
+R PKAB XCW_0_M2 unit=w n=512 nop=2 rep=5 art=28/29/29 pit=209/213/218 ctl_art=9/10/10 ctl_pit=56/57/64 shell=DA36 bshell=DA36 if1=28
+R PKAB XCW_0_M2 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=209/213/224 ctl_art=12/13/14 ctl_pit=82/82/95 shell=8666 bshell=8666 if1=29
+R PKAB XCW_0_M2 unit=w n=512 nop=8 rep=5 art=29/29/30 pit=209/213/223 ctl_art=18/19/20 ctl_pit=132/134/141 shell=6A49 bshell=6A49 if1=28
+R PKAB XCW_0_M2 unit=w n=512 nop=16 rep=5 art=35/36/36 pit=262/265/276 ctl_art=31/32/33 ctl_pit=233/234/246 shell=6398 bshell=6398 if1=35
+R PKAB XCW_0_M2 unit=w n=512 nop=32 rep=5 art=59/59/61 pit=460/460/477 ctl_art=56/57/58 ctl_pit=435/435/446 shell=3F45 bshell=3F45 if1=59
+STATE PKAB row=XCW_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001001 lin=000A1001 al4=1 al16=1 src=16D0:7470
+R PKAB XCW_1_M2 unit=w n=512 nop=0 rep=5 art=38/39/39 pit=286/287/295 ctl_art=5/7/8 ctl_pit=31/34/44 shell=7E0F bshell=7E0F if1=38
+R PKAB XCW_1_M2 unit=w n=512 nop=2 rep=5 art=52/53/53 pit=400/404/409 ctl_art=9/9/10 ctl_pit=56/57/64 shell=5204 bshell=5204 if1=52
+R PKAB XCW_1_M2 unit=w n=512 nop=4 rep=5 art=37/38/39 pit=286/288/295 ctl_art=12/12/13 ctl_pit=82/83/92 shell=01D5 bshell=01D5 if1=38
+R PKAB XCW_1_M2 unit=w n=512 nop=8 rep=5 art=52/53/54 pit=401/402/411 ctl_art=19/19/20 ctl_pit=132/134/143 shell=B805 bshell=B805 if1=53
+R PKAB XCW_1_M2 unit=w n=512 nop=16 rep=5 art=38/39/40 pit=288/289/301 ctl_art=31/31/33 ctl_pit=234/234/246 shell=F279 bshell=F279 if1=39
+R PKAB XCW_1_M2 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=461/462/476 ctl_art=56/56/59 ctl_pit=435/435/451 shell=A9B1 bshell=A9B1 if1=60
+STATE PKAB row=XCW_3_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001003 lin=000A1003 al4=3 al16=3 src=16D0:7470
+R PKAB XCW_3_M2 unit=w n=512 nop=0 rep=5 art=53/54/56 pit=413/415/426 ctl_art=5/6/7 ctl_pit=31/34/43 shell=3465 bshell=3465 if1=55
+R PKAB XCW_3_M2 unit=w n=512 nop=2 rep=5 art=53/54/55 pit=413/414/424 ctl_art=9/10/11 ctl_pit=56/57/66 shell=5241 bshell=5241 if1=55
+R PKAB XCW_3_M2 unit=w n=512 nop=4 rep=5 art=53/54/55 pit=411/417/425 ctl_art=12/13/13 ctl_pit=82/82/91 shell=1E92 bshell=1E92 if1=53
+R PKAB XCW_3_M2 unit=w n=512 nop=8 rep=5 art=54/55/55 pit=413/419/429 ctl_art=19/19/21 ctl_pit=133/134/145 shell=0CBC bshell=0CBC if1=55
+R PKAB XCW_3_M2 unit=w n=512 nop=16 rep=5 art=54/55/55 pit=415/419/427 ctl_art=31/31/33 ctl_pit=233/234/243 shell=C19A bshell=C19A if1=54
+R PKAB XCW_3_M2 unit=w n=512 nop=32 rep=5 art=65/66/69 pit=510/511/530 ctl_art=56/57/59 ctl_pit=435/437/449 shell=9478 bshell=9478 if1=66
+STATE PKAB row=XCB_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCB_0_M2 unit=b n=512 nop=0 rep=5 art=28/29/30 pit=209/215/218 ctl_art=6/6/7 ctl_pit=31/32/39 shell=5B3A bshell=5B3A if1=28
+R PKAB XCB_0_M2 unit=b n=512 nop=2 rep=5 art=28/29/31 pit=209/213/224 ctl_art=9/10/10 ctl_pit=56/58/66 shell=DA36 bshell=DA36 if1=28
+R PKAB XCB_0_M2 unit=b n=512 nop=4 rep=5 art=28/29/30 pit=211/214/222 ctl_art=12/13/13 ctl_pit=82/83/90 shell=8666 bshell=8666 if1=28
+R PKAB XCB_0_M2 unit=b n=512 nop=8 rep=5 art=29/29/31 pit=209/215/224 ctl_art=18/19/21 ctl_pit=133/133/144 shell=6A49 bshell=6A49 if1=29
+R PKAB XCB_0_M2 unit=b n=512 nop=16 rep=5 art=35/35/36 pit=263/264/277 ctl_art=31/31/33 ctl_pit=234/236/244 shell=6398 bshell=6398 if1=35
+R PKAB XCB_0_M2 unit=b n=512 nop=32 rep=5 art=59/60/61 pit=460/462/476 ctl_art=56/56/59 ctl_pit=434/435/449 shell=3F45 bshell=3F45 if1=60
+STATE PKAB row=XCR_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCR_0_M2 unit=w n=512 nop=0 rep=5 art=115/116/116 pit=901/909/916 ctl_art=5/6/8 ctl_pit=31/32/41 shell=5B3A bshell=5B3A if1=115
+STATE PKAB row=XCR_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001001 lin=000A1001 al4=1 al16=1 src=16D0:7470
+R PKAB XCR_1_M2 unit=w n=512 nop=0 rep=5 art=147/147/148 pit=1159/1162/1165 ctl_art=5/6/7 ctl_pit=31/33/39 shell=7E0F bshell=7E0F if1=148
+STATE PKAB row=XCR_3_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001003 lin=000A1003 al4=3 al16=3 src=16D0:7470
+R PKAB XCR_3_M2 unit=w n=512 nop=0 rep=5 art=220/221/223 pit=1749/1754/1762 ctl_art=6/6/8 ctl_pit=31/32/41 shell=3465 bshell=3465 if1=221
+STATE PKAB row=XAW_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001000 lin=000A3000 al4=0 al16=0 src=16D0:7470
+R PKAB XAW_0_M2 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=212/213/222 ctl_art=6/7/7 ctl_pit=31/31/38 shell=1EE6 bshell=1EE6 if1=29
+R PKAB XAW_0_M2 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=210/214/225 ctl_art=9/9/11 ctl_pit=56/57/64 shell=F28E bshell=F28E if1=28
+R PKAB XAW_0_M2 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=212/213/224 ctl_art=12/13/15 ctl_pit=82/83/95 shell=713E bshell=713E if1=29
+R PKAB XAW_0_M2 unit=w n=512 nop=8 rep=5 art=28/29/31 pit=214/214/223 ctl_art=18/19/20 ctl_pit=132/134/143 shell=0058 bshell=0058 if1=28
+R PKAB XAW_0_M2 unit=w n=512 nop=16 rep=5 art=34/35/37 pit=263/266/275 ctl_art=31/32/34 ctl_pit=234/236/246 shell=DA78 bshell=DA78 if1=35
+R PKAB XAW_0_M2 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/460/474 ctl_art=56/57/59 ctl_pit=435/435/448 shell=2B8A bshell=2B8A if1=59
+STATE PKAB row=XAW_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001001 lin=000A3001 al4=1 al16=1 src=16D0:7470
+R PKAB XAW_1_M2 unit=w n=512 nop=0 rep=5 art=37/38/39 pit=285/289/294 ctl_art=6/7/8 ctl_pit=31/34/41 shell=3BD3 bshell=3BD3 if1=39
+R PKAB XAW_1_M2 unit=w n=512 nop=2 rep=5 art=52/52/53 pit=401/403/406 ctl_art=9/9/10 ctl_pit=57/58/64 shell=7ABC bshell=7ABC if1=52
+R PKAB XAW_1_M2 unit=w n=512 nop=4 rep=5 art=37/39/39 pit=282/288/296 ctl_art=12/13/15 ctl_pit=82/83/95 shell=F68D bshell=F68D if1=38
+R PKAB XAW_1_M2 unit=w n=512 nop=8 rep=5 art=52/53/53 pit=402/402/410 ctl_art=18/19/20 ctl_pit=132/133/142 shell=D214 bshell=D214 if1=53
+R PKAB XAW_1_M2 unit=w n=512 nop=16 rep=5 art=38/38/39 pit=287/287/299 ctl_art=31/32/34 ctl_pit=233/234/247 shell=4B99 bshell=4B99 if1=39
+R PKAB XAW_1_M2 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/460/474 ctl_art=56/57/58 ctl_pit=435/435/449 shell=BD7E bshell=BD7E if1=59
+STATE PKAB row=XAW_3_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001003 lin=000A3003 al4=3 al16=3 src=16D0:7470
+R PKAB XAW_3_M2 unit=w n=512 nop=0 rep=5 art=53/54/56 pit=413/415/428 ctl_art=5/6/7 ctl_pit=31/33/43 shell=71B9 bshell=71B9 if1=54
+R PKAB XAW_3_M2 unit=w n=512 nop=2 rep=5 art=53/54/56 pit=414/415/426 ctl_art=9/10/11 ctl_pit=56/56/65 shell=7AF9 bshell=7AF9 if1=54
+R PKAB XAW_3_M2 unit=w n=512 nop=4 rep=5 art=53/54/56 pit=413/415/426 ctl_art=12/13/14 ctl_pit=82/83/92 shell=E9CA bshell=E9CA if1=54
+R PKAB XAW_3_M2 unit=w n=512 nop=8 rep=5 art=54/54/55 pit=412/419/427 ctl_art=18/18/21 ctl_pit=133/134/144 shell=66AD bshell=66AD if1=54
+R PKAB XAW_3_M2 unit=w n=512 nop=16 rep=5 art=54/55/57 pit=413/420/431 ctl_art=31/32/32 ctl_pit=234/234/245 shell=787A bshell=787A if1=54
+R PKAB XAW_3_M2 unit=w n=512 nop=32 rep=5 art=66/67/68 pit=511/513/531 ctl_art=56/57/58 ctl_pit=435/439/449 shell=80B7 bshell=80B7 if1=66
+STATE PKAB row=XAR_0_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001000 lin=000A3000 al4=0 al16=0 src=16D0:7470
+R PKAB XAR_0_M2 unit=w n=512 nop=0 rep=5 art=114/116/116 pit=902/903/907 ctl_art=5/6/7 ctl_pit=31/34/39 shell=1EE6 bshell=1EE6 if1=115
+STATE PKAB row=XAR_1_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001001 lin=000A3001 al4=1 al16=1 src=16D0:7470
+R PKAB XAR_1_M2 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1159/1161/1165 ctl_art=6/7/7 ctl_pit=31/32/41 shell=3BD3 bshell=3BD3 if1=148
+STATE PKAB row=XAR_3_M2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001003 lin=000A3003 al4=3 al16=3 src=16D0:7470
+R PKAB XAR_3_M2 unit=w n=512 nop=0 rep=5 art=220/222/223 pit=1747/1759/1775 ctl_art=6/6/7 ctl_pit=31/31/39 shell=71B9 bshell=71B9 if1=222
+STATE PKAB pegc=256 packed bank0=0 phase=_M2
+STATE PKAB row=PKW_0_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=291 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW_0_M2 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=226/227/235 ctl_art=6/6/8 ctl_pit=31/32/44 shell=BDFC bshell=BDFC if1=30
+R PKAB PKW_0_M2 unit=w n=512 nop=2 rep=5 art=30/31/31 pit=226/228/236 ctl_art=9/10/11 ctl_pit=56/59/63 shell=70B0 bshell=70B0 if1=30
+R PKAB PKW_0_M2 unit=w n=512 nop=4 rep=5 art=24/25/27 pit=180/182/192 ctl_art=13/13/13 ctl_pit=82/82/93 shell=1B96 bshell=1B96 if1=25
+R PKAB PKW_0_M2 unit=w n=512 nop=8 rep=5 art=30/31/31 pit=228/229/237 ctl_art=18/18/20 ctl_pit=132/133/144 shell=3825 bshell=3825 if1=31
+R PKAB PKW_0_M2 unit=w n=512 nop=16 rep=5 art=34/35/37 pit=259/261/271 ctl_art=31/32/33 ctl_pit=234/234/245 shell=19F2 bshell=19F2 if1=34
+R PKAB PKW_0_M2 unit=w n=512 nop=32 rep=5 art=59/59/62 pit=460/461/477 ctl_art=56/57/59 ctl_pit=435/435/449 shell=D40C bshell=D40C if1=59
+STATE PKAB row=PKW_1_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=397563 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKW_1_M2 unit=w n=512 nop=0 rep=5 art=24/24/27 pit=181/182/192 ctl_art=6/7/7 ctl_pit=31/33/39 shell=EFCC bshell=EFCC if1=25
+R PKAB PKW_1_M2 unit=w n=512 nop=2 rep=5 art=30/31/32 pit=225/229/235 ctl_art=9/9/11 ctl_pit=56/57/66 shell=4C65 bshell=4C65 if1=31
+R PKAB PKW_1_M2 unit=w n=512 nop=4 rep=5 art=25/25/26 pit=181/182/191 ctl_art=12/13/13 ctl_pit=82/82/90 shell=EA00 bshell=EA00 if1=25
+R PKAB PKW_1_M2 unit=w n=512 nop=8 rep=5 art=31/31/31 pit=227/229/237 ctl_art=18/19/20 ctl_pit=132/133/143 shell=023A bshell=023A if1=30
+R PKAB PKW_1_M2 unit=w n=512 nop=16 rep=5 art=34/35/36 pit=259/261/270 ctl_art=31/31/32 ctl_pit=234/234/243 shell=B143 bshell=B143 if1=34
+R PKAB PKW_1_M2 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/463/476 ctl_art=56/57/59 ctl_pit=434/435/449 shell=E065 bshell=E065 if1=60
+STATE PKAB row=PKW_3_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=795032 drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB PKW_3_M2 unit=w n=512 nop=0 rep=5 art=58/58/59 pit=448/448/458 ctl_art=5/6/7 ctl_pit=31/32/39 shell=A5A6 bshell=A5A6 if1=58
+R PKAB PKW_3_M2 unit=w n=512 nop=2 rep=5 art=46/47/48 pit=350/354/362 ctl_art=9/9/11 ctl_pit=56/58/66 shell=4C20 bshell=4C20 if1=47
+R PKAB PKW_3_M2 unit=w n=512 nop=4 rep=5 art=58/59/61 pit=446/449/463 ctl_art=12/12/14 ctl_pit=82/82/90 shell=F547 bshell=F547 if1=59
+R PKAB PKW_3_M2 unit=w n=512 nop=8 rep=5 art=46/47/47 pit=354/357/365 ctl_art=18/18/20 ctl_pit=133/134/143 shell=B683 bshell=B683 if1=47
+R PKAB PKW_3_M2 unit=w n=512 nop=16 rep=5 art=58/59/60 pit=449/450/467 ctl_art=31/32/32 ctl_pit=233/234/243 shell=82A0 bshell=82A0 if1=58
+R PKAB PKW_3_M2 unit=w n=512 nop=32 rep=5 art=65/66/68 pit=504/505/521 ctl_art=56/57/58 ctl_pit=434/435/449 shell=DDAC bshell=DDAC if1=65
+STATE PKAB row=PKD_0_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1192535 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKD_0_M2 unit=d n=512 nop=0 rep=5 art=30/30/32 pit=227/228/241 ctl_art=5/6/8 ctl_pit=31/33/42 shell=BDFC bshell=BDFC if1=31
+R PKAB PKD_0_M2 unit=d n=512 nop=2 rep=5 art=31/31/32 pit=225/228/236 ctl_art=9/10/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=30
+R PKAB PKD_0_M2 unit=d n=512 nop=4 rep=5 art=24/25/26 pit=179/183/193 ctl_art=12/13/13 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=25
+R PKAB PKD_0_M2 unit=d n=512 nop=8 rep=5 art=30/31/31 pit=229/229/237 ctl_art=18/19/21 ctl_pit=132/133/143 shell=3825 bshell=3825 if1=30
+R PKAB PKD_0_M2 unit=d n=512 nop=16 rep=5 art=36/36/38 pit=272/273/286 ctl_art=31/32/33 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=36
+R PKAB PKD_0_M2 unit=d n=512 nop=32 rep=5 art=61/61/63 pit=473/473/488 ctl_art=56/57/59 ctl_pit=435/435/447 shell=D40C bshell=D40C if1=61
+STATE PKAB row=PKD_1_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1590014 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKD_1_M2 unit=d n=512 nop=0 rep=5 art=46/46/48 pit=352/353/362 ctl_art=6/7/8 ctl_pit=31/32/41 shell=EFCC bshell=EFCC if1=46
+R PKAB PKD_1_M2 unit=d n=512 nop=2 rep=5 art=58/58/59 pit=447/448/459 ctl_art=9/10/10 ctl_pit=57/57/66 shell=4C65 bshell=4C65 if1=59
+R PKAB PKD_1_M2 unit=d n=512 nop=4 rep=5 art=46/46/48 pit=353/354/365 ctl_art=12/12/14 ctl_pit=82/82/93 shell=EA00 bshell=EA00 if1=47
+R PKAB PKD_1_M2 unit=d n=512 nop=8 rep=5 art=58/59/60 pit=451/452/462 ctl_art=18/19/20 ctl_pit=133/133/141 shell=023A bshell=023A if1=58
+R PKAB PKD_1_M2 unit=d n=512 nop=16 rep=5 art=58/59/60 pit=448/451/462 ctl_art=31/31/32 ctl_pit=233/234/245 shell=B143 bshell=B143 if1=59
+R PKAB PKD_1_M2 unit=d n=512 nop=32 rep=5 art=66/67/69 pit=514/517/533 ctl_art=56/57/58 ctl_pit=435/435/449 shell=E065 bshell=E065 if1=66
+STATE PKAB row=PKR_0_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1987511 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKR_0_M2 unit=w n=512 nop=0 rep=5 art=125/126/126 pit=985/990/997 ctl_art=6/7/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=126
+STATE PKAB row=PKR_1_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=2058331 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKR_1_M2 unit=w n=512 nop=0 rep=5 art=125/125/127 pit=977/985/994 ctl_art=6/6/8 ctl_pit=31/31/41 shell=EFCC bshell=EFCC if1=126
+STATE PKAB row=PKR_3_M2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=2129111 drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB PKR_3_M2 unit=w n=512 nop=0 rep=5 art=241/243/244 pit=1915/1922/1936 ctl_art=6/6/7 ctl_pit=31/32/39 shell=A5A6 bshell=A5A6 if1=242
+STATE PKAB row=GRW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRW_R2 unit=w n=512 nop=0 rep=5 art=115/115/116 pit=902/910/915 ctl_art=5/6/8 ctl_pit=31/33/42 shell=BDFC bshell=BDFC if1=116
+R PKAB GRW_R2 unit=w n=512 nop=2 rep=5 art=115/116/118 pit=904/913/921 ctl_art=9/10/11 ctl_pit=56/57/65 shell=70B0 bshell=70B0 if1=117
+R PKAB GRW_R2 unit=w n=512 nop=4 rep=5 art=121/122/122 pit=952/955/962 ctl_art=12/13/13 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=122
+R PKAB GRW_R2 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1000/1003/1009 ctl_art=18/19/20 ctl_pit=132/132/141 shell=3825 bshell=3825 if1=127
+R PKAB GRW_R2 unit=w n=512 nop=16 rep=5 art=143/144/145 pit=1128/1132/1141 ctl_art=31/32/33 ctl_pit=233/235/243 shell=19F2 bshell=19F2 if1=143
+R PKAB GRW_R2 unit=w n=512 nop=32 rep=5 art=164/166/170 pit=1297/1310/1335 ctl_art=56/57/58 ctl_pit=434/436/449 shell=D40C bshell=D40C if1=166
+R PKAB GRW_R2 unit=w n=512 nop=64 rep=5 art=213/214/216 pit=1693/1695/1715 ctl_art=107/107/109 ctl_pit=838/840/857 shell=D552 bshell=D552 if1=213
+STATE PKAB row=GRD_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRD_R2 unit=d n=512 nop=0 rep=5 art=147/147/149 pit=1160/1161/1170 ctl_art=5/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=148
+R PKAB GRD_R2 unit=d n=512 nop=2 rep=5 art=147/148/149 pit=1160/1164/1174 ctl_art=9/9/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=148
+R PKAB GRD_R2 unit=d n=512 nop=4 rep=5 art=153/154/154 pit=1208/1212/1222 ctl_art=12/13/14 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=154
+R PKAB GRD_R2 unit=d n=512 nop=8 rep=5 art=159/161/161 pit=1250/1265/1267 ctl_art=18/19/20 ctl_pit=132/133/144 shell=3825 bshell=3825 if1=159
+R PKAB GRD_R2 unit=d n=512 nop=16 rep=5 art=172/173/173 pit=1359/1366/1373 ctl_art=31/32/33 ctl_pit=233/234/246 shell=19F2 bshell=19F2 if1=173
+R PKAB GRD_R2 unit=d n=512 nop=32 rep=5 art=194/196/197 pit=1543/1546/1560 ctl_art=56/56/58 ctl_pit=435/437/451 shell=D40C bshell=D40C if1=195
+R PKAB GRD_R2 unit=d n=512 nop=64 rep=5 art=241/242/245 pit=1919/1922/1941 ctl_art=107/107/110 ctl_pit=838/838/860 shell=D552 bshell=D552 if1=242
+STATE PKAB row=GW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GW_R2 unit=w n=512 nop=0 rep=5 art=28/28/30 pit=212/213/218 ctl_art=6/6/8 ctl_pit=32/32/41 shell=BDFC bshell=BDFC if1=28
+R PKAB GW_R2 unit=w n=512 nop=2 rep=5 art=29/29/30 pit=212/213/222 ctl_art=9/10/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=28
+R PKAB GW_R2 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=210/213/224 ctl_art=12/13/14 ctl_pit=82/82/92 shell=1B96 bshell=1B96 if1=29
+R PKAB GW_R2 unit=w n=512 nop=8 rep=5 art=28/29/31 pit=209/216/228 ctl_art=18/18/21 ctl_pit=133/134/141 shell=3825 bshell=3825 if1=28
+R PKAB GW_R2 unit=w n=512 nop=16 rep=5 art=34/35/37 pit=263/267/277 ctl_art=31/31/33 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=35
+R PKAB GW_R2 unit=w n=512 nop=32 rep=5 art=60/60/62 pit=460/462/474 ctl_art=56/56/59 ctl_pit=435/436/450 shell=D40C bshell=D40C if1=59
+R PKAB GW_R2 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=863/864/885 ctl_art=107/107/110 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=GLSW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSW_R2 unit=w n=512 nop=0 rep=5 art=110/111/111 pit=866/872/876 ctl_art=3/4/4 ctl_pit=10/10/16 shell=D39C bshell=D39C if1=111
+STATE PKAB row=GMVR_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0000
+R PKAB GMVR_R2 unit=w n=512 nop=0 rep=5 art=137/137/138 pit=1081/1084/1086 ctl_art=3/4/5 ctl_pit=9/9/20 shell=52DC bshell=52DC if1=137
+STATE PKAB row=TCRW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRW_R2 unit=w n=512 nop=0 rep=5 art=124/125/125 pit=980/986/991 ctl_art=6/7/8 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=125
+R PKAB TCRW_R2 unit=w n=512 nop=2 rep=5 art=125/126/128 pit=983/985/999 ctl_art=9/9/11 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=125
+R PKAB TCRW_R2 unit=w n=512 nop=4 rep=5 art=129/129/130 pit=1013/1015/1021 ctl_art=12/13/13 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=129
+R PKAB TCRW_R2 unit=w n=512 nop=8 rep=5 art=133/134/135 pit=1045/1054/1061 ctl_art=18/19/21 ctl_pit=133/133/141 shell=3825 bshell=3825 if1=133
+R PKAB TCRW_R2 unit=w n=512 nop=16 rep=5 art=146/147/149 pit=1158/1161/1171 ctl_art=31/32/33 ctl_pit=233/235/246 shell=19F2 bshell=19F2 if1=146
+R PKAB TCRW_R2 unit=w n=512 nop=32 rep=5 art=172/173/174 pit=1362/1365/1375 ctl_art=56/57/59 ctl_pit=435/435/449 shell=D40C bshell=D40C if1=172
+R PKAB TCRW_R2 unit=w n=512 nop=64 rep=5 art=222/223/227 pit=1763/1770/1798 ctl_art=106/107/110 ctl_pit=837/838/857 shell=D552 bshell=D552 if1=224
+STATE PKAB row=TDW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TDW_R2 unit=w n=512 nop=0 rep=5 art=32/33/34 pit=245/246/253 ctl_art=6/6/8 ctl_pit=32/33/39 shell=BDFC bshell=BDFC if1=33
+R PKAB TDW_R2 unit=w n=512 nop=2 rep=5 art=32/33/35 pit=243/250/258 ctl_art=9/9/11 ctl_pit=56/57/66 shell=70B0 bshell=70B0 if1=33
+R PKAB TDW_R2 unit=w n=512 nop=4 rep=5 art=33/33/34 pit=244/248/255 ctl_art=12/13/13 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=33
+R PKAB TDW_R2 unit=w n=512 nop=8 rep=5 art=32/33/35 pit=246/248/262 ctl_art=19/19/21 ctl_pit=132/133/143 shell=3825 bshell=3825 if1=33
+R PKAB TDW_R2 unit=w n=512 nop=16 rep=5 art=35/35/37 pit=266/268/281 ctl_art=31/32/33 ctl_pit=233/234/243 shell=19F2 bshell=19F2 if1=35
+R PKAB TDW_R2 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/462/478 ctl_art=56/56/59 ctl_pit=435/435/449 shell=D40C bshell=D40C if1=60
+R PKAB TDW_R2 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=864/866/885 ctl_art=106/107/109 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=RMW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB RMW_R2 unit=w n=512 nop=0 rep=5 art=49/50/51 pit=379/383/390 ctl_art=6/6/7 ctl_pit=31/31/41 shell=BDFC bshell=BDFC if1=50
+R PKAB RMW_R2 unit=w n=512 nop=2 rep=5 art=49/51/51 pit=380/383/389 ctl_art=9/10/10 ctl_pit=57/58/64 shell=70B0 bshell=70B0 if1=50
+R PKAB RMW_R2 unit=w n=512 nop=4 rep=5 art=49/50/51 pit=378/384/391 ctl_art=12/13/14 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=51
+R PKAB RMW_R2 unit=w n=512 nop=8 rep=5 art=49/50/51 pit=382/384/389 ctl_art=18/19/20 ctl_pit=132/133/144 shell=3825 bshell=3825 if1=49
+R PKAB RMW_R2 unit=w n=512 nop=16 rep=5 art=50/50/51 pit=379/383/394 ctl_art=31/32/33 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=50
+R PKAB RMW_R2 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/461/476 ctl_art=56/56/59 ctl_pit=435/437/452 shell=D40C bshell=D40C if1=60
+R PKAB RMW_R2 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=864/866/884 ctl_art=106/107/109 ctl_pit=838/838/860 shell=D552 bshell=D552 if1=110
+STATE PKAB row=XCR_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCR_R2 unit=w n=512 nop=0 rep=5 art=116/116/117 pit=905/908/920 ctl_art=6/7/8 ctl_pit=34/35/44 shell=5B3A bshell=5B3A if1=116
+R PKAB XCR_R2 unit=w n=512 nop=2 rep=5 art=116/116/117 pit=907/912/917 ctl_art=9/10/11 ctl_pit=59/59/66 shell=DA36 bshell=DA36 if1=116
+R PKAB XCR_R2 unit=w n=512 nop=4 rep=5 art=121/122/122 pit=953/956/962 ctl_art=12/13/14 ctl_pit=84/84/94 shell=8666 bshell=8666 if1=122
+R PKAB XCR_R2 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1004/1005/1015 ctl_art=19/20/20 ctl_pit=135/136/146 shell=6A49 bshell=6A49 if1=127
+R PKAB XCR_R2 unit=w n=512 nop=16 rep=5 art=144/144/144 pit=1132/1134/1142 ctl_art=31/32/34 ctl_pit=236/236/249 shell=6398 bshell=6398 if1=145
+R PKAB XCR_R2 unit=w n=512 nop=32 rep=5 art=165/166/171 pit=1297/1311/1349 ctl_art=57/57/58 ctl_pit=438/440/449 shell=3F45 bshell=3F45 if1=169
+R PKAB XCR_R2 unit=w n=512 nop=64 rep=5 art=214/216/218 pit=1696/1704/1722 ctl_art=107/107/110 ctl_pit=840/842/863 shell=C07F bshell=C07F if1=214
+STATE PKAB row=XCW_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCW_R2 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=214/216/222 ctl_art=6/7/7 ctl_pit=33/34/41 shell=5B3A bshell=5B3A if1=28
+R PKAB XCW_R2 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=213/215/223 ctl_art=9/10/11 ctl_pit=59/61/69 shell=DA36 bshell=DA36 if1=28
+R PKAB XCW_R2 unit=w n=512 nop=4 rep=5 art=28/29/31 pit=214/214/229 ctl_art=12/13/14 ctl_pit=84/85/92 shell=8666 bshell=8666 if1=30
+R PKAB XCW_R2 unit=w n=512 nop=8 rep=5 art=28/30/31 pit=213/217/227 ctl_art=19/19/20 ctl_pit=135/136/146 shell=6A49 bshell=6A49 if1=29
+R PKAB XCW_R2 unit=w n=512 nop=16 rep=5 art=35/36/36 pit=267/268/278 ctl_art=32/32/33 ctl_pit=236/238/245 shell=6398 bshell=6398 if1=35
+R PKAB XCW_R2 unit=w n=512 nop=32 rep=5 art=60/60/62 pit=463/463/479 ctl_art=56/57/59 ctl_pit=438/439/452 shell=3F45 bshell=3F45 if1=61
+R PKAB XCW_R2 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=867/867/887 ctl_art=107/108/109 ctl_pit=841/842/860 shell=C07F bshell=C07F if1=110
+STATE PKAB row=XCRS_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00000000 lin=000A0000 al4=0 al16=0 src=16D0:7470
+R PKAB XCRS_R2 unit=w n=512 nop=0 rep=5 art=115/116/117 pit=905/911/913 ctl_art=6/6/8 ctl_pit=33/34/43 shell=FD80 bshell=FD80 if1=115
+R PKAB XCRS_R2 unit=w n=512 nop=2 rep=5 art=115/117/118 pit=905/912/926 ctl_art=9/9/10 ctl_pit=58/59/67 shell=B9F8 bshell=B9F8 if1=115
+R PKAB XCRS_R2 unit=w n=512 nop=4 rep=5 art=121/122/123 pit=954/957/966 ctl_art=12/13/14 ctl_pit=83/83/93 shell=2B22 bshell=2B22 if1=122
+R PKAB XCRS_R2 unit=w n=512 nop=8 rep=5 art=128/128/128 pit=1000/1004/1012 ctl_art=18/19/20 ctl_pit=134/134/144 shell=F5A6 bshell=F5A6 if1=129
+R PKAB XCRS_R2 unit=w n=512 nop=16 rep=5 art=144/144/145 pit=1134/1137/1142 ctl_art=31/32/33 ctl_pit=235/238/246 shell=218D bshell=218D if1=144
+R PKAB XCRS_R2 unit=w n=512 nop=32 rep=5 art=165/166/171 pit=1306/1316/1349 ctl_art=57/57/59 ctl_pit=437/438/450 shell=7A1F bshell=7A1F if1=167
+R PKAB XCRS_R2 unit=w n=512 nop=64 rep=5 art=213/214/217 pit=1690/1700/1724 ctl_art=107/107/110 ctl_pit=840/842/860 shell=CC4B bshell=CC4B if1=214
+STATE PKAB row=XCWS_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00000000 lin=000A0000 al4=0 al16=0 src=16D0:7470
+R PKAB XCWS_R2 unit=w n=512 nop=0 rep=5 art=28/30/30 pit=212/216/222 ctl_art=6/7/8 ctl_pit=33/34/45 shell=FD80 bshell=FD80 if1=29
+R PKAB XCWS_R2 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=212/214/222 ctl_art=9/10/11 ctl_pit=58/59/66 shell=B9F8 bshell=B9F8 if1=29
+R PKAB XCWS_R2 unit=w n=512 nop=4 rep=5 art=29/29/30 pit=212/215/224 ctl_art=12/13/14 ctl_pit=83/84/95 shell=2B22 bshell=2B22 if1=28
+R PKAB XCWS_R2 unit=w n=512 nop=8 rep=5 art=29/30/30 pit=210/218/224 ctl_art=18/19/20 ctl_pit=134/135/143 shell=F5A6 bshell=F5A6 if1=29
+R PKAB XCWS_R2 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=264/267/278 ctl_art=31/31/34 ctl_pit=236/237/247 shell=218D bshell=218D if1=35
+R PKAB XCWS_R2 unit=w n=512 nop=32 rep=5 art=60/61/61 pit=463/464/475 ctl_art=57/57/59 ctl_pit=437/439/450 shell=7A1F bshell=7A1F if1=60
+R PKAB XCWS_R2 unit=w n=512 nop=64 rep=5 art=110/110/113 pit=865/867/886 ctl_art=107/108/110 ctl_pit=840/842/859 shell=CC4B bshell=CC4B if1=111
+STATE PKAB row=XARS_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00000000 lin=000A2000 al4=0 al16=0 src=16D0:7470
+R PKAB XARS_R2 unit=w n=512 nop=0 rep=5 art=115/115/117 pit=904/906/915 ctl_art=6/7/7 ctl_pit=33/34/41 shell=D3BC bshell=D3BC if1=116
+R PKAB XARS_R2 unit=w n=512 nop=2 rep=5 art=115/117/117 pit=906/917/920 ctl_art=9/10/11 ctl_pit=58/59/68 shell=41BB bshell=41BB if1=117
+R PKAB XARS_R2 unit=w n=512 nop=4 rep=5 art=121/122/123 pit=956/958/965 ctl_art=12/13/13 ctl_pit=83/84/91 shell=12CC bshell=12CC if1=122
+R PKAB XARS_R2 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1000/1005/1012 ctl_art=18/19/20 ctl_pit=134/135/145 shell=4B77 bshell=4B77 if1=128
+R PKAB XARS_R2 unit=w n=512 nop=16 rep=5 art=144/144/145 pit=1130/1137/1143 ctl_art=31/31/33 ctl_pit=235/236/244 shell=531B bshell=531B if1=144
+R PKAB XARS_R2 unit=w n=512 nop=32 rep=5 art=164/166/168 pit=1296/1313/1329 ctl_art=56/56/59 ctl_pit=437/438/449 shell=7DF9 bshell=7DF9 if1=171
+R PKAB XARS_R2 unit=w n=512 nop=64 rep=5 art=213/215/218 pit=1690/1697/1727 ctl_art=108/108/110 ctl_pit=840/840/859 shell=17ED bshell=17ED if1=215
+STATE PKAB row=XAWS_R2 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00000000 lin=000A2000 al4=0 al16=0 src=16D0:7470
+R PKAB XAWS_R2 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=213/214/225 ctl_art=6/7/7 ctl_pit=33/34/41 shell=D3BC bshell=D3BC if1=30
+R PKAB XAWS_R2 unit=w n=512 nop=2 rep=5 art=29/29/31 pit=214/218/224 ctl_art=9/10/10 ctl_pit=58/60/67 shell=41BB bshell=41BB if1=29
+R PKAB XAWS_R2 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=212/215/225 ctl_art=12/13/13 ctl_pit=84/85/91 shell=12CC bshell=12CC if1=29
+R PKAB XAWS_R2 unit=w n=512 nop=8 rep=5 art=29/30/31 pit=216/217/228 ctl_art=18/19/21 ctl_pit=134/135/145 shell=4B77 bshell=4B77 if1=29
+R PKAB XAWS_R2 unit=w n=512 nop=16 rep=5 art=35/36/38 pit=266/267/279 ctl_art=31/32/33 ctl_pit=236/238/244 shell=531B bshell=531B if1=35
+R PKAB XAWS_R2 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=463/464/478 ctl_art=56/56/59 ctl_pit=437/437/450 shell=7DF9 bshell=7DF9 if1=61
+R PKAB XAWS_R2 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/867/886 ctl_art=107/108/109 ctl_pit=840/841/859 shell=17ED bshell=17ED if1=111
+STATE PKAB row=PKR_R2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=233 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKR_R2 unit=w n=512 nop=0 rep=5 art=125/125/127 pit=983/986/997 ctl_art=6/6/8 ctl_pit=31/32/40 shell=BDFC bshell=BDFC if1=125
+R PKAB PKR_R2 unit=w n=512 nop=2 rep=5 art=125/126/127 pit=985/988/997 ctl_art=9/9/10 ctl_pit=56/57/66 shell=70B0 bshell=70B0 if1=126
+R PKAB PKR_R2 unit=w n=512 nop=4 rep=5 art=130/131/132 pit=1017/1026/1039 ctl_art=12/13/14 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=131
+R PKAB PKR_R2 unit=w n=512 nop=8 rep=5 art=137/139/139 pit=1085/1092/1098 ctl_art=18/19/20 ctl_pit=132/133/142 shell=3825 bshell=3825 if1=138
+R PKAB PKR_R2 unit=w n=512 nop=16 rep=5 art=158/158/161 pit=1245/1251/1266 ctl_art=31/32/33 ctl_pit=233/234/243 shell=19F2 bshell=19F2 if1=158
+R PKAB PKR_R2 unit=w n=512 nop=32 rep=5 art=171/171/174 pit=1348/1355/1375 ctl_art=57/57/59 ctl_pit=434/436/450 shell=D40C bshell=D40C if1=171
+R PKAB PKR_R2 unit=w n=512 nop=64 rep=5 art=233/234/236 pit=1854/1857/1869 ctl_art=107/107/110 ctl_pit=838/839/857 shell=D552 bshell=D552 if1=233
+STATE PKAB row=PKW_R2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=463151 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW_R2 unit=w n=512 nop=0 rep=5 art=30/31/31 pit=226/227/234 ctl_art=6/7/7 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=30
+R PKAB PKW_R2 unit=w n=512 nop=2 rep=5 art=24/25/26 pit=181/183/192 ctl_art=9/9/10 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=25
+R PKAB PKW_R2 unit=w n=512 nop=4 rep=5 art=30/31/32 pit=225/227/236 ctl_art=12/13/14 ctl_pit=81/82/93 shell=1B96 bshell=1B96 if1=31
+R PKAB PKW_R2 unit=w n=512 nop=8 rep=5 art=24/25/26 pit=183/183/196 ctl_art=18/19/21 ctl_pit=132/133/144 shell=3825 bshell=3825 if1=25
+R PKAB PKW_R2 unit=w n=512 nop=16 rep=5 art=34/35/36 pit=259/261/272 ctl_art=31/32/33 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=34
+R PKAB PKW_R2 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/460/476 ctl_art=56/57/58 ctl_pit=435/435/447 shell=D40C bshell=D40C if1=60
+R PKAB PKW_R2 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=864/864/885 ctl_art=107/107/110 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=PKW1ST_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=238 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW1ST_FA2 unit=w n=512 nop=0 rep=5 art=30/31/31 pit=227/228/235 ctl_art=6/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=30
+STATE PKAB row=PKRF_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=71826 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKRF_FA2 unit=w n=512 nop=0 rep=5 art=125/126/127 pit=984/986/998 ctl_art=5/7/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=PKWAFT_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=141789 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWAFT_FA2 unit=w n=512 nop=0 rep=5 art=24/25/26 pit=179/184/191 ctl_art=5/6/7 ctl_pit=31/31/41 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKWLATE_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=538905 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWLATE_FA2 unit=w n=512 nop=0 rep=5 art=24/25/27 pit=180/183/191 ctl_art=6/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKWODD_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=609975 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKWODD_FA2 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=225/229/233 ctl_art=5/7/8 ctl_pit=31/34/39 shell=EFCC bshell=EFCC if1=31
+STATE PKAB row=PKWHI_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=680763 drain=0 winph=1 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWHI_FA2 unit=w n=512 nop=0 rep=5 art=30/30/32 pit=227/228/238 ctl_art=6/6/8 ctl_pit=31/32/40 shell=87BC bshell=87BC if1=31
+STATE PKAB row=PKDF_FA2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=751527 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKDF_FA2 unit=d n=512 nop=0 rep=5 art=24/25/25 pit=181/181/191 ctl_art=6/6/8 ctl_pit=31/31/38 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKW1ST_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=237 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW1ST_FV2 unit=w n=512 nop=0 rep=5 art=24/25/25 pit=174/177/185 ctl_art=6/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKRF_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=70283 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKRF_FV2 unit=w n=512 nop=0 rep=5 art=104/104/105 pit=814/816/821 ctl_art=6/6/8 ctl_pit=32/32/39 shell=BDFC bshell=BDFC if1=104
+STATE PKAB row=PKWAFT_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=141159 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWAFT_FV2 unit=w n=512 nop=0 rep=5 art=24/24/26 pit=174/177/184 ctl_art=6/6/7 ctl_pit=32/32/38 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKWLATE_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=538305 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWLATE_FV2 unit=w n=512 nop=0 rep=5 art=23/24/24 pit=169/169/177 ctl_art=6/6/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=23
+STATE PKAB row=PKWODD_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=609354 drain=0 winph=2 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKWODD_FV2 unit=w n=512 nop=0 rep=5 art=24/25/26 pit=175/177/185 ctl_art=6/6/8 ctl_pit=31/31/41 shell=EFCC bshell=EFCC if1=24
+STATE PKAB row=PKWHI_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=682043 drain=0 winph=2 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWHI_FV2 unit=w n=512 nop=0 rep=5 art=24/24/26 pit=175/177/186 ctl_art=6/6/7 ctl_pit=31/31/39 shell=87BC bshell=87BC if1=25
+STATE PKAB row=PKDF_FV2 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=750916 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKDF_FV2 unit=d n=512 nop=0 rep=5 art=23/24/24 pit=169/171/176 ctl_art=5/6/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=23
+STATE PKAB round=3
+STATE PKAB grcg=00 gvram reads phase=_M3
+STATE PKAB row=GRW_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRW_0_M3 unit=w n=512 nop=0 rep=5 art=115/116/117 pit=903/909/911 ctl_art=6/7/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=116
+STATE PKAB row=GRW_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB GRW_1_M3 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1157/1163/1166 ctl_art=6/6/7 ctl_pit=31/31/39 shell=EFCC bshell=EFCC if1=147
+STATE PKAB row=GRW_3_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB GRW_3_M3 unit=w n=512 nop=0 rep=5 art=221/223/223 pit=1750/1760/1764 ctl_art=6/6/8 ctl_pit=31/32/41 shell=A5A6 bshell=A5A6 if1=221
+STATE PKAB row=GRD_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRD_0_M3 unit=d n=512 nop=0 rep=5 art=147/147/148 pit=1158/1160/1167 ctl_art=6/6/7 ctl_pit=31/33/39 shell=BDFC bshell=BDFC if1=148
+STATE PKAB row=GRD_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB GRD_1_M3 unit=d n=512 nop=0 rep=5 art=252/253/253 pit=1998/2008/2012 ctl_art=6/6/8 ctl_pit=31/31/42 shell=EFCC bshell=EFCC if1=254
+STATE PKAB row=GRD_2_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000002 lin=000A8002 al4=2 al16=2 src=16D0:7470
+R PKAB GRD_2_M3 unit=d n=512 nop=0 rep=5 art=221/223/223 pit=1756/1761/1766 ctl_art=6/7/7 ctl_pit=31/32/39 shell=8093 bshell=8093 if1=222
+STATE PKAB row=GRB_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRB_0_M3 unit=b n=512 nop=0 rep=5 art=115/115/116 pit=901/907/912 ctl_art=6/6/7 ctl_pit=32/32/39 shell=BDFC bshell=BDFC if1=115
+STATE PKAB row=GLSW_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSW_0_M3 unit=w n=512 nop=0 rep=5 art=111/111/112 pit=867/874/878 ctl_art=4/4/5 ctl_pit=9/10/18 shell=D39C bshell=D39C if1=111
+STATE PKAB row=GLSW_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC27 lin=00025927 al4=3 al16=7 src=A800:0001
+R PKAB GLSW_1_M3 unit=w n=512 nop=0 rep=5 art=182/182/183 pit=1442/1446/1449 ctl_art=3/4/4 ctl_pit=9/9/16 shell=020C bshell=020C if1=182
+STATE PKAB row=GLSD_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSD_0_M3 unit=d n=256 nop=0 rep=5 art=73/74/74 pit=570/573/578 ctl_art=3/4/5 ctl_pit=9/12/18 shell=BE20 bshell=BE20 if1=74
+STATE PKAB row=GLSD_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC27 lin=00025927 al4=3 al16=7 src=A800:0001
+R PKAB GLSD_1_M3 unit=d n=256 nop=0 rep=5 art=128/129/130 pit=1011/1012/1014 ctl_art=3/4/5 ctl_pit=9/10/19 shell=3DA6 bshell=3DA6 if1=128
+STATE PKAB row=GMVR_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0000
+R PKAB GMVR_0_M3 unit=w n=512 nop=0 rep=5 art=136/137/138 pit=1076/1085/1088 ctl_art=3/4/4 ctl_pit=9/11/19 shell=52DC bshell=52DC if1=137
+STATE PKAB row=GMVR_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0001
+R PKAB GMVR_1_M3 unit=w n=512 nop=0 rep=5 art=205/207/207 pit=1626/1638/1644 ctl_art=3/3/4 ctl_pit=9/10/19 shell=494F bshell=494F if1=207
+STATE PKAB row=GMVV_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=A800:0000
+R PKAB GMVV_0_M3 unit=w n=512 nop=0 rep=5 art=146/147/148 pit=1151/1156/1162 ctl_art=3/4/4 ctl_pit=9/10/17 shell=AB9F bshell=AB9F if1=146
+STATE PKAB row=GMVV_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00004001 lin=000AC001 al4=1 al16=1 src=A800:0001
+R PKAB GMVV_1_M3 unit=w n=512 nop=0 rep=5 art=237/239/240 pit=1879/1895/1895 ctl_art=3/4/4 ctl_pit=9/10/16 shell=B29F bshell=B29F if1=238
+STATE PKAB row=TCRW_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRW_0_M3 unit=w n=512 nop=0 rep=5 art=125/126/127 pit=979/984/993 ctl_art=5/6/7 ctl_pit=31/34/41 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=TCRW_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB TCRW_1_M3 unit=w n=512 nop=0 rep=5 art=168/169/170 pit=1334/1337/1343 ctl_art=5/6/8 ctl_pit=31/32/39 shell=EFCC bshell=EFCC if1=169
+STATE PKAB row=TCRW_3_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB TCRW_3_M3 unit=w n=512 nop=0 rep=5 art=237/238/238 pit=1880/1888/1889 ctl_art=6/6/7 ctl_pit=31/31/39 shell=A5A6 bshell=A5A6 if1=238
+STATE PKAB row=TCRB_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRB_0_M3 unit=b n=512 nop=0 rep=5 art=125/126/126 pit=978/983/990 ctl_art=6/6/8 ctl_pit=31/31/41 shell=BDFC bshell=BDFC if1=126
+STATE PKAB row=BLSS_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=26D1:0001
+R PKAB BLSS_0_M3 unit=row n=50 nop=0 rep=5 art=94/95/95 pit=740/741/751 ctl_art=3/4/6 ctl_pit=13/14/25 shell=9A1F bshell=9A1F if1=94
+STATE PKAB row=BLSS_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=26D1:0001
+R PKAB BLSS_1_M3 unit=row n=50 nop=0 rep=5 art=184/185/186 pit=1458/1464/1470 ctl_art=3/4/5 ctl_pit=13/14/22 shell=14B8 bshell=14B8 if1=185
+STATE PKAB row=BLSS_9_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=26D1:0000
+R PKAB BLSS_9_M3 unit=row n=50 nop=0 rep=5 art=185/185/186 pit=1457/1458/1469 ctl_art=3/4/5 ctl_pit=13/13/24 shell=873A bshell=873A if1=185
+STATE PKAB row=XCW_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCW_0_M3 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=210/211/223 ctl_art=6/6/7 ctl_pit=31/32/39 shell=5B3A bshell=5B3A if1=29
+R PKAB XCW_0_M3 unit=w n=512 nop=2 rep=5 art=28/29/31 pit=210/212/220 ctl_art=9/10/10 ctl_pit=56/57/64 shell=DA36 bshell=DA36 if1=28
+R PKAB XCW_0_M3 unit=w n=512 nop=4 rep=5 art=29/29/30 pit=213/216/224 ctl_art=12/13/14 ctl_pit=82/83/90 shell=8666 bshell=8666 if1=29
+R PKAB XCW_0_M3 unit=w n=512 nop=8 rep=5 art=29/29/30 pit=213/215/225 ctl_art=18/18/20 ctl_pit=132/135/143 shell=6A49 bshell=6A49 if1=28
+R PKAB XCW_0_M3 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=263/266/278 ctl_art=31/32/33 ctl_pit=234/234/245 shell=6398 bshell=6398 if1=35
+R PKAB XCW_0_M3 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/462/474 ctl_art=56/57/59 ctl_pit=435/435/450 shell=3F45 bshell=3F45 if1=59
+STATE PKAB row=XCW_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001001 lin=000A1001 al4=1 al16=1 src=16D0:7470
+R PKAB XCW_1_M3 unit=w n=512 nop=0 rep=5 art=52/53/54 pit=401/403/409 ctl_art=6/6/8 ctl_pit=31/32/41 shell=7E0F bshell=7E0F if1=52
+R PKAB XCW_1_M3 unit=w n=512 nop=2 rep=5 art=52/53/54 pit=402/404/409 ctl_art=9/9/10 ctl_pit=57/57/64 shell=5204 bshell=5204 if1=52
+R PKAB XCW_1_M3 unit=w n=512 nop=4 rep=5 art=38/38/39 pit=286/288/296 ctl_art=12/13/14 ctl_pit=82/83/92 shell=01D5 bshell=01D5 if1=38
+R PKAB XCW_1_M3 unit=w n=512 nop=8 rep=5 art=52/52/53 pit=402/403/412 ctl_art=19/19/21 ctl_pit=132/133/142 shell=B805 bshell=B805 if1=53
+R PKAB XCW_1_M3 unit=w n=512 nop=16 rep=5 art=38/39/40 pit=287/288/299 ctl_art=31/31/33 ctl_pit=234/234/245 shell=F279 bshell=F279 if1=38
+R PKAB XCW_1_M3 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/474 ctl_art=56/57/58 ctl_pit=435/437/447 shell=A9B1 bshell=A9B1 if1=59
+STATE PKAB row=XCW_3_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001003 lin=000A1003 al4=3 al16=3 src=16D0:7470
+R PKAB XCW_3_M3 unit=w n=512 nop=0 rep=5 art=54/55/55 pit=414/417/422 ctl_art=5/6/7 ctl_pit=31/34/41 shell=3465 bshell=3465 if1=54
+R PKAB XCW_3_M3 unit=w n=512 nop=2 rep=5 art=53/54/55 pit=410/416/424 ctl_art=9/9/11 ctl_pit=56/57/66 shell=5241 bshell=5241 if1=55
+R PKAB XCW_3_M3 unit=w n=512 nop=4 rep=5 art=53/54/56 pit=411/418/423 ctl_art=12/13/14 ctl_pit=82/82/92 shell=1E92 bshell=1E92 if1=54
+R PKAB XCW_3_M3 unit=w n=512 nop=8 rep=5 art=54/55/55 pit=416/419/428 ctl_art=18/19/20 ctl_pit=133/133/144 shell=0CBC bshell=0CBC if1=55
+R PKAB XCW_3_M3 unit=w n=512 nop=16 rep=5 art=54/54/56 pit=414/419/431 ctl_art=31/32/33 ctl_pit=233/234/245 shell=C19A bshell=C19A if1=54
+R PKAB XCW_3_M3 unit=w n=512 nop=32 rep=5 art=66/67/68 pit=510/514/528 ctl_art=56/57/59 ctl_pit=434/437/453 shell=9478 bshell=9478 if1=66
+STATE PKAB row=XCB_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCB_0_M3 unit=b n=512 nop=0 rep=5 art=28/29/29 pit=211/213/220 ctl_art=6/6/8 ctl_pit=31/31/41 shell=5B3A bshell=5B3A if1=28
+R PKAB XCB_0_M3 unit=b n=512 nop=2 rep=5 art=28/29/30 pit=210/211/224 ctl_art=9/10/11 ctl_pit=56/57/66 shell=DA36 bshell=DA36 if1=29
+R PKAB XCB_0_M3 unit=b n=512 nop=4 rep=5 art=28/29/31 pit=212/213/223 ctl_art=12/12/14 ctl_pit=82/82/92 shell=8666 bshell=8666 if1=28
+R PKAB XCB_0_M3 unit=b n=512 nop=8 rep=5 art=28/29/31 pit=211/215/226 ctl_art=18/19/20 ctl_pit=133/134/141 shell=6A49 bshell=6A49 if1=29
+R PKAB XCB_0_M3 unit=b n=512 nop=16 rep=5 art=35/35/36 pit=263/266/277 ctl_art=31/32/33 ctl_pit=234/234/243 shell=6398 bshell=6398 if1=35
+R PKAB XCB_0_M3 unit=b n=512 nop=32 rep=5 art=59/60/62 pit=460/460/477 ctl_art=56/57/59 ctl_pit=435/435/449 shell=3F45 bshell=3F45 if1=60
+STATE PKAB row=XCR_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCR_0_M3 unit=w n=512 nop=0 rep=5 art=114/115/116 pit=899/909/913 ctl_art=6/6/7 ctl_pit=31/31/39 shell=5B3A bshell=5B3A if1=115
+STATE PKAB row=XCR_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001001 lin=000A1001 al4=1 al16=1 src=16D0:7470
+R PKAB XCR_1_M3 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1160/1161/1175 ctl_art=6/6/8 ctl_pit=31/32/41 shell=7E0F bshell=7E0F if1=148
+STATE PKAB row=XCR_3_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001003 lin=000A1003 al4=3 al16=3 src=16D0:7470
+R PKAB XCR_3_M3 unit=w n=512 nop=0 rep=5 art=221/222/223 pit=1756/1759/1765 ctl_art=6/6/7 ctl_pit=31/32/39 shell=3465 bshell=3465 if1=221
+STATE PKAB row=XAW_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001000 lin=000A3000 al4=0 al16=0 src=16D0:7470
+R PKAB XAW_0_M3 unit=w n=512 nop=0 rep=5 art=29/29/30 pit=211/214/219 ctl_art=6/6/8 ctl_pit=31/32/39 shell=1EE6 bshell=1EE6 if1=28
+R PKAB XAW_0_M3 unit=w n=512 nop=2 rep=5 art=28/28/30 pit=211/213/224 ctl_art=9/10/11 ctl_pit=56/58/67 shell=F28E bshell=F28E if1=29
+R PKAB XAW_0_M3 unit=w n=512 nop=4 rep=5 art=28/29/31 pit=212/213/223 ctl_art=12/13/14 ctl_pit=82/82/92 shell=713E bshell=713E if1=28
+R PKAB XAW_0_M3 unit=w n=512 nop=8 rep=5 art=29/29/30 pit=213/216/226 ctl_art=18/19/21 ctl_pit=132/133/144 shell=0058 bshell=0058 if1=29
+R PKAB XAW_0_M3 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=263/265/277 ctl_art=32/32/32 ctl_pit=233/234/243 shell=DA78 bshell=DA78 if1=35
+R PKAB XAW_0_M3 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/461/477 ctl_art=56/57/58 ctl_pit=435/435/449 shell=2B8A bshell=2B8A if1=60
+STATE PKAB row=XAW_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001001 lin=000A3001 al4=1 al16=1 src=16D0:7470
+R PKAB XAW_1_M3 unit=w n=512 nop=0 rep=5 art=52/53/53 pit=400/403/408 ctl_art=6/6/8 ctl_pit=31/34/40 shell=3BD3 bshell=3BD3 if1=53
+R PKAB XAW_1_M3 unit=w n=512 nop=2 rep=5 art=52/53/54 pit=400/401/412 ctl_art=9/10/11 ctl_pit=56/56/66 shell=7ABC bshell=7ABC if1=53
+R PKAB XAW_1_M3 unit=w n=512 nop=4 rep=5 art=37/38/39 pit=285/287/293 ctl_art=12/13/13 ctl_pit=82/82/90 shell=F68D bshell=F68D if1=38
+R PKAB XAW_1_M3 unit=w n=512 nop=8 rep=5 art=52/53/53 pit=402/405/415 ctl_art=18/19/21 ctl_pit=133/134/144 shell=D214 bshell=D214 if1=52
+R PKAB XAW_1_M3 unit=w n=512 nop=16 rep=5 art=38/39/39 pit=288/289/296 ctl_art=31/32/32 ctl_pit=233/234/243 shell=4B99 bshell=4B99 if1=38
+R PKAB XAW_1_M3 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/461/479 ctl_art=56/57/59 ctl_pit=435/435/449 shell=BD7E bshell=BD7E if1=60
+STATE PKAB row=XAW_3_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001003 lin=000A3003 al4=3 al16=3 src=16D0:7470
+R PKAB XAW_3_M3 unit=w n=512 nop=0 rep=5 art=53/54/55 pit=412/416/421 ctl_art=6/6/7 ctl_pit=31/32/39 shell=71B9 bshell=71B9 if1=54
+R PKAB XAW_3_M3 unit=w n=512 nop=2 rep=5 art=54/55/56 pit=413/416/428 ctl_art=10/10/10 ctl_pit=56/57/66 shell=7AF9 bshell=7AF9 if1=54
+R PKAB XAW_3_M3 unit=w n=512 nop=4 rep=5 art=54/54/55 pit=415/418/425 ctl_art=12/13/13 ctl_pit=82/83/90 shell=E9CA bshell=E9CA if1=54
+R PKAB XAW_3_M3 unit=w n=512 nop=8 rep=5 art=54/55/56 pit=417/423/430 ctl_art=18/19/21 ctl_pit=132/134/144 shell=66AD bshell=66AD if1=55
+R PKAB XAW_3_M3 unit=w n=512 nop=16 rep=5 art=53/54/55 pit=414/419/430 ctl_art=31/32/32 ctl_pit=234/234/243 shell=787A bshell=787A if1=53
+R PKAB XAW_3_M3 unit=w n=512 nop=32 rep=5 art=66/67/68 pit=511/516/528 ctl_art=57/57/58 ctl_pit=435/435/450 shell=80B7 bshell=80B7 if1=66
+STATE PKAB row=XAR_0_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001000 lin=000A3000 al4=0 al16=0 src=16D0:7470
+R PKAB XAR_0_M3 unit=w n=512 nop=0 rep=5 art=114/115/117 pit=902/908/911 ctl_art=6/7/8 ctl_pit=31/32/39 shell=1EE6 bshell=1EE6 if1=116
+STATE PKAB row=XAR_1_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001001 lin=000A3001 al4=1 al16=1 src=16D0:7470
+R PKAB XAR_1_M3 unit=w n=512 nop=0 rep=5 art=147/148/148 pit=1158/1161/1165 ctl_art=6/6/7 ctl_pit=31/32/39 shell=3BD3 bshell=3BD3 if1=147
+STATE PKAB row=XAR_3_M3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00001003 lin=000A3003 al4=3 al16=3 src=16D0:7470
+R PKAB XAR_3_M3 unit=w n=512 nop=0 rep=5 art=221/223/224 pit=1752/1760/1774 ctl_art=6/6/8 ctl_pit=31/32/41 shell=71B9 bshell=71B9 if1=222
+STATE PKAB pegc=256 packed bank0=0 phase=_M3
+STATE PKAB row=PKW_0_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=290 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW_0_M3 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=227/227/233 ctl_art=6/6/7 ctl_pit=32/34/39 shell=BDFC bshell=BDFC if1=31
+R PKAB PKW_0_M3 unit=w n=512 nop=2 rep=5 art=24/25/27 pit=181/181/189 ctl_art=9/10/11 ctl_pit=56/57/67 shell=70B0 bshell=70B0 if1=24
+R PKAB PKW_0_M3 unit=w n=512 nop=4 rep=5 art=30/31/31 pit=225/226/237 ctl_art=12/13/13 ctl_pit=81/82/90 shell=1B96 bshell=1B96 if1=31
+R PKAB PKW_0_M3 unit=w n=512 nop=8 rep=5 art=30/31/32 pit=227/230/240 ctl_art=19/19/21 ctl_pit=132/133/142 shell=3825 bshell=3825 if1=31
+R PKAB PKW_0_M3 unit=w n=512 nop=16 rep=5 art=34/35/36 pit=259/261/272 ctl_art=32/32/33 ctl_pit=234/234/244 shell=19F2 bshell=19F2 if1=34
+R PKAB PKW_0_M3 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=460/460/476 ctl_art=56/56/58 ctl_pit=435/435/450 shell=D40C bshell=D40C if1=59
+STATE PKAB row=PKW_1_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=396634 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKW_1_M3 unit=w n=512 nop=0 rep=5 art=24/25/26 pit=181/182/191 ctl_art=5/6/8 ctl_pit=31/31/39 shell=EFCC bshell=EFCC if1=25
+R PKAB PKW_1_M3 unit=w n=512 nop=2 rep=5 art=31/31/31 pit=226/229/233 ctl_art=9/9/10 ctl_pit=57/58/64 shell=4C65 bshell=4C65 if1=30
+R PKAB PKW_1_M3 unit=w n=512 nop=4 rep=5 art=25/26/27 pit=181/183/193 ctl_art=12/13/14 ctl_pit=82/84/94 shell=EA00 bshell=EA00 if1=25
+R PKAB PKW_1_M3 unit=w n=512 nop=8 rep=5 art=30/31/32 pit=228/230/237 ctl_art=18/19/21 ctl_pit=132/134/144 shell=023A bshell=023A if1=31
+R PKAB PKW_1_M3 unit=w n=512 nop=16 rep=5 art=34/35/36 pit=259/262/272 ctl_art=31/32/34 ctl_pit=233/234/245 shell=B143 bshell=B143 if1=35
+R PKAB PKW_1_M3 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/477 ctl_art=56/56/59 ctl_pit=435/435/447 shell=E065 bshell=E065 if1=59
+STATE PKAB row=PKW_3_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=794116 drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB PKW_3_M3 unit=w n=512 nop=0 rep=5 art=58/59/60 pit=448/449/458 ctl_art=5/6/8 ctl_pit=31/31/41 shell=A5A6 bshell=A5A6 if1=58
+R PKAB PKW_3_M3 unit=w n=512 nop=2 rep=5 art=46/46/47 pit=351/353/362 ctl_art=9/10/10 ctl_pit=56/57/66 shell=4C20 bshell=4C20 if1=46
+R PKAB PKW_3_M3 unit=w n=512 nop=4 rep=5 art=58/59/60 pit=447/450/459 ctl_art=12/12/14 ctl_pit=82/83/92 shell=F547 bshell=F547 if1=58
+R PKAB PKW_3_M3 unit=w n=512 nop=8 rep=5 art=46/46/48 pit=355/357/367 ctl_art=18/19/20 ctl_pit=132/133/141 shell=B683 bshell=B683 if1=46
+R PKAB PKW_3_M3 unit=w n=512 nop=16 rep=5 art=58/59/61 pit=448/451/467 ctl_art=31/32/33 ctl_pit=233/234/245 shell=82A0 bshell=82A0 if1=59
+R PKAB PKW_3_M3 unit=w n=512 nop=32 rep=5 art=65/66/67 pit=505/506/521 ctl_art=56/57/59 ctl_pit=434/435/452 shell=DDAC bshell=DDAC if1=64
+STATE PKAB row=PKD_0_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1192268 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKD_0_M3 unit=d n=512 nop=0 rep=5 art=30/31/31 pit=226/228/236 ctl_art=6/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=30
+R PKAB PKD_0_M3 unit=d n=512 nop=2 rep=5 art=25/25/26 pit=180/184/191 ctl_art=10/10/10 ctl_pit=57/57/66 shell=70B0 bshell=70B0 if1=24
+R PKAB PKD_0_M3 unit=d n=512 nop=4 rep=5 art=30/31/31 pit=225/227/235 ctl_art=12/13/13 ctl_pit=81/81/90 shell=1B96 bshell=1B96 if1=31
+R PKAB PKD_0_M3 unit=d n=512 nop=8 rep=5 art=30/31/32 pit=228/229/237 ctl_art=18/19/21 ctl_pit=133/133/143 shell=3825 bshell=3825 if1=31
+R PKAB PKD_0_M3 unit=d n=512 nop=16 rep=5 art=36/36/37 pit=272/272/283 ctl_art=31/32/33 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=37
+R PKAB PKD_0_M3 unit=d n=512 nop=32 rep=5 art=61/62/63 pit=472/475/490 ctl_art=56/56/58 ctl_pit=434/437/450 shell=D40C bshell=D40C if1=62
+STATE PKAB row=PKD_1_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1600019 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKD_1_M3 unit=d n=512 nop=0 rep=5 art=46/47/47 pit=352/355/359 ctl_art=5/6/7 ctl_pit=31/31/39 shell=EFCC bshell=EFCC if1=46
+R PKAB PKD_1_M3 unit=d n=512 nop=2 rep=5 art=58/59/59 pit=448/451/459 ctl_art=9/10/11 ctl_pit=56/57/66 shell=4C65 bshell=4C65 if1=59
+R PKAB PKD_1_M3 unit=d n=512 nop=4 rep=5 art=46/47/47 pit=353/355/361 ctl_art=12/13/13 ctl_pit=82/82/90 shell=EA00 bshell=EA00 if1=46
+R PKAB PKD_1_M3 unit=d n=512 nop=8 rep=5 art=59/59/60 pit=448/450/461 ctl_art=19/19/20 ctl_pit=133/135/144 shell=023A bshell=023A if1=58
+R PKAB PKD_1_M3 unit=d n=512 nop=16 rep=5 art=46/46/48 pit=355/356/370 ctl_art=31/32/32 ctl_pit=233/235/243 shell=B143 bshell=B143 if1=46
+R PKAB PKD_1_M3 unit=d n=512 nop=32 rep=5 art=66/67/69 pit=515/517/533 ctl_art=56/57/59 ctl_pit=435/436/449 shell=E065 bshell=E065 if1=67
+STATE PKAB row=PKR_0_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=1997507 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKR_0_M3 unit=w n=512 nop=0 rep=5 art=125/126/127 pit=984/990/994 ctl_art=6/6/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=126
+STATE PKAB row=PKR_1_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=2068330 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKR_1_M3 unit=w n=512 nop=0 rep=5 art=125/125/125 pit=979/988/989 ctl_art=5/6/7 ctl_pit=31/32/39 shell=EFCC bshell=EFCC if1=125
+STATE PKAB row=PKR_3_M3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=2139131 drain=0 winph=1 dst=A800:00000003 lin=000A8003 al4=3 al16=3 src=16D0:7470
+R PKAB PKR_3_M3 unit=w n=512 nop=0 rep=5 art=242/244/245 pit=1915/1928/1943 ctl_art=6/6/7 ctl_pit=31/32/41 shell=A5A6 bshell=A5A6 if1=243
+STATE PKAB row=GRW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRW_R3 unit=w n=512 nop=0 rep=5 art=114/115/117 pit=900/905/919 ctl_art=6/7/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=116
+R PKAB GRW_R3 unit=w n=512 nop=2 rep=5 art=115/116/117 pit=905/914/918 ctl_art=9/10/10 ctl_pit=56/57/66 shell=70B0 bshell=70B0 if1=115
+R PKAB GRW_R3 unit=w n=512 nop=4 rep=5 art=121/121/123 pit=953/956/963 ctl_art=12/13/14 ctl_pit=81/83/90 shell=1B96 bshell=1B96 if1=122
+R PKAB GRW_R3 unit=w n=512 nop=8 rep=5 art=127/128/128 pit=1000/1002/1009 ctl_art=18/19/21 ctl_pit=132/134/144 shell=3825 bshell=3825 if1=128
+R PKAB GRW_R3 unit=w n=512 nop=16 rep=5 art=143/144/145 pit=1131/1134/1145 ctl_art=31/31/34 ctl_pit=233/234/245 shell=19F2 bshell=19F2 if1=145
+R PKAB GRW_R3 unit=w n=512 nop=32 rep=5 art=165/167/169 pit=1300/1317/1335 ctl_art=56/56/59 ctl_pit=434/435/449 shell=D40C bshell=D40C if1=169
+R PKAB GRW_R3 unit=w n=512 nop=64 rep=5 art=214/214/216 pit=1692/1696/1712 ctl_art=106/107/109 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=214
+STATE PKAB row=GRD_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GRD_R3 unit=d n=512 nop=0 rep=5 art=147/148/149 pit=1157/1162/1170 ctl_art=5/6/8 ctl_pit=31/32/40 shell=BDFC bshell=BDFC if1=147
+R PKAB GRD_R3 unit=d n=512 nop=2 rep=5 art=148/148/149 pit=1165/1166/1178 ctl_art=9/10/10 ctl_pit=56/58/66 shell=70B0 bshell=70B0 if1=148
+R PKAB GRD_R3 unit=d n=512 nop=4 rep=5 art=153/154/155 pit=1208/1214/1224 ctl_art=12/12/13 ctl_pit=81/83/92 shell=1B96 bshell=1B96 if1=154
+R PKAB GRD_R3 unit=d n=512 nop=8 rep=5 art=159/159/160 pit=1249/1259/1265 ctl_art=18/19/20 ctl_pit=132/133/144 shell=3825 bshell=3825 if1=160
+R PKAB GRD_R3 unit=d n=512 nop=16 rep=5 art=172/173/174 pit=1361/1366/1374 ctl_art=31/32/33 ctl_pit=233/235/244 shell=19F2 bshell=19F2 if1=172
+R PKAB GRD_R3 unit=d n=512 nop=32 rep=5 art=194/195/199 pit=1542/1547/1574 ctl_art=56/57/59 ctl_pit=435/435/450 shell=D40C bshell=D40C if1=193
+R PKAB GRD_R3 unit=d n=512 nop=64 rep=5 art=242/242/246 pit=1920/1923/1950 ctl_art=107/107/109 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=243
+STATE PKAB row=GW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB GW_R3 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=211/213/223 ctl_art=6/7/7 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=29
+R PKAB GW_R3 unit=w n=512 nop=2 rep=5 art=28/28/30 pit=210/211/223 ctl_art=9/9/10 ctl_pit=56/57/63 shell=70B0 bshell=70B0 if1=29
+R PKAB GW_R3 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=211/213/223 ctl_art=13/13/14 ctl_pit=81/83/92 shell=1B96 bshell=1B96 if1=30
+R PKAB GW_R3 unit=w n=512 nop=8 rep=5 art=28/29/30 pit=213/215/226 ctl_art=18/19/20 ctl_pit=132/134/142 shell=3825 bshell=3825 if1=28
+R PKAB GW_R3 unit=w n=512 nop=16 rep=5 art=35/35/36 pit=263/266/273 ctl_art=31/32/32 ctl_pit=233/235/245 shell=19F2 bshell=19F2 if1=35
+R PKAB GW_R3 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/476 ctl_art=56/57/59 ctl_pit=434/435/447 shell=D40C bshell=D40C if1=60
+R PKAB GW_R3 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=864/864/885 ctl_art=107/107/109 ctl_pit=838/839/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=GLSW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=16D0:0000EC26 lin=00025926 al4=2 al16=6 src=A800:0000
+R PKAB GLSW_R3 unit=w n=512 nop=0 rep=5 art=110/111/111 pit=865/867/871 ctl_art=3/4/5 ctl_pit=9/9/16 shell=D39C bshell=D39C if1=111
+STATE PKAB row=GMVR_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=36D1:00000000 lin=00036D10 al4=0 al16=0 src=A800:0000
+R PKAB GMVR_R3 unit=w n=512 nop=0 rep=5 art=137/137/138 pit=1077/1081/1091 ctl_art=3/4/4 ctl_pit=9/10/18 shell=52DC bshell=52DC if1=137
+STATE PKAB row=TCRW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TCRW_R3 unit=w n=512 nop=0 rep=5 art=125/126/126 pit=982/986/992 ctl_art=6/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=125
+R PKAB TCRW_R3 unit=w n=512 nop=2 rep=5 art=125/126/126 pit=984/988/994 ctl_art=9/10/10 ctl_pit=57/58/64 shell=70B0 bshell=70B0 if1=126
+R PKAB TCRW_R3 unit=w n=512 nop=4 rep=5 art=128/130/131 pit=1012/1017/1024 ctl_art=12/13/15 ctl_pit=81/81/95 shell=1B96 bshell=1B96 if1=129
+R PKAB TCRW_R3 unit=w n=512 nop=8 rep=5 art=133/133/135 pit=1049/1051/1061 ctl_art=18/19/20 ctl_pit=132/133/142 shell=3825 bshell=3825 if1=132
+R PKAB TCRW_R3 unit=w n=512 nop=16 rep=5 art=147/147/149 pit=1158/1161/1173 ctl_art=31/31/33 ctl_pit=233/235/246 shell=19F2 bshell=19F2 if1=147
+R PKAB TCRW_R3 unit=w n=512 nop=32 rep=5 art=171/173/174 pit=1356/1360/1374 ctl_art=56/57/58 ctl_pit=435/435/448 shell=D40C bshell=D40C if1=172
+R PKAB TCRW_R3 unit=w n=512 nop=64 rep=5 art=222/224/226 pit=1765/1774/1787 ctl_art=107/107/109 ctl_pit=838/840/858 shell=D552 bshell=D552 if1=224
+STATE PKAB row=TDW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB TDW_R3 unit=w n=512 nop=0 rep=5 art=33/34/35 pit=248/250/259 ctl_art=6/6/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=33
+R PKAB TDW_R3 unit=w n=512 nop=2 rep=5 art=33/33/34 pit=247/250/260 ctl_art=9/9/10 ctl_pit=56/57/66 shell=70B0 bshell=70B0 if1=33
+R PKAB TDW_R3 unit=w n=512 nop=4 rep=5 art=33/33/34 pit=246/248/257 ctl_art=12/12/14 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=34
+R PKAB TDW_R3 unit=w n=512 nop=8 rep=5 art=32/34/35 pit=245/251/261 ctl_art=18/19/20 ctl_pit=133/133/143 shell=3825 bshell=3825 if1=33
+R PKAB TDW_R3 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=268/269/281 ctl_art=31/32/32 ctl_pit=233/234/243 shell=19F2 bshell=19F2 if1=36
+R PKAB TDW_R3 unit=w n=512 nop=32 rep=5 art=59/59/62 pit=460/460/478 ctl_art=56/57/59 ctl_pit=435/435/450 shell=D40C bshell=D40C if1=60
+R PKAB TDW_R3 unit=w n=512 nop=64 rep=5 art=111/111/112 pit=864/866/885 ctl_art=106/107/109 ctl_pit=838/838/858 shell=D552 bshell=D552 if1=109
+STATE PKAB row=RMW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB RMW_R3 unit=w n=512 nop=0 rep=5 art=49/50/51 pit=379/382/387 ctl_art=5/6/8 ctl_pit=31/33/39 shell=BDFC bshell=BDFC if1=50
+R PKAB RMW_R3 unit=w n=512 nop=2 rep=5 art=49/50/51 pit=379/382/389 ctl_art=9/10/11 ctl_pit=56/57/64 shell=70B0 bshell=70B0 if1=49
+R PKAB RMW_R3 unit=w n=512 nop=4 rep=5 art=49/49/51 pit=381/381/387 ctl_art=12/13/14 ctl_pit=81/82/93 shell=1B96 bshell=1B96 if1=49
+R PKAB RMW_R3 unit=w n=512 nop=8 rep=5 art=50/50/52 pit=381/383/392 ctl_art=18/19/19 ctl_pit=132/134/141 shell=3825 bshell=3825 if1=50
+R PKAB RMW_R3 unit=w n=512 nop=16 rep=5 art=50/50/52 pit=382/384/394 ctl_art=31/32/33 ctl_pit=234/234/244 shell=19F2 bshell=19F2 if1=51
+R PKAB RMW_R3 unit=w n=512 nop=32 rep=5 art=59/60/61 pit=460/461/476 ctl_art=56/56/58 ctl_pit=434/435/449 shell=D40C bshell=D40C if1=60
+R PKAB RMW_R3 unit=w n=512 nop=64 rep=5 art=110/110/113 pit=864/866/885 ctl_art=107/107/109 ctl_pit=838/839/860 shell=D552 bshell=D552 if1=109
+STATE PKAB row=XCR_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCR_R3 unit=w n=512 nop=0 rep=5 art=115/116/117 pit=907/910/920 ctl_art=6/7/8 ctl_pit=34/35/44 shell=5B3A bshell=5B3A if1=116
+R PKAB XCR_R3 unit=w n=512 nop=2 rep=5 art=115/117/117 pit=907/917/925 ctl_art=9/10/11 ctl_pit=59/61/66 shell=DA36 bshell=DA36 if1=116
+R PKAB XCR_R3 unit=w n=512 nop=4 rep=5 art=121/122/123 pit=953/956/970 ctl_art=12/13/14 ctl_pit=84/85/94 shell=8666 bshell=8666 if1=122
+R PKAB XCR_R3 unit=w n=512 nop=8 rep=5 art=128/128/129 pit=1003/1006/1017 ctl_art=18/19/21 ctl_pit=135/136/145 shell=6A49 bshell=6A49 if1=128
+R PKAB XCR_R3 unit=w n=512 nop=16 rep=5 art=144/144/146 pit=1131/1136/1151 ctl_art=31/32/34 ctl_pit=236/236/248 shell=6398 bshell=6398 if1=143
+R PKAB XCR_R3 unit=w n=512 nop=32 rep=5 art=164/171/172 pit=1300/1347/1364 ctl_art=56/57/58 ctl_pit=437/438/449 shell=3F45 bshell=3F45 if1=166
+R PKAB XCR_R3 unit=w n=512 nop=64 rep=5 art=214/215/218 pit=1691/1704/1721 ctl_art=107/107/111 ctl_pit=841/843/863 shell=C07F bshell=C07F if1=214
+STATE PKAB row=XCW_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00001000 lin=000A1000 al4=0 al16=0 src=16D0:7470
+R PKAB XCW_R3 unit=w n=512 nop=0 rep=5 art=29/29/30 pit=213/216/227 ctl_art=6/7/7 ctl_pit=33/35/41 shell=5B3A bshell=5B3A if1=29
+R PKAB XCW_R3 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=213/215/224 ctl_art=9/9/12 ctl_pit=59/59/68 shell=DA36 bshell=DA36 if1=29
+R PKAB XCW_R3 unit=w n=512 nop=4 rep=5 art=28/29/31 pit=212/214/228 ctl_art=12/13/14 ctl_pit=84/84/92 shell=8666 bshell=8666 if1=29
+R PKAB XCW_R3 unit=w n=512 nop=8 rep=5 art=29/29/30 pit=213/218/227 ctl_art=19/20/21 ctl_pit=135/136/146 shell=6A49 bshell=6A49 if1=29
+R PKAB XCW_R3 unit=w n=512 nop=16 rep=5 art=35/36/37 pit=267/268/280 ctl_art=31/32/33 ctl_pit=236/238/245 shell=6398 bshell=6398 if1=36
+R PKAB XCW_R3 unit=w n=512 nop=32 rep=5 art=60/61/62 pit=462/465/476 ctl_art=56/57/58 ctl_pit=438/440/452 shell=3F45 bshell=3F45 if1=61
+R PKAB XCW_R3 unit=w n=512 nop=64 rep=5 art=110/111/112 pit=866/867/887 ctl_art=107/108/110 ctl_pit=841/843/859 shell=C07F bshell=C07F if1=111
+STATE PKAB row=XCRS_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00000000 lin=000A0000 al4=0 al16=0 src=16D0:7470
+R PKAB XCRS_R3 unit=w n=512 nop=0 rep=5 art=114/116/117 pit=901/907/914 ctl_art=6/7/7 ctl_pit=33/34/43 shell=FD80 bshell=FD80 if1=115
+R PKAB XCRS_R3 unit=w n=512 nop=2 rep=5 art=116/117/118 pit=914/916/922 ctl_art=9/9/11 ctl_pit=58/59/66 shell=B9F8 bshell=B9F8 if1=117
+R PKAB XCRS_R3 unit=w n=512 nop=4 rep=5 art=121/122/123 pit=955/958/966 ctl_art=13/13/14 ctl_pit=83/86/94 shell=2B22 bshell=2B22 if1=121
+R PKAB XCRS_R3 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1000/1005/1012 ctl_art=18/19/21 ctl_pit=134/136/145 shell=F5A6 bshell=F5A6 if1=128
+R PKAB XCRS_R3 unit=w n=512 nop=16 rep=5 art=143/144/146 pit=1128/1134/1145 ctl_art=31/31/34 ctl_pit=235/238/247 shell=218D bshell=218D if1=143
+R PKAB XCRS_R3 unit=w n=512 nop=32 rep=5 art=165/167/169 pit=1305/1316/1334 ctl_art=56/57/59 ctl_pit=437/439/450 shell=7A1F bshell=7A1F if1=169
+R PKAB XCRS_R3 unit=w n=512 nop=64 rep=5 art=213/214/217 pit=1692/1695/1719 ctl_art=107/108/110 ctl_pit=840/842/859 shell=CC4B bshell=CC4B if1=215
+STATE PKAB row=XCWS_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A000:00000000 lin=000A0000 al4=0 al16=0 src=16D0:7470
+R PKAB XCWS_R3 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=212/215/220 ctl_art=6/7/8 ctl_pit=33/35/42 shell=FD80 bshell=FD80 if1=28
+R PKAB XCWS_R3 unit=w n=512 nop=2 rep=5 art=28/29/31 pit=213/213/225 ctl_art=9/10/10 ctl_pit=58/60/66 shell=B9F8 bshell=B9F8 if1=29
+R PKAB XCWS_R3 unit=w n=512 nop=4 rep=5 art=28/29/31 pit=213/214/224 ctl_art=12/13/13 ctl_pit=83/84/92 shell=2B22 bshell=2B22 if1=29
+R PKAB XCWS_R3 unit=w n=512 nop=8 rep=5 art=29/29/31 pit=217/218/229 ctl_art=19/19/21 ctl_pit=134/135/145 shell=F5A6 bshell=F5A6 if1=30
+R PKAB XCWS_R3 unit=w n=512 nop=16 rep=5 art=36/36/37 pit=265/269/280 ctl_art=31/31/34 ctl_pit=235/236/245 shell=218D bshell=218D if1=36
+R PKAB XCWS_R3 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/463/479 ctl_art=56/57/59 ctl_pit=437/438/452 shell=7A1F bshell=7A1F if1=60
+R PKAB XCWS_R3 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/866/889 ctl_art=107/108/110 ctl_pit=841/842/860 shell=CC4B bshell=CC4B if1=110
+STATE PKAB row=XARS_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00000000 lin=000A2000 al4=0 al16=0 src=16D0:7470
+R PKAB XARS_R3 unit=w n=512 nop=0 rep=5 art=114/116/116 pit=901/909/915 ctl_art=6/7/8 ctl_pit=33/34/43 shell=D3BC bshell=D3BC if1=115
+R PKAB XARS_R3 unit=w n=512 nop=2 rep=5 art=116/117/117 pit=910/915/920 ctl_art=10/10/10 ctl_pit=59/59/66 shell=41BB bshell=41BB if1=116
+R PKAB XARS_R3 unit=w n=512 nop=4 rep=5 art=121/121/123 pit=955/957/966 ctl_art=12/13/14 ctl_pit=83/83/94 shell=12CC bshell=12CC if1=122
+R PKAB XARS_R3 unit=w n=512 nop=8 rep=5 art=127/128/129 pit=1004/1007/1016 ctl_art=19/20/20 ctl_pit=134/136/145 shell=4B77 bshell=4B77 if1=128
+R PKAB XARS_R3 unit=w n=512 nop=16 rep=5 art=143/144/145 pit=1130/1133/1143 ctl_art=32/32/33 ctl_pit=235/236/248 shell=531B bshell=531B if1=144
+R PKAB XARS_R3 unit=w n=512 nop=32 rep=5 art=165/169/171 pit=1300/1341/1356 ctl_art=56/56/58 ctl_pit=437/437/448 shell=7DF9 bshell=7DF9 if1=165
+R PKAB XARS_R3 unit=w n=512 nop=64 rep=5 art=213/214/218 pit=1692/1695/1723 ctl_art=107/108/110 ctl_pit=840/842/859 shell=17ED bshell=17ED if1=214
+STATE PKAB row=XAWS_R3 q04=00 q07=00 q08=00 q0A=00 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=FFFF e0006=FFFF e0100=FF e0102=FF pgon=0 since_pegc=- drain=0 winph=1 dst=A200:00000000 lin=000A2000 al4=0 al16=0 src=16D0:7470
+R PKAB XAWS_R3 unit=w n=512 nop=0 rep=5 art=28/29/30 pit=214/214/222 ctl_art=6/7/7 ctl_pit=33/34/40 shell=D3BC bshell=D3BC if1=29
+R PKAB XAWS_R3 unit=w n=512 nop=2 rep=5 art=28/29/30 pit=214/214/223 ctl_art=9/10/10 ctl_pit=59/59/68 shell=41BB bshell=41BB if1=28
+R PKAB XAWS_R3 unit=w n=512 nop=4 rep=5 art=28/29/30 pit=212/214/223 ctl_art=12/13/14 ctl_pit=83/84/91 shell=12CC bshell=12CC if1=29
+R PKAB XAWS_R3 unit=w n=512 nop=8 rep=5 art=28/29/31 pit=212/218/227 ctl_art=19/19/20 ctl_pit=134/135/144 shell=4B77 bshell=4B77 if1=29
+R PKAB XAWS_R3 unit=w n=512 nop=16 rep=5 art=36/36/36 pit=268/268/277 ctl_art=32/32/33 ctl_pit=236/237/245 shell=531B bshell=531B if1=35
+R PKAB XAWS_R3 unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/462/478 ctl_art=56/56/59 ctl_pit=437/439/451 shell=7DF9 bshell=7DF9 if1=61
+R PKAB XAWS_R3 unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/865/887 ctl_art=107/108/109 ctl_pit=840/842/859 shell=17ED bshell=17ED if1=111
+STATE PKAB row=PKR_R3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=235 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKR_R3 unit=w n=512 nop=0 rep=5 art=125/126/127 pit=983/988/992 ctl_art=5/6/7 ctl_pit=31/31/43 shell=BDFC bshell=BDFC if1=125
+R PKAB PKR_R3 unit=w n=512 nop=2 rep=5 art=125/126/127 pit=987/989/993 ctl_art=9/9/10 ctl_pit=56/56/64 shell=70B0 bshell=70B0 if1=125
+R PKAB PKR_R3 unit=w n=512 nop=4 rep=5 art=130/131/132 pit=1027/1031/1038 ctl_art=12/13/14 ctl_pit=81/82/92 shell=1B96 bshell=1B96 if1=131
+R PKAB PKR_R3 unit=w n=512 nop=8 rep=5 art=138/139/140 pit=1091/1094/1097 ctl_art=18/18/20 ctl_pit=132/134/142 shell=3825 bshell=3825 if1=138
+R PKAB PKR_R3 unit=w n=512 nop=16 rep=5 art=158/158/160 pit=1248/1251/1258 ctl_art=31/32/32 ctl_pit=234/234/245 shell=19F2 bshell=19F2 if1=158
+R PKAB PKR_R3 unit=w n=512 nop=32 rep=5 art=171/172/173 pit=1350/1361/1365 ctl_art=56/57/59 ctl_pit=435/438/449 shell=D40C bshell=D40C if1=173
+R PKAB PKR_R3 unit=w n=512 nop=64 rep=5 art=233/235/237 pit=1847/1857/1876 ctl_art=106/107/110 ctl_pit=837/839/859 shell=D552 bshell=D552 if1=234
+STATE PKAB row=PKW_R3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=462241 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW_R3 unit=w n=512 nop=0 rep=5 art=25/25/25 pit=180/183/191 ctl_art=6/6/8 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=25
+R PKAB PKW_R3 unit=w n=512 nop=2 rep=5 art=30/31/31 pit=227/227/234 ctl_art=9/9/11 ctl_pit=56/57/65 shell=70B0 bshell=70B0 if1=30
+R PKAB PKW_R3 unit=w n=512 nop=4 rep=5 art=30/31/32 pit=226/227/235 ctl_art=12/13/15 ctl_pit=81/82/93 shell=1B96 bshell=1B96 if1=30
+R PKAB PKW_R3 unit=w n=512 nop=8 rep=5 art=25/25/27 pit=182/185/194 ctl_art=18/19/20 ctl_pit=132/133/141 shell=3825 bshell=3825 if1=25
+R PKAB PKW_R3 unit=w n=512 nop=16 rep=5 art=34/35/37 pit=259/260/272 ctl_art=31/31/33 ctl_pit=233/237/246 shell=19F2 bshell=19F2 if1=35
+R PKAB PKW_R3 unit=w n=512 nop=32 rep=5 art=59/59/61 pit=460/461/474 ctl_art=56/57/59 ctl_pit=435/435/447 shell=D40C bshell=D40C if1=59
+R PKAB PKW_R3 unit=w n=512 nop=64 rep=5 art=110/110/113 pit=864/866/885 ctl_art=106/107/110 ctl_pit=838/838/858 shell=D552 bshell=D552 if1=110
+STATE PKAB row=PKW1ST_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=237 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW1ST_FA3 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=225/229/234 ctl_art=6/7/7 ctl_pit=32/32/39 shell=BDFC bshell=BDFC if1=30
+STATE PKAB row=PKRF_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=70901 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKRF_FA3 unit=w n=512 nop=0 rep=5 art=124/126/127 pit=983/986/996 ctl_art=6/6/8 ctl_pit=31/33/41 shell=BDFC bshell=BDFC if1=125
+STATE PKAB row=PKWAFT_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=141794 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWAFT_FA3 unit=w n=512 nop=0 rep=5 art=30/30/32 pit=226/226/233 ctl_art=6/6/8 ctl_pit=31/33/42 shell=BDFC bshell=BDFC if1=31
+STATE PKAB row=PKWLATE_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=538935 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWLATE_FA3 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=226/228/239 ctl_art=6/6/8 ctl_pit=31/31/42 shell=BDFC bshell=BDFC if1=30
+STATE PKAB row=PKWODD_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=609968 drain=0 winph=1 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKWODD_FA3 unit=w n=512 nop=0 rep=5 art=30/31/31 pit=227/228/234 ctl_art=6/6/7 ctl_pit=31/32/39 shell=EFCC bshell=EFCC if1=31
+STATE PKAB row=PKWHI_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=680738 drain=0 winph=1 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWHI_FA3 unit=w n=512 nop=0 rep=5 art=30/31/32 pit=227/228/233 ctl_art=5/6/7 ctl_pit=31/31/40 shell=87BC bshell=87BC if1=31
+STATE PKAB row=PKDF_FA3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=751535 drain=0 winph=1 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKDF_FA3 unit=d n=512 nop=0 rep=5 art=24/25/26 pit=181/183/191 ctl_art=5/6/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKW1ST_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=237 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKW1ST_FV3 unit=w n=512 nop=0 rep=5 art=23/25/25 pit=174/177/185 ctl_art=6/6/8 ctl_pit=31/31/41 shell=BDFC bshell=BDFC if1=25
+STATE PKAB row=PKRF_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=70299 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKRF_FV3 unit=w n=512 nop=0 rep=5 art=103/105/105 pit=813/817/823 ctl_art=5/6/7 ctl_pit=31/31/39 shell=BDFC bshell=BDFC if1=104
+STATE PKAB row=PKWAFT_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=141171 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWAFT_FV3 unit=w n=512 nop=0 rep=5 art=24/25/25 pit=174/178/184 ctl_art=5/7/8 ctl_pit=31/32/41 shell=BDFC bshell=BDFC if1=27
+STATE PKAB row=PKWLATE_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=538324 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWLATE_FV3 unit=w n=512 nop=0 rep=5 art=24/25/25 pit=174/177/187 ctl_art=6/7/7 ctl_pit=31/32/39 shell=BDFC bshell=BDFC if1=24
+STATE PKAB row=PKWODD_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=609357 drain=0 winph=2 dst=A800:00000001 lin=000A8001 al4=1 al16=1 src=16D0:7470
+R PKAB PKWODD_FV3 unit=w n=512 nop=0 rep=5 art=23/24/24 pit=169/172/179 ctl_art=6/6/8 ctl_pit=31/32/41 shell=EFCC bshell=EFCC if1=23
+STATE PKAB row=PKWHI_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=680127 drain=0 winph=2 dst=A800:00004000 lin=000AC000 al4=0 al16=0 src=16D0:7470
+R PKAB PKWHI_FV3 unit=w n=512 nop=0 rep=5 art=24/25/25 pit=175/177/186 ctl_art=6/6/7 ctl_pit=31/31/39 shell=87BC bshell=87BC if1=24
+STATE PKAB row=PKDF_FV3 q04=01 q07=00 q08=00 q0A=01 bda054C=CF bda054D=50 p9a8=00 cr0=00000032 e0004=0000 e0006=0000 e0100=00 e0102=00 pgon=1 since_pegc=750919 drain=0 winph=2 dst=A800:00000000 lin=000A8000 al4=0 al16=0 src=16D0:7470
+R PKAB PKDF_FV3 unit=d n=512 nop=0 rep=5 art=23/24/25 pit=169/170/177 ctl_art=5/6/7 ctl_pit=31/33/43 shell=BDFC bshell=BDFC if1=23
+RESTORE PKAB Q9A0A_256 was=00 now=00 kind=readback OK
+RESTORE PKAB Q9A04_16C was=00 now=00 kind=readback OK
+RESTORE PKAB E0004_BANK was=- now=00 kind=default OK
+RESTORE PKAB P7E_TILE was=- now=00 kind=default OK
+RESTORE PKAB TRAM_0000_1FFF was=0000 now=0000 kind=self OK
+RESTORE PKAB BDA054C_BIT7 was=00 now=00 kind=readback OK
+RESTORE PKAB BDA054D_BIT2 was=00 now=00 kind=readback OK
+RESTORE PKAB AH31_AL was=09 now=09 kind=readback OK
+RESTORE PKAB AH31_BH was=01 now=01 kind=readback OK
+RESTORE PKAB P9A8_BIT0 was=00 now=00 kind=readback OK
+I PKAB sync_to=0
+RESTORE PKAB P7C_GRCG was=- now=00 kind=default OK
+RESTORE PKAB PA6_PAGE was=- now=00 kind=default OK
+RESTORE PKAB Q9A07_EGC was=00 now=00 kind=readback OK
+END:PKAB rows=652 sum=6358
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=20BE
+XE10T DONE sections=4 sum=6264224B

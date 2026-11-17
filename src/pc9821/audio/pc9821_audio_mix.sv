@@ -180,10 +180,10 @@ end
 // back from the clamp instead of attenuating already-clipped audio. Scaling the wide sum is
 // that same linear law taken on the exact sum (g*(a+b+c) = g*a+g*b+g*c).
 //
-// The final DAC's sum: the -86 stream spans [+255,996, -239,616], CD adds +-32,768 and the
-// speaker up to +3,072, so the three-source sum needs 20 signed bits (range +-524,287). An
-// 18-bit accumulator (range +-131,071) would wrap and hand the saturator the wrong
-// rail/polarity. The one saturation of the whole machine's audio is the mix_dry saturate below
+// The final DAC's sum: the -86 stream stays within about +-72k (pc9821_snd86_join: the clamped
+// FM+ADPCM junction, the AC SSG term and PCM86), CD adds +-32,768 and the speaker up to +3,072,
+// so the three-source sum stays within about +-108k, which the 20-bit accumulator (range
+// +-524,287) holds without wrapping. The one saturation of the whole machine's audio is the mix_dry saturate below
 // - on the MASTER-SCALED sum, exactly ymfm's clamp16 / NP2kai's _saturation_s16 junction.
 wire signed [19:0] master_l;
 wire signed [19:0] master_r;

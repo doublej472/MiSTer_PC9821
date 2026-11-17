@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_Z486_SIGMA_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the z486 data_unit SIGMA next-state arm mux - the REFACTOR pin for the Class-1 cut-3 flatten (the sink of the vipt_load_wb_dst_r -> data_unit|sigma family), a CHARACTERIZATION against the documented semantics and not a hardware claim. sigma captures the documented next-state on EVERY clock edge across the full arm space and its overlaps: the stack-pointer advance (forwarded_esp +/- 2/4, 16/32-bit stack, both directions, wrap cases directed), the gate arm, the two shift arms, the 17-arm aluop->alu_result class, the 8-arm muldiv class gated by muldiv_sigma_write (a documented NO-OP/hold when the gate is low), the unlisted-aluop hold, and the any_fault override over everything. The internal arm VALUES are driven with force (the x87_pulse_race idiom) so the golden is independent arithmetic over chosen values. Blind spots stated: not a hardware bench, the z486.sv forwarded_esp arm mux is pinned by its in-tree FWD-ESP FUSE in every simulation, the ALU/shifter/muldiv engines are forced at their results.
+// TB_PC9821_Z486_SIGMA_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the z486 data_unit SIGMA next-state arm mux - the REFACTOR pin for the Class-1 cut-3 flatten (the sink of the vipt_load_wb_dst_r -> data_unit|sigma family), a CHARACTERIZATION against the documented semantics and not a hardware claim. sigma captures the documented next-state on EVERY clock edge across the full arm space and its overlaps: the stack-pointer advance (forwarded_esp +/- 2/4, 16/32-bit stack, both directions, wrap cases directed), the gate arm, the two shift arms, the 17-arm aluop->alu_result class, the 8-arm muldiv class gated by muldiv_sigma_write (a documented NO-OP/hold when the gate is low), the unlisted-aluop hold, and the any_fault override over everything - every one of the 128 aluop encodings swept on the exec arm with the muldiv gate low and high, and drawn from all 128 in the random phase. The internal arm VALUES are driven with force (the x87_pulse_race idiom) so the golden is independent arithmetic over chosen values. Blind spots stated: not a hardware bench, the z486.sv forwarded_esp arm mux is pinned by its in-tree FWD-ESP FUSE in every simulation, the ALU/shifter/muldiv engines are forced at their results.
 //
 // TB_PC9821_Z486_SIGMA_EQUIV: a CYCLE-EXACT EQUIVALENCE (characterization,
 // not a hardware claim) bench for the z486 data_unit SIGMA next-state arm
@@ -160,6 +160,10 @@ module tb_pc9821_z486_sigma_equiv;
   endfunction
 
   localparam integer DIRECTED = 40;
+  // Then a directed sweep of EVERY 7-bit aluop encoding, each with the muldiv gate low and
+  // high, on the exec arm alone (shift select 0): each class arm and the hold are presented.
+  localparam integer SWEEP = 256;
+  localparam integer DIRECTED_ALL = DIRECTED + SWEEP;
 
   // ==== CHECKS ====
   task automatic drive_cycle(input integer mode);
@@ -197,21 +201,16 @@ module tb_pc9821_z486_sigma_equiv;
             aluop = ALUJMP_ADD;
           end
         endcase
+      end else if (mode < DIRECTED + SWEEP) begin
+        exec = 1; shift_sigma_sel = 2'd0;
+        aluop = 7'((mode - DIRECTED) >> 1);
+        v_mw = mode[0];
       end else begin
         instr_start = r0[0]; stack_op = r0[1]; stack_dir = r0[2];
         stack_data32 = r0[3]; stack32 = r0[4];
         gate_detect = r0[5]; exec = r0[6]; any_fault = r0[7];
         shift_sigma_sel = r0[9:8];
-        case (r0[12:10])
-          0: aluop = ALUJMP_ADD;
-          1: aluop = ALUJMP_ALU;
-          2: aluop = ALUJMP_SERECO;
-          3: aluop = ALUJMP_DIV5;
-          4: aluop = ALUJMP_IMUL3;
-          5: aluop = ALUJMP_IDIV2;
-          6: aluop = ALUJMP_CMP;
-          default: aluop = 7'h40;  // unlisted encoding: documented hold
-        endcase
+        aluop = r1[6:0];            // any of the 128 encodings (listed or the documented hold)
         forwarded_esp = wrap_operand(r0[15:13]);
         v_mw = r0[16];
       end
@@ -232,7 +231,7 @@ module tb_pc9821_z486_sigma_equiv;
     force dut.muldiv_sigma_write = v_mw;
     force dut.muldiv_sigma_value = v_mv;
     force dut.tmpc = v_tmpc;
-    for (i = 0; i < DIRECTED + 20000; i = i + 1) begin
+    for (i = 0; i < DIRECTED_ALL + 20000; i = i + 1) begin
       @(negedge clk);
       drive_cycle(i);
     end

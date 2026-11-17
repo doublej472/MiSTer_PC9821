@@ -1,14 +1,14 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The framework's write-only pll_cfg_hdmi and the full pll_cfg, each driven by its own copy of the real pc9821_vpll_ctl with identical stimulus (the N counter at address 3, the M counter at address 4, the 32-bit fraction K at address 7 and a start at address 2 at power-up, on the 24 kHz-to-31 kHz change and on the 31 kHz-to-24 kHz change), accept the same sequence of management writes and produce the same sequence of DPRIO writes (address and data, including the read-modify-write of the bypass-enable and odd-division registers at 0x15/0x17 and the fraction's two words at 0x18/0x19) and byte-identical 64-word PLL reconfiguration register files after every step, so swapping one core for the other cannot change the dot clock the guest's raster runs on; waitrequest pacing is allowed to differ and is not compared, the PLL model answers reads with the value last written two clocks after the address (where the vendor core's readLatency=3 capture point samples it), and the final registers are pinned to the words the stimulus wrote (N 0x10000 bypass at 3, M 0x0808 24 kHz / 0x20A09 31 kHz at 4, K 0 / 0x20B00000 at 7, the bypass/odd-division read-modify-write at 0x15/0x17, and every other register zero) rather than to either core's internal state. FAIL-FIRST: a pll_cfg_hdmi mutant that puts the M counter at the N counter's DPRIO address, or that never recognises the start register, makes the sequences or the register files differ, and both are compared; the bench also fails if the model's reads are not returned, because the bypass write-back would then not preserve the preloaded bits.
+// The framework's write-only pll_cfg_hdmi and the full pll_cfg, each driven by its own copy of the real pc9821_vpll_ctl with identical stimulus (no write at power-up, where the PLL is in its generated 24 kHz configuration; the N counter at address 3, the M counter at address 4, the 32-bit fraction K at address 7 and a start at address 2 on the 24 kHz-to-31 kHz change and on the 31 kHz-to-24 kHz change), accept the same sequence of management writes and produce the same sequence of DPRIO writes (address and data, including the read-modify-write of the bypass-enable and odd-division registers at 0x15/0x17 and the fraction's two words at 0x18/0x19) and byte-identical 64-word PLL reconfiguration register files after every step, so swapping one core for the other cannot change the dot clock the guest's raster runs on; waitrequest pacing is allowed to differ and is not compared, the PLL model answers reads with the value last written two clocks after the address (where the vendor core's readLatency=3 capture point samples it), and the final registers are pinned to the words the stimulus wrote (N 0x10000 bypass at 3, M 0x0A0A 24 kHz / 0x0C0C 31 kHz at 4, K 0x35E50000 / 0x294C0000 at 7, the bypass/odd-division read-modify-write at 0x15/0x17, and every other register zero) rather than to either core's internal state. FAIL-FIRST: a pll_cfg_hdmi mutant that puts the M counter at the N counter's DPRIO address, or that never recognises the start register, makes the sequences or the register files differ, and both are compared; the bench also fails if the model's reads are not returned, because the bypass write-back would then not preserve the preloaded bits.
 //
 // THE REGISTER MAP is Altera's Cyclone V PLL reconfiguration interface (altera_pll_reconfig, as
 // sys/pll_cfg/pll_cfg_hdmi.v and altera_pll_reconfig_core.v drive it): management address 2 =
 // start, 3 = N counter, 4 = M counter, 5 = C counters, 7 = M's fraction K; a counter word is
 // {odd[17], bypass[16], high[15:8], low[7:0]}. pc9821_vpll_ctl writes N (bypass), M, K and start
-// (M 0x0808 = 16 for the 24 kHz clock, 0x20A09 = 19 with its odd bit for the 31 kHz clock; K 0 and
-// 0x20B00000), which both cores must program identically.
+// (M 0x0A0A = 20 for the 24 kHz clock, 0x0C0C = 24 for the 31 kHz clock; K 0x35E50000 and
+// 0x294C0000), which both cores must program identically.
 //
 // WHY TWO CONTROLLERS. One controller per core: each waits on ITS OWN core's mgmt_waitrequest,
 // so a core that stalls longer does not desynchronise the other's write sequence -- that is the
@@ -49,10 +49,10 @@ module tb_pc9821_pll_cfg_lockstep;
   wire        a_31, a_busy;
   wire [63:0] a_to_pll, a_from_pll;
 
-  pc9821_vpll_ctl #(.SETTLE(SETTLE)) ctl_a (
+  pc9821_vpll_ctl #(.SETTLE(SETTLE), .STABLE(0)) ctl_a (
     .clk(clk), .want_31k(want_31k), .pll_locked(pll_locked), .mgmt_waitrequest(a_wait),
     .mgmt_write(a_wr), .mgmt_address(a_addr), .mgmt_writedata(a_wdata),
-    .vclk_31(a_31), .busy(a_busy)
+    .pll_rst(), .vclk_31(a_31), .busy(a_busy)
   );
   /* verilator lint_off PINCONNECTEMPTY */
   pll_cfg dut_a (
@@ -70,10 +70,10 @@ module tb_pc9821_pll_cfg_lockstep;
   wire        b_31, b_busy;
   wire [63:0] b_to_pll, b_from_pll;
 
-  pc9821_vpll_ctl #(.SETTLE(SETTLE)) ctl_b (
+  pc9821_vpll_ctl #(.SETTLE(SETTLE), .STABLE(0)) ctl_b (
     .clk(clk), .want_31k(want_31k), .pll_locked(pll_locked), .mgmt_waitrequest(b_wait),
     .mgmt_write(b_wr), .mgmt_address(b_addr), .mgmt_writedata(b_wdata),
-    .vclk_31(b_31), .busy(b_busy)
+    .pll_rst(), .vclk_31(b_31), .busy(b_busy)
   );
   pll_cfg_hdmi dut_b (
     .mgmt_clk(clk), .mgmt_reset(1'b0),
@@ -269,12 +269,11 @@ module tb_pc9821_pll_cfg_lockstep;
     preg_a[6'h17] = 16'h0F3F; preg_b[6'h17] = 16'h0F3F;
     lock_enable = 1'b1;
 
-    // ---- power-up: the PLL is at its generated configuration, the OSD wants native ----
+    // ---- power-up: the PLL is at its generated (24 kHz) configuration: nothing to write ----
     expect_true(a_busy && b_busy, "busy at power-up");
     wait_idle("power-up");
     expect_true(a_31 == b_31 && !a_31, "both controllers name the 24 kHz configuration");
-    expect_change(0, 32'h0000_0808, 32'h0000_0000, "power-up");
-    expect_picture(16'h0808, 32'h0000_0000, "power-up");
+    expect_true(a_nm == 0 && b_nm == 0, $sformatf("power-up: %0d / %0d management writes, want none", a_nm, b_nm));
     compare_all("power-up");
 
     // ---- nothing changes: no write on either side ----
@@ -289,8 +288,8 @@ module tb_pc9821_pll_cfg_lockstep;
     repeat (4) @(posedge clk);
     expect_true(a_busy && b_busy && a_31 && b_31, "busy and 31 kHz selected on the request");
     wait_idle("31 kHz");
-    expect_change(w0, 32'h0002_0A09, 32'h20B0_0000, "31 kHz");
-    expect_picture(16'h0A09, 32'h20B0_0000, "31 kHz");
+    expect_change(w0, 32'h0000_0C0C, 32'h294C_0000, "31 kHz");
+    expect_picture(16'h0C0C, 32'h294C_0000, "31 kHz");
     compare_all("31 kHz");
 
     // ---- back to the 24 kHz clock ----
@@ -299,8 +298,8 @@ module tb_pc9821_pll_cfg_lockstep;
     repeat (4) @(posedge clk);
     expect_true(a_busy && b_busy && !a_31 && !b_31, "busy and 24 kHz selected on the request");
     wait_idle("24 kHz");
-    expect_change(w0, 32'h0000_0808, 32'h0000_0000, "24 kHz");
-    expect_picture(16'h0808, 32'h0000_0000, "24 kHz");
+    expect_change(w0, 32'h0000_0A0A, 32'h35E5_0000, "24 kHz");
+    expect_picture(16'h0A0A, 32'h35E5_0000, "24 kHz");
     compare_all("24 kHz");
 
     // ---- lock lost while idle: busy until relocked and settled, and no write ----

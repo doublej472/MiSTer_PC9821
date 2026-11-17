@@ -70,9 +70,11 @@ module pc9821_atapi #(
     output wire        irq,
     // THE DRIVE'S DATA TRANSFERS (the front-panel access lamp, pc9821_disk_led): 1 while the
     // engine is fetching data sectors from the image for a READ (e_st out of E_IDLE with
-    // e_kind EK_DATA). A command answered from the drive's own state (TEST UNIT READY, GET
-    // EVENT STATUS NOTIFICATION, REQUEST SENSE, INQUIRY), the mount's header fetch and CD-DA
-    // streaming never raise it. A pure view of the engine.
+    // e_kind EK_DATA). A command answered from the drive's own state (TEST UNIT READY, REQUEST
+    // SENSE, INQUIRY), a command the drive aborts (GET EVENT STATUS NOTIFICATION 0x4A is not
+    // decoded and takes the exec case's `default: t_sendabort;`, as NP2kai atapicmd_a0's
+    // default arm `sendabort(drv);` does), the mount's header fetch and CD-DA streaming never
+    // raise it. A pure view of the engine.
     output wire        xfer,
 
     // The CD slot of hps_io (slot 4): the mount event, and the block request/ack/payload.
@@ -227,7 +229,7 @@ module pc9821_atapi #(
   wire [19:0] totals = !loaded ? 20'd0 : (is_pcd ? leadout : iso_cap);
   reg        damsfbcd;         // atapicmd.c: NEC mode (BCD MSF), set by MODE SENSE page 0x0F
   // The lead-out MSF of an ISO (for its synthesised TOC), from the MSF converter at mount.
-  reg [6:0]  lo_m = 7'd0; reg [5:0] lo_s = 6'd0; reg [6:0] lo_f = 7'd0;
+  reg [7:0]  lo_m = 8'd0; reg [5:0] lo_s = 6'd0; reg [6:0] lo_f = 7'd0;
   reg [7:0]  lo_mb = 8'd0, lo_sb = 8'd0, lo_fb = 8'd0;   // the same in BCD
 
   // ---- CD-DA player state (atapicmd.c drv->daflag/dacurpos/dalength) ----
@@ -310,33 +312,66 @@ module pc9821_atapi #(
   // (stored already formatted: binary, or BCD in NEC mode - the converter's one formatter)
   reg [7:0]  ab_m, ab_s, ab_f, rl_m, rl_s, rl_f;
 
+  // ---- THE HPS WORD STREAM, ONE STAGE IN ----
+  // hps_io's sector stream (sd_ack, sd_buff_wr, sd_buff_addr, sd_buff_dout) enters the drive
+  // through one register stage, and EVERY consumer reads the staged copy: the engine's word
+  // decode (e_word: the window subtract and compares, the enable of the audio words, e_odd,
+  // the header capture and the buffer fill), its acknowledge (E_WAIT) and its completion
+  // (e_done). The decode was a single-cycle path from hps_io's registers, whose address moves
+  // every word, into the CDDA word capture (xt: 1/6 seeds, -0.47 ns; sdc 1/6, -2.57 ns - a
+  // missed or extra word flips e_odd and swaps L/R for the rest of a 4-sector fetch) and into
+  // the PCD header's tracks/lead-out/magic (xt: 6/6 seeds, to -1.75 ns; a missed word leaves
+  // the disc misread until a remount). The whole stream moving together, the drive sees exactly
+  // the sequence it saw, one clk_sys later: the host side's handshake (sd_rd falls one cycle
+  // after the acknowledge, the completion one cycle after the acknowledge falls) is one clk_sys
+  // later against an HPS round trip of microseconds, and nothing the guest reads moves. cdda.v's
+  // contract (it samples CDDA_DATA the cycle after CDDA_WR) holds: both are formed from the same
+  // staged word. tools/check_seq_equiv.py --proof atapi_hps_stage proves the drive is its
+  // previous self with exactly this stage on its input.
+  reg        hs_ack = 1'b0, hs_wr = 1'b0;
+  reg [12:0] hs_addr = 13'd0;
+  reg [15:0] hs_dout = 16'd0;
+  always @(posedge clk) begin
+    hs_ack  <= sd_ack;
+    hs_wr   <= sd_buff_wr;
+    hs_addr <= sd_buff_addr;
+    hs_dout <= sd_buff_dout;
+  end
+
   // ---- engine: one hps_io request at a time ----
-  localparam [1:0] E_IDLE = 2'd0, E_CALC = 2'd1, E_WAIT = 2'd2, E_STREAM = 2'd3;
+  // E_CALC registers the sector's raw product (e_prod_q, the multiply's output register) and E_SET
+  // forms the offset and the request from it (THE OFFSET STAGE, at e_off's declaration).
+  localparam [2:0] E_IDLE = 3'd0, E_CALC = 3'd1, E_WAIT = 3'd2, E_STREAM = 3'd3, E_SET = 3'd4;
   localparam [1:0] EK_HDR = 2'd0, EK_DATA = 2'd1, EK_AUDIO = 2'd2;
-  reg [1:0]  e_st = 2'd0, e_kind = 2'd0;
+  reg [2:0]  e_st = 3'd0;
+  reg [1:0]  e_kind = 2'd0;
+  reg [31:0] e_prod_q = 32'd0; // E_CALC's registered product e_l * 2352 (THE OFFSET STAGE, at e_off)
   reg [19:0] e_pos = 20'd0;
   reg [8:0]  e_w0 = 9'd0;      // first wanted word in the transfer
   reg [12:0] e_n = 13'd0;      // wanted words (an audio fetch of 4 sectors is 4704)
   reg        hdr_pend = 1'b0, data_pend = 1'b0;
   reg        e_odd = 1'b0;     // audio: the next wanted word is a right sample
-  wire e_done = (e_st == E_STREAM) && !sd_ack;
+  wire e_done = (e_st == E_STREAM) && !hs_ack;
   wire audio_in_flight = (e_st != E_IDLE) && (e_kind == EK_AUDIO);
   assign xfer = (e_st != E_IDLE) && (e_kind == EK_DATA);   // see the port
-  wire [12:0] e_rel = sd_buff_addr - {4'd0, e_w0};
-  wire e_word = (e_st == E_STREAM) && sd_ack && sd_buff_wr &&
-                (sd_buff_addr >= {4'd0, e_w0}) && (e_rel < e_n);
+  wire [12:0] e_rel = hs_addr - {4'd0, e_w0};
+  wire e_word = (e_st == E_STREAM) && hs_ack && hs_wr &&
+                (hs_addr >= {4'd0, e_w0}) && (e_rel < e_n);
 
   // ---- MSF converter (frames -> M:S:F), sequential ----
   reg        cv_busy = 1'b0, cv_ph = 1'b0, cv_owner_mount = 1'b0, iso_msf_pend = 1'b0;
-  reg [19:0] cv_x = 20'd0;
-  reg [6:0]  cv_m = 7'd0; reg [5:0] cv_s = 6'd0;
+  // 21 bits: a frame count is a 20-bit sector position plus the 150-frame lead-in, which
+  // carries past 2^20 for an ISO near the 2 GiB limit (iso_cap 0xFFFFF + 150).
+  reg [20:0] cv_x = 21'd0;
+  // cv_m is 8 bits: the 2 GiB ISO limit (iso_cap 0xFFFFF) is 1048725 frames = 233 minutes.
+  reg [7:0]  cv_m = 8'd0; reg [5:0] cv_s = 6'd0;
   // The step for the phase the converter is in: 4500 frames per minute while the M step runs,
   // 75 per second after it (atapicmd.c's frames -> M:S:F walk). ONE 20-bit subtractor and ONE
   // 20-bit compare serve both phases - the operand is selected by the same `cv_ph` that selected
   // the arm, so the phases stay mutually exclusive and the merged form is value- and
   // cycle-identical to the two-subtractor form (tools/check_seq_equiv.py --old proves it
   // register for register against the pre-change module).
-  wire [19:0] cv_step = cv_ph ? 20'd75 : 20'd4500;
+  wire [20:0] cv_step = cv_ph ? 21'd75 : 21'd4500;
   wire        cv_step_ge = (cv_x >= cv_step);
   // The F step's last cycle, `cv_x < 75`, is the same compare at the phase-1 operand.
   wire       cv_done = cv_busy && cv_ph && !cv_step_ge;
@@ -352,8 +387,14 @@ module pc9821_atapi #(
   endfunction
   // The converter's result, the one place an M:S:F is formatted: BCD, and the form NEC mode
   // asks for (atapicmd.c storemsf's isBCD).
-  wire [7:0] cv_mb = bcd(cv_m), cv_sb = bcd({1'b0, cv_s}), cv_fb = bcd(cv_x[6:0]);
-  wire [7:0] cv_mf = damsfbcd ? cv_mb : {1'b0, cv_m};
+  // A BCD time past 99 minutes is FF:59:74, as NP2kai's storemsf answers it (atapicmd.c `if
+  // (pos > 99) { ptr[1] = 0xff; ptr[2] = 0x59; ptr[3] = 0x74;`); the binary form's own clamp
+  // (255:59:74) is never reached, 233 minutes being the most an ISO here can hold.
+  wire       cv_m99 = (cv_m > 8'd99);
+  wire [7:0] cv_mb = cv_m99 ? 8'hFF : bcd(cv_m[6:0]);
+  wire [7:0] cv_sb = cv_m99 ? 8'h59 : bcd({1'b0, cv_s});
+  wire [7:0] cv_fb = cv_m99 ? 8'h74 : bcd(cv_x[6:0]);
+  wire [7:0] cv_mf = damsfbcd ? cv_mb : cv_m;
   wire [7:0] cv_sf = damsfbcd ? cv_sb : {2'b00, cv_s};
   wire [7:0] cv_ff = damsfbcd ? cv_fb : {1'b0, cv_x[6:0]};
   function automatic [7:0] unbcd(input [7:0] b);
@@ -630,7 +671,7 @@ module pc9821_atapi #(
   // in the PCD header's layout (tools/cue2pcd.py) so READ TOC / READ SUB-CHANNEL read one form.
   // (Every value it reads is an ARGUMENT: Quartus 17 elaborated the module-scope lo_m/lo_s/lo_f
   // a function body read as "assigned a value but never read" (warning 10036) and dropped them.)
-  function automatic [15:0] iso_word(input [9:0] a, input [19:0] cap, input [6:0] m,
+  function automatic [15:0] iso_word(input [9:0] a, input [19:0] cap, input [7:0] m,
                                      input [5:0] sec, input [6:0] fr,
                                      input [7:0] mb, input [7:0] sb, input [7:0] fb);
     case (a)
@@ -641,7 +682,7 @@ module pc9821_atapi #(
       10'd258: iso_word = {4'd0, cap[19:16], 8'h00};     // lead-out LBA, big-endian
       10'd259: iso_word = {cap[7:0], cap[15:8]};
       10'd513, 10'd769: iso_word = 16'h0002;                 // 00:02:00
-      10'd514: iso_word = {1'b0, m, 8'h00};
+      10'd514: iso_word = {m, 8'h00};
       10'd515: iso_word = {1'b0, fr, 2'b00, sec};
       10'd770: iso_word = {mb, 8'h00};
       10'd771: iso_word = {fb, sb};
@@ -664,7 +705,8 @@ module pc9821_atapi #(
   // paused or completed drive reports a position that wanders by up to 7 frames from poll to
   // poll. Policenauts depends on it: ITP.EXE's wait for the end of a CD-DA clip leaves only when
   // the Q channel's relative position goes BACKWARDS, so a position that stands still at 0x13
-  // keeps it at the Konami logo for good (cdrom-REPORT sec.10.9). rand() is an 8-bit LFSR here,
+  // keeps it at the Konami logo for good (observed on the core; the CD-ROM report that traced
+  // it is not kept in the tree). rand() is an 8-bit LFSR here,
   // stepped once per positioned report, as NP2kai calls rand() once per report.
   reg [19:0] sc_pos;
   reg [7:0]  sc_rnd = 8'h5A;
@@ -825,11 +867,28 @@ module pc9821_atapi #(
   wire [7:0] me_a = damsfbcd ? unbcd(cdb[6]) : cdb[6];
   wire [7:0] me_b = damsfbcd ? unbcd(cdb[7]) : cdb[7];
   wire [7:0] me_c = damsfbcd ? unbcd(cdb[8]) : cdb[8];
-  wire [19:0] msf_start = frames(ms_a, ms_b, ms_c);
-  wire [19:0] msf_end   = frames(me_a, me_b, me_c);
-  // PLAY AUDIO MSF's two clamps as one subtraction each, the borrow being the compare
-  wire [20:0] msf_pos_d = {1'b0, msf_start} - 21'd150;     // borrow: start < 150
-  wire [20:0] msf_len_d = {1'b0, msf_end} - {1'b0, msf_start};   // borrow: end < start
+  // PLAY AUDIO MSF's start and end frames, and its two clamps as one subtraction each (the borrow
+  // being the compare), computed behind THREE free-running clk_sys stages (the BCD decode, the
+  // M:S:F-to-frames products, the two clamps), which is what the 0x47 arm loads. In one cycle the
+  // chain was -3.8 to -4.2 ns from the CDB bytes into dacurpos/daplaypos/dalength on every seed
+  // (and still -3.2 to -4.1 ns into a single stage register, h5-e1a94b10). Its inputs are static
+  // long before a command executes: the start and end M:S:F are CDB bytes 3-8, written by packet
+  // words 1-4 (`cdb[{pkt_words, 1'b0}] <= data_lo`), the CDB is written only in S_PKT, and words
+  // 5 and 6 follow as four more I/O writes (0x0640, 0x0641 each) before S_EXEC, so the bytes have
+  // been static for at least five cycles at exec_go; damsfbcd changes only in another command's
+  // execution. Each stage is a pc9821_static_stage strobed by exec_go (the instances follow
+  // exec_go's declaration below), which asserts that premise at every command's execution.
+  // Command latency only: no I/O access moves, and the command executes in the same cycle as
+  // before.
+  wire [47:0] msf_b_q;                // stage 1: the six M:S:F bytes, BCD-decoded {me_c..ms_a}
+  wire [39:0] msf_f_q;                // stage 2: the two frame counts {end, start}
+  wire [19:0] msf_pos_q, msf_len_q;   // stage 3: the clamped position and length
+  wire [19:0] msf_start_f = frames(msf_b_q[7:0],   msf_b_q[15:8],  msf_b_q[23:16]);
+  wire [19:0] msf_end_f   = frames(msf_b_q[31:24], msf_b_q[39:32], msf_b_q[47:40]);
+  wire [20:0] msf_pos_s = {1'b0, msf_f_q[19:0]} - 21'd150;                 // borrow: start < 150
+  wire [20:0] msf_len_s = {1'b0, msf_f_q[39:20]} - {1'b0, msf_f_q[19:0]};  // borrow: end < start
+  wire [19:0] msf_pos_n = msf_pos_s[20] ? 20'd0 : msf_pos_s[19:0];
+  wire [19:0] msf_len_n = msf_len_s[20] ? 20'd0 : msf_len_s[19:0];
   // READ TOC's start track (atapicmd.c: 0 = 1, 0xAA = the lead-out)
   wire [7:0]  toc_st = (cdb[6] == 8'h00) ? 8'd1 : (cdb[6] == 8'hAA) ? tracks + 8'd1 : cdb[6];
   wire        toc_ok = (toc_st >= 8'd1) && (toc_st <= tracks + 8'd1);
@@ -849,6 +908,14 @@ module pc9821_atapi #(
   wire [15:0] ms_len = bxfer - 16'd2;                  // MODE SENSE's length field
   wire [15:0] toc_ds = {4'd0, b_full} - 16'd2;                 // READ TOC's length field
 
+  // A reset of the drive this cycle (DEVICE RESET, EXECUTE DEVICE DIAGNOSTIC, an SRST edge)
+  // OWNS the command FSM: the internal progress arms (exec, builder, prep, fetch completion)
+  // stand down, so the reset's state is the one written (R2). A stale EK_DATA completion that
+  // coincides is consumed by the reset - its sector belongs to the command being reset.
+  wire abort_now = io_wr && bank1 &&
+                   ((io_addr == 16'h064E && (io_din == 8'h90 || (mine && io_din == 8'h08))) ||
+                    (io_addr == 16'h074C && io_din[2] != srst));
+
   // ---- who may start what this cycle (one decision per resource) ----
   // The command executes once the engine holds no fetch that could still write the buffer:
   // a stale data sector of an abandoned READ, or a header that the builder might read.
@@ -858,6 +925,13 @@ module pc9821_atapi #(
   // And it never executes under the core reset, which forces the command FSM idle.
   wire exec_go = (st == S_EXEC) && !abort_now && rst_n && !mount_edge &&
                  !((e_st != E_IDLE) && (e_kind != EK_AUDIO)) && !data_pend;
+  // THE MSF STAGES (declared at msf_b_q above), each strobed by every command's execution.
+  pc9821_static_stage #(.W(48), .DEPTH(1)) u_msf_bytes (
+      .clk(clk), .d({me_c, me_b, me_a, ms_c, ms_b, ms_a}), .q(msf_b_q), .chk_en(exec_go));
+  pc9821_static_stage #(.W(40), .DEPTH(1)) u_msf_frames (
+      .clk(clk), .d({msf_end_f, msf_start_f}), .q(msf_f_q), .chk_en(exec_go));
+  pc9821_static_stage #(.W(40), .DEPTH(1)) u_msf_clamp (
+      .clk(clk), .d({msf_len_n, msf_pos_n}), .q({msf_len_q, msf_pos_q}), .chk_en(exec_go));
   // A READ(10) sector is in range of the medium (sxsi_read fails otherwise: ILLEGAL REQUEST,
   // ASC 0x21 - atapicmd.c atapi_dataread).
   function automatic in_range(input [31:0] lba, input [19:0] tot);
@@ -945,13 +1019,6 @@ module pc9821_atapi #(
   wire       rd_ge = rd_t >= 9'd147;
   wire       raw_size_ok = rd_ok && rd_n == 5'd0 && rd_r == 8'd0;
   wire toc_success = loaded && ((cdb[9][7:6] == 2'd0 && toc_ok) || cdb[9][7:6] == 2'd1);
-  // A reset of the drive this cycle (DEVICE RESET, EXECUTE DEVICE DIAGNOSTIC, an SRST edge)
-  // OWNS the command FSM: the internal progress arms (exec, builder, prep, fetch completion)
-  // stand down, so the reset's state is the one written (R2). A stale EK_DATA completion that
-  // coincides is consumed by the reset - its sector belongs to the command being reset.
-  wire abort_now = io_wr && bank1 &&
-                   ((io_addr == 16'h064E && (io_din == 8'h90 || (mine && io_din == 8'h08))) ||
-                    (io_addr == 16'h074C && io_din[2] != srst));
 
   // The completion forms of atapicmd.c (senddata / cmddone / senderror / sendabort) and
   // ideio.c's cmdabort, as tasks of the one always block below.
@@ -1249,7 +1316,13 @@ module pc9821_atapi #(
           8'h46: t_build(K_GETCFG, 12'd512,   // NP2kai reads the length byte-swapped
                          ({cdb[8], cdb[7]} == 16'd0) ? 16'd12 : {cdb[8], cdb[7]});
           8'h45, 8'h47, 8'h4B: if (AUDIO_EN) t_cmddone; else t_sendabort;   // player: below
-          default: t_sendabort;   // incl. 0x4E STOP PLAY/SCAN, 0xBE READ CD, 0xBD: NP2kai aborts
+          // Aborted here: 0x4E STOP PLAY/SCAN and 0xBD MECHANISM STATUS, which NP2kai aborts too
+          // (atapicmd_a0's default `sendabort(drv);`; atapi_cmd_mechanismstatus is `sendabort(drv);`),
+          // and 0xBE READ CD / 0xB9 READ CD MSF, which NP2kai DOES implement (atapi_cmd_read_cd,
+          // atapi_cmd_read_cd_msf: raw 2352-byte sectors of a 2352-byte image, the data-selection
+          // field picking sync/header/user data/EDC-ECC) and this drive does not: a recorded
+          // divergence from the primary reference.
+          default: t_sendabort;
         endcase
       end
 
@@ -1310,9 +1383,19 @@ module pc9821_atapi #(
     if (e_word && e_kind != EK_AUDIO) begin
       buf_we <= 1'b1;
       buf_waddr <= {(e_kind == EK_HDR), e_rel[9:0]};
-      buf_wdata <= sd_buff_dout;
+      buf_wdata <= hs_dout;
     end
   end
+
+  // The command side's fetch request: entering S_FETCH (a READ(10)'s first sector, or the next
+  // one at the end of a data phase). Mirrors the two arms above that set st <= S_FETCH.
+  wire read_first = exec_go && cmd == 8'hA0 && cdb[0] == 8'h28 && cdb_len78 != 16'd0 &&
+                    in_range(cdb_lba, totals);
+  wire read_next  = io_rd && sel && io_addr == 16'h0641 && data_in && cmd == 8'hA0 &&
+                    !({1'b0, ptr} + 11'd1 < dp_words) && dp_read && rd_left != 16'd0 &&
+                    !rd_fail && (rd_lba < totals);
+  wire fetch_req = (read_first || read_next) && rst_n && !abort_now;
+  wire e_take_data = (e_st == E_IDLE) && data_pend && !hdr_pend;
 
   // ================= the medium, the player, the engine and the converter =================
   // Not reset (see the declarations), except the player, which the core reset stops
@@ -1325,9 +1408,9 @@ module pc9821_atapi #(
 
     // ---- the MSF converter: one start per cycle, else step / finish ----
     if (cv_start_abs || cv_start_rel || cv_start_iso) begin
-      cv_busy <= 1'b1; cv_ph <= 1'b0; cv_m <= 7'd0; cv_s <= 6'd0;
+      cv_busy <= 1'b1; cv_ph <= 1'b0; cv_m <= 8'd0; cv_s <= 6'd0;
       cv_owner_mount <= cv_start_iso;
-      cv_x <= cv_start_rel ? sc_rel : (cv_start_iso ? iso_cap : sc_pos) + 20'd150;
+      cv_x <= cv_start_rel ? {1'b0, sc_rel} : {1'b0, cv_start_iso ? iso_cap : sc_pos} + 21'd150;
       if (cv_start_iso) iso_msf_pend <= 1'b0;
     end else if (cv_done) begin cv_busy <= 1'b0; cv_owner_mount <= 1'b0; end
     else if (cv_busy) begin
@@ -1335,7 +1418,7 @@ module pc9821_atapi #(
       else begin
         cv_x <= cv_x - cv_step;                   // 4500 in phase 0, 75 in phase 1
         if (cv_ph) cv_s <= cv_s + 6'd1;
-        else       cv_m <= cv_m + 7'd1;
+        else       cv_m <= cv_m + 8'd1;
       end
     end
 
@@ -1408,9 +1491,9 @@ module pc9821_atapi #(
           daplaypos <= cdb_lba[19:0];
         end else begin   // 0x47 PLAY AUDIO MSF
           daflag <= DA_PLAY;
-          dacurpos  <= msf_pos_d[20] ? 20'd0 : msf_pos_d[19:0];
-          daplaypos <= msf_pos_d[20] ? 20'd0 : msf_pos_d[19:0];
-          dalength <= msf_len_d[20] ? 20'd0 : msf_len_d[19:0];
+          dacurpos  <= msf_pos_q;
+          daplaypos <= msf_pos_q;
+          dalength  <= msf_len_q;
         end
       end else if (player_flag_cmd) begin   // 0x4B
         if (cdb[8][0]) begin if (daflag == DA_PAUSE) daflag <= DA_PLAY; end
@@ -1471,23 +1554,28 @@ module pc9821_atapi #(
           e_nsec <= fetch4 ? 3'd4 : 3'd1;
         end
       end
+      // The byte offset of the wanted bytes: an ISO sector at L*2048; a PCD sector at
+      // (L+1)*2352 (after the header sector), its MODE1 user data 16 bytes in. E_CALC registers
+      // the raw product (e_prod_q); E_SET adds the offset and forms the request.
       E_CALC: begin
-        // The byte offset of the wanted bytes: an ISO sector at L*2048; a PCD sector at
-        // (L+1)*2352 (after the header sector), its MODE1 user data 16 bytes in.
+        e_prod_q <= e_l * 32'd2352; e_st <= E_SET;
+      end
+      E_SET: begin
         e_st <= E_WAIT; sd_rd <= 1'b1; e_odd <= 1'b0;
         if (e_kind == EK_HDR) begin
           sd_lba <= 32'd0; sd_blk_cnt <= 6'd3; e_w0 <= 9'd0; e_n <= 13'd1024;
         end else begin
-          sd_lba <= {9'd0, e_off[31:9]};
-          sd_blk_cnt <= (e_kind != EK_AUDIO) ? 6'(({5'd0, e_off[8:0]} + 14'd2047) >> 9)
-                      : (e_nsec == 3'd4)     ? 6'(({5'd0, e_off[8:0]} + 14'd9407) >> 9)
-                                             : 6'(({5'd0, e_off[8:0]} + 14'd2351) >> 9);
-          e_w0 <= {1'b0, e_off[8:1]};
+          sd_lba <= {9'd0, e_off_s[31:9]};
+          sd_blk_cnt <= (e_kind != EK_AUDIO) ? 6'(({5'd0, e_off_s[8:0]} + 14'd2047) >> 9)
+                      : (e_nsec == 3'd4)     ? 6'(({5'd0, e_off_s[8:0]} + 14'd9407) >> 9)
+                                             : 6'(({5'd0, e_off_s[8:0]} + 14'd2351) >> 9);
+          e_w0 <= {1'b0, e_off_s[8:1]};
           e_n <= (e_kind != EK_AUDIO) ? 13'd1024 : (e_nsec == 3'd4) ? 13'd4704 : 13'd1176;
         end
       end
-      E_WAIT: if (sd_ack) begin sd_rd <= 1'b0; e_st <= E_STREAM; end
-      default: if (!sd_ack) e_st <= E_IDLE;   // E_STREAM: the host dropped ack - done
+      E_WAIT: if (hs_ack) begin sd_rd <= 1'b0; e_st <= E_STREAM; end
+      E_STREAM: if (!hs_ack) e_st <= E_IDLE;   // the host dropped ack - done
+      default: e_st <= E_IDLE;
     endcase
     // data_pend is the request flag between the command and the engine: set by the command
     // side's entry to S_FETCH, cleared by the engine's take (one owner each way).
@@ -1500,22 +1588,22 @@ module pc9821_atapi #(
         case (e_rel[9:0])
           // (and the raw sync 00 FF..FF 00, little-endian words FF00 FFFF x4 00FF, then the
           // MODE byte, byte 15: 1 or 2)
-          10'd0: begin is_pcd <= (sd_buff_dout == 16'h4350); raw_sync <= (sd_buff_dout == 16'hFF00); end
-          10'd1: begin is_pcd <= is_pcd && (sd_buff_dout == 16'h3839); raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF); end
-          10'd2: begin is_pcd <= is_pcd && (sd_buff_dout == 16'h4443); raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF); end
-          10'd3: begin is_pcd <= is_pcd && (sd_buff_dout == 16'h3130); raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF); end
+          10'd0: begin is_pcd <= (hs_dout == 16'h4350); raw_sync <= (hs_dout == 16'hFF00); end
+          10'd1: begin is_pcd <= is_pcd && (hs_dout == 16'h3839); raw_sync <= raw_sync && (hs_dout == 16'hFFFF); end
+          10'd2: begin is_pcd <= is_pcd && (hs_dout == 16'h4443); raw_sync <= raw_sync && (hs_dout == 16'hFFFF); end
+          10'd3: begin is_pcd <= is_pcd && (hs_dout == 16'h3130); raw_sync <= raw_sync && (hs_dout == 16'hFFFF); end
           10'd4: begin
-            if (is_pcd) begin tracks <= sd_buff_dout[7:0]; first_trk <= sd_buff_dout[15:8]; end
-            raw_sync <= raw_sync && (sd_buff_dout == 16'hFFFF);
+            if (is_pcd) begin tracks <= hs_dout[7:0]; first_trk <= hs_dout[15:8]; end
+            raw_sync <= raw_sync && (hs_dout == 16'hFFFF);
           end
-          10'd5: raw_sync <= raw_sync && (sd_buff_dout == 16'h00FF);
-          10'd6: if (is_pcd) leadout[15:0] <= sd_buff_dout;
+          10'd5: raw_sync <= raw_sync && (hs_dout == 16'h00FF);
+          10'd6: if (is_pcd) leadout[15:0] <= hs_dout;
           10'd7: begin
-            if (is_pcd) leadout[19:16] <= sd_buff_dout[3:0];
-            raw_sync <= raw_sync && (sd_buff_dout[15:8] == 8'h01 || sd_buff_dout[15:8] == 8'h02);
-            raw_m2   <= (sd_buff_dout[15:8] == 8'h02);
+            if (is_pcd) leadout[19:16] <= hs_dout[3:0];
+            raw_sync <= raw_sync && (hs_dout[15:8] == 8'h01 || hs_dout[15:8] == 8'h02);
+            raw_m2   <= (hs_dout[15:8] == 8'h02);
           end
-          10'd8: if (is_pcd) ctrl0 <= sd_buff_dout[7:0];
+          10'd8: if (is_pcd) ctrl0 <= hs_dout[7:0];
           default: ;
         endcase
       end else if (AUDIO_EN && e_kind == EK_AUDIO) begin
@@ -1523,30 +1611,40 @@ module pc9821_atapi #(
         e_odd <= !e_odd;
         // {R, L} is assembled in the output register itself (src/soc/cdda.v samples CDDA_DATA
         // only in the cycle after the cdda_wr edge, and the next L cannot land before it).
-        if (!e_odd) cdda_data[15:0] <= sd_buff_dout;
-        else begin cdda_wr <= !audio_stale_now; cdda_data[31:16] <= sd_buff_dout; end
+        if (!e_odd) cdda_data[15:0] <= hs_dout;
+        else begin cdda_wr <= !audio_stale_now; cdda_data[31:16] <= hs_dout; end
       end
     end
   end
 
-  // The command side's fetch request: entering S_FETCH (a READ(10)'s first sector, or the next
-  // one at the end of a data phase). Mirrors the two arms above that set st <= S_FETCH.
-  wire read_first = exec_go && cmd == 8'hA0 && cdb[0] == 8'h28 && cdb_len78 != 16'd0 &&
-                    in_range(cdb_lba, totals);
-  wire read_next  = io_rd && sel && io_addr == 16'h0641 && data_in && cmd == 8'hA0 &&
-                    !({1'b0, ptr} + 11'd1 < dp_words) && dp_read && rd_left != 16'd0 &&
-                    !rd_fail && (rd_lba < totals);
-  wire fetch_req = (read_first || read_next) && rst_n && !abort_now;
-  wire e_take_data = (e_st == E_IDLE) && data_pend && !hdr_pend;
-
   // the engine's offset arithmetic (E_CALC): one multiply (a DSP block, not LAB logic)
+  // THE OFFSET STAGE (owner decision 2026-11-13, docs/trade-candidates.md T88): E_IDLE loads e_pos
+  // and E_CALC used to form the whole request in the next cycle - e_pos -> the multiply -> the
+  // offset adds -> sd_lba/sd_blk_cnt/e_w0/e_n - a single-cycle path through a DSP block and the
+  // adds behind it, with nothing to qualify it (a miss fetches the wrong HPS sector for one
+  // request). E_CALC now registers the raw product e_l * 2352 alone (e_prod_q: nothing between
+  // the multiply and the register, so it is the DSP block's own output register) and E_SET does
+  // the ISO shift, the offset add and select, and the request's adds and compares from it (e_off_s):
+  // +1 clk_sys per CD fetch, against an HPS round trip of milliseconds; nothing
+  // the guest reads moves except that fetch's completion, one clk_sys later. e_pos, e_kind,
+  // e_nsec, is_pcd, is_raw and raw_m2 are all unchanged between E_CALC and E_SET (e_pos/e_kind/
+  // e_nsec are written only in E_IDLE, the medium's flags only by a header fetch's stream, a mount
+  // or the engine's E_IDLE), so e_off_s is the e_off the old E_CALC read.
   wire [31:0] e_l = {12'd0, e_pos};
   // (a raw image's sector L at L*2352, its user data 16 bytes in, 24 for MODE2 form 1)
-  wire [31:0] e_off = !(is_pcd || is_raw) ? (e_l << 11)
-                    : (e_l * 32'd2352 + (is_raw ? (raw_m2 ? 32'd24 : 32'd16)
-                                         : ((e_kind == EK_DATA) ? 32'd2368 : 32'd2352)));
+  wire [31:0] e_off_add = is_raw ? (raw_m2 ? 32'd24 : 32'd16)
+                                 : ((e_kind == EK_DATA) ? 32'd2368 : 32'd2352);
+  wire [31:0] e_off_s = !(is_pcd || is_raw) ? (e_l << 11) : (e_prod_q + e_off_add);   // E_SET's
+  /* verilator lint_off UNUSEDSIGNAL */   // e_off: the single-cycle form, read only by the check below
+  wire [31:0] e_off = !(is_pcd || is_raw) ? (e_l << 11) : (e_l * 32'd2352 + e_off_add);
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // synthesis translate_off
+  // SIM-ONLY: THE OFFSET STAGE's premise - E_SET's offset from the registered product is the one the
+  // request's own operands give now (they do not move between E_CALC and E_SET).
+  always @(posedge clk)
+    if (e_st == E_SET && e_off_s != e_off)
+      $fatal(1, "pc9821_atapi: E_SET's offset %08h differs from the live %08h", e_off_s, e_off);
   // SIM-ONLY (R8): the ring's CDDA_PLAYED can only report a sector the player fetched. Outside a
   // flush (which discards the ring and re-bases both positions), a played pulse while the
   // played position already equals the fetched one plus the fetch in flight is a sector that
@@ -1590,6 +1688,7 @@ module pc9821_atapi #(
     end
     reg [2:0] lg_st_d = 3'd0;
     reg       lg_loaded_d = 1'b0;
+    reg       lg_rst_d = 1'b0;
     always @(posedge clk) begin lg_st_d <= st; lg_loaded_d <= loaded; lg_rst_d <= rst_n; end
     wire ev_cmd  = io_wr && bank1 && io_addr == 16'h064E;
     wire ev_cdb  = exec_go && cmd == 8'hA0;
@@ -1613,7 +1712,6 @@ module pc9821_atapi #(
                     ({1'b0, dacurpos[3:0]} + {2'd0, e_nsec}) >= 5'd16));
     reg  p_cmd = 0, p_cdb = 0, p_end = 0, p_mnt = 0, p_rdy = 0, p_ctl = 0, p_play = 0;
     reg  p_alive = 1'b1;   // power-up
-    reg  lg_rst_d = 1'b0;
     wire ev_alive = rst_n && !lg_rst_d;   // the end of a core reset
     reg  [7:0] l_cmd = 0, l_cmd_st = 0, l_ctl = 0;
     reg        l_end_data = 0;

@@ -1,9 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The rhythm ROM's pack-loader path: a synthetic pack stream written through pc9821_rhythm_loader fills RHYTHM_ROM at pack offset 0x49000 with the exact bytes the stream carried (byte order and offsets included), a stream whose region is zero leaves the ROM reading zero (which is NOT silence -- the decoder ramps zero codes; this bench only pins the LOADER, not the audio), and a download under another ioctl index writes nothing. With +RHYTHM_REGION=<file> it additionally drives the region from the 4096 words build_pack.py wrote there in a real pack, so the loader is proved against the tooling's own output and not only a fixture. It does NOT use or assert any percussion sample data, and it does not claim the channel is audible without a user-supplied image.
-//
-// The rhythm ROM's pack-loader path: a synthetic pack stream written through pc9821_rhythm_loader fills RHYTHM_ROM at pack offset 0x49000 with the exact bytes the stream carried (byte order and offsets included), a stream whose region is zero leaves the ROM reading zero (the no-image silence state), and a download under another ioctl index writes nothing. With +RHYTHM_REGION=<file> it additionally drives the region from the 4096 words build_pack.py wrote there in a real pack, so the loader is proved against the tooling's own output and not only a fixture. It does NOT use or assert any percussion sample data, and it does not claim the channel is audible without a user-supplied image.
+// The rhythm ROM's pack-loader path: a synthetic pack stream written through pc9821_rhythm_loader fills RHYTHM_ROM at pack offset 0x49000 with the exact bytes the stream carried (byte order and offsets included), a stream whose region is zero leaves the ROM reading zero (which is NOT silence -- the decoder ramps zero codes; this bench only pins the LOADER, not the audio), a download under another ioctl index writes nothing, and a region streamed while the core's reset is up still lands whole; the synthetic pattern differs in every 256-byte block, so a loader that moves whole blocks fails too. With +RHYTHM_REGION=<file> it additionally drives the region from the 4096 words build_pack.py wrote there in a real pack, so the loader is proved against the tooling's own output and not only a fixture. It does NOT use or assert any percussion sample data, and it does not claim the channel is audible without a user-supplied image.
 
 // The DUT is the loader plus the ROM it fills. RHYTHM_ROM is the same module
 // jtopna instantiates (pc9821_dpram-backed, 12-bit words, byte read), so the
@@ -87,8 +85,11 @@ module tb_pc9821_rhythm_rom;
   // ==== STIMULUS ====
   // The byte the synthetic stream carries at pack offset p. A function of the
   // offset, so a wrong offset or a swapped byte pair changes the compared value.
+  // The high offset bits enter too (p[12:8] times an odd 77, distinct mod 256), so
+  // every 256-byte block of the region differs and a loader that shuffles, aliases
+  // or inverts whole blocks (waddr's upper bits) cannot match.
   function automatic [7:0] pattern(input [26:0] p);
-    pattern = ((p * 27'd257) + 27'h5A) & 27'hFF;
+    pattern = 8'(p[7:0] + 8'h5A + 8'(p[12:8] * 8'd77));
   endfunction
 
   // One 16-bit pack word at even byte address `a`: the low byte is the byte at
@@ -227,9 +228,9 @@ module tb_pc9821_rhythm_rom;
 
     // ---- 3. a zeroed region leaves the ROM reading zero (no image) ------
     // The no-image pack zero-fills the region (tools/build_pack.py), and this
-    // is the resulting state: every address answers 0x00, so the ADPCM decoder
-    // produces zero output and the channel is silent. This is the "without it"
-    // half -- it proves the ROM follows the pack, not the chip's idle output.
+    // is the resulting state: every address answers 0x00. That is NOT silence
+    // (an all-zero ADPCM-A code steps the decoder, AGENTS.md "Firmware pack");
+    // this bench pins only that the ROM follows the pack, not the audio.
     stream_zero_region();
     mismatches = 0;
     for (i = 0; i < REGION_BYTES; i = i + 1) begin
@@ -238,6 +239,27 @@ module tb_pc9821_rhythm_rom;
     end
     if (mismatches != 0)
       fail("a zeroed region did not leave the rhythm ROM reading zero (which is NOT silence: the decoder ramps zero codes)");
+
+    // ---- 4. a pack word that arrives while the core's reset is up still lands --
+    // The pack download is the framework's, not the core's: hps_io streams it whatever
+    // the core's reset does, and z486_mister keeps the SDRAM controller out of reset for
+    // the load (`.reset(rst_top[T_SDRAM] && !pack_load_hold)`) for the same reason. So a
+    // reset during the download may not cost the rhythm ROM a word.
+    reset = 1;
+    ioctl_download = 1'b1;
+    ioctl_index    = 16'd0;
+    for (i = 0; i < REGION_BYTES/2; i = i + 1)
+      push_word(REGION + i * 27'd2, pattern(REGION + i * 2) ^ 8'hA5, pattern(REGION + i * 2 + 1) ^ 8'hA5);
+    @(negedge clk);
+    ioctl_download = 1'b0;
+    reset = 0;
+    mismatches = 0;
+    for (i = 0; i < REGION_BYTES; i = i + 1) begin
+      read_rom(i[12:0], v);
+      if (v !== (pattern(REGION + i) ^ 8'hA5)) mismatches = mismatches + 1;
+    end
+    if (mismatches != 0)
+      fail("pack words written while reset was up did not all land in the rhythm ROM");
 
   // ==== VERDICT ====
 

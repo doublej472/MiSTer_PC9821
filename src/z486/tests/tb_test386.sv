@@ -327,7 +327,7 @@ module tb_test386;
                 $display("  Last POST: 0x%02X", current_post);
                 $display("  Instructions: %0d", instruction_count);
                 $display("========================================");
-                $finish;
+                $fatal(1, "TEST386 TIMEOUT");
             end
 
             // Check for HLT instruction execution
@@ -351,7 +351,7 @@ module tb_test386;
                     $display("  EFLAGS=%08X", dut.EFLAGS);
                     $display("========================================");
                     #100;
-                    $finish;
+                    $fatal(1, "TEST386 FAILED at POST 0x%02X", current_post);
                 end
             end
 

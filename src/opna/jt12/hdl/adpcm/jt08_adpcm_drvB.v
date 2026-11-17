@@ -19,6 +19,10 @@
     Date: 21-03-2019
 */
 
+// Local changes in this file (src/opna/LICENSE-SCOPE.md, "Upstream"):
+//   * LOCAL FIX (PC-98 core, BRDY after a flag reset): a flag reset's BRDY clear holds past
+//     the next status read instead of one clk_en, outside playback (at the flags below).
+
 module jt08_adpcm_drvB(
     input           rst_n,
     input           clk,
@@ -113,6 +117,19 @@ wire        gran_8b = (acmd_x8_b | acmd_rom_b);
 wire [20:0] astart  = (gran_8b) ? {astart_b, 5'h00} : {3'h0, astart_b, 2'h0} ;
 wire [20:0] astop   = (gran_8b) ? {aend_b,   5'h1F} : {3'h0, aend_b,   2'h3} ; 
 wire [20:0] alimit  = (gran_8b) ? {alimit_b, 5'h1F} : {3'h0, alimit_b, 2'h3} ;
+
+// LOCAL FIX (PC-98 core, BRDY after a flag reset): the events that set BRDY (see the flags).
+reg        acmd_up_q;
+reg  [1:0] brdy_hold;     // 55.5 kHz enables still to pass after a flag reset before the idle set
+wire       brdy_idle = !acmd_rst_b && !ram_busy && (brdy_hold == 2'd0);
+wire       brdy_set  = acmd_on_b ? ~ram_busy :
+                       ((cen && acmd_mem_b && (state == STATE_POST)) || (acmd_up_b && !acmd_up_q) ||
+                        brdy_idle);
+always @(posedge clk) begin
+    acmd_up_q <= acmd_up_b;
+    brdy_hold <= clr_flag[F_BRDY] ? 2'd2 :
+                 (cen55 && (brdy_hold != 2'd0)) ? (brdy_hold - 2'd1) : brdy_hold;
+end
 
 always @(posedge clk) begin
     if ((rst_n == 1'b0) || (acmd_rst_b)) begin
@@ -262,7 +279,31 @@ always @(posedge clk) begin
         end
     end
     // flags
-    flag[F_BRDY] <= clr_flag[F_BRDY] ? 1'b0 : (flag[F_BRDY] | ( ~ram_busy ));
+    // LOCAL FIX (PC-98 core, BRDY after a flag reset): upstream sets BRDY whenever the memory
+    // port is idle (`flag[F_BRDY] | ( ~ram_busy )`), so a 0x110 = 80 flag reset clears it for
+    // one clk_en and it is back before the guest can read it. On the Xe10 the reset's clear is
+    // what the next read sees: after a 0x100 = 01 reset and after each of the last five resets
+    // in memory-write mode the first status read finds BRDY clear (docs/probes/
+    // XE10T-XE10-OPNA2.TXT `ADB_SETUP st0=00 s_rst=08 sb=08 st1=00 stl=00 reads=1`, `FR_ADB
+    // i=3 sb=08 st1=00 stl=00 reads=1` .. `i=7`). The same rows show BRDY set again:
+    //   * by a 0x100 write (`s_rst=08` right after 0x100 = 01, `s_set=08` after the set-up;
+    //     ymfm ymfm_adpcm.cpp adpcm_b_channel::write sets STATUS_BRDY on a 0x00 write);
+    //   * by each memory byte (ADB_W, 40 of 40; ymfm write_ram/read_ram
+    //     `set_reset_status(STATUS_BRDY);`), here the end of a CPU access (STATE_POST);
+    //   * on its own while the unit is idle and not held in reset (0x100 bit 0 clear): each
+    //     FR_ADB row's first read before its reset (`sb=08`) follows a row that had left it
+    //     clear, with nothing written, and kit 1 reads it back as soon as 0x110 unmasks it
+    //     with 0x100 = 00 (docs/probes/KIT1-XE10-OPNA.TXT `C0 0188=00 018C=08`,
+    //     tb_pc9821_opna_kit1). With 0x100 = 01 it did not come back before the set-up
+    //     (ADB_SETUP `stl=00`, then `s_set=08` after the 0x100 = 60 write). The capture bounds
+    //     WHEN only: later than the first read after the reset, sooner than the next row. Here
+    //     the idle port sets it again from the second 55.5 kHz sample enable after the reset
+    //     (18-36 us, the unit's own rate), inside those bounds; the instant is not measured.
+    // Power-up is the idle case (ymfm `m_status(STATUS_BRDY)`), once the reset's clear is over.
+    // During playback (acmd_on_b) upstream's rule is kept: no capture covers it. Not reproduced:
+    // after the EOS rows the machine kept BRDY (and, at the first read, EOS) through three
+    // resets (FR_ADB i=0..2 time out at 4096 reads); no reference explains it (todo item 38).
+    flag[F_BRDY] <= clr_flag[F_BRDY] ? 1'b0 : (flag[F_BRDY] | brdy_set);
     flag[F_EOS]  <= clr_flag[F_EOS]  ? 1'b0 : (flag[F_EOS] | (~acmd_on_b & ram_eos) | (acmd_on_b & pcm_eos));
     flag[F_ZERO] <= 1'b0; //clr_flag[F_ZERO] ? 1'b0 : adc_zero;
     flag[F_BUSY] <= clr_flag[F_BUSY] ? 1'b0 : chon;

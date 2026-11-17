@@ -331,7 +331,9 @@ module tb_pc9821_dmac_engine;
     mem[0] = 8'hE1; mem[1] = 8'hE2;
     prog_ch0(16'h0000, 16'h0001, 8'h18);   // type 10, bit 4 set = autoinitialize
     push_n = 0;
-    drq[0] = 1; settle(120); drq[0] = 0;
+    // Twelve bytes' worth of engine time: 12 x the byte's 11 clk_sys (10 before T89's S_SEL state,
+    // when this window was 120), so the request still drops on a block boundary.
+    drq[0] = 1; settle(132); drq[0] = 0;
     check(push_n >= 2 && (push_n % 2) == 0,
           "E6: an autoinitializing channel did not transfer whole two-byte blocks");
     check(pushed[0] === 8'hE1, "E6: the first byte of the block is not mem[0]");

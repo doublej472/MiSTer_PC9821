@@ -49,6 +49,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import hwtime  # noqa: E402  (tools/hwprobe/hwtime.py: the shared time bases and referee)
+import markers  # noqa: E402  (tools/hwprobe/markers.py: the anchored BEGIN:/END: split)
+
 # The 0x5F I/O-wait port is the machine's documented 600 ns / 30 clk_sys class.
 WAIT_NS = 600
 WAIT_CLK = 30
@@ -60,9 +64,9 @@ WAIT_CLK = 30
 # PIT_HZ follows the strap the measured divisor discriminates -
 # a divisor near 0x4E00 means the BIOS work-area 0501 bit-7 strap selects the
 # 1.9968 MHz oscillator and decode() switches the rate (a 19% move).
-PIT_HZ = 2_457_600
-ARTIC_HZ = 307_200
-ARTIC_NS = 1e9 / ARTIC_HZ
+PIT_HZ = hwtime.PIT_HZ_24576
+ARTIC_HZ = hwtime.ARTIC_HZ
+ARTIC_NS = hwtime.ARTIC_NS
 
 
 def pit_ns(counts: int) -> float:
@@ -113,7 +117,7 @@ MODES = ("fast", "xe10")
 
 EXPECTED_RTL: dict = {
     "fast": {
-        "clock_hz": 90_000_000,
+        "clock_hz": hwtime.CLK_SYS_HZ_BASE,
         "constants": {"IO_MIN_HOLD": 4, "IO_PIT_HOLD": 21},
         "above_floor": {
             (0x0071, "W"): "IO_PIT_HOLD", (0x0073, "W"): "IO_PIT_HOLD",
@@ -122,7 +126,7 @@ EXPECTED_RTL: dict = {
             (0x3FDD, "W"): "IO_PIT_HOLD", (0x3FDF, "W"): "IO_PIT_HOLD",
         },
     },
-    "xe10": {"clock_hz": 90_000_000, "constants": XE10_CONSTANTS_50MHZ},
+    "xe10": {"clock_hz": hwtime.CLK_SYS_HZ_BASE, "constants": XE10_CONSTANTS_50MHZ},
 }
 
 
@@ -486,7 +490,7 @@ def rtl_drift(table: RtlTable | None) -> list[str]:
 
     Each census entry's READ and WRITE price is compared to the CONSTANT the
     checked-in expectation names for it (not just to the FSM floor): swapping
-    IO_WAIT_5F and IO_PIT_HOLD (30 <-> 21) would otherwise pass the gate while
+    IO_NS_SLOW_R and IO_NS_SLOW_W (40 <-> 42) would otherwise pass the gate while
     printing a wrong price.
     """
     if table is None:
@@ -536,79 +540,50 @@ def print_rtl_drift(drift: list[str]) -> None:
 
 
 
-# The census the probe measures: every entry of io_tab in ioprobe.s, as
-# (port, mode). A BEGIN: with no END: names the port a hang happened in, and a
-# port that has no section at all never got reached, so both are reported.
-CENSUS: list[tuple[int, str]] = [
-    (0x005F, "W"), (0x005F, "R"), (0x005C, "R"),
-    (0x0000, "R"), (0x0002, "R"), (0x0008, "R"), (0x000A, "R"),
-    (0x0071, "R"), (0x0073, "R"), (0x0077, "W"),
-    (0x0020, "R"), (0x0022, "R"),
-    (0x0041, "R"), (0x0043, "R"),
-    (0x0060, "R"), (0x0062, "R"),
-    (0x00A0, "R"), (0x00A2, "R"),
-    (0x006A, "R"), (0x006A, "W"), (0x007C, "R"), (0x007C, "W"),
-    (0x00A6, "R"), (0x00A6, "W"),
-    (0x04A0, "R"), (0x04A1, "R"), (0x04A2, "R"), (0x04A3, "R"),
-    (0x04A4, "R"), (0x04A5, "R"), (0x04A6, "R"), (0x04A7, "R"),
-    (0x04A8, "R"), (0x04A9, "R"), (0x04AA, "R"), (0x04AB, "R"),
-    (0x04AC, "R"), (0x04AD, "R"), (0x04AE, "R"), (0x04A0, "W"),
-    (0x0188, "R"), (0x018A, "R"), (0x018C, "R"), (0x018E, "R"),
-    (0x0188, "W"), (0x018A, "W"),
-    (0xA460, "R"), (0xA462, "R"),
-    (0x0430, "R"), (0x0432, "R"), (0x0433, "R"), (0x0435, "R"),
-    (0x0640, "R"), (0x0641, "R"), (0x0642, "R"), (0x0644, "R"),
-    (0x0646, "R"), (0x0648, "R"), (0x064A, "R"), (0x064C, "R"),
-    (0x064E, "R"), (0x1E8E, "R"),
-    (0x0740, "R"), (0x0742, "R"), (0x0744, "R"), (0x0746, "R"),
-    (0x0748, "R"), (0x074A, "R"), (0x074C, "R"), (0x074E, "R"),
-    (0x1480, "R"), (0x1481, "R"),
-    (0x0011, "R"), (0x001B, "R"), (0x0021, "R"), (0x0023, "R"),
-    (0x0025, "R"), (0x0027, "R"), (0x0029, "R"),
-    (0x0040, "R"), (0x0090, "R"), (0x0092, "R"), (0x0094, "R"),
-    (0x043B, "R"), (0x043D, "R"), (0x043F, "R"), (0x0461, "R"),
-    (0x0463, "R"), (0x0530, "R"), (0x0531, "R"), (0x0534, "R"),
-    (0x053D, "R"), (0x063C, "R"), (0x063D, "R"), (0x063E, "R"),
-    (0x063F, "R"), (0x0EE0, "R"), (0x09A0, "R"), (0x98D7, "R"),
-    (0x9892, "R"), (0x9894, "R"), (0x18F0, "R"), (0x18F2, "R"),
-    (0x0FAA, "R"), (0x7FD9, "R"), (0xBFDB, "R"),
-]
+# The census the probe measures: every entry of io_tab in ioprobe.s, as (port, mode),
+# READ OUT OF THE SOURCE (it was a hand-kept copy that lost the 0x00BE and 0xC8/0xCA/0xCC
+# rows). A BEGIN: with no END: names the port a hang happened in, and a port that has no
+# section at all never got reached, so both are reported.
+IOPROBE_S = Path(__file__).resolve().parent / "ioprobe.s"
+
+
+def census_from_source(path: Path = IOPROBE_S) -> list[tuple[int, str]]:
+    """io_tab's {port word, kind byte, strap byte, label word} entries up to the 0xFFFF end,
+    as (port, 'R'|'W') in table order (a port measured twice, under two straps, is listed
+    twice; the completeness check works on the set of section names)."""
+    text = path.read_text(encoding="latin-1")
+    start = re.search(r"^io_tab:\s*$", text, re.M)
+    if start is None:
+        raise SystemExit(f"{path}: no io_tab: label")
+    out: list[tuple[int, str]] = []
+    port = None
+    for line in text[start.end():].splitlines():
+        line = re.sub(r"/\*.*?\*/", "", line).strip()
+        mw = re.match(r"\.word\s+(0x[0-9A-Fa-f]+)\s*$", line)
+        if mw:
+            port = int(mw.group(1), 16)
+            if port == 0xFFFF:
+                return out
+            continue
+        mb = re.match(r"\.byte\s+([12])\s*,\s*\d+\s*$", line)
+        if mb and port is not None:
+            out.append((port, "R" if mb.group(1) == "1" else "W"))
+            port = None
+    raise SystemExit(f"{path}: io_tab has no 0xFFFF end marker")
+
+
+CENSUS: list[tuple[int, str]] = census_from_source()
+
+# The rows the probe gained with its FDCSTRAP section (the strap-gated 2HD/2DD windows). A
+# capture from a binary before that section (docs/probes/IO.TXT: no BEGIN:FDCSTRAP) never had
+# them, so its census leaves them out rather than reporting them NOT REACHED.
+FDCSTRAP_ROWS: set[tuple[int, str]] = {(0x00BE, "R"), (0x00C8, "R"), (0x00CA, "R"), (0x00CC, "R")}
 
 
 def sections(text: str) -> tuple[dict[str, list[str]], list[str], list[str]]:
-    """Split a capture by BEGIN:/END: markers.
-
-    Returns (found, opens, closes): found maps a section name to its lines, opens
-    and closes are the marker names in order. A name in opens with no matching
-    close is the section that hung.
-
-    A marker must START its own line.  The probe's banner prose names the markers
-    (`Sections are BEGIN:IO<port><mode>/END:IO<port><mode>: ...`), and a
-    mid-line match counted that sentence as a section named `IO`: the first
-    100 MHz IO.TXT is complete (it ends `IOPROBE DONE`) but decoded as
-    `HUNG: IO` plus one extra section, with the census otherwise exact.  The
-    anchor is what makes prose safe, and it holds for the already-archived
-    captures too (every real marker is alone on its line).
-    """
-    found: dict[str, list[str]] = {}
-    opens: list[str] = []
-    closes: list[str] = []
-    cur: str | None = None
-    for line in text.splitlines():
-        m = re.match(r"\s*BEGIN:([A-Z0-9]+)\s*$", line)
-        if m:
-            cur = m.group(1)
-            opens.append(cur)
-            found.setdefault(cur, [])
-            continue
-        m = re.match(r"\s*END:([A-Z0-9]+)\s*$", line)
-        if m:
-            closes.append(m.group(1))
-            cur = None
-            continue
-        if cur is not None:
-            found[cur].append(line)
-    return found, opens, closes
+    """Split a capture by its line-anchored BEGIN:/END: markers: (found, opens, closes), as
+    tools/hwprobe/markers.py documents (a name in opens with no close is the section that hung)."""
+    return markers.sections(text)
 
 
 ROW_RE = re.compile(
@@ -647,30 +622,13 @@ def excess(x: int, y: int) -> int:
 
 
 def pick_ns(pit_counts: int, art_ticks: int) -> tuple[float, str]:
-    """Absolute ns for one window, refereed (ARTIC whenever its delta is >= 1 tick).
-
-    Prefer ARTIC whenever its delta is >= 1 tick: at these scales the 24-bit
-    counter cannot wrap or tear, while the PIT's 16-bit raw delta wraps
-    silently (a 3-reload window reads ~8192 counts low - INSIDE the old 25%
-    band) and the torn latch word mis-assembles.  PIT
-    survives only for sub-tick windows (art_ticks == 0).  The 8:1 cross-check
-    is a health label at the machine-measured 0.5-5% band: ok / WRAP (the
-    -8192-count signature, explicitly rejected) / neq / sub.
-
-    Small-window rule: the absolute floors (16 counts,
-    32 for the WRAP check) exist for latch-read quantization, but they are
-    CLAMPED to ref so the effective band never exceeds +/-100% on windows
-    below ~320 counts (art=1 tick, ref=8: 'ok' now spans pit 0..16, not
-    0..24).  Label-only: ns still come from ARTIC at art_ticks >= 1.
-    """
-    if art_ticks >= 1:
-        ref = max(art_ticks * 8, 1)
-        if abs(pit_counts - ref) <= min(max(16, 0.05 * ref), ref):
-            return art_ticks * ARTIC_NS, "ok"
-        if abs(ref - pit_counts - 8192) <= min(max(32, 0.02 * ref), ref):
-            return art_ticks * ARTIC_NS, "WRAP"
-        return art_ticks * ARTIC_NS, "neq"
-    return pit_ns(pit_counts), "sub"
+    """Absolute ns for one window, refereed by hwtime.referee() at the 8:1 law: ARTIC
+    whenever its delta is >= 1 tick, PIT only for a sub-tick window (the label is
+    health-only; see tools/hwprobe/hwtime.py for the band and the small-window rule)."""
+    label = hwtime.referee(pit_counts, art_ticks)
+    if label == "sub":
+        return pit_ns(pit_counts), label
+    return art_ticks * ARTIC_NS, label
 
 
 def clk_and_ns(ex: int, w_ex: int) -> tuple[float | None, float | None]:
@@ -782,13 +740,15 @@ def print_table(rows: list[dict], scale: int) -> None:
     )
 
 
-def print_class_summary(rows: list[dict]) -> None:
+def print_class_summary(rows: list[dict], scale: int = 1) -> None:
     """The measured median per io_access_cycles() ARM, beside that arm's price.
 
     The arms are the function's own (their labels come from its comments), so a
     port priced at the FSM floor groups under the floor and the summary cannot
-    imply a class price the core no longer carries.  meash/RTL compares the two
-    in ns at the profile clock: a large ratio is item 82's stall-budget gap.
+    imply a class price the core no longer carries.  meas_ns/RTL_ns compares the two
+    in ns at the profile clock: a large ratio is item 82's stall-budget gap.  `scale` is
+    print_table's legacy x2 for halved-era PIT columns, applied the same way so meas_ns
+    stays equal to the per-row abs_ns column on a sub-tick anchor.
     """
     wait = next((r for r in rows if r["port"] == 0x005F and r["mode"] == "W"), None)
     if wait is None:
@@ -804,7 +764,7 @@ def print_class_summary(rows: list[dict]) -> None:
     # The machine's absolute price of one 0x5F access: what the clk_sys axis is worth
     # in ns for THIS capture (1621 ns on IO.TXT, not the documented 600).  Using the
     # capture's own anchor keeps meas_ns equal to the per-row abs_ns column.
-    anchor_ns = pick_ns(excess(wait["pit"], wait["base"]),
+    anchor_ns = pick_ns(excess(wait["pit"], wait["base"]) * scale,
                         excess(wait["artic"], wait["bartic"]))[0] / TM_N
     groups: dict[tuple[str, str], list[tuple[int, str, float]]] = {}
     for r in rows:
@@ -853,7 +813,10 @@ def print_completeness(opens: list[str], closes: list[str]) -> None:
     too, so a capture truncated after its last END: is not read as complete."""
     closed = set(closes)
     hung = [o for o in opens if o not in closed]
-    census_names = {f"IO{p:04X}{m}" for p, m in CENSUS}
+    census = set(CENSUS)
+    if "FDCSTRAP" not in opens:
+        census -= FDCSTRAP_ROWS
+    census_names = {f"IO{p:04X}{m}" for p, m in census}
     io_seen = {o for o in opens if o.startswith("IO")}
     missing = sorted(census_names - io_seen)
     extra = sorted(io_seen - census_names)
@@ -881,7 +844,7 @@ def decode(text: str) -> list[str]:
     matches EXPECTED_RTL); main() exits non-zero on a non-empty one, because the
     RTL column IS a contract and a wrong price must not read as a note."""
     global PIT_HZ
-    PIT_HZ = 2_457_600  # reset per capture: one 0x4E00-era
+    PIT_HZ = hwtime.PIT_HZ_24576  # reset per capture: one 0x4E00-era
     # file in a multi-file invocation must not skew every later capture 23%.
     found, opens, closes = sections(text)
 
@@ -931,7 +894,7 @@ def decode(text: str) -> list[str]:
         # The divisor discriminates the strap - 0x4E00 means the
         # BIOS work-area 0501 bit-7 strap selects the 1.9968 MHz oscillator.
         if 0x4800 <= divisor <= 0x5400:
-            PIT_HZ = 1_996_800
+            PIT_HZ = hwtime.PIT_HZ_19968
             print("  PIT STRAP: divisor ~= 0x4E00 -> the 1.9968 MHz oscillator"
                   " (work-area 0501 bit 7); PIT rate switched to 1996800 counts/s")
         elif 0x5A00 <= divisor <= 0x6600:
@@ -952,7 +915,7 @@ def decode(text: str) -> list[str]:
     print_table(rows, scale)
 
     print("\n== class summary ==")
-    print_class_summary(rows)
+    print_class_summary(rows, scale)
 
     print("\n== run completeness ==")
     print_completeness(opens, closes)

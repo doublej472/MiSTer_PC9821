@@ -2,7 +2,7 @@
 `include "z486_pc98_preset.svh"
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GRCG_CPU: the graphics-charger fill END TO END, driven by the REAL z486 executing the REAL guest clear sequence (FSMAIN.EXE @0xB1C: `out 0x7C,0x80`, four `out 0x7E,0`, then `rep stosw` through ES=0xA800 over 0x4000 words) through the REAL pc9821_memory_map plane-window decode into the REAL pc9821_gvram client and its GRCG, so the shape the CPU actually presents on the client port - the operand's byte enables, the DWORD-ALIGNED address, the datum and the store order - is what the GRCG's TDW burst classification keys on. The leaf benches (tb_pc9821_grcg / grcg_ops) drive that port by hand and prove a whole-pair TDW zero-fill expands to all four planes; what they cannot see is whether z486 PRESENTS those whole pairs for `rep stosw`, which is the seam this bench closes. Every window store the CPU issues is recorded as {addr, be, data}; the shapes are asserted to be whole column pairs (0011/1100/1111), the precondition the burst needs; and the guest-visible outcome is asserted through the CPU's own read path: the cleared page reads back zero in ALL FOUR planes while the OTHER access page, filled with a different pattern and not addressed by the clear, keeps it byte for byte - so a one-plane (blue-only) fill, a wrong-page fill or a dead read path cannot pass.
+// TB_PC9821_GRCG_CPU: the graphics-charger fill END TO END, driven by the REAL z486 executing the REAL guest clear sequence (FSMAIN.EXE @0xB1C: `out 0x7C,0x80`, four `out 0x7E,0`, then `rep stosw` through ES=0xA800 over 0x4000 words) through the REAL pc9821_memory_map plane-window decode into the REAL pc9821_gvram client and its GRCG, so the shape the CPU actually presents on the client port - the operand's byte enables, the DWORD-ALIGNED address, the datum and the store order - is what the GRCG's TDW burst classification keys on. The leaf benches (tb_pc9821_grcg / grcg_ops) drive that port by hand and prove a whole-pair TDW zero-fill expands to all four planes; what they cannot see is whether z486 PRESENTS those whole pairs for `rep stosw`, which is the seam this bench closes. Every window store the CPU issues is recorded as {addr, be, data}; the shapes are asserted to be whole column pairs (0011/1100/1111), the precondition the burst needs; and the guest-visible outcome is asserted through the CPU's own read path: the cleared page reads back zero in ALL FOUR planes, including sentinels at the plane's middle (0x4000) and last dword (0x7FFC) past the pre-filled first 1 KiB, while the OTHER access page, filled with a different pattern and not addressed by the clear, keeps it byte for byte - so a one-plane (blue-only) fill, a wrong-page fill or a dead read path cannot pass.
 //
 // Blind spots stated: the access page is 0 on the guest side, the EGC is gated off (Farland
 // Story never arms it: its only FF2 writes are num 0 and num 0x20, never num 2), and the
@@ -136,7 +136,7 @@ module tb_pc9821_grcg_cpu;
   // z486 presents an I/O access as a DWORD-ALIGNED address with the operand's byte
   // lane carried only in `be` (pc9821_system forms {z_addr, 2'b00}); pc9821_iobus
   // steps `lane` = be's first set bit and forms the byte port as base_addr + lane
-  // (pc9821_iobus.sv:870-872, `lane_addr = base_addr + {30'd0, lane}`). The responder MUST do the same: without it
+  // (pc9821_iobus.sv:909-916, `port_addr = {base_addr[15:2], lane}`). The responder MUST do the same: without it
   // `out 0x7E,al` (base 0x7C, lane 2) decodes as `out 0x7C,al` and every tile write
   // lands on the mode register, so the GRCG is never armed - which is exactly the
   // false failure this bench reported before the lane was modelled.
@@ -379,7 +379,7 @@ module tb_pc9821_grcg_cpu;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a bench window store never became ready");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG_CPU: FAIL (hang: a bench window store never became ready)");
         end
       end
       @(negedge clk);
@@ -404,7 +404,7 @@ module tb_pc9821_grcg_cpu;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a bench window read never became ready");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG_CPU: FAIL (hang: a bench window read never became ready)");
         end
       end
       @(negedge clk);
@@ -416,7 +416,7 @@ module tb_pc9821_grcg_cpu;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a bench window read never returned a response");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG_CPU: FAIL (hang: a bench window read never returned a response)");
         end
       end
       data = gv_cpu_dout;
@@ -438,6 +438,18 @@ module tb_pc9821_grcg_cpu;
         bench_store(WIN_G + {2'b0, c[14:2], 2'b00}, {v,v,v,v}, 4'hF);
         bench_store(WIN_E + {2'b0, c[14:2], 2'b00}, {v,v,v,v}, 4'hF);
       end
+    end
+  endtask
+
+  // One dword of all four planes at column `off` on the CURRENT access page: the sentinels past
+  // the pre-filled span, so a clear that stops short (the guest's 0x4000 words cover the whole
+  // 32 KiB plane, 0x0000-0x7FFF) leaves a non-zero byte behind.
+  task automatic sentinel(input [14:0] off, input [31:0] v);
+    begin
+      bench_store(WIN_B + {17'd0, off}, v, 4'hF);
+      bench_store(WIN_R + {17'd0, off}, v, 4'hF);
+      bench_store(WIN_G + {17'd0, off}, v, 4'hF);
+      bench_store(WIN_E + {17'd0, off}, v, 4'hF);
     end
   endtask
 
@@ -569,6 +581,8 @@ module tb_pc9821_grcg_cpu;
   reg [31:0] b2, r2, g2, e2;
   reg [31:0] p0, q0, s0, t0;      // page 1, column 0 (the control)
   reg [31:0] p1, q1, s1, t1;      // page 1, column 0x0100
+  reg [31:0] b3, r3, g3, e3, b4, r4, g4, e4;   // page 0, columns 0x7FFC and 0x4000 (sentinels)
+  reg [31:0] p3, q3, s3, t3;      // page 1, column 0x7FFC
 
   initial begin
     // 1. Hold both resets and load the program.
@@ -583,9 +597,18 @@ module tb_pc9821_grcg_cpu;
     repeat (8) @(posedge clk);
     access_page = 1'b0;
     fill_planes(8'hA5);
+    sentinel(15'h4000, 32'hC3C3_C3C3);
+    sentinel(15'h7FFC, 32'hC3C3_C3C3);
     access_page = 1'b1;
     fill_planes(8'h5A);
+    sentinel(15'h7FFC, 32'h3C3C_3C3C);
     access_page = 1'b0;
+    read_planes(15'h7FFC, b3, r3, g3, e3);
+    if (b3 !== 32'hC3C3C3C3 || r3 !== 32'hC3C3C3C3 || g3 !== 32'hC3C3C3C3 || e3 !== 32'hC3C3C3C3) begin
+      $display("FAIL the page-0 last-column sentinel did not land: B=%08x R=%08x G=%08x E=%08x",
+               b3, r3, g3, e3);
+      errors = errors + 1;
+    end
 
     read_planes(15'h0000, b0, r0, g0, e0);
     if (b0 !== 32'hA5A5A5A5 || r0 !== 32'hA5A5A5A5 ||
@@ -640,9 +663,12 @@ module tb_pc9821_grcg_cpu;
     read_planes(15'h0000, b0, r0, g0, e0);
     read_planes(15'h0100, b1, r1, g1, e1);
     read_planes(15'h03FC, b2, r2, g2, e2);
+    read_planes(15'h4000, b4, r4, g4, e4);
+    read_planes(15'h7FFC, b3, r3, g3, e3);
     access_page = 1'b1;
     read_planes(15'h0000, p0, q0, s0, t0);
     read_planes(15'h0100, p1, q1, s1, t1);
+    read_planes(15'h7FFC, p3, q3, s3, t3);
     access_page = 1'b0;
 
     $display("== cleared page 0 (want all zero) ==");
@@ -659,6 +685,15 @@ module tb_pc9821_grcg_cpu;
       fail("the clear did not reach all four planes at page-0 column 0x0100");
     if (b2 !== 32'd0 || r2 !== 32'd0 || g2 !== 32'd0 || e2 !== 32'd0)
       fail("the clear did not reach all four planes at page-0 column 0x03FC");
+    $display("   col 0x4000: B=%08x R=%08x G=%08x E=%08x", b4, r4, g4, e4);
+    $display("   col 0x7FFC: B=%08x R=%08x G=%08x E=%08x (page 1: %08x %08x %08x %08x)",
+             b3, r3, g3, e3, p3, q3, s3, t3);
+    if (b4 !== 32'd0 || r4 !== 32'd0 || g4 !== 32'd0 || e4 !== 32'd0)
+      fail("the clear stopped short: page-0 column 0x4000 (sentinel C3) is not zero in all four planes");
+    if (b3 !== 32'd0 || r3 !== 32'd0 || g3 !== 32'd0 || e3 !== 32'd0)
+      fail("the clear stopped short: page-0 last column 0x7FFC (sentinel C3) is not zero in all four planes");
+    if (p3 !== 32'h3C3C3C3C || q3 !== 32'h3C3C3C3C || s3 !== 32'h3C3C3C3C || t3 !== 32'h3C3C3C3C)
+      fail("the clear disturbed page 1's last column 0x7FFC");
     if (p0 !== 32'h5A5A5A5A || q0 !== 32'h5A5A5A5A ||
         s0 !== 32'h5A5A5A5A || t0 !== 32'h5A5A5A5A)
       fail("the clear disturbed page 1, which it never addressed (the access page is not applied)");

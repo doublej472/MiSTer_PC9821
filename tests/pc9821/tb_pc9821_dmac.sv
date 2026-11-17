@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The uPD71071 register file answering the machine's own captured values (the address and count registers readable, 0x11/0x1B/0x29 reading 0x00, the write-only registers driving 0xFF), the ITF self-test shape surviving a real low/high byte flip-flop, and the engine moving bytes in both directions: a programmed count of N+1, the address walking by the mode's direction, terminal count reported on the last byte, the channel masked at terminal count, and the status bits cleared when the status register is read. S7 pins the clear WIDTH: the 0x11 read clears only the terminal-count nibble stat[3:0] and leaves the request-state nibble stat[7:4] standing, exactly NP2kai's dmac_i11 `dmac.stat &= 0xf0` (io/dmac.c:290-294) (FAIL-FIRST against a full-byte clear that eats the nibble).
+// The uPD71071 register file answering the machine's own captured values (the address and count registers readable, 0x11/0x1B/0x29 reading 0x00, the write-only registers driving 0xFF), the ITF self-test shape surviving a real low/high byte flip-flop, and the engine moving bytes in both directions: a programmed count of N+1, the address walking by the mode's direction, terminal count reported on the last byte, the channel masked at terminal count, and the status bits cleared when the status register is read. S7 pins the clear WIDTH: the 0x11 read clears only the terminal-count nibble stat[3:0] and leaves the request-state nibble stat[7:4] standing, exactly NP2kai's dmac_i11 `dmac.stat &= 0xf0` (io/dmac.c:290-294) (FAIL-FIRST against a full-byte clear that eats the nibble). And 0x29 reads all four channels' bank bounds packed, channel n in bits 2n+1:2n: the Xe10's XE10Z D29 write sequence replayed write for write reads 00 0C 0C 8C 8E 86 86 50 as the machine did (docs/probes/XE10Z-XE10.TXT:205), and a channel-0 write alone reads its bound in bits 1:0 (docs/probes/RDBACK.TXT:157) (FAIL-FIRST against the channel-0-only read, 00 00 00 00 02 02 02 00).
 //
 // The uPD71071 register file answering the machine's own captured values (the address and count registers readable, 0x11/0x1B/0x29 reading 0x00, the write-only registers driving 0xFF), the ITF self-test shape surviving a real low/high byte flip-flop, and the engine moving bytes in both directions: a programmed count of N+1, the address walking by the mode's direction, terminal count reported on the last byte, the channel masked at terminal count, and the status bits cleared when the status register is read. Plus S7's clear-WIDTH pin: the 0x11 read clears only the terminal-count nibble stat[3:0] and leaves the request-state nibble stat[7:4] standing, which is exactly what NP2kai's dmac_i11 does (`dmac.stat &= 0xf0`, io/dmac.c:290-294) and exactly what a full-byte clear breaks.
 //
@@ -267,11 +267,33 @@ module tb_pc9821_dmac;
     reg_rd(5'd17); expect8(8'h00, "0x23 is another channel's bank: untouched at 0x00");
     reg_wr(5'd17, 8'h3C);                 // 0x23 -> channel 2's bank
     reg_rd(5'd17); expect8(8'h0C, "0x23 bank masks to the low nibble too");
-    // 0x29: `(dat >> 2) & 3` into the channel `dat & 3` selects, with CHANNEL 0 ALONE on the
-    // read (NP2kai io/dmac.c:260-263 and qemu hw/dma/pc98-dma.c:269-272 store per channel,
-    // which the capture cannot see - all three of its writes carry `dat & 3 == 0`).
+    // 0x29: `(dat >> 2) & 3` into the channel `dat & 3` selects (NP2kai io/dmac.c:260-263, qemu
+    // hw/dma/pc98-dma.c:269-272), and the READ is all four bounds packed, channel n in bits
+    // 2n+1:2n: the Xe10's own sequence, replayed write for write (docs/probes/XE10Z-XE10.TXT:205
+    // `D29 asfound w0D w02 w0B w08 w05 again final = 00 0C 0C 8C 8E 86 86 50`, the writes from
+    // tools/hwprobe/xe10z/xe10z.s sec_d29: d29_w = 0D 02 0B 08 05, then 00 01 06 07 before the
+    // final read). FAIL-FIRST: the core read channel 0's bound alone, 00 00 00 00 02 02 02 00.
+    reg_rd(5'd20); expect8(8'h00, "0x29 as found (XE10Z D29 asfound)");
     reg_wr(5'd20, 8'h0D);                 // channel 1, bound 3
-    reg_rd(5'd20); expect8(8'h00, "0x29 exposes channel 0 alone: a channel-1 write leaves 0x00");
+    reg_rd(5'd20); expect8(8'h0C, "0x29 after w0D (ch1 = 3) reads 0C");
+    reg_wr(5'd20, 8'h02);                 // channel 2, bound 0
+    reg_rd(5'd20); expect8(8'h0C, "0x29 after w02 (ch2 = 0) reads 0C");
+    reg_wr(5'd20, 8'h0B);                 // channel 3, bound 2
+    reg_rd(5'd20); expect8(8'h8C, "0x29 after w0B (ch3 = 2) reads 8C");
+    reg_wr(5'd20, 8'h08);                 // channel 0, bound 2
+    reg_rd(5'd20); expect8(8'h8E, "0x29 after w08 (ch0 = 2) reads 8E");
+    reg_wr(5'd20, 8'h05);                 // channel 1, bound 1
+    reg_rd(5'd20); expect8(8'h86, "0x29 after w05 (ch1 = 1) reads 86");
+    reg_rd(5'd20); expect8(8'h86, "0x29 read again with no write reads 86");
+    reg_wr(5'd20, 8'h00);
+    reg_wr(5'd20, 8'h01);
+    reg_wr(5'd20, 8'h06);
+    reg_wr(5'd20, 8'h07);
+    reg_rd(5'd20); expect8(8'h50, "0x29 after the firmware's 00 01 06 07 reads 50");
+    // RDBACK's channel-0 row, with the other three bounds 0 as they were there
+    // (docs/probes/RDBACK.TXT:157 `before=00 after 04/08/0C = 01 02 03`).
+    reg_wr(5'd20, 8'h02);
+    reg_wr(5'd20, 8'h03);
     reg_wr(5'd20, 8'h0C);                 // channel 0, bound 3 = the machine's row
     reg_rd(5'd20); expect8(8'h03, "0x29 channel-0 write 0C reads 03 (probes/RDBACK.TXT:157)");
     reg_rd(5'd9);  expect8(8'hFF, "0x13 software request is write-only");

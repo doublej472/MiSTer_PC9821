@@ -141,9 +141,9 @@ assign de_out   = active ? d_de : de_in;
 assign ce_out   = active ? d_ce : ce;
 assign doubling = active;
 
-`ifndef SYNTHESIS
+  // synthesis translate_off
 // The ce/ce2 contract this module is built on: every dot enable is also a ce2.
 always @(posedge clk) if (ce & ~ce2) $fatal(1, "pc9821_line_doubler: ce without ce2");
-`endif
+  // synthesis translate_on
 
 endmodule

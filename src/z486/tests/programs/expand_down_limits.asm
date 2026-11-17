@@ -105,7 +105,10 @@ start:
     CASE 1, {mov ax, [gs:0x0FFF]}
     CASE 1, {mov al, [gs:dword 0x10000]}
     CASE 0, {mov word [gs:0x2000], 0x1234}
-    CASE 0, {cmp word [gs:0x2000], 0x1234}
+    ; The read-back: CASE ends on its own fault-count compare, so the data
+    ; compare is made after it, on a register.
+    CASE 0, {mov ax, [gs:0x2000]}
+    cmp ax, 0x1234
     jne fail
     ; expand-up checks unchanged
     mov ax, 0x18

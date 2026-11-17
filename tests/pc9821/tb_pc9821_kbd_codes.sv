@@ -314,6 +314,11 @@ module tb_pc9821_kbd_codes;
     // The firmware's own init: mode byte, then TxEN+RxE+RTS.
     write_port(1'b1, 8'h5E);
     write_port(1'b1, 8'h05);
+    // The Windows keys (0x77/0x78) are sent only after the extended key setting 0x95 0x03
+    // (undoc98vol2 io_kb.txt command 95h; NP2kai keystat.c skips keycodes >= 0x75 while
+    // kbdtype < 3); tb_pc9821_kbd_winkeys pins the gate, this bench needs the keys live.
+    write_port(1'b0, 8'h95);  read_byte(8'hfa);
+    write_port(1'b0, 8'h03);  read_byte(8'hfa);
 
     // ---- 1. Every mapped key: make byte, then break byte. ----
     ref_match = 0;

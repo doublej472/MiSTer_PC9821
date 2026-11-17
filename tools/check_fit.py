@@ -12,6 +12,7 @@ own, so it can be run after any fit:
     tools/check_fit.py [--scratch DIR | --reports DIR] [--tree DIR]
     tools/check_fit.py --write-attribution DIR --tree TREE --rtl-hash H   (container_build.sh)
     tools/check_fit.py --rtl-hash-of TREE
+    tools/check_fit.py --selftest
 
 WHICH TREE A FIT BELONGS TO. A fit report does not name its source, and this check
 used to default its scratch to one fixed path, so run in a checkout that had never
@@ -31,6 +32,11 @@ own provenance and this refuses to give a verdict without it:
 Exit status: 0 the fit closed and every array expected in block RAM is in it;
 1 the fit or its attribution is wrong; 2 this check could not attribute the fit
 to a tree at all, so it has no verdict to give.
+
+A FIT THAT DID NOT FINISH IS A FAIL, not a PASS on no evidence: the fit report must carry
+"Fitter Status ; Successful" and every resource summary row (REQUIRED_FIT_ROWS), and the
+map report must be present with its RAM Summary table. Each of those used to be skipped
+when absent, so a truncated fit, or one whose map report was not copied, printed PASS.
 """
 from __future__ import annotations
 
@@ -43,8 +49,16 @@ import re
 import sys
 
 # Arrays this design intends to be block RAM. Membership in the map report's RAM
-# Summary is the evidence: an inferred array appears by name, and one that fell into
-# registers does not appear at all.
+# Summary table is the evidence: an inferred array appears by name, and one that fell
+# into registers does not appear at all.
+#
+# EACH KEY NAMES ONE ARRAY, by its instance path down to the inferred altsyncram
+# (`<module>:<instance>|...|altsyncram:<array>`), and is matched against the Name column
+# of that table only, at hierarchy boundaries (ram_summary_names, ram_key_present). A key
+# that stops at a module instance asserted nothing about any one array in it: the old
+# "pc9821_cg:u_cg" was satisfied by cg_blkm, u_ank or u_jis_cache with u_cg_ram gone, and
+# because the text was searched from the report's table of contents rather than from the
+# table, a State Machine entry under the module satisfied it too.
 EXPECTED_RAM = {
     # NOT LISTED, AND DELIBERATELY: pc9821_watchdog_msg's message table is ~43 ALUTs of what
     # should be memory, and it does NOT infer. The cause was found with a ten-candidate
@@ -56,17 +70,20 @@ EXPECTED_RAM = {
     # reads. Whichever change makes the ROM synchronous should add its entry here in the same
     # commit, and then the guard will mean what it says.
     # c48ef091 moved the text VRAM into pc9821_text_mem, so the key moved with it.
-    "pc9821_text_mem:u_text_mem|pc9821_dpram:u_tram": "the text VRAM planes",
-    "pc9821_cg:u_cg|pc9821_dpram:u_ank": "the character generator (the ANK table; the JIS font is SDRAM-backed)",
-    "pc9821_cg:u_cg": "the CG store (cg_ram)",
-    "l1_cache:dcache_inst": "the z486 data cache",
-    "l1_icache:icache_inst": "the z486 instruction cache",
-    "pc9821_ata:ata": "the ATA sector buffer",
+    "pc9821_text_mem:u_text_mem|pc9821_dpram:u_tram|altsyncram:ram": "the text VRAM planes",
+    "pc9821_cg:u_cg|pc9821_dpram:u_ank|altsyncram:ram": "the character generator (the ANK table; the JIS font is SDRAM-backed)",
+    "pc9821_cg:u_cg|pc9821_dpram:u_cg_ram|altsyncram:ram": "the CG store (cg_ram)",
+    **{f"l1_cache:dcache_inst|altsyncram:{kind}_way{way}": f"the z486 data cache ({kind} way {way})"
+       for kind in ("data", "tag") for way in range(4)},
+    **{f"l1_icache:icache_inst|altsyncram:{kind}_way{way}":
+       f"the z486 instruction cache ({kind} way {way})"
+       for kind in ("data", "tag") for way in range(4)},
+    "pc9821_ata:ata|altsyncram:sector_buf": "the ATA sector buffer",
     # The scanout line buffer is the array the global SYNTH_RESOURCE_AWARE_INFERENCE_FOR_BLOCK_RAM
     # OFF rescues: without that setting Quartus demotes its 8,192 bits to registers. It has no
     # in-tree per-module guard (the out-of-tree EGC resource harness proves only the EGC), so it is listed
     # here: a fit that loses the inference is caught by this check.
-    "pc9821_gvram_scan:u_gvram_scan|altsyncram:line_buf_rtl_0": "the scanout line buffer",
+    "pc9821_gvram_scan:u_gvram_scan|altsyncram:line_buf": "the scanout line buffer",
     # The PC-9801-86 86-PCM block's 32 KiB sample buffer MOVED TO SDRAM
     # (sdram-offload: src/pcm86/pc9821_pcm86_buf.sv is the memory controller's
     # third port). It is no longer a dpram, so it is DELIBERATELY absent here:
@@ -320,6 +337,215 @@ def parse_fit(text: str) -> dict:
     return out
 
 
+# The fit summary rows the verdict is built from. A fit report without all of them did not
+# finish (or is not a fit report), so it is a FAIL rather than a PASS on no evidence.
+REQUIRED_FIT_ROWS = ("ALMs", "LABs", "RAM blocks", "registers", "memory bits")
+FITTER_SUCCESS = re.compile(r"^; Fitter Status\s*;\s*Successful", re.MULTILINE)
+RAM_SUMMARY_TITLE = "; Analysis & Synthesis RAM Summary"
+
+
+def ram_summary_names(map_text: str) -> list[str] | None:
+    """The Name column of the map report's RAM Summary TABLE, or None without one.
+
+    The title also appears in the report's table of contents, hundreds of KB before the
+    table, so the table is found by its "; <title>" row and read up to its closing border.
+    """
+    lines = map_text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(RAM_SUMMARY_TITLE):
+            break
+    else:
+        return None
+    names: list[str] = []
+    borders = 0
+    header_seen = False
+    for line in lines[i + 1:]:
+        if line.startswith("+"):
+            borders += 1
+            if borders >= 3:      # title border, header border, then the closing one
+                break
+            continue
+        if not line.startswith(";"):
+            break
+        name = line[1:].split(";", 1)[0].strip()
+        if not header_seen:
+            header_seen = name == "Name"
+            continue
+        if name:
+            names.append(name)
+    return names
+
+
+def ram_key_present(key: str, names: list[str]) -> bool:
+    """Whether one row of the RAM Summary is the array `key` names.
+
+    The key must start at a hierarchy boundary and its array name may carry only the
+    suffixes Quartus adds to an inferred array (_rtl_N, __N), so data_way0 is not
+    satisfied by a data_way0x, nor u_cg by u_cg_ram.
+    """
+    pattern = re.compile(r"(?:^|\|)" + re.escape(key) + r"(?:_rtl_\d+)?(?:__\d+)?\|")
+    return any(pattern.search(name) for name in names)
+
+
+def judge(text: str, map_text: str | None) -> tuple[list[str], list[str]]:
+    """(report lines, failures) for a fit report and its map report (None if absent)."""
+    report: list[str] = []
+    bad: list[str] = []
+    res = parse_fit(text)
+    for label in REQUIRED_FIT_ROWS:
+        v = res.get(label)
+        if not v:
+            report.append(f"  {label:<12} (row missing from the fit report)")
+            bad.append(f"the fit report has no '{label}' summary row: the fit did not finish, "
+                       f"or this is not a fit report")
+            continue
+        if len(v) == 2:
+            pct = 100.0 * v[0] / v[1] if v[1] else 0.0
+            flag = "  <-- FULL" if v[0] >= v[1] else ""
+            report.append(f"  {label:<12} {v[0]:>8,} / {v[1]:<8,} ({pct:5.1f}%){flag}")
+        else:
+            report.append(f"  {label:<12} {v[0]:>8,}")
+
+    if not FITTER_SUCCESS.search(text):
+        bad.append("the fit report has no 'Fitter Status ; Successful' line: the fit did not "
+                   "finish")
+    if "Can't fit design in device" in text:
+        bad.append("the fit did not close at all")
+    # ALMs at 100% is the registers-for-RAM failure this check exists for (cg_ram: 41,910 of
+    # 41,910). LABs at 100% is this design's NORMAL result: the fitter spreads logic over every
+    # LAB once ALM use is high (AGENTS.md: "LABs bind"; a good fit reads 4,191 / 4,191), so it
+    # is reported, never a verdict - only a real fit's timing and ALM count judge area.
+    v = res.get("ALMs")
+    if v and len(v) == 2 and v[0] >= v[1]:
+        bad.append("ALMs are at 100% of the device")
+    v = res.get("LABs")
+    if v and len(v) == 2 and v[0] >= v[1]:
+        report.append("  LABs at 100%  informational: the normal result for this design "
+                      "(LABs bind), not a failure")
+
+    # A design with this much inferred memory that fits with NO block RAM has had its
+    # arrays turned into registers: that is what a port-count problem looks like from
+    # here (64 Kb of CG store became 65,536 flip-flops while the map report still listed
+    # the M10K). Checking the map report alone missed it, so check the fit's own use.
+    rb = res.get("RAM blocks")
+    bits = res.get("memory bits")
+    if rb and len(rb) == 2:
+        inferred_bits = bits[0] if bits else 0
+        if rb[0] == 0 and inferred_bits > 100_000:
+            bad.append(f"the fit uses no RAM blocks at all while {inferred_bits:,} memory "
+                       f"bits were inferred -- the arrays became registers")
+        else:
+            report.append(f"  RAM blocks    {rb[0]:,} in use for {inferred_bits:,} inferred bits")
+
+    if map_text is None:
+        report.append("  inferred RAM  (no map report)")
+        bad.append("no map report beside the fit report, so the block-RAM inference "
+                   "cannot be checked")
+        return report, bad
+    names = ram_summary_names(map_text)
+    if names is None:
+        report.append("  inferred RAM  (the map report has no RAM Summary table)")
+        bad.append("the map report has no 'Analysis & Synthesis RAM Summary' table, so the "
+                   "block-RAM inference cannot be checked")
+        return report, bad
+    missing = [f"{n} ({why})" for n, why in EXPECTED_RAM.items()
+               if not ram_key_present(n, names)]
+    # An array absent from the RAM summary is a defect only when the design CONTAINS the
+    # module that should hold it. A report from a tree that predates a feature has neither,
+    # and calling that "not inferred as RAM" is a false accusation: it sent a lane chasing a
+    # block that was not in the tree it had fitted, and the lane correctly spent its time
+    # disproving me instead of fixing anything. The check still FAILS in both cases - a
+    # stale report should be re-fitted, not trusted - but it now says WHICH case it is,
+    # because the two call for opposite actions.
+    not_inferred = [m for m in missing if m.split(":")[0] in map_text]
+    absent = [m for m in missing if m not in not_inferred]
+    if not missing:
+        report.append("  inferred RAM  all expected arrays present")
+    else:
+        report.append(f"  inferred RAM  MISSING: {', '.join(missing)}")
+    for m in not_inferred:
+        bad.append(f"NOT INFERRED AS RAM: {m} -- the module is in this design but its array "
+                   f"is not in the RAM summary, so it became registers")
+    for m in absent:
+        bad.append(f"ABSENT FROM THIS DESIGN: {m} -- the module holding it appears nowhere "
+                   f"in this fit, so this report predates the feature; re-fit rather than "
+                   f"looking for an inference bug")
+    return report, bad
+
+
+def selftest() -> int:
+    """Plants for judge(): each must FAIL a synthetic fit that a real fit would pass."""
+    fit_good = "\n".join((
+        "; Fitter Status                   ; Successful - Sat Jan 01 00:00:00 2000       ;",
+        "; Logic utilization (ALMs needed / total ALMs on device)      ; 30,000 / 41,910 ; 72 % ;",
+        "; Total LABs:  partially or completely used                   ; 3,500 / 4,191  ; 84 % ;",
+        "; Total RAM Blocks                ; 500 / 553 ( 90 % )                          ;",
+        "; Total registers                 ; 38362                                       ;",
+        "; Total block memory bits         ; 3,521,913 / 5,662,720 ( 62 % )              ;",
+    )) + "\n"
+    toc = "\n".join(f"  {i}. State Machine - |sys_top|emu:emu|pc9821_system:core|"
+                     f"{key.rsplit('|altsyncram:', 1)[0]}|state"
+                     for i, key in enumerate(EXPECTED_RAM)) + "\n"
+    border = "+" + "-" * 40 + "+"
+    rows = [f"; emu:emu|pc9821_system:core|{key}_rtl_0|altsyncram_x:auto_generated|ALTSYNCRAM ; M10K ;"
+            for key in EXPECTED_RAM]
+    # the CG module also holds other arrays, which must not stand in for u_cg_ram
+    rows += ["; emu:emu|pc9821_system:core|pc9821_cg:u_cg|altsyncram:cg_blkm_rtl_0|"
+             "altsyncram_x:auto_generated|ALTSYNCRAM ; M10K ;",
+             "; emu:emu|pc9821_system:core|pc9821_cg:u_cg|pc9821_dpram:u_jis_cache|"
+             "altsyncram:ram_rtl_0|altsyncram_x:auto_generated|ALTSYNCRAM ; M10K ;"]
+
+    def map_report(table_rows: list[str], toc_text: str = toc) -> str:
+        return (f"  8. Analysis & Synthesis RAM Summary\n{toc_text}\n{border}\n"
+                f"{RAM_SUMMARY_TITLE} ;\n{border}\n; Name ; Type ;\n{border}\n"
+                + "\n".join(table_rows) + f"\n{border}\n")
+
+    cg_row = next(r for r in rows if "u_cg_ram|" in r)
+    cases: list[tuple[str, str, str | None, str | None]] = [
+        # (name, fit text, map text, a substring the failure must contain; None = PASS)
+        ("a complete fit passes", fit_good, map_report(rows), None),
+        ("LABs at 100% (this design's normal fit) passes",
+         fit_good.replace("3,500 / 4,191", "4,191 / 4,191"), map_report(rows), None),
+        ("ALMs at 100% fails", fit_good.replace("30,000 / 41,910", "41,910 / 41,910"),
+         map_report(rows), "ALMs are at 100%"),
+        ("u_cg_ram missing while the module's other arrays remain", fit_good,
+         map_report([r for r in rows if r != cg_row]), "u_cg_ram"),
+        ("u_cg_ram named only in the table of contents", fit_good,
+         map_report([r for r in rows if r != cg_row],
+                    toc + "201. Source assignments for " + cg_row[2:].split(" ;")[0] + "\n"),
+         "u_cg_ram"),
+        ("one dcache way missing", fit_good,
+         map_report([r for r in rows if "dcache_inst|altsyncram:data_way2" not in r]),
+         "data way 2"),
+        ("an ATA row under another array name", fit_good,
+         map_report([r.replace("sector_buf_rtl_0", "sector_bufx_rtl_0") for r in rows]),
+         "ATA sector buffer"),
+        ("no Fitter Status line", fit_good.replace("Fitter Status", "Fitter Stage"),
+         map_report(rows), "Fitter Status"),
+        ("the fit did not close", fit_good + "Error: Can't fit design in device\n",
+         map_report(rows), "did not close"),
+        ("no map report", fit_good, None, "no map report"),
+        ("a map report with no RAM Summary table", fit_good, toc, "RAM Summary"),
+    ]
+    for label in REQUIRED_FIT_ROWS:
+        needle = {"ALMs": "Logic utilization", "LABs": "Total LABs", "RAM blocks": "Total RAM",
+                  "registers": "Total registers", "memory bits": "Total block memory"}[label]
+        cases.append((f"the '{label}' row deleted",
+                      "\n".join(l for l in fit_good.splitlines() if needle not in l) + "\n",
+                      map_report(rows), f"'{label}'"))
+    failures = 0
+    for name, fit_text, map_text, expect in cases:
+        _, bad = judge(fit_text, map_text)
+        ok = (not bad) if expect is None else any(expect in b for b in bad)
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": {bad}"))
+        failures += not ok
+    if failures:
+        print(f"check_fit selftest: FAIL ({failures} of {len(cases)} cases)")
+        return 1
+    print(f"check_fit selftest: PASS ({len(cases)} cases)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scratch", default=None, help="a build's scratch directory "
@@ -337,7 +563,12 @@ def main() -> int:
                          "from, and exit. tools/container_build.sh calls this, so the hash "
                          "it records and the file list this check verifies come from one "
                          "rule instead of two that can drift apart.")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the verdict's plants (synthetic reports) and exit")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     here = repo_root()
 
@@ -406,67 +637,10 @@ def main() -> int:
         print(f"  attribution  verified: every RTL file matches {tree} as the fit found it")
 
     text = fit.read_text(errors="ignore")
-    res = parse_fit(text)
-    for label in ("ALMs", "LABs", "RAM blocks", "registers", "memory bits"):
-        v = res.get(label)
-        if not v:
-            continue
-        if len(v) == 2:
-            pct = 100.0 * v[0] / v[1] if v[1] else 0.0
-            flag = "  <-- FULL" if v[0] >= v[1] else ""
-            print(f"  {label:<12} {v[0]:>8,} / {v[1]:<8,} ({pct:5.1f}%){flag}")
-        else:
-            print(f"  {label:<12} {v[0]:>8,}")
-
-    bad = []
-    if "Can't fit design in device" in text:
-        bad.append("the fit did not close at all")
-    for label in ("ALMs", "LABs"):
-        v = res.get(label)
-        if v and len(v) == 2 and v[0] >= v[1]:
-            bad.append(f"{label} are at 100% of the device")
-
-    # A design with this much inferred memory that fits with NO block RAM has had its
-    # arrays turned into registers: that is what a port-count problem looks like from
-    # here (64 Kb of CG store became 65,536 flip-flops while the map report still listed
-    # the M10K). Checking the map report alone missed it, so check the fit's own use.
-    rb = res.get("RAM blocks")
-    bits = res.get("memory bits")
-    if rb and len(rb) == 2:
-        inferred_bits = bits[0] if bits else 0
-        if rb[0] == 0 and inferred_bits > 100_000:
-            bad.append(f"the fit uses no RAM blocks at all while {inferred_bits:,} memory "
-                       f"bits were inferred -- the arrays became registers")
-        else:
-            print(f"  RAM blocks    {rb[0]:,} in use for {inferred_bits:,} inferred bits")
-
-    if mp.exists():
-        summary = mp.read_text(errors="ignore")
-        head = summary.find("Analysis & Synthesis RAM Summary")
-        body = summary[head:head + 80_000] if head >= 0 else ""
-        missing = [f"{n} ({why})" for n, why in EXPECTED_RAM.items() if n not in body]
-        # An array absent from the RAM summary is a defect only when the design CONTAINS the
-        # module that should hold it. A report from a tree that predates a feature has neither,
-        # and calling that "not inferred as RAM" is a false accusation: it sent a lane chasing a
-        # block that was not in the tree it had fitted, and the lane correctly spent its time
-        # disproving me instead of fixing anything. The check still FAILS in both cases - a
-        # stale report should be re-fitted, not trusted - but it now says WHICH case it is,
-        # because the two call for opposite actions.
-        not_inferred = [m for m in missing if m.split(":")[0] in summary]
-        absent = [m for m in missing if m not in not_inferred]
-        if not missing:
-            print("  inferred RAM  all expected arrays present")
-        else:
-            print(f"  inferred RAM  MISSING: {', '.join(missing)}")
-        for m in not_inferred:
-            bad.append(f"NOT INFERRED AS RAM: {m} -- the module is in this design but its array "
-                       f"is not in the RAM summary, so it became registers")
-        for m in absent:
-            bad.append(f"ABSENT FROM THIS DESIGN: {m} -- the module holding it appears nowhere "
-                       f"in this fit, so this report predates the feature; re-fit rather than "
-                       f"looking for an inference bug")
-    else:
-        print("  inferred RAM  (no map report; skipping the inference check)")
+    map_text = mp.read_text(errors="ignore") if mp.exists() else None
+    report, bad = judge(text, map_text)
+    for line in report:
+        print(line)
 
     print()
     if problems:

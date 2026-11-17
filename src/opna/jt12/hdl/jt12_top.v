@@ -28,6 +28,8 @@ module jt12_top (
     input           rst,        // rst should be at least 6 clk&cen cycles long
     input           clk,        // CPU clock
     (* direct_enable *) input cen,        // optional clock enable, if not needed leave as 1'b1
+    input           rst_nx,     // LOCAL PATCH (rst_nx seam, PC-98 core): rst one cycle early, for jt12_rst's posedge synchroniser; see jt12_rst.v's LOCAL PATCH
+    input           cen_nx,     // LOCAL PATCH (cen_nx seam, PC-98 core): the next cycle's cen, for jt12_div's posedge clock-enable registers; see jt12_div.v's LOCAL PATCH
     input   [7:0]   din,
     input   [1:0]   addr,
     input           cs_n,
@@ -38,12 +40,12 @@ module jt12_top (
     output          irq_n,
     // Configuration
     input           en_hifi_pcm,  // high to enable PCM interpolation on YM2612 mode
-    // LOCAL CHANGE (this repository, on top of r13/64): the RHYTHM (ADPCM-A) bus
+    // LOCAL CHANGE (this repository): the RHYTHM (ADPCM-A) bus
     // attenuation is a RUNTIME 3-bit SHIFT, not a parameter, because the OSD's
     // "Rhythm volume" field drives it. It is applied to EACH of the six ADPCM-A drums
     // inside jt08_adpcm_acc, BEFORE the accumulator that sums them, because that sum
     // is hard-limited to 16 bits: four or more loud drums overlapping clamp it, and an
-    // attenuation applied to the summed result (as r13/64/r13/117 did here) could only
+    // attenuation applied to the summed result (as an earlier local change did here) could only
     // scale an already distorted, flat-topped value. Steps 0..5 are 0/-6/-12/-18/-24/-30
     // dB; 0 = bit-identical to upstream, and is what a card with no config file passes.
     input   [2:0]   rhythm_gain_shift,
@@ -237,6 +239,7 @@ if( use_adpcm==1 ) begin: gen_adpcm
 
     jt12_rst u_rst(
         .rst    ( rst   ),
+        .rst_nx ( rst_nx ),   // LOCAL PATCH (rst_nx seam, PC-98 core)
         .clk    ( clk   ),
         .rst_n  ( rst_n )
     );
@@ -340,6 +343,7 @@ if( use_adpcm==2 ) begin: gen_adpcm
 
     jt12_rst u_rst(
         .rst    ( rst   ),
+        .rst_nx ( rst_nx ),   // LOCAL PATCH (rst_nx seam, PC-98 core)
         .clk    ( clk   ),
         .rst_n  ( rst_n )
     );
@@ -497,6 +501,7 @@ jt12_mmr #(.use_ssg(use_ssg),.num_ch(num_ch),.use_pcm(use_pcm), .use_adpcm(use_a
     .rst        ( rst       ),
     .clk        ( clk       ),
     .cen        ( cen       ),  // external clock enable
+    .cen_nx     ( cen_nx    ),  // LOCAL PATCH (cen_nx seam, PC-98 core)
     .clk_en     ( clk_en    ),  // internal clock enable
     .clk_en_2   ( clk_en_2  ),  // input cen divided by 2
     .clk_en_ssg ( clk_en_ssg),  // internal clock enable
@@ -728,7 +733,7 @@ generate
             .sample     (           )
         );
         // DEAD: jtopna leaves .snd_left()/.snd_right() unconnected (pc9821_opna does the
-        // board's FM+ADPCM+SSG join itself, and review2/opna-audit A-11 was corrected to
+        // board's FM+ADPCM+SSG join itself, with the SSG term at
         // psg_snd << 2). Kept ALIGNED with that shipped join so wiring this upstream
         // combined output cannot reintroduce the SSG-2x-hot bug: << 2 is the PC88 board
         // join for THIS chip (PC88MiSTer.vhd:2505, the JTOPNA/YM2608 path), where upstream
@@ -872,6 +877,7 @@ generate
 
         jt12_rst u_rst_pcm(
             .rst    ( rst       ),
+            .rst_nx ( rst_nx    ),   // LOCAL PATCH (rst_nx seam, PC-98 core)
             .clk    ( clk       ),
             .rst_n  ( rst_pcm_n )
         );

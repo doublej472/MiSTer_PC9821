@@ -341,7 +341,7 @@ endmodule
 // Two hardware rules this form must keep (invisible to every bench):
 // - NO power-up seed and NO reset on q_l/q_r in the engine and on coef_q below - either
 //   makes Quartus refuse the RAM and build the table out of LUTs (the kbd_lut trap,
-//   res-mlab-REPORT section 7.2) and the whole area win evaporates with zero functional
+//   pc9821_kbd.sv's "THE TRANSLATION ROM'S READ IS REGISTERED" comment) and the whole area win evaporates with zero functional
 //   change.
 // - CMIRROR = 15, deliberately: the engine's mirror (midx = 2*CMIRROR - idx) supports
 //   ODD-length prototypes only (2*CMIRROR+1 taps), and this prototype is EVEN (16 taps,
@@ -552,8 +552,8 @@ module pc9821_audio_fir_engine_ref #(
     //
     // q_l/q_r carry NO power-up value and NO reset, and that is a hardware rule, not a
     // style one: a seed or a reset on the register that captures a memory read makes Quartus
-    // refuse the RAM and build the whole history out of LUTs (the kbd_lut trap,
-    // res-mlab-REPORT section 7.2). Their first value before any run is X in 4-state
+    // refuse the RAM and build the whole history out of LUTs (the kbd_lut trap:
+    // pc9821_kbd.sv's "THE TRANSLATION ROM'S READ IS REGISTERED" comment). Their first value before any run is X in 4-state
     // simulation and is never used - the engine only accumulates inside a run, and a run
     // always issues TAPS addresses first.
     reg signed [15:0] q_l, q_r;

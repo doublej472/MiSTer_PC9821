@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // GDC status bit 6 (port 0x60, mirrored by the graphics GDC's 0xA0) follows the HORIZONTAL blank of every line, vertical-blank lines included: over two whole default frames it is high for 208 of every 848 dots (24.5 %, the machine's capture reads 23.4 % against the 208/848 horizontal blank and not the ~31 % a frame-blank signal gives) and it rises once per line, 440 times a frame, where the previous model held it high for the whole 40-line vertical blank and low across every active line's active dots only.
 //
-// WHY. docs/probes/TIME.TXT:183 (`high 1.7% of the time and bit6 23.4%`, the machine's own GDC.TXT histogram) pins the duty at the horizontal blank, 208/848 = 24.5 %; a frame blank (~(h_active && v_active)) would read (848*440 - 640*400)/(848*440) = 31.4 %. NP2kai io/gdc.c:631-633 (`if ((remain % gdc.rasterclock) < gdc.hsyncclock) { ret |= 0x40;`) raises it once per raster line, independent of the vertical position, for both gdc_i60 and gdc_ia0. The phase inside the line is NOT measured (todo item 23); this bench pins the duty and the one-edge-per-line shape only.
+// WHY. docs/probes/TIME.TXT:183 (`high 1.7% of the time and bit6 23.4%`, the machine's own GDC.TXT histogram) pins the duty at the horizontal blank, 208/848 = 24.5 %; a frame blank (~(h_active && v_active)) would read (848*440 - 640*400)/(848*440) = 31.4 %. NP2kai io/gdc.c:631-633 (`if ((remain % gdc.rasterclock) < gdc.hsyncclock) { ret |= 0x40;`) raises it once per raster line, independent of the vertical position, for both gdc_i60 and gdc_ia0. This bench pins the duty and the one-edge-per-line shape; the phase inside the line (the Xe10 raises bit 6 at the VSYNC fall, XE10Y /K3M) is tb_pc9821_crtc_blank_phase's.
 
 `timescale 1ns / 1ps
 

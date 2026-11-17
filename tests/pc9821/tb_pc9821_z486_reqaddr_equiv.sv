@@ -3,7 +3,7 @@
 `include "z486_pc98_preset.svh"
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_Z486_REQADDR_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the z486 paging request-address cone - the REFACTOR pin for the Class-1 cut-2 flatten, a CHARACTERIZATION against the documented semantics and not a hardware claim. paging_tlb's registered and VIPT lookup ports return the documented translation EVERY cycle over refill/INVLPG/CR3 sequences and all four ways (the documented PLRU fill order, the tag-matched INVLPG and the sidecar-hit PLRU refresh are transcribed so eviction runs are pinned too; the VIPT sidecar's 256-entry direct-mapped table, its epoch validity and reset/wrap scrub, its SUBSET rule - a walker refill that evicts a valid entry also invalidates the victim's sidecar slot, one cycle later - and its hazard poison are pinned exactly; the live demand port this contract used to pin was REMOVED by upstream's one-port TLB, where walker, demand and prefetch share the registered lookup as on the i486), paging_unit's request-owner mux equals the documented priority merge over ALL owner-overlap combinations (the arms are driven with force - the x87_pulse_race idiom - so the full operand space is covered), and memory's four A20-masked addresses equal the PC-98 preset's A20 mask (bit 20 cleared, the Xe10's measured BIT20-ONLY) every cycle with every external capture edge carrying the documented masked phys[31:2] and holding it between captures. Blind spots stated in the header: not a hardware bench, the request classification cones (alias coherency's), the walker and store queue quiet - and, measured by the hit counters this bench prints, it NEVER REACHES A HIT on the registered port or the sidecar (0 and 0 over 20 001 checks / 20 006 cycles; the sidecar never leaves its scrub at this stimulus's CR3 rate), so its paging_tlb contract above is a MISS-path claim there and a mutant that takes way 0's PFN from way 1 PASSES it; the registered port's hit paths are pinned by tb_pc9821_z486_tlb_window, not here.
+// TB_PC9821_Z486_REQADDR_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the z486 paging request-address cone - the REFACTOR pin for the Class-1 cut-2 flatten, a CHARACTERIZATION against the documented semantics and not a hardware claim. paging_tlb's registered and VIPT lookup ports return the documented translation EVERY cycle over refill/INVLPG/CR3 sequences and all four ways (the documented PLRU fill order, the tag-matched INVLPG and the sidecar-hit PLRU refresh are transcribed so eviction runs are pinned too; the VIPT sidecar's 256-entry direct-mapped table, its epoch validity and reset/wrap scrub, its SUBSET rule - a walker refill that evicts a valid entry also invalidates the victim's sidecar slot, one cycle later - and its hazard poison are pinned exactly; the live demand port this contract used to pin was REMOVED by upstream's one-port TLB, where walker, demand and prefetch share the registered lookup as on the i486), paging_unit's request-owner mux equals the documented priority merge over ALL owner-overlap combinations (the arms are driven with force - the x87_pulse_race idiom - so the full operand space is covered), and memory's A20-masked addresses equal the PC-98 preset's A20 mask (bit 20 cleared, the Xe10's measured BIT20-ONLY) every cycle - the D$ request on both arms (a memory request, which the closed gate folds, three cycles in four, and an I/O request, which it does not) and the VIPT-resolve and I$ request addresses on random nonzero inputs - with every external capture edge (I/O requests only are presented) carrying the documented masked phys[31:2] and holding it between captures; the fast-store address is not driven. Blind spots stated in the header: not a hardware bench, the request classification cones (alias coherency's), the walker and store queue quiet - and, measured by the hit counters this bench prints, it NEVER REACHES A HIT on the registered port or the sidecar (0 and 0 over 20 001 checks / 20 006 cycles; the sidecar never leaves its scrub at this stimulus's CR3 rate), so its paging_tlb contract above is a MISS-path claim there and a mutant that takes way 0's PFN from way 1 PASSES it; the registered port's hit paths are pinned by tb_pc9821_z486_tlb_window, not here.
 // TB_PC9821_Z486_REQADDR_EQUIV: the CYCLE-EXACT EQUIVALENCE contract for the z486 paging request-address cone - the REFACTOR pin for the Class-1 cut-2 flatten, a CHARACTERIZATION against the documented semantics and not a hardware claim. paging_tlb's registered and VIPT lookup ports return the documented translation EVERY cycle over refill/INVLPG/CR3 sequences and all four ways (the documented PLRU fill order, the tag-matched INVLPG and the sidecar-hit PLRU refresh are transcribed so eviction runs are pinned too; the VIPT sidecar's 256-entry direct-mapped table, its epoch validity and reset/wrap scrub, its SUBSET rule - a walker refill that evicts a valid entry also invalidates the victim's sidecar slot, one cycle later - and its hazard poison are pinned exactly; the live demand port this contract used to pin was REMOVED by upstream's one-port TLB, where walker, demand and prefetch share the registered lookup as on the i486), paging_unit's request-owner mux equals the documented priority merge over ALL owner-overlap combinations (the arms are driven with force - the x87_pulse_race idiom - so the full operand space is covered), and memory's four A20-masked addresses equal the PC-98 preset's A20 mask (bit 20 cleared, the Xe10's measured BIT20-ONLY) every cycle with every external capture edge carrying the documented masked phys[31:2] and holding it between captures. Blind spots stated in the header: not a hardware bench, the request classification cones (alias coherency's), the walker and store queue quiet.
 //
 // TB_PC9821_Z486_REQADDR_EQUIV: a CYCLE-EXACT EQUIVALENCE (characterization,
@@ -299,6 +299,10 @@ module tb_pc9821_z486_reqaddr_equiv;
   reg         mem_req_valid = 0;
   reg  [31:0] mem_req_raw = 0;
   reg         mem_req_is_io = 1;
+  // The VIPT-resolve and I$ request raw addresses: driven with random values so their A20
+  // masks are compared on nonzero inputs (the masked forms are cache_unit's own wires).
+  reg  [31:0] mem_vipt_raw = 0;
+  reg  [31:0] mem_icache_raw = 0;
   wire [31:2] mem_addr;
   wire        mem_valid, mem_write, mem_io;
   reg         mem_ready = 1;
@@ -316,6 +320,8 @@ module tb_pc9821_z486_reqaddr_equiv;
     // exactly this window when no template window is enabled.
     .dcache_req_is_vga_mem(mem_req_raw[31:17] == 15'h5),
     .dcache_req_is_io(mem_req_is_io),
+    .dcache_vipt_resolve_phys_addr_raw(mem_vipt_raw),
+    .icache_req_phys_addr_raw(mem_icache_raw),
     .dcache_req_be(4'hf),
     .dcache_req_write(1'b0),
     .addr(mem_addr), .valid(mem_valid), .ready(mem_ready),
@@ -389,12 +395,12 @@ module tb_pc9821_z486_reqaddr_equiv;
       if (dut_mem.dcache_req_phys_addr !== g_a20(mem_req_raw, mem_a20_enable || mem_req_is_io))
         fail("a20_dcache", dut_mem.dcache_req_phys_addr,
              g_a20(mem_req_raw, mem_a20_enable || mem_req_is_io));
-      if (dut_mem.dcache_vipt_resolve_phys_addr_raw !== g_a20(32'd0, mem_a20_enable))
-        fail("a20_vipt_static", dut_mem.dcache_vipt_resolve_phys_addr_raw,
-             g_a20(32'd0, mem_a20_enable));
-      if (dut_mem.icache_req_phys_addr_raw !== g_a20(32'd0, mem_a20_enable))
-        fail("a20_icache_static", dut_mem.icache_req_phys_addr_raw,
-             g_a20(32'd0, mem_a20_enable));
+      if (dut_mem.cache_unit_inst.dcache_vipt_resolve_phys_addr !== g_a20(mem_vipt_raw, mem_a20_enable))
+        fail("a20_vipt", dut_mem.cache_unit_inst.dcache_vipt_resolve_phys_addr,
+             g_a20(mem_vipt_raw, mem_a20_enable));
+      if (dut_mem.cache_unit_inst.icache_req_phys_addr !== g_a20(mem_icache_raw, mem_a20_enable))
+        fail("a20_icache", dut_mem.cache_unit_inst.icache_req_phys_addr,
+             g_a20(mem_icache_raw, mem_a20_enable));
       if (mem_valid && !g_valid_prev) begin
         // a NEW external request is presented: the capture that produced it
         // must carry the documented wrapped address of the request the edge
@@ -656,11 +662,16 @@ module tb_pc9821_z486_reqaddr_equiv;
       update_pfn = {r0[11:0], r1[31:28]} & 20'hfffff;
       update_writable = r0[12]; update_user = r0[13]; update_dirty = r0[14];
 
-      // memory stimulus (io-only, documented wrap space)
-      mem_req_valid = r0[15];
+      // memory stimulus. The A20 fold is checked on BOTH arms: a memory request (is_io = 0,
+      // three cycles in four), whose bit 20 the closed gate clears, and an I/O request. Only
+      // I/O requests are PRESENTED (valid), so the external capture stays in the documented
+      // io wrap space; the memory arm's fold is the combinational dcache_req_phys_addr.
+      mem_req_is_io = (r1[9:8] == 2'b00);
+      mem_req_valid = r0[15] && mem_req_is_io;
       mem_req_raw = {r0[19:0], r1[31:28]} | (r1[3:0] << 20);
-      mem_req_is_io = 1'b1;
       mem_a20_enable = r0[16];
+      mem_vipt_raw = {r1[15:0], r0[31:16]};
+      mem_icache_raw = {r0[7:0], r1[31:8]};
 
       // owner-mux arms (forced into paging_unit)
       pu_early = r0[17]; pu_early_idx = r0[18]; pu_req_mem = r0[19];

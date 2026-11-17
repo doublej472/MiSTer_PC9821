@@ -12,8 +12,15 @@ REM ============================================================
 IF NOT EXIST A20MAP.COM GOTO NOPROG
 ECHO Running A20MAP...
 A20MAP > A20MAP.TXT
+IF ERRORLEVEL 1 GOTO REFUSED
 ECHO.
 ECHO Done. Send back A20MAP.TXT (its last VERDICT line is the answer).
+GOTO END
+
+:REFUSED
+ECHO.
+ECHO A20MAP refused to run; nothing was measured. Its reason:
+TYPE A20MAP.TXT
 GOTO END
 
 :NOPROG

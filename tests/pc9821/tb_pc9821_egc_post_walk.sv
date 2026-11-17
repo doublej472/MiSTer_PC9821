@@ -1,18 +1,15 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_POST_WALK: the EGC's POSTED two-word write burst and the GVRAM's per-word fallback walk (the m_mode burst fallback) must not corrupt each other, against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram. The post advances the EGC on the D1 ACCEPT, so a 32-bit access presents its second 16-bit unit while the GVRAM still walks the first unit's two words; the fallback is entered when the destination word is DIRTY in the write-combining buffer, and its address used to be the LIVE cc_addr the posted EGC moves. The bench dirties the destination word, runs a 32-bit EGC 0x3100 put, and asserts every word of the destination dword takes the source value - it fails (words 0x1001/0x1002 never written) before the walk latches its base word.
+// TB_PC9821_EGC_POST_WALK: the EGC's POSTED writes land by value through the REAL pc9821_gvram (tests/pc9821/pc9821_gvram_dut.sv, on-chip plane store): a 32-bit EGC 0x3100 put after a partial store to its destination word must land the source on every word of the destination dword on all four planes (it failed, words 0x1001/0x1002 never written, before the GVRAM's per-word fallback walk latched its base word), and a 16-bit EGC write followed at once by an EGC READ presented behind the posted write must land both destination bytes (0x1100/0x1101) on all four planes. The fallback walk (pc9821_gvram_arb's m_mode) both scenarios were written for no longer takes the EGC (it serves the plain and GRCG owners, and the write-combining buffer whose dirty hold forced it is gone), so the walk witnesses, gated to each EGC write's own interval and to a WRITE walk, are printed, not asserted: this pins the posted EGC write's data, not the walk or its m_write latch.
 //
-// The second scenario pins the walk's DIRECTION latch (m_write). A 16-bit EGC write whose two-column
-// burst is not legal falls back to the same per-word walk; the EGC advances on the ACCEPT, so it
-// completes that single unit and can present the NEXT access - a READ - while the walk is still
-// draining. A walk that reads the client's LIVE `cc_write` sees it drop to 0 for that read and takes
-// the READ arm for its second word, which is then never written; the destination's second word
-// (0x1101) is asserted by value. It fails on ef_wr = cc_write and passes on ef_wr = m_mode ? m_write : cc_write.
-//
-// The walk reads `ef_addr = cc_addr + m_lane` and its intermediate B_IDLE accepts a request
-// whenever one is presented - the shape the PLAIN client holds still (it waits for cc_done).
-// The posted EGC does not.
+// HISTORY. The second scenario was written to pin the walk's DIRECTION latch (m_write): a 16-bit
+// EGC write whose two-column burst fell back to the per-word walk, with a READ presented behind it
+// while the walk drained; a walk that read the client's LIVE `cc_write` took the READ arm for its
+// second word (FAIL-FIRST when written, on ef_wr = cc_write). Its walk and race witnesses were
+// never gated to the write and were satisfied by the plane_word read-backs' own read walks. Gated
+// to each EGC write's interval they read zero: the EGC is not a walk client any more, so both
+// scenarios are data checks on the posted EGC write, and the witnesses are printed only.
 
 `default_nettype none
 
@@ -141,7 +138,8 @@ module tb_pc9821_egc_post_walk;
     end
   endtask
 
-  // One PARTIAL byte store: leaves the addressed word DIRTY in the write-combining buffer.
+  // One PARTIAL byte store (it once left the word DIRTY in the write-combining buffer, which is
+  // gone; it stays as the scenario's shape).
   task automatic dirty_store(input [1:0] plane, input [14:0] off, input [7:0] v);
     reg [31:0] d;
     begin
@@ -149,15 +147,14 @@ module tb_pc9821_egc_post_walk;
     end
   endtask
 
+  // A raster line tick (the buffer drain it once was has nothing left to drain).
   task automatic flush_wcb;
     begin
       @(negedge clk);
       scan_line_tick = 1'b1;
       @(negedge clk);
       scan_line_tick = 1'b0;
-      @(posedge clk);
-      while (1'b0) @(posedge clk);
-      @(posedge clk);
+      repeat (2) @(posedge clk);
     end
   endtask
 
@@ -174,6 +171,22 @@ module tb_pc9821_egc_post_walk;
 
   integer s, k, mism;
   integer mism2;
+  // The witnesses count ONLY inside `win_on`, the interval from the EGC write's presentation to
+  // the end of the access behind it, and only a WRITE walk (the walk's latched direction m_write):
+  // a plain multi-lane read also walks (cs == C_MWAIT -> the m_mode walk with cc_write low), so
+  // ungated counters were satisfied by the plane_word read-backs themselves.
+  reg win_on = 1'b0;
+  // A witness that the direction scenario really took the per-word fallback walk
+  // (pc9821_gvram_arb's m_mode) as a WRITE walk: a change that made its burst legal would turn
+  // it into a plain burst that passes for the wrong reason.
+  integer walk_cycles = 0, walk_before = 0;
+  always @(posedge clk) if (win_on && dut.u_arb.m_mode && dut.u_arb.m_write) walk_cycles = walk_cycles + 1;
+  // ...and that the race really happens: the client's LIVE write flag (cc_write) drops for the
+  // read behind the write while that write walk still runs. A read presented only after the walk
+  // drained would test nothing.
+  integer race_cycles = 0;
+  always @(posedge clk)
+    if (win_on && dut.u_arb.m_mode && dut.u_arb.m_write && !dut.u_arb.cc_write) race_cycles = race_cycles + 1;
   reg [31:0] d0;
 
   // ==== CHECKS ====
@@ -226,11 +239,17 @@ module tb_pc9821_egc_post_walk;
     // ---- The 32-bit EGC WRITE half: two 16-bit units. Unit 0's burst sees the dirty hold. ----
     begin : write_half
       reg [31:0] d;
+      win_on = 1'b1;
       plane_op(1'b0, 2'd0, 15'h1000, 32'h0, 4'hF, 1'b1, 1'b1, d);
+      win_on = 1'b0;
     end
     flush_wcb();
     repeat (20) @(posedge clk);
 
+    // (The 32-bit scenario no longer reaches the walk: the write-combining buffer whose dirty
+    // hold sent it there is gone, so the posted 32-bit put is an ordinary burst now. Measured
+    // here, not asserted; its by-value check below still pins that every word lands.)
+    $display("NOTE egc_post_walk: the 32-bit scenario's write spent %0d cycles in a write walk", walk_cycles - walk_before);
     // ---- Read the destination dword back, per plane, and check it BY VALUE. ----
     mism = 0;
     for (s = 0; s < 4; s = s + 1) begin
@@ -244,9 +263,9 @@ module tb_pc9821_egc_post_walk;
     end
 
     if (mism != 0)
-      fail("the posted EGC write burst's dirty-hold fallback corrupted its word or the next unit: destination dword wrong");
+      fail("the posted 32-bit EGC put did not land every word of the destination dword");
     else
-      $display("NOTE egc_post_walk: the posted EGC write burst's dirty-hold fallback landed the dword exactly");
+      $display("NOTE egc_post_walk: the posted 32-bit EGC put landed every word of the dword");
 
     // ==== THE WALK'S DIRECTION IS LATCHED AT THE ACCEPT (the m_write fix) ====
     // A 16-bit EGC write whose two-column burst is not legal (the destination word is DIRTY)
@@ -257,6 +276,8 @@ module tb_pc9821_egc_post_walk;
     // which then never reaches SDRAM. (The 32-bit scenario above holds cc_write high through
     // both units, so it cannot see this.)
     mism2 = 0;
+    walk_before = walk_cycles;
+    race_cycles = 0;
     // Dirty ONLY the destination's SECOND word (0x1101). The burst covers [0x1100, 0x1101], so
     // its dirty hold still sends the pair down the fallback walk - but word 0 (0x1100, never
     // written) MISSES the buffer and takes the slow B_WB arm, which is the window the read needs.
@@ -274,6 +295,7 @@ module tb_pc9821_egc_post_walk;
 
     // The 16-bit EGC WRITE: hold the bus only until cpu_ready, then present the READ.
     @(negedge clk);
+    win_on      = 1'b1;
     access_page = 1'b0;
     egc_gate    = 1'b1;
     win_plane   = 2'd0;
@@ -306,6 +328,8 @@ module tb_pc9821_egc_post_walk;
     @(negedge clk);
     egc_gate = 1'b0;
     while (dut.u_egc.state != pc9821_egc_pkg::EGC_IDLE) @(negedge clk);
+    while (dut.u_arb.m_mode) @(negedge clk);
+    win_on = 1'b0;
     flush_wcb();
     repeat (20) @(posedge clk);
 
@@ -318,10 +342,16 @@ module tb_pc9821_egc_post_walk;
                    15'h1100 + k, s, k, d0[8*k +: 8], src_byte(s));
         end
     end
+    // The EGC is no longer a walk client: the arbiter's walk takes the plain and GRCG owners
+    // only (pc9821_gvram_arb.sv:673 `cc_lane_many = (cc_owns_plain && c_many && !c_line_mode) ||`),
+    // so this scenario's write cannot reach m_mode and the two witnesses are printed, not
+    // asserted. Ungated, they used to pass on the plane_word read-backs' own (read) walks.
+    $display("NOTE egc_post_walk: the 16-bit scenario's write spent %0d cycle(s) in a write walk, %0d with the live write flag low (the EGC does not walk)",
+             walk_cycles - walk_before, race_cycles);
     if (mism2 != 0)
-      fail("the fallback walk read the client's live cc_write: its second word took the READ arm and was never written");
+      fail("the 16-bit posted EGC write with a read presented behind it did not land both bytes by value");
     else
-      $display("NOTE egc_post_walk: the fallback walk wrote both words with a read presented behind it (m_write latched)");
+      $display("NOTE egc_post_walk: the 16-bit posted EGC write landed both bytes with a read presented behind it");
 
     // ==== VERDICT ====
     if (errors == 0) begin

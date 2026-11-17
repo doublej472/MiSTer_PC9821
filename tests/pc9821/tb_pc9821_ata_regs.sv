@@ -25,7 +25,10 @@
 //   * 0x0644/0x0646 = 0x01, 0x0648/0x064A = 0x00, 0x064C = 0xA0 are the
 //     power-on task file (ATA-1 default device/head; the sector number/count
 //     default to 1).
-//   * 0x0640/0x0641 = 0x00 while DRQ is clear (NP2kai ideio_r16 / qemu ide_data_readw).
+//   * 0x0640 = 0x00 while DRQ is clear (NP2kai ideio_r16 / qemu ide_data_readw); 0x0641 =
+//     0xFF while DRQ is clear, the Xe10's own read in every task-file dump
+//     (docs/probes/IDE.TXT:21 `0641=FF`, docs/probes/KIT1-XE10-IDEPROBE.TXT:21 `0641=FF`),
+//     which outranks both references.
 
 `timescale 1ns / 1ps
 
@@ -147,10 +150,11 @@ module tb_pc9821_ata_regs;
     expect_port(16'h0648, 8'h00, "0x648 cylinder low");
     expect_port(16'h064A, 8'h00, "0x64A cylinder high");
 
-    // Data register with DRQ clear follows the primary reference: NP2kai ideio_r16 and
-    // qemu ide_data_readw both return 0 when a drive is present but DRQ is clear.
+    // Data register with DRQ clear: 0x0640 follows NP2kai ideio_r16 and qemu ide_data_readw
+    // (0 when a drive is present but DRQ is clear); 0x0641 is the Xe10's measured 0xFF
+    // (docs/probes/IDE.TXT:21 `0641=FF`; the capture outranks the references).
     expect_port(16'h0640, 8'h00, "0x640 data, DRQ clear");
-    expect_port(16'h0641, 8'h00, "0x641 data high, DRQ clear");
+    expect_port(16'h0641, 8'hFF, "0x641 data high, DRQ clear (Xe10 capture)");
 
     // Write each writable register and read it back through the port, so a
     // swapped or ignored decode fails here rather than silently.

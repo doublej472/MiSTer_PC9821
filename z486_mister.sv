@@ -670,14 +670,15 @@ wire        ps2_mouse_clk_in  = 1'b1;
 wire        ps2_mouse_data_in = 1'b1;
 
 wire        core_ce_pixel;
+wire        core_frame_end; // the raster is on the last dot of its frame (pc9821_reset_align)
 wire        core_31k;      // 0x09A8 bit 0: the raster is on the 31 kHz dot clock (pc9821_system)
 wire        vid_vmode;     // clk_vid level: the video PLL is in its 31 kHz configuration (hps_io new_vmode)
 // THE VIDEO CLOCK (CLK_VIDEO): the video PLL's output, exactly dot-locked so every pixel and sync
 // period is a constant number of clocks. The PLL is generated as the reconfigurable fractional-N
-// variant at its FASTEST rate, 2 x 25.168 MHz = 50.336 MHz (the 31 kHz clock), so the cleaner's
-// sync-length bound is sized from the generated rate; pc9821_vpll_ctl moves it to the 24 kHz
-// configuration after lock and to the 31 kHz one whenever the guest sets 0x09A8 bit 0
-// (pc9821_vclk_pkg: both settings in one place).
+// variant at its 24 kHz rate (42.105 MHz); its FASTEST rate, 2 x 25.168 MHz = 50.336 MHz (the 31 kHz
+// clock), sizes the cleaner's sync-length bound and the SDC's period; pc9821_vpll_ctl moves it to the
+// 31 kHz configuration whenever the guest sets 0x09A8 bit 0 (pc9821_vclk_pkg: both settings in one
+// place).
 // Everything from pc9821_video_out's output to CLK_VIDEO runs on it.
 wire        clk_vid;
 localparam integer VIDEO_CLK_HZ = 50_336_015;
@@ -1034,7 +1035,7 @@ wire [2:0] configured_ram_size = (selected_ram_size > ram_size_max)
 // pc9821_calendar rather than from this RTC, so only rtc[55:0] is consumed and the upper date
 // bits are not; timestamp is the framework's Unix time and nothing here uses it; uart_speed
 // selects the framework's UART baud, unused because the debug UART's rate is fixed by the
-// defparam above.
+// defparam on debug_uart_tx_i below.
 /* verilator lint_off UNUSEDSIGNAL */
 wire [64:0] rtc;
 wire [32:0] timestamp;
@@ -1127,14 +1128,38 @@ end else begin : g_no_sdph_dps
 	assign sdph_fault    = 1'b0;
 end endgenerate
 
+// THE REQUEST WAITS FOR THE RASTER'S FRAME END (pc9821_reset_align says why): a machine reset
+// restarts the raster, and only a restart where the frame ends anyway leaves every frame the
+// framework measures - its size and its length - as it was, so a reset of an unchanged mode is neither
+// reported as a mode change nor seen as a frame of another rate by the low-latency HDMI PLL tracking.
+// The platform reset (reset_async) is not delayed.
+wire        reset_go, reset_waiting;
+pc9821_reset_align reset_align (
+	.clk(clk_sys), .req(reset_req), .wrap(core_frame_end), .active(reset_sync_r[1]),
+	.go(reset_go), .waiting(reset_waiting)
+);
 always @(posedge clk_sys or posedge reset_async) begin
 	if (reset_async)
 		reset_sync_r <= 3'b111;
-	else if (reset_req)
+	else if (reset_go)
 		reset_sync_r <= 3'b111;
 	else
 		reset_sync_r <= {reset_sync_r[1:0], 1'b0};
 end
+
+// THE RESET TREE (pc9821_reset_tree): reset_sync_r[2] is loaded into one register per block, all
+// on the same clk_sys edge, and each block is reset from its own copy, so the machine leaves
+// reset on one edge, one clk_sys after reset_sync_r[2] falls, and no single register drives the
+// whole device's synchronous reset. These are the top level's own consumers; pc9821_system takes
+// reset_sync_r[2] itself and gives its blocks their copies from its own trees.
+localparam int T_SDRAM = 0;   // the SDRAM controller (split_sdram_backend) and its pin cells
+localparam int T_TRACE = 1;   // pc9821_trace (TRACE_EN only)
+localparam int T_UART  = 2;   // the debug UART's FIFO and banner
+localparam int T_N     = 3;
+/* verilator lint_off UNUSEDSIGNAL */   // T_TRACE is unread when TRACE_EN is 0
+wire [T_N-1:0] rst_top;
+/* verilator lint_on UNUSEDSIGNAL */
+pc9821_reset_tree #(.N(T_N)) u_reset_tree (.clk(clk_sys), .reset(reset_sync_r[2]), .q(rst_top));
 
 hps_io #(
 	.CONF_STR(CONF_STR),
@@ -1357,10 +1382,12 @@ split_sdram_backend #(
 	// level (pc9821_memory_subsystem's pack_load_hold: a boot ROM Main_MiSTer sends at core start
 	// with status[0] held across the transfer). The loader writes the pack through this
 	// controller, so it must run while the CPU and the rest of the machine stay in reset. This
-	// reset is never high where the platform's is not, and the hold falls only after
-	// reset_sync_r[2] has, so its end cannot re-assert this reset (a re-run of the controller's
-	// JEDEC initialisation). With no such download it is the platform reset unchanged.
-	.reset(reset_sync_r[2] && !pack_load_hold),
+	// reset is never high where the platform's is not, and the hold falls only after this
+	// controller's reset copy has (the hold is cleared by the memory subsystem's own copy, which
+	// falls on the same edge, and it clears one clk_sys after that), so its end cannot
+	// re-assert this reset (a re-run of the controller's JEDEC initialisation). With no such
+	// download it is the platform reset unchanged. The hold term is applied after the copy.
+	.reset(rst_top[T_SDRAM] && !pack_load_hold),
 	.refresh_allowed(1'b1),
 	.sdram_size(sdram_sz[1:0]),
 	.busy(guest_mem_busy),
@@ -1452,7 +1479,9 @@ pc9821_system #(
 ) core (
 	.clk_sys             (clk_sys),
 	.reset               (reset_sync_r[2]),
-	.hps_apply_reset     (status[0]),
+	// the OSD's Reset level, and the wait for the frame end that pc9821_reset_align puts before the
+	// machine reset it starts: the CPU is held through both
+	.hps_apply_reset     (status[0] | reset_waiting),
 	.rtc                 (rtc[55:0]),
 	// The CPU's triple-fault reset is consumed inside pc9821_system (a warm
 	// CPU reset through the same class as `out 0xF0`); its monitor output is
@@ -1637,6 +1666,7 @@ pc9821_system #(
 
 	.video_ce            (core_ce_pixel),
 	.video_31k           (core_31k),
+	.video_frame_end     (core_frame_end),
 	.video_blank_n       (core_de),
 	.video_hsync         (core_hs),
 	.video_vsync         (core_vs),
@@ -1687,6 +1717,8 @@ pc9821_system #(
 // same clk_sys edge, so they cross together as one 40-bit vector (the bus is 20
 // bits per channel since the A-1 fix: the FM+ADPCM+SSG+PCM86 sum is carried WIDE
 // and clamped once at the final DAC below).
+// The holding register loads the bus on an edge unrelated to its sources, so the bus must come
+// from registers: pc9821_system's pc9821_snd86_join registers both devices' outputs first.
 wire [19:0] sample_86_l_audio;
 wire [19:0] sample_86_r_audio;
 
@@ -1837,7 +1869,7 @@ if (TRACE_EN) begin : g_trace
 		.STALL_CYCLES(CLOCK_RATE_HZ / 5),   // 200 ms, the same window the watchdog calls a stall
 		.ARM_RECORDS(64)
 	) u_trace (
-		.clk(clk_sys), .reset(reset_sync_r[2]),
+		.clk(clk_sys), .reset(rst_top[T_TRACE]),
 		.cs(cpu_cs), .eip(cpu_eip),
 		.ctx_addr(trace_ctx_addr), .ctx_write(trace_ctx_write),
 		.ctx_valid(trace_ctx_valid), .ctx_ready(trace_ctx_ready),
@@ -1866,7 +1898,7 @@ always @(*) begin
 	// the two interleave in the capture and the decoders separate them by shape.
 	// A watchdog byte that cannot get in here is NOT dropped: debug_uart_wdg_accept above is this
 	// chain's own answer for that source, and pc9821_dbg_record holds the byte until it is set
-	// so the 289+232+100-byte report survives a full FIFO however long the drain takes.
+	// so the 707-byte report (pc9821_dbg_record's header: 351 + 256 + 100) survives a full FIFO however long the drain takes.
 	if (debug_uart_banner_active && debug_uart_fifo_count != 10'd512)
 		debug_uart_enqueue = 1'b1;
 	else if (trace_we && debug_uart_fifo_count != 10'd512)
@@ -1879,7 +1911,7 @@ always @(*) begin
 end
 
 always @(posedge clk_sys) begin
-	if (reset_sync_r[2]) begin
+	if (rst_top[T_UART]) begin
 		debug_uart_data <= 8'd0;
 		debug_uart_wr <= 1'b0;
 		debug_uart_fifo_wr <= 9'd0;
@@ -1978,20 +2010,23 @@ wire [1:0] video_sel = status[81:80];
 /* verilator lint_off UNUSEDSIGNAL */   // unread in a build without the doubler
 wire       video_dbl_on = VIDEO_DBL_EN && (video_sel == VIDEO_SEL_DBL || (video_sel == 2'd0 && forced_scandoubler));
 /* verilator lint_on UNUSEDSIGNAL */
-// THE VIDEO PLL: a fractional-N PLL, 50 MHz x (M + K/2^32) / 19, generated by build_profile.py from
-// tools/profile/vpll_template.v into rtl/vpll* at its FASTEST run-time configuration (the 31 kHz
-// clock) and read back exact. pc9821_vpll_ctl moves it to the 24 kHz configuration after lock and
-// to the 31 kHz one whenever the guest sets 0x09A8 bit 0 (pc9821_vclk_pkg). The reconfiguration core runs on the 50 MHz
-// reference, as the framework's pll_cfg_hdmi does.
+// THE VIDEO PLL: a fractional-N PLL, 50 MHz x (M + K/2^32) / 24, generated by build_profile.py from
+// tools/profile/vpll_template.v into rtl/vpll* at its 24 kHz configuration (the one the guest starts
+// in, so a core load reconfigures nothing) and read back exact; the SDC times it at the faster 31 kHz
+// period. pc9821_vpll_ctl moves it to the 31 kHz configuration whenever the guest sets 0x09A8 bit 0
+// and back (pc9821_vclk_pkg), and resets it (`vpll_rst`, with the reconfiguration core) when a write
+// or a relock does not complete in 5 ms. The reconfiguration core runs on the 50 MHz reference, as
+// the framework's pll_cfg_hdmi does.
 wire       vpll_locked;
 wire       vclk_31;          // the video PLL is (going to) the 31 kHz configuration
 wire       vclk_busy;        // the video clock is not usable: pc9821_video_out flushes its FIFO
+wire       vpll_rst;         // pc9821_vpll_ctl's recovery reset: the video PLL and its reconfiguration core
 wire [63:0] vpll_to_pll, vpll_from_pll;
 wire        vcfg_waitrequest, vcfg_write;
 wire  [5:0] vcfg_address;
 wire [31:0] vcfg_writedata;
 vpll vpll (
-	.refclk(CLK_50M), .rst(1'b0), .outclk_0(clk_vid), .locked(vpll_locked),
+	.refclk(CLK_50M), .rst(vpll_rst), .outclk_0(clk_vid), .locked(vpll_locked),
 	.reconfig_to_pll(vpll_to_pll), .reconfig_from_pll(vpll_from_pll)
 );
 // The framework's write-only reconfiguration core (sys/pll_cfg/pll_cfg_hdmi.v), the same module
@@ -2003,7 +2038,7 @@ vpll vpll (
 // tb_pc9821_pll_cfg_lockstep drives both with the same controller and proves the two
 // cores program a PLL register model with the same sequence and the same final registers.
 pll_cfg_hdmi vpll_cfg (
-	.mgmt_clk(CLK_50M), .mgmt_reset(1'b0),
+	.mgmt_clk(CLK_50M), .mgmt_reset(vpll_rst),
 	.mgmt_waitrequest(vcfg_waitrequest),
 	.mgmt_write(vcfg_write), .mgmt_address(vcfg_address), .mgmt_writedata(vcfg_writedata),
 	.reconfig_to_pll(vpll_to_pll), .reconfig_from_pll(vpll_from_pll)
@@ -2012,7 +2047,7 @@ pc9821_vpll_ctl vpll_ctl (
 	.clk(CLK_50M), .want_31k(core_31k), .pll_locked(vpll_locked),
 	.mgmt_waitrequest(vcfg_waitrequest), .mgmt_write(vcfg_write),
 	.mgmt_address(vcfg_address), .mgmt_writedata(vcfg_writedata),
-	.vclk_31(vclk_31), .busy(vclk_busy)
+	.pll_rst(vpll_rst), .vclk_31(vclk_31), .busy(vclk_busy)
 );
 
 wire       dbl_active;
@@ -2295,8 +2330,12 @@ assign UART_TXD      = VIDEO_MON_EN ? video_mon_tx :
                        uart_debug_mode ? debug_uart_tx : 1'b1;
 assign UART_DTR      = 1'b0;
 
-// The user port has no device in this core, and there is no MIDI source, so
-// USER_OUT is an explicit tie-off rather than left undriven.
-assign USER_OUT      = 7'd0;
+// The user port has no device in this core, so every pin is RELEASED. The port is open drain:
+// sys_top.v drives a pin low for a 0 and floats it for a 1 (sys/sys_top.v:1670
+// `!user_out[0]  ? 1'b0 : 1'bZ`), and sys/emu_ports.vh:155 says "Set USER_OUT to 1 to read
+// from USER_IN". A 0 here would hold all seven pins low against whatever is attached (D+ and
+// D- low together is a USB reset); sys/mt32pi.sv:57 parks its unused pins the same way
+// (`assign USER_OUT[6:2] = '1;`).
+assign USER_OUT      = '1;
 
 endmodule

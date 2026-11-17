@@ -15,7 +15,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_ADVERTISED:
-// The mechanical advertised=>executable cross-check the multiple-mode defect needed: every capability bit the ATA model's IDENTIFY page sets is executed or is not set - LBA support (word 49 bit 9) runs an LBA-mode READ SECTORS, the PIO-mode words (word 53 bit 1 / word 64) run SET FEATURES, and word 82's NOP / DEVICE RESET / WRITE CACHE bits run 0x00 / 0x08 / 0xE7. It pins that multiple mode is NOT advertised (word 47 = 0, because the model buffers one sector and the Xe10 ROM's READ MULTIPLE does not check DRQ) and that no DMA capability is advertised anywhere (word 49 bit 8, words 62/63/88 and word 53 bit 2 clear) because no 0xC8-0xCF command exists.
+// The mechanical advertised=>executable cross-check the multiple-mode defect needed: every capability bit the ATA model's IDENTIFY page sets is executed, judged through the ports (STATUS.ERR after BSY drops), or is not set - LBA support (word 49 bit 9) runs an LBA-mode READ SECTORS, the PIO-mode words (word 53 bit 1 / word 64) run SET FEATURES, word 82's NOP / DEVICE RESET bits run 0x00 / 0x08 (DEVICE RESET must answer the machine's STATUS 0x51 / ERROR 0x04), a word 82 write-cache bit would run SET FEATURES 0x02/0x82 and a word 83 FLUSH CACHE bit 0xE7. It pins word 47 = 0 (multiple mode NOT advertised, because the model buffers one sector and the Xe10 ROM's READ MULTIPLE does not check DRQ) and that no DMA capability is advertised anywhere (word 49 bit 8, words 62/63/88 and word 53 bit 2 clear) because no 0xC8-0xCF command exists.
 
 module tb_pc9821_ata_advertised;
 
@@ -154,22 +154,28 @@ module tb_pc9821_ata_advertised;
     end
   endtask
 
-  // Did the command just issued abort? The model's own abort counter, sampled before the
-  // command under test, answers that unambiguously. ERROR is NOT usable as this proxy any
-  // more: DEVICE RESET (0x08) legitimately leaves ABRT (0x04) as its post-diagnostic
-  // signature on the machine -- status 0x51, ERROR 0x04 (docs/probes/IDE.TXT:343) -- which
-  // is a completion, not a rejection.
-  reg [7:0] aborts_before;
+  // Did the command just issued abort? Judged the way a guest judges it: poll STATUS
+  // (0x064E) until BSY drops, then read STATUS.ERR and ERROR (0x0642). An aborted command
+  // ends with ERR set (ATA: ABRT is reported through STATUS.ERR; NP2kai cmdabort sets
+  // `IDESTAT_DRDY | IDESTAT_ERR`, cbus/ideio.c). DEVICE RESET (0x08) is the one command
+  // whose COMPLETION carries ERR: the machine answers it with STATUS 0x51 / ERROR 0x04
+  // (docs/probes/IDE.TXT:343), so its leg compares that measured pair instead.
+  reg [7:0] cmd_st, cmd_er;
+  integer   poll_n;
 
-  task note_aborts;
+  task issue(input [7:0] cmd);
     begin
-      aborts_before = dbg_cmd[31:24];
+      write_byte(16'h064E, cmd);
+      poll_n = 0;
+      read_byte(16'h064E, cmd_st);
+      while (cmd_st[7] && poll_n < 20000) begin
+        read_byte(16'h064E, cmd_st);
+        poll_n = poll_n + 1;
+      end
+      if (cmd_st[7]) fail("command left BSY set");
+      read_byte(16'h0642, cmd_er);
     end
   endtask
-
-  function aborted;
-    aborted = dbg_cmd[31:24] != aborts_before;
-  endfunction
 
   // ==== block adapter ====
   // Reads fill a sector, writes drain one; a short latency so the transfer is not
@@ -289,16 +295,14 @@ module tb_pc9821_ata_advertised;
       end else begin
         clear_error;
         write_byte(16'h0644, m[7:0]);
-        note_aborts;
-        write_byte(16'h064E, 8'hC6);           // SET MULTIPLE
-        if (aborted()) fail("word 47 advertises multiple mode but SET MULTIPLE aborted");
+        issue(8'hC6);           // SET MULTIPLE
+        if (cmd_st[0]) fail("word 47 advertises multiple mode but SET MULTIPLE aborted");
         $display("  ok word 47 multiple mode: SET MULTIPLE %0d completed", m);
 
         read_byte(16'h064E, value);
         arm_lba_read(LBA_BASE);
-        note_aborts;
-        write_byte(16'h064E, 8'hC4);           // READ MULTIPLE
-        if (aborted()) fail("word 47 advertises multiple mode but READ MULTIPLE aborted");
+        issue(8'hC4);           // READ MULTIPLE
+        if (cmd_st[0]) fail("word 47 advertises multiple mode but READ MULTIPLE aborted");
         drain_read_sector(LBA_BASE);
         while (dut.status_reg[7]) @(negedge clk);
         $display("  ok word 47 multiple mode: READ MULTIPLE completed");
@@ -306,13 +310,17 @@ module tb_pc9821_ata_advertised;
 
       read_byte(16'h064E, value);
       arm_lba_read(LBA_BASE + 32'd1);
-      note_aborts;
-      write_byte(16'h064E, 8'hC5);             // WRITE MULTIPLE
-      if (aborted()) fail("word 47 advertises multiple mode but WRITE MULTIPLE aborted");
+      issue(8'hC5);             // WRITE MULTIPLE
+      if (cmd_st[0]) fail("word 47 advertises multiple mode but WRITE MULTIPLE aborted");
       feed_write_sector(LBA_BASE + 32'd1);
       while (dut.status_reg[7]) @(negedge clk);
       $display("  ok word 47 multiple mode: WRITE MULTIPLE completed");
-    end else begin
+    end
+    // The model withdraws the multiple-mode advertisement outright (one-sector buffer, and
+    // the Xe10 ROM's READ MULTIPLE does not check DRQ: pc9821_ata.sv word 47), so the
+    // whole word must read 0 -- the arm above only guards a re-advertisement.
+    if (idw[47] !== 16'h0000) fail("word 47 is not 0: multiple mode is advertised again");
+    if (!idw[47][15]) begin
       // Withdrawn: word 59's valid bit must agree, or a driver reads a current
       // multiple setting that no word-47 claim backs.
       if (idw[59][8]) fail("word 59 says the multiple setting is valid but word 47 advertises no multiple mode");
@@ -323,9 +331,8 @@ module tb_pc9821_ata_advertised;
     if (idw[49][9]) begin
       read_byte(16'h064E, value);
       arm_lba_read(LBA_BASE + 32'd2);
-      note_aborts;
-      write_byte(16'h064E, 8'h20);             // READ SECTORS, LBA mode
-      if (aborted()) fail("word 49 advertises LBA but an LBA READ SECTORS aborted");
+      issue(8'h20);             // READ SECTORS, LBA mode
+      if (cmd_st[0]) fail("word 49 advertises LBA but an LBA READ SECTORS aborted");
       drain_read_sector(LBA_BASE + 32'd2);
       while (dut.status_reg[7]) @(negedge clk);
       $display("  ok word 49 LBA: LBA-mode READ SECTORS completed");
@@ -344,9 +351,8 @@ module tb_pc9821_ata_advertised;
     if (idw[53][1]) begin
       if (idw[64] == 16'h0000) fail("word 53 bit 1 advertises words 64-70 valid but word 64 is zero");
       clear_error;
-      note_aborts;
-      write_byte(16'h064E, 8'hEF);             // SET FEATURES (transfer mode)
-      if (aborted()) fail("word 53 bit 1 advertises PIO modes but SET FEATURES aborted");
+      issue(8'hEF);             // SET FEATURES (transfer mode)
+      if (cmd_st[0]) fail("word 53 bit 1 advertises PIO modes but SET FEATURES aborted");
       $display("  ok word 53/64 PIO modes: word 64=0x%04x, SET FEATURES completed", idw[64]);
     end else begin
       $display("  - word 53 does not advertise words 64-70; no PIO-mode command owed");
@@ -373,24 +379,38 @@ module tb_pc9821_ata_advertised;
     // ---- 7. word 82's command-set bits ----
     if (idw[82][14]) begin
       clear_error;
-      note_aborts;
-      write_byte(16'h064E, 8'h00);             // NOP
-      if (aborted()) fail("word 82 advertises NOP but NOP aborted");
+      issue(8'h00);             // NOP
+      if (cmd_st[0]) fail("word 82 advertises NOP but NOP aborted");
       $display("  ok word 82 NOP: 0x00 completed");
     end
     if (idw[82][9]) begin
       clear_error;
-      note_aborts;
-      write_byte(16'h064E, 8'h08);             // DEVICE RESET
-      if (aborted()) fail("word 82 advertises DEVICE RESET but 0x08 aborted");
+      issue(8'h08);             // DEVICE RESET
+      if (cmd_st !== 8'h51 || cmd_er !== 8'h04) begin
+        $display("FAIL: DEVICE RESET answered STATUS 0x%02x ERROR 0x%02x, the machine's is 51/04 (docs/probes/IDE.TXT:343)",
+                 cmd_st, cmd_er);
+        errors = errors + 1;
+      end
       $display("  ok word 82 DEVICE RESET: 0x08 completed");
     end
+    // Word 82 bit 5 is "write cache supported": the command it maps to is SET FEATURES
+    // 0x02 / 0x82 (enable / disable write cache), not FLUSH CACHE. FLUSH CACHE (0xE7) is
+    // word 83 bit 12 (ATA/ATAPI-6 words 82/83).
     if (idw[82][5]) begin
       clear_error;
-      note_aborts;
-      write_byte(16'h064E, 8'hE7);             // FLUSH CACHE
-      if (aborted()) fail("word 82 advertises WRITE CACHE but FLUSH CACHE aborted");
-      $display("  ok word 82 WRITE CACHE: FLUSH CACHE completed");
+      write_byte(16'h0642, 8'h02);
+      issue(8'hEF);                            // SET FEATURES: enable write cache
+      if (cmd_st[0]) fail("word 82 advertises WRITE CACHE but SET FEATURES 0x02 aborted");
+      write_byte(16'h0642, 8'h82);
+      issue(8'hEF);                            // SET FEATURES: disable write cache
+      if (cmd_st[0]) fail("word 82 advertises WRITE CACHE but SET FEATURES 0x82 aborted");
+      $display("  ok word 82 WRITE CACHE: SET FEATURES 0x02/0x82 completed");
+    end
+    if (idw[83][12]) begin
+      clear_error;
+      issue(8'hE7);                            // FLUSH CACHE
+      if (cmd_st[0]) fail("word 83 advertises FLUSH CACHE but 0xE7 aborted");
+      $display("  ok word 83 FLUSH CACHE: 0xE7 completed");
     end
 
     // ---- verdict ----

@@ -76,7 +76,8 @@ module pc9821_calendar #(
   reg        tick_en;       // 0x128 bit 7: the interrupt enable
   reg        tick_flag;     // 0x128 bit 4: a tick since the last read
   reg        tick_line;     // the IRQ15 request line
-  reg [22:0] tick_div;
+  reg [22:0] tick_div;      // the free-running 1/64 s divider (0 .. TICK64_N - 1)
+  reg [1:0]  tick_ph;       // 1/64 s steps modulo 4: the 1/32 s and 1/16 s taps
   reg [15:0] tick_low;      // what is left of the low pulse at a tick (0 = not in one)
   reg [26:0] hz_div;        // 27 bits hold the longest profile's 1 Hz count
 
@@ -145,26 +146,48 @@ module pc9821_calendar #(
     endcase
   endfunction
 
-  // Period in clk_sys cycles for the selected tick rate (1/64, 1/32, 1/16 s), minus one
-  // because the counter resets at the compare. 781249 / 1562499 / 3124999 at 50 MHz.
-  wire [22:0] tick_period = (tick_rate == 2'd3) ? 23'(SYS_CLOCK_HZ / 16 - 1) :
-                            (tick_rate == 2'd1) ? 23'(SYS_CLOCK_HZ / 32 - 1) :
-                                                  23'(SYS_CLOCK_HZ / 64 - 1);
+  // THE TICK IS FREE-RUNNING: one divider chain, which a 0x128 write does not restart. Kit
+  // 2's /AUDIT2 took its time origin just after each row's 0x128 write and read
+  // (tools/hwprobe/xe10t/sec_audit2.inc a2_calirr), and the first fall came inside one period
+  // every time, at a different phase in each row: after `<- 81` at 5311 and 8013 ARTIC ticks
+  // (period 9600), after `<- 80` at 609 and 3366 (period 4800), after `<- 83` at 14994 and
+  // 17858 (period 19200) (docs/probes/KIT2-XE10-AUDIT2.TXT:31-41, `cfg=81 mode=N ...
+  // e=-5311`, `cfg=81 mode=R ... e=-8013`, `cfg=80 mode=N ... e=-609`, `cfg=80 mode=R ...
+  // e=-3366`, `cfg=83 mode=N ... e=-14994`, `cfg=83 mode=R ... e=-17858`); a restart at the
+  // write would put each a whole period out (tb_pc9821_calendar_tick_phase). The three rates
+  // are taps of ONE chain, a 1/64 s divider and two binary stages after it, so the 1/32 s and
+  // 1/16 s ticks fall on 1/64 s ticks (the alignment is the chain's, not measured: the
+  // captures never relate two rows' phases). The chain runs with the rate off as well.
+  //   TICK64_N clk_sys cycles per 1/64 s: 781250 at 50 MHz (a whole number at every
+  // profile's clock, each a multiple of 64 Hz, so 2 and 4 steps are exactly the 1/32 s and
+  // 1/16 s periods).
+  localparam integer TICK64_N = SYS_CLOCK_HZ / 64;
+  wire        tick_step = (tick_div == 23'(TICK64_N - 1));
+  // A write takes effect on its own cycle: a tap that falls on the write's cycle is judged
+  // by the rate written (the two events merged, docs/single-cycle-event-discipline.md R4).
+  wire [1:0]  tick_rate_eff = tick_we ? tick_din[1:0] : tick_rate;
+  wire        tick_en_eff   = tick_we ? tick_din[7]   : tick_en;
+  wire        tick_now      = tick_step && ((tick_rate_eff == 2'd0) ||
+                                            ((tick_rate_eff == 2'd1) && tick_ph[0]) ||
+                                            ((tick_rate_eff == 2'd3) && (tick_ph == 2'd3)));
   // The low pulse at a tick: 5 us, inside the 1-2 ARTIC ticks (3.3-6.5 us at 307.2 kHz) the
   // machine's line stays low (docs/probes/KIT2-XE10-AUDIT2.TXT:27-41, e.g. `cfg=81 mode=R ...
   // e=-8013,+8015,-17615,+17616`, `cfg=81 mode=N ... e=-5311,+5312`), at least one clock.
   localparam integer TICK_LOW_N = (SYS_CLOCK_HZ / 200_000 > 0) ? SYS_CLOCK_HZ / 200_000 : 1;
   // The tick block's line (see its comment): a tick with the interrupt enabled starts the low
   // pulse, its end raises the line, and a write that disables the tick (bit 7 clear or rate 2)
-  // drops it; a read changes nothing.
-  wire        tick_now     = !tick_we && (tick_rate != 2'd2) && (tick_div == tick_period);
+  // drops it; a read changes nothing. A write that disables cannot meet a tick it starts:
+  // rate 2 has no tap, and with bit 7 clear a tap only lowers the line, as the write does.
   wire        tick_off_wr  = tick_we && (!tick_din[7] || tick_din[1:0] == 2'd2);
   wire        tick_line_nx = tick_off_wr ? 1'b0 :
                              tick_now    ? 1'b0 :
                              (tick_low == 16'd1) ? 1'b1 : tick_line;
   wire [15:0] tick_low_nx  = tick_off_wr ? 16'd0 :
-                             (tick_now && tick_en) ? 16'(TICK_LOW_N) :
+                             (tick_now && tick_en_eff) ? 16'(TICK_LOW_N) :
                              (tick_low != 16'd0) ? (tick_low - 16'd1) : 16'd0;
+  // The tick flag: a tick sets it, a read or a write clears it, and a tick on the same cycle
+  // as either is a new tick (set wins, docs/single-cycle-event-discipline.md R3).
+  wire        tick_flag_nx = tick_now ? 1'b1 : ((tick_we || tick_rd) ? 1'b0 : tick_flag);
   localparam [26:0] HZ_DIV_MAX = 27'(SYS_CLOCK_HZ) - 27'd1;   // one second
 
   // ---- the 1 Hz ripple, counted from its roll signals ---------------------
@@ -196,6 +219,57 @@ module pc9821_calendar #(
   // every cycle the value is observed and saves a second 8-bit BCD adder.
   wire [7:0] wday_inc = c_wday + 8'd1;
 
+  // ---- TIMESET: the load, as the Xe10's uPD4990A takes it ------------------------------
+  // THE CHIP LOADS WHAT IT IS SENT; IT REFUSES NOTHING. Each field goes into its counter and
+  // a digit past its counter's end is folded at once, before any second ticks: the Xe10's
+  // XE10Z /CAL rows (docs/probes/XE10Z-XE10.TXT:234-247, `CAL set=... r0=... r1=... r2=...`,
+  // r0 read at once after the set, r1/r2 about 1.1 s and 2.2 s later), wire byte order sec,
+  // min, hour, day, month|weekday, year:
+  //   sec 5A -> 00 and the minute 30 -> 31 (:235 `set=5A3012156320 r0=003112156320`);
+  //   sec 3F -> 40 (:236 `set=3F3012156320 r0=403012156320`), then 41, 42;
+  //   min 60 -> 00, the hour NOT carried (:237 `set=586012156320 r0=580012156320`);
+  //   hour 24 -> 00, the day NOT carried (:238 `set=585924156320 r0=585900156320`);
+  //   day 32 and day 00 loaded as sent (:239 `r0=585923326320`, :240 `r0=003012006320`);
+  //   day 2A -> 20, the tens NOT carried (:243 `set=5859232A6320 r0=585923206320`);
+  //   month D -> 1 (:244 `set=00301215D320 r0=003012151320`), month 0 as sent (:245);
+  //   year A0 -> 00 (:246 `set=0030121563A0 r0=003012156300`);
+  //   weekday 7 -> 0 (:247 `set=003012156720 r0=003012156020`).
+  // So the seconds are a RIPPLE: a units digit past 9 clears and carries into the tens, and
+  // tens past 5 clear and carry into the minute (a full minute tick: c_sec is loaded 59 and
+  // the 1 Hz arm runs at once, hz_div = HZ_DIV_MAX). Every other field's fold clears without a
+  // carry. NOT MEASURED, so inferred (each from the one row of its field): a units digit A..F
+  // clears (seen at A and F in the seconds, A in the day; applied to every field's units), the
+  // minute's tens 6..F clear (seen at 6), an hour 24 or more clears (seen at 24), a month 13 or
+  // more is 1 (seen at 13), a weekday 7 or more is 0 (seen at 7), the year's tens A..F clear
+  // (seen at A); the day's tens are kept. todo item 201 lists what is open.
+  // The counters' carries afterwards are the 1 Hz arm's own: a day at or past its month's
+  // length rolls to 01 (day 32 in June, :239 `r2=000000017420`; Feb 30 2020, :241).
+  // NP2kai's TIMESET loads nothing (io/upd4990.c `case 0x02: uPD4990.regsft = 0;`); the
+  // capture outranks it. The core used to REFUSE the whole set when a byte compare failed.
+  wire [7:0] ts_sec_b  = in_sreg[7:0];
+  wire       ts_sec_uc = (ts_sec_b[3:0] >= 4'hA);                      // units past 9: carry
+  wire [4:0] ts_sec_t  = {1'b0, ts_sec_b[7:4]} + {4'd0, ts_sec_uc};
+  wire       ts_sec_tc = (ts_sec_t >= 5'd6);                            // tens past 5: carry
+  // The seconds field the counter holds after the fold; 59 when the fold carries a minute,
+  // which the 1 Hz arm then rolls to 00 with the minute's increment.
+  wire [7:0] ts_sec    = ts_sec_tc ? 8'h59 : {ts_sec_t[3:0], ts_sec_uc ? 4'h0 : ts_sec_b[3:0]};
+  function [7:0] ts_units(input [7:0] v);                               // units past 9 clear
+    ts_units = {v[7:4], (v[3:0] >= 4'hA) ? 4'h0 : v[3:0]};
+  endfunction
+  wire [7:0] ts_min_u  = ts_units(in_sreg[15:8]);
+  wire [7:0] ts_min    = (ts_min_u[7:4] >= 4'h6) ? {4'h0, ts_min_u[3:0]} : ts_min_u;
+  wire [7:0] ts_hour_u = ts_units(in_sreg[23:16]);
+  wire [7:0] ts_hour   = (ts_hour_u >= 8'h24) ? 8'h00 : ts_hour_u;
+  wire [7:0] ts_day    = ts_units(in_sreg[31:24]);
+  wire [3:0] ts_month  = (in_sreg[39:36] >= 4'd13) ? 4'd1 : in_sreg[39:36];  // the month VALUE
+  wire [3:0] ts_wday   = (in_sreg[35:32] >= 4'd7) ? 4'd0 : in_sreg[35:32];
+  wire [7:0] ts_year_u = ts_units(in_sreg[47:40]);
+  wire [7:0] ts_year   = (ts_year_u[7:4] >= 4'hA) ? {4'h0, ts_year_u[3:0]} : ts_year_u;
+  // The TIMESET that loads: the STB rise that latches opcode 2 with all 48 bits in (frozen at
+  // 48: see the CLK arm). The counters take it in the 1 Hz block, one assignment per register.
+  wire ts_load = cmd_we && cmd_din[3] && !cmd_last[3] && (command == CMD_TIMESET) &&
+                 (in_bits == 6'd48);
+
   always @(posedge clk) begin
     if (!rst_n) begin
       c_sec <= 8'h00; c_min <= 8'h00; c_hour <= 8'h00;
@@ -214,6 +288,7 @@ module pc9821_calendar #(
       tick_flag    <= 1'b0;
       tick_line    <= 1'b0;
       tick_div     <= 23'd0;
+      tick_ph      <= 2'd0;
       tick_low     <= 16'd0;
       hz_div       <= 27'd0;
     end else begin
@@ -227,6 +302,22 @@ module pc9821_calendar #(
         c_year  <= rtc_bcd[47:40];
         c_wday  <= rtc_bcd[55:48];
         hz_div  <= 27'd0;
+      end else if (ts_load) begin
+        c_sec   <= ts_sec;
+        c_min   <= ts_min;
+        c_hour  <= ts_hour;
+        c_day   <= ts_day;
+        c_month <= month_dec_to_bcd(ts_month);
+        c_wday  <= {4'h0, ts_wday};
+        c_year  <= ts_year;
+        // THE SET RESTARTS THE SECOND: the first tick lands one second after it. On the Xe10
+        // every one of the 28 reads taken 1.1 s apart after a set moved exactly one second
+        // (docs/probes/XE10Z-XE10.TXT:234-247, r0 -> r1 -> r2), where a divider left running
+        // steps two in about one interval in ten (the core's own run of the same probe, which
+        // left it running: docs/probes/core/XE10Z-CORE-rs-8b71a248-s6.TXT, 3 of 28). Inferred
+        // from those reads, not measured directly. A seconds fold that carries a minute
+        // (above) runs the 1 Hz arm in the next cycle instead, and that arm restarts the second.
+        hz_div  <= ts_sec_tc ? HZ_DIV_MAX : 27'd0;
       end else if (hz_div == HZ_DIV_MAX) begin
         hz_div <= 27'd0;
         // The weekday counts DAYS, so it advances on every date change (hour_roll),
@@ -271,29 +362,17 @@ module pc9821_calendar #(
       // rates' periods agree, so the shape stands. NOT MEASURED, so inferred: with bit 7 clear
       // or rate 2 (off) no interrupt comes (kit 1, XE10T-XE10-AUDIT.TXT `cfg=01 ... n=0`), and
       // the line is held low there.
-      // The write still restarts the period, which the capture does not support (the first
-      // fall after `0x128 <- 81` lands 5311 and 8013 ticks in, not a period); todo item 114.
-      // One assignment per register per cycle: the line and the pulse count take their next
-      // value from the arms below (tick_line_nx / tick_low_nx).
+      // The write does not restart the tick (the chain above); todo item 114.
+      // One assignment per register per cycle: the line, the pulse count and the flag take
+      // their next value from the arms above (tick_line_nx / tick_low_nx / tick_flag_nx).
       tick_line <= tick_line_nx;
       tick_low  <= tick_low_nx;
+      tick_flag <= tick_flag_nx;
+      tick_div  <= tick_step ? 23'd0 : (tick_div + 23'd1);
+      if (tick_step) tick_ph <= tick_ph + 2'd1;
       if (tick_we) begin
-        tick_rate    <= tick_din[1:0];
-        tick_en      <= tick_din[7];
-        tick_div     <= 23'd0;
-        tick_flag    <= 1'b0;
-      end else if (tick_rate == 2'd2) begin
-        tick_div <= 23'd0;
-        if (tick_rd) tick_flag <= 1'b0;
-      // tick_div never passes tick_period: the rate moves only on tick_we, which zeroes it.
-      end else if (tick_div == tick_period) begin
-        tick_div     <= 23'd0;
-        // A tick landing on a read's cycle is a new tick: the flag sets (race-idiom R3, set
-        // wins).
-        tick_flag    <= 1'b1;
-      end else begin
-        tick_div <= tick_div + 23'd1;
-        if (tick_rd) tick_flag <= 1'b0;
+        tick_rate <= tick_din[1:0];
+        tick_en   <= tick_din[7];
       end
 
       // ---------------- 0x22 mode latch ----------------
@@ -332,32 +411,14 @@ module pc9821_calendar #(
             in_sreg  <= 48'h0;
             in_bits  <= 6'd0;
           end else if (command == CMD_TIMESET) begin
-            // Load the counters from the accumulated input stream if the BCD is in
-            // range. THE FIELD POSITIONS MIRROR emit_payload: in_sreg shifts the
-            // arriving bit in at bit 47 and off the bottom, so after 48 LSB-first
-            // clocks the FIRST byte sent (seconds) sits in [7:0] and the last (the
-            // year) in [47:40], the order the reader walks out (BANK7@0x5D22).
-            //
-            // The month|weekday byte at [39:32] is NOT bare BCD: its HIGH nibble
-            // [39:36] is the month's decimal value (1..12; 0xA/0xB/0xC for
-            // Oct..Dec) and its LOW nibble [35:32] the weekday, as NP2kai packs it.
-            if (in_bits == 6'd48 &&   // frozen at 48: see the CLK arm
-                in_sreg[7:0]   <= 8'h59 && in_sreg[15:8]  <= 8'h59 &&
-                in_sreg[23:16] <= 8'h23 && in_sreg[31:24] >= 8'h01 &&
-                /* verilator lint_off WIDTHEXPAND */   // 0x39:36 is the 4-bit month-VALUE nibble, compared against an 8-bit literal
-                in_sreg[31:24] <= 8'h31 && in_sreg[39:36] >= 8'h01 &&
-                /* verilator lint_on WIDTHEXPAND */
-                /* verilator lint_off WIDTHEXPAND */   // 0x39:36 as above: the nibble holds the value 1..0xC
-                in_sreg[39:36] <= 8'h0C) begin
-                /* verilator lint_on WIDTHEXPAND */
-              c_sec   <= in_sreg[7:0];
-              c_min   <= in_sreg[15:8];
-              c_hour  <= in_sreg[23:16];
-              c_day   <= in_sreg[31:24];
-              c_month <= month_dec_to_bcd(in_sreg[39:36]);
-              c_wday  <= {4'h0, in_sreg[35:32]};
-              c_year  <= in_sreg[47:40];
-            end
+            // Load the counters from the accumulated input stream: ts_load, in the 1 Hz block
+            // above, takes it (every field, folded as the chip folds it). THE FIELD POSITIONS
+            // MIRROR emit_payload: in_sreg shifts the arriving bit in at bit 47 and off the
+            // bottom, so after 48 LSB-first clocks the FIRST byte sent (seconds) sits in [7:0]
+            // and the last (the year) in [47:40], the order the reader walks out
+            // (BANK7@0x5D22). The month|weekday byte at [39:32] is NOT bare BCD: its HIGH
+            // nibble [39:36] is the month's decimal value (1..12; 0xA/0xB/0xC for Oct..Dec)
+            // and its LOW nibble [35:32] the weekday, as NP2kai packs it.
             shifting <= 1'b0;
           end else if (command == CMD_HOLD) begin
             // Opcode 0 is a register hold: NP2kai sets regsft = 0 (io/upd4990.c:29-30),

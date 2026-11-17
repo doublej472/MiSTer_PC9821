@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_ABORT:
-// A read-ahead that ERRORs while the FSM waits in X_WAIT_BLOCK truly abandons the block transfer: `abort_command` clears `prefetch_busy`, so `block_in_flight` goes false and the very next SRST (the authentic ROM's own `out 0x74C,0x06` pair) returns the drive to READY instead of parking it in X_DRAIN with BSY set forever. On the current RTL the abort leaves `prefetch_busy` set, `block_in_flight` stays true, and the SRST sets BSY and never clears it -- a dead drive from one adapter error.
+// A read-ahead that ERRORs while the FSM waits in X_WAIT_BLOCK truly abandons the block transfer: the abort clears `prefetch_busy` (so `block_in_flight` goes false), the guest's STATUS read at 0x064E shows ERR with BSY and DRQ clear and ERROR (0x0642) is non-zero, the ROM's SRST pair (`0x74C <- 0x04` then `0x00`) then reads back STATUS 0x50 and ERROR 0x01 through the ports (NP2kai cbus/ideio.c ideio_o74c), and a following IDENTIFY DEVICE raises DRQ -- the drive is usable, not parked in X_DRAIN with BSY set forever.
 //
 // ---- the bench's own account of where the expectation comes from ----
 //
@@ -13,7 +13,8 @@
 // fetch as an error, `abort_command` runs -- and it set X_IDLE without clearing
 // prefetch_busy. `block_in_flight` (pc9821_ata.sv) is true while prefetch_busy, so the
 // SRST the ROM issues routinely takes the X_DRAIN arm and waits for a `block_done` no
-// request will ever produce. Status stays 0x80 and every later command is ignored.
+// request will ever produce. Status stays 0x80 and every later command is ignored. (That was
+// the defect; abort_with_status now clears prefetch_busy, and this bench holds it there.)
 //
 // The ATA's own range check only tests a command's FIRST LBA, so an image end, an eject
 // mid-transfer or a malformed HPS stream all reach this arm; the one-line fix mirrors
@@ -22,9 +23,14 @@
 // WHAT IS ASSERTED:
 //   1. after the errored read-ahead is consumed, the transfer is really over:
 //      xfer_state = X_IDLE, prefetch_busy = 0 and block_in_flight = 0;
-//   2. an SRST (`0x74C <- 0x04`) after that leaves BSY CLEAR and the FSM in X_IDLE, and
-//      the SRST's falling edge re-establishes the post-diagnostic signature
-//      (ERROR = 0x01, READY status) -- the same answer a drive that was never wedged gives.
+//   2. the guest sees the abort through the ports: STATUS (0x064E) has ERR set and BSY/DRQ
+//      clear, ERROR (0x0642) is non-zero;
+//   3. an SRST (`0x74C <- 0x04`) after that leaves BSY CLEAR and the FSM in X_IDLE, and
+//      the SRST's falling edge re-establishes the post-diagnostic signature, read through the
+//      ports: STATUS 0x50 and ERROR 0x01 (NP2kai cbus/ideio.c ideio_o74c: an HDD leaves SRST
+//      with `IDESTAT_DRDY | IDESTAT_DSC` and `IDEERR_AMNF`, the 0x01 diagnostic code; the
+//      Xe10's own EXECUTE DIAGNOSTIC answer is the same pair, docs/probes/IDE.TXT:342);
+//   4. the drive then takes a command: IDENTIFY DEVICE (0xEC) raises DRQ at the port.
 
 module tb_pc9821_ata_abort;
 
@@ -101,6 +107,10 @@ module tb_pc9821_ata_abort;
       @(posedge clk);
       @(negedge clk);
       io_wr = 0;
+      // The guest's next access comes at least five clk_sys after a command's (pc9821_iobus
+      // S_BYTE -> S_REPLY -> S_HOLD -> S_IDLE -> S_IOWAIT -> S_BYTE), and a media command
+      // dispatches pc9821_ata's MEDIA_WAIT cycles after its write: look no sooner than the bus.
+      if (addr == 16'h064E) repeat (4) @(negedge clk);
     end
   endtask
 
@@ -227,12 +237,22 @@ module tb_pc9821_ata_abort;
     end
     repeat (4) @(posedge clk);
 
-    // 1. the transfer is really over -- this is the line the current RTL fails.
+    // 1. the transfer is really over.
     if (dut.xfer_state !== 3'd0) fail("the abort did not return the FSM to X_IDLE");
     if (dut.prefetch_busy) fail("the abort left prefetch_busy set (block_in_flight stays true)");
     if (dut.block_in_flight) fail("block_in_flight is still true after the abort");
 
-    // 2. the ROM's own SRST pair must return the drive, not park it in X_DRAIN.
+    // 2. the guest's view of the abort: an errored command ends with ERR set, BSY and DRQ
+    // clear, and a non-zero ERROR register.
+    read_byte(16'h064E, status);
+    if (status[7] || status[3] || !status[0]) begin
+      $display("FAIL: STATUS after the abort reads 0x%02x (want ERR=1 BSY=0 DRQ=0)", status);
+      errors = errors + 1;
+    end
+    read_byte(16'h0642, value);
+    if (value == 8'h00) fail("ERROR after the abort reads 0x00");
+
+    // 3. the ROM's own SRST pair must return the drive, not park it in X_DRAIN.
     write_byte(16'h074C, 8'h04);
     repeat (8) @(posedge clk);
     if (dut.status_reg[7]) begin
@@ -246,12 +266,36 @@ module tb_pc9821_ata_abort;
       errors = errors + 1;
     end
     write_byte(16'h074C, 8'h00);
-    repeat (8) @(posedge clk);
-    if (dut.status_reg !== 8'h50)
-      $display("NOTE: post-SRST status is 0x%02x, expected 0x50", dut.status_reg);
-    if (dut.status_reg[7]) fail("the drive is still BSY after the full SRST pair");
-    if (dut.error_reg !== 8'h01)
-      $display("NOTE: post-SRST ERROR is 0x%02x, expected the 0x01 diagnostic", dut.error_reg);
+    // Poll the port until BSY drops (bounded), then read the signature.
+    n = 0;
+    read_byte(16'h064E, status);
+    while (status[7] && n < 200000) begin
+      read_byte(16'h064E, status);
+      n = n + 1;
+    end
+    if (status !== 8'h50) begin
+      $display("FAIL: post-SRST STATUS reads 0x%02x, expected 0x50 (NP2kai ideio_o74c)", status);
+      errors = errors + 1;
+    end
+    read_byte(16'h0642, value);
+    if (value !== 8'h01) begin
+      $display("FAIL: post-SRST ERROR reads 0x%02x, expected the 0x01 diagnostic", value);
+      errors = errors + 1;
+    end
+
+    // 4. the drive takes a command again: IDENTIFY DEVICE must raise DRQ at the port.
+    write_byte(16'h064C, 8'hA0);
+    write_byte(16'h064E, 8'hEC);
+    n = 0;
+    read_byte(16'h064E, status);
+    while (!status[3] && n < 200000) begin
+      read_byte(16'h064E, status);
+      n = n + 1;
+    end
+    if (!status[3] || status[7] || status[0]) begin
+      $display("FAIL: IDENTIFY after the SRST did not raise DRQ (STATUS 0x%02x)", status);
+      errors = errors + 1;
+    end
 
     $display("ABORT: reqs=%0d ra_errored=1 final_status=0x%02x xfer_state=%0d",
              ad_reqs, dut.status_reg, dut.xfer_state);

@@ -147,7 +147,7 @@ module tb_pc9821_dma_tram;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg [14:0] scan_line_base = 0;
@@ -190,6 +190,7 @@ module tb_pc9821_dma_tram;
   reg   [3:0] dma_be   = 4'd0;
   reg         dma_valid = 1'b0;
   reg         dma_write = 1'b0;
+  wire        dma_load_write = dma_write;   // the loading byte's direction (pc9821_dmac mem_load_we): set with the address
   wire        dma_ready, dma_resp_valid;
   wire [31:0] dma_dout;
   // The GDC draw engine's visit (the GDC2 WRITE slice) is not this bench's subject: tied
@@ -206,10 +207,10 @@ module tb_pc9821_dma_tram;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;

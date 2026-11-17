@@ -12,7 +12,8 @@
 // (pos/neg are sampled only at edges, so a stuck sync must not move either module), with random
 // RGB/DE and a ce_pix that drops out. The PLANTED class (+PLANT_BOTH_LONG) makes both phases
 // longer than the bound - the one case the header of pc9821_video_cleaner.sv says separates them -
-// and the bench must then report mismatches (it fails, which is the point of the plant).
+// and the bench must then report mismatches (it fails, which is the point of the plant; the
+// mutation plan, tests/pc9821/mutations.json, runs it).
 
 module tb_pc9821_video_cleaner_equiv;
   reg clk = 0;
@@ -54,7 +55,7 @@ module tb_pc9821_video_cleaner_equiv;
   // fixed-polarity HSYNC/VSYNC); the two syncs take the two polarities so both are covered.
   bit hs_pol = 0, vs_pol = 1;
 
-  task automatic phase_len(output int act, output int inact, input bit is_v);
+  task automatic phase_len(output int act, output int inact);
     case (rnd() % 8)
       0, 1, 2: begin act = 1 + rnd() % 64;   inact = 50 + rnd() % 900; end      // line-scale
       3, 4:    begin act = 1 + rnd() % (SAT - 1); inact = SAT + rnd() % (4 * SAT); end // long inactive
@@ -68,7 +69,7 @@ module tb_pc9821_video_cleaner_equiv;
   initial begin : hs_proc
     int a, i;
     forever begin
-      phase_len(a, i, 0);
+      phase_len(a, i);
       hsync = hs_pol;  repeat (a) @(posedge clk);
       hsync = ~hs_pol; repeat (i) @(posedge clk);
       hs_edges++;
@@ -77,7 +78,7 @@ module tb_pc9821_video_cleaner_equiv;
   initial begin : vs_proc
     int a, i;
     forever begin
-      phase_len(a, i, 1);
+      phase_len(a, i);
       vsync = vs_pol;  repeat (a) @(posedge clk);
       vsync = ~vs_pol; repeat (i) @(posedge clk);
       vs_edges++;

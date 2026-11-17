@@ -1,4 +1,4 @@
-TOOLS := gfxbenc2 egcplane gfxbench idelat ideprobe ioprobe irqwd opnapro pegcwatch probe2 sndtest memmap a20map d8bank integ crt31k crt24k pegcrd grcgpace gdcfig txtmode fdmode dmaroute rboot xe10cfg ym29 fdwrite selfmod stamp gvdump risky gtimer rstdtr rwipe
+TOOLS := gfxbenc2 egcplane gfxbench idelat ideprobe ioprobe irqwd opnapro pegcwatch probe2 sndtest memmap a20map d8bank integ crt31k crt24k pegcrd grcgpace gdcfig txtmode fdmode dmaroute rboot xe10cfg ym29 fdwrite selfmod stamp gvdump risky gtimer rstdtr rwipe xe10z pcm86ovf shbank picrot opnax ide640
 
 # Build the DOS .COM probe binaries from their assembly sources.
 #
@@ -25,13 +25,20 @@ COM_MAX := 65280
 # built file is renamed. Nothing else changes: the rows the probe PRINTS still begin `PEGCWATCH`,
 # and the decoder parses those, not the filename.
 COM_NAME_pegcwatch := pegcw
+COM_NAME_pcm86ovf := pcmovf
 
 com_name = $(if $(COM_NAME_$(1)),$(COM_NAME_$(1)),$(1))
 
 .DEFAULT_GOAL := all
 .PHONY: all clean
 
-all: $(foreach t,$(TOOLS),$(t)/$(call com_name,$(t)).com) cpusuite tcrpm/tcrpm.com sdshmoo/sdshmoo.com xe10t/xe10t.com xe10t/xe10u.com mputest/mputest.com speed/speed.com
+# The binaries built by a rule of their own (not the TOOLS pattern): `all` builds and `clean`
+# removes this one list (with each one's .o/.elf), so the two cannot drift apart.
+EXTRA_COMS := tcrpm/tcrpm.com sdshmoo/sdshmoo.com xe10t/xe10t.com xe10t/xe10u.com xe10t/xe10v.com \
+              xe10t/xe10w.com xe10t/xe10x.com xe10t/xe10y.com xe10cfg/xe10cg3.com mputest/mputest.com \
+              speed/speed.com
+
+all: $(foreach t,$(TOOLS),$(t)/$(call com_name,$(t)).com) cpusuite $(EXTRA_COMS)
 
 # CPUSUITE is NASM, not GNU as: it runs z486's own test programs (src/z486/tests/programs, NASM
 # sources), and its pack is GENERATED from them by gen_cpusuite.py, so a change to the suite
@@ -79,6 +86,14 @@ $(foreach t,$(TOOLS),$(eval $(call build_com,$(t))))
 
 # Include files of single-source tools.
 xe10cfg/xe10cfg.com: xe10cfg/xe10cfg_ext.inc
+# XE10CG3.COM: xe10cfg with the kit-3 CG rows (the rows no earlier capture measured) in /CG's CGX table (--defsym CG3=1), so
+# xe10cfg.com stays the binary of the kit-1/kit-2 captures.
+xe10cfg/xe10cg3.com: xe10cfg/xe10cfg.s xe10cfg/xe10cfg_ext.inc
+	as --32 --defsym CG3=1 -o xe10cfg/xe10cg3.o xe10cfg/xe10cfg.s
+	ld -m elf_i386 -Ttext 0x100 -e 0x100 -o xe10cfg/xe10cg3.elf xe10cfg/xe10cg3.o
+	objcopy -O binary -j .text xe10cfg/xe10cg3.elf $@
+	rm -f xe10cfg/xe10cg3.o xe10cfg/xe10cg3.elf
+	@echo "built $@"
 txtmode/txtmode.com: txtmode/txtmode_d.inc
 
 # XE10T, the unified timing probe: several include files, a tighter size limit (its
@@ -113,6 +128,66 @@ xe10t/xe10u.com: $(XE10T_SRC) xe10t/xe10t_decode.py
 	  rm -f $@; exit 1; fi
 	python3 -I xe10t/xe10t_decode.py --stamp $@
 	rm -f xe10t/xe10u.o xe10t/xe10u.elf
+	@echo "built $@"
+
+# XE10V.COM: XE10U plus /MISAL (the GVRAM store cost by alignment, graphics display off and on;
+# xe10t/sec_misal.inc), so XE10U.COM stays the binary the kit-2 /OPNA4 and /AUDIT2 captures
+# compare against.
+xe10t/xe10v.com: $(XE10T_SRC) xe10t/xe10t_decode.py
+	python3 -I xe10t/xe10t_decode.py --check-source xe10t/xe10t.s
+	as --32 --defsym XE10U=1 --defsym XE10V=1 -I xe10t -o xe10t/xe10v.o xe10t/xe10t.s
+	ld -m elf_i386 -Ttext 0x100 -e 0x100 -o xe10t/xe10v.elf xe10t/xe10v.o
+	objcopy -O binary -j .text xe10t/xe10v.elf $@
+	@if [ `wc -c < $@` -gt $(XE10T_MAX) ]; then \
+	  echo "ERROR: $@ is `wc -c < $@` bytes - over the $(XE10T_MAX)-byte limit (buffers at 0xC000)"; \
+	  rm -f $@; exit 1; fi
+	python3 -I xe10t/xe10t_decode.py --stamp $@
+	rm -f xe10t/xe10v.o xe10t/xe10v.elf
+	@echo "built $@"
+
+# XE10W.COM: XE10V plus /MISAL2 (misaligned main-memory, GVRAM-read, TCR, text-RAM, PEGC and
+# word-I/O accesses; xe10t/sec_misal2.inc), so XE10V.COM stays the binary of the XE10V-XE10-MISAL*
+# machine captures.
+xe10t/xe10w.com: $(XE10T_SRC) xe10t/xe10t_decode.py
+	python3 -I xe10t/xe10t_decode.py --check-source xe10t/xe10t.s
+	as --32 --defsym XE10U=1 --defsym XE10V=1 --defsym XE10W=1 -I xe10t -o xe10t/xe10w.o xe10t/xe10t.s
+	ld -m elf_i386 -Ttext 0x100 -e 0x100 -o xe10t/xe10w.elf xe10t/xe10w.o
+	objcopy -O binary -j .text xe10t/xe10w.elf $@
+	@if [ `wc -c < $@` -gt $(XE10T_MAX) ]; then \
+	  echo "ERROR: $@ is `wc -c < $@` bytes - over the $(XE10T_MAX)-byte limit (buffers at 0xC000)"; \
+	  rm -f $@; exit 1; fi
+	python3 -I xe10t/xe10t_decode.py --stamp $@
+	rm -f xe10t/xe10w.o xe10t/xe10w.elf
+	@echo "built $@"
+
+# XE10X.COM: XE10W plus /RDLAT (GVRAM, TCR and text-RAM reads under a nop sweep - latency or
+# rate - and the raster penalty in the 31 kHz and 640x480 modes; xe10t/sec_rdlat.inc), so
+# XE10W.COM stays the binary of the XE10W-XE10-MIS2RUN* machine captures.
+xe10t/xe10x.com: $(XE10T_SRC) xe10t/xe10t_decode.py
+	python3 -I xe10t/xe10t_decode.py --check-source xe10t/xe10t.s
+	as --32 --defsym XE10U=1 --defsym XE10V=1 --defsym XE10W=1 --defsym XE10X=1 -I xe10t -o xe10t/xe10x.o xe10t/xe10t.s
+	ld -m elf_i386 -Ttext 0x100 -e 0x100 -o xe10t/xe10x.elf xe10t/xe10x.o
+	objcopy -O binary -j .text xe10t/xe10x.elf $@
+	@if [ `wc -c < $@` -gt $(XE10T_MAX) ]; then \
+	  echo "ERROR: $@ is `wc -c < $@` bytes - over the $(XE10T_MAX)-byte limit (buffers at 0xC000)"; \
+	  rm -f $@; exit 1; fi
+	python3 -I xe10t/xe10t_decode.py --stamp $@
+	rm -f xe10t/xe10x.o xe10t/xe10x.elf
+	@echo "built $@"
+
+# XE10Y.COM: XE10X plus the kit-3 sections (/PKAB /CELLS /K3M, xe10t/sec_kit3.inc) and /REP, without
+# /OPNA2 /OPNA3 /AUDIT /OPNA4 /AUDIT2 (room under the 48896-byte limit), so XE10X.COM stays the binary
+# of the XE10X-XE10-RDLAT* machine captures.
+xe10t/xe10y.com: $(XE10T_SRC) xe10t/xe10t_decode.py
+	python3 -I xe10t/xe10t_decode.py --check-source xe10t/xe10t.s
+	as --32 --defsym XE10U=1 --defsym XE10V=1 --defsym XE10W=1 --defsym XE10X=1 --defsym XE10Y=1 -I xe10t -o xe10t/xe10y.o xe10t/xe10t.s
+	ld -m elf_i386 -Ttext 0x100 -e 0x100 -o xe10t/xe10y.elf xe10t/xe10y.o
+	objcopy -O binary -j .text xe10t/xe10y.elf $@
+	@if [ `wc -c < $@` -gt $(XE10T_MAX) ]; then \
+	  echo "ERROR: $@ is `wc -c < $@` bytes - over the $(XE10T_MAX)-byte limit (buffers at 0xC000)"; \
+	  rm -f $@; exit 1; fi
+	python3 -I xe10t/xe10t_decode.py --stamp $@
+	rm -f xe10t/xe10y.o xe10t/xe10y.elf
 	@echo "built $@"
 
 # SPEED: the speed reference (NASM loader + the gate's own Dhrystone). The Dhrystone objects are
@@ -170,6 +245,5 @@ kit: $(KIT_COMS)
 
 clean:
 	rm -f $(foreach t,$(TOOLS),$(t)/$(t).com $(t)/$(call com_name,$(t)).com $(t)/$(t).o $(t)/$(t).elf)
-	rm -f cpusuite/cpusuite.com tcrpm/tcrpm.com sdshmoo/sdshmoo.com xe10t/xe10t.com xe10t/xe10t.o xe10t/xe10t.elf xe10t/xe10u.com xe10t/xe10u.o xe10t/xe10u.elf
-	rm -f mputest/mputest.com mputest/mputest.o mputest/mputest.elf
-	rm -rf cpusuite/build
+	rm -f cpusuite/cpusuite.com $(EXTRA_COMS) $(EXTRA_COMS:.com=.o) $(EXTRA_COMS:.com=.elf)
+	rm -rf cpusuite/build speed/build

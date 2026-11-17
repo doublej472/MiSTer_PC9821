@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PEGC_SCAN_DOT: the packed 256-colour dot path, sampled the way the FRAMEWORK samples it, must put the byte of line offset x on dot x - one packed byte per dot, byte 0 leftmost, NP2kai's own mapping (`vramex + vc*8 + 0..7` lands at the surface row's bytes 0..7 in order, vram/makegrex.c) and the identity this core's planar path already has (its fold takes bit 7-dot of the column's plane byte). The REAL pc9821_pegc_scan and the REAL pc9821_video_mixer run over a machine raster (848-dot lines, the 21.0526 MHz dot enable, h_active = the first 640 dots), the line store's byte k is k & 0xFF so every fetched byte names its own line offset, the palette is loaded with entry v -> {v,v,v} so the sampled red byte IS the index the dot carried, and the sampler latches at sys/scanlines.v's rule (at the pixel enable, the value present during the cycle the enable ends); the run asserts 640 of 640 active dots correct and cannot pass silently (a window that sampled fewer than 600 FAILS). FAIL-FIRST: the 256-colour palette read is REGISTERED (the async form is refused by every block type, measured at 2,264 ALMs), so the pixel's index must be on the palette's input one clk before the sample - and because a dword covers four dots, the dword address must be presented one clk EARLY at every 4-dot group boundary or the group's first cycle still holds the previous group's dword: every dot that OPENS a group then displayed the byte FOUR DOTS to the left, measured at 160 of a line's 640 dots (dots 0, 4, 8, ...: 0->byte 4, 4->byte 0, 8->byte 4) before the fix and 0 after, with the blank->display boundary (the line's first active dot) its second instance.
+// TB_PC9821_PEGC_SCAN_DOT: the packed 256-colour dot path, sampled the way the FRAMEWORK samples it, must put the byte of line offset x on dot x - one packed byte per dot, byte 0 leftmost, NP2kai's own mapping (`vramex + vc*8 + 0..7` lands at the surface row's bytes 0..7 in order, vram/makegrex.c) and the identity this core's planar path already has (its fold takes bit 7-dot of the column's plane byte). The REAL pc9821_pegc_scan and the REAL pc9821_video_mixer run over a machine raster (848-dot lines, the 21.0526 MHz dot enable, h_active = the first 640 dots), the line store's byte k is k & 0xFF so every fetched byte names its own line offset, the palette is loaded with entry v -> {v,v,v} so the sampled red byte IS the index the dot carried, and the sampler latches at sys/scanlines.v's rule (at the pixel enable, the value present during the cycle the enable ends); the run asserts 640 of 640 active dots correct and cannot pass silently (the window must sample each of the 640 active dots exactly once, dot 0 included, or it FAILS). FAIL-FIRST: the 256-colour palette read is REGISTERED (the async form is refused by every block type, measured at 2,264 ALMs), so the pixel's index must be on the palette's input one clk before the sample - and because a dword covers four dots, the dword address must be presented one clk EARLY at every 4-dot group boundary or the group's first cycle still holds the previous group's dword: every dot that OPENS a group then displayed the byte FOUR DOTS to the left, measured at 160 of a line's 640 dots (dots 0, 4, 8, ...: 0->byte 4, 4->byte 0, 8->byte 4) before the fix and 0 after, with the blank->display boundary (the line's first active dot) its second instance.
 
 `default_nettype none
 
@@ -171,10 +171,14 @@ module tb_pc9821_pegc_scan_dot;
   integer first_bad_dot = -1;
   integer samples = 0;
   integer shown = 0;
+  reg [HACTIVE-1:0] seen = '0;   // which active dots the window sampled
+  integer dups = 0;
 
   always @(posedge clk) begin
     if (!reset && samp_hit && (samp_dot < HACTIVE)) begin
       samples = samples + 1;
+      if (seen[samp_dot]) dups = dups + 1;
+      seen[samp_dot] = 1'b1;
       if (samp_r !== samp_dot[7:0]) begin
         bad = bad + 1;
         if (first_bad_dot < 0) first_bad_dot = samp_dot;
@@ -236,9 +240,11 @@ module tb_pc9821_pegc_scan_dot;
     // ==== VERDICT ====
     $display("MEASURED packed dot phase: %0d active dots sampled, %0d wrong (first at dot %0d)",
              samples, bad, first_bad_dot);
-    if (samples < 600) begin
-      $display("FAIL dot phase: only %0d of the line's 640 active dots were sampled", samples);
-      $fatal(1, "TB_PC9821_PEGC_SCAN_DOT: FAIL (the sampling window did not run)");
+    if (samples != HACTIVE || dups != 0 || !(&seen)) begin
+      $display("FAIL dot phase: %0d samples (%0d repeated) over the line's %0d active dots, dot 0 %0s, every dot %0s",
+               samples, dups, HACTIVE, seen[0] ? "sampled" : "NOT sampled",
+               (&seen) ? "sampled" : "NOT sampled");
+      $fatal(1, "TB_PC9821_PEGC_SCAN_DOT: FAIL (the sampling window did not cover each active dot exactly once)");
     end
     if (bad != 0) begin
       $display("FAIL dot phase: %0d of %0d active dots carry the wrong line byte -- the packed byte for dot x must be the line's byte x (byte 0 leftmost)",

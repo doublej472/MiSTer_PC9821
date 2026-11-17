@@ -89,6 +89,7 @@ fail_24:
     jmp fail
 fail_25:
     mov eax, 0x25
+    jmp fail
 fail_26:
     mov eax, [gdt+0x24]
     jmp fail

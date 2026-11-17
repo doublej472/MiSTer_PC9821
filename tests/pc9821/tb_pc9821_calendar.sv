@@ -331,10 +331,12 @@ module tb_pc9821_calendar;
     if (irq !== 1'b0) fail("IRQ15 asserted while the tick is off");
     cal_tick(8'h81);
     if (tick_dout !== 8'h81) fail("0x128 read did not report rate 1");
-    // 1/32 s at 50 MHz is 1,562,499 cycles; preset the divider rather than
-    // spinning that long.
+    // 1/32 s at 50 MHz is 1,562,499 cycles; preset the free-running chain rather than
+    // spinning that long: the 1/64 s divider one clock before its step (781,250 cycles per
+    // step), at a step that is a 1/32 s tap (tick_ph[0] set).
     @(negedge clk);
-    dut.tick_div = 22'd1_562_498;
+    dut.tick_div = 23'd781_248;
+    dut.tick_ph  = 2'd1;
     repeat (2) @(posedge clk);
     @(negedge clk);
     // The tick sets the tick flag, bit 4 (the Xe10 reads 0x91 with a tick unread,

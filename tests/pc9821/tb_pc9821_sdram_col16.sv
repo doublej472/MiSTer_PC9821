@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Column-address cone (S4a) is value-identical in its shipped combinational form: on the pins every length-1 READ's (bank,row,half-column) follows the request's cells in order -- a same-row 4-dword read visits halves col0*2..col0*2+7 in that row, a read crossing a row boundary finishes the first row's tail then restarts at half 0 of the next row, and the last row of a bank carries into the next bank's row 0 -- so {rd_col_base,1'b0}+rd_issued in segment 1 and rd_issued-rd_seg_halfs after the split reproduce the old {rd_col_base + dw, rd_issued[0]} exactly.
+// Column-address cone (S4a) is value-identical in its shipped form, the registered look-ahead la_rd_col16 formed one cycle ahead (sdram.v S1-b): on the pins every length-1 READ's (bank,row,half-column) follows the request's cells in order -- a same-row 4-dword read visits halves col0*2..col0*2+7 in that row, a read crossing a row boundary finishes the first row's tail then restarts at half 0 of the next row, and the last row of a bank carries into the next bank's row 0 -- so {rd_col_base,1'b0}+rd_issued in segment 1 and rd_issued-rd_seg_halfs after the split reproduce the old {rd_col_base + dw, rd_issued[0]} exactly.
 //
 // ---- where each expectation comes from ----
 //  * THE COLUMN SEQUENCE IS PROTOCOL GEOMETRY, not the RTL's own formula: the

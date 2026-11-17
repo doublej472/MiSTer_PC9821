@@ -53,7 +53,7 @@ module pc9821_perf_msg (
     input  wire       dbg_gr_owned,   // the GRCG OWNS the GVRAM this clk_sys (pc9821_gvram)
     input  wire       dbg_eg_owned,   // ... and the EGC owns it this clk_sys
     input  wire       dbg_pw_owned,   // ... and the PLAIN plane-window client owns it (a store)
-    input  wire       v_active,       // the raster is on a visible line (pc9821_gdc_text)
+    input  wire       v_active,       // the raster is on a visible line (pc9821_crtc's pix_v_active)
     input  wire       vsync_edge,     // ONE pulse at the frame's vblank edge the IRQ rises on
     input  wire       dbg_access_page, // the CPU/GRCG/EGC access page (pc9821_gvram)
     input  wire       dbg_scan_page_q, // the page the scanout's line fetch is latched on

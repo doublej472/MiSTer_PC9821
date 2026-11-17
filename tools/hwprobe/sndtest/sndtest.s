@@ -457,7 +457,7 @@ kit_hit_loop:
 /* SEG 18: the hot triple (BD + SD + TOM) at 0 dB - the drum-bus wrap check.
  * The die sums the six drums into a 16-bit two's-complement accumulator
  * (fmopna_impl.c:5370), so three simultaneous near-peak drums are the case
- * where the machine may wrap and our core is not claimed to match (TODO 87). */
+ * where the machine may wrap and our core is not claimed to match. */
 sec_hot:
     mov     dx, offset hd_24
     call    puts

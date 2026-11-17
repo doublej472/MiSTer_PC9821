@@ -9,11 +9,8 @@
 // the image is deliberately ABSENT from the tree and arrives as a
 // user-supplied runtime file instead.
 //
-// AN ALL-ZERO IMAGE IS NOT SILENCE. It was believed to be ("the ROM reads as
-// all-zero ADPCM codes, which the decoder turns into silence"), and a pack
-// built without the image shipped that way -- which is the owner's harsh
-// percussion pop. An ADPCM-A all-zero nibble is code 0 at step 0, i.e. a +2
-// delta every 18.5 kHz sample (jt10_adpcma_lut step 0 code 0 = 12'o0002), so
+// AN ALL-ZERO IMAGE IS NOT SILENCE (AGENTS.md, "Firmware pack"). An ADPCM-A
+// all-zero nibble is code 0 at step 0, i.e. a +2 delta every 18.5 kHz sample (jt10_adpcma_lut step 0 code 0 = 12'o0002), so
 // the 12-bit accumulator RAMPS and wraps instead of resting at zero: measured
 // on ymfm's own decoder, one drum over the zero image reaches peak 15,360 with
 // up to +6,726 of DC, where the real image stays zero-mean and ends at 4-184.
@@ -22,19 +19,18 @@
 // the real image (tools/build_pack.py --rhythm, auto-detected from --dumps).
 //
 // An empty ROM needs no initialisation, and that is also what makes it
-// elaborate. The first version of this file filled 8192 entries with a loop,
-// and Quartus 17 refuses that ("Error (10106): Verilog HDL Loop error ...
-// loop must terminate within 5000 iterations"). Removing the contents removes
-// the loop; there is nothing left to elaborate over. Do not add an init back
+// elaborate. Filling 8192 entries with a loop does not: Quartus 17 refuses it
+// ("Error (10106): Verilog HDL Loop error ... loop must terminate within 5000
+// iterations"). With no contents there is nothing left to elaborate over. Do not add an init back
 // for the empty case: the image comes from the pack at runtime, not from an
 // init_file, so the array must have no initial contents of its own.
 //
 // ---------------------------------------------------------------------------
-// The read port (unchanged from upstream)
+// The read port (upstream's timing)
 //
 // `jtopna.v` drives address = adpcma_addr[12:0] and rden = ~adpcma_roe_n and
 // expects the byte one clock later, which is what a block-RAM read gives. The
-// memory holds 12-bit words (two bytes each) because the pack loader below
+// memory holds 4096 16-bit words (a 12-bit word address, two bytes each) because the pack loader below
 // presents a 16-bit word per transfer; the read muxes the addressed byte out
 // of the word registered one clock after `address`, so the chip still sees
 // exactly the byte-at-address-it-presented timing it saw before.
@@ -52,7 +48,7 @@
 // ---------------------------------------------------------------------------
 //
 // ---------------------------------------------------------------------------
-// The pack-loader write port (now wired)
+// The pack-loader write port
 //
 // The samples come from the ROM pack, exactly as the font does: a runtime file
 // the user supplies, not committed in the tree (README.md, "Licensing").

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_FDC_READY_CHANGE: a floppy media change raises NP2kai's ready-change interrupt (fdd/diskdrv.c): every mount event of an equipped drive - an eject, an insert, an eject of an empty drive - leaves ST0 = AI|NR|drv (0xC8|u) for SENSE INTERRUPT STATUS and raises the interrupt at once, ungated; an insert keeps the drive NOT READY (ST3 RDY clear, a READ DATA answering the IC0|NR class in its own seven-byte result with the interrupt, SENSE INTERRUPT STATUS then empty, the real Xe10's not-ready shape) for DISK_DELAY = 20 guest frames and then, only when the 0xBE register's bit 2 is clear or the DOR's motor bit 0x08 is set, leaves ST0 = AI|drv (0xC0|u) and raises the interrupt again, with the drive READY, while a ready held back by that gate is announced (AI|drv) when the DOR's motor bit later rises with 0xBE bit 2 set (NP2kai io/fdc.c fdc_o94); a medium that parses after the delay is announced when it parses; and a mount event while the controller is held in reset raises nothing (fdc_reset zeroes fdc.stat). FAIL-FIRST: the base controller had no ready-change interrupt at all (no media_chg/frame_tick seam).
+// TB_PC9821_FDC_READY_CHANGE: a floppy media change raises NP2kai's ready-change interrupt (fdd/diskdrv.c): every mount event of an equipped drive - an eject, an insert, an eject of an empty drive - leaves ST0 = AI|NR|drv (0xC8|u) for SENSE INTERRUPT STATUS and raises the interrupt at once, ungated; an insert keeps the drive NOT READY (ST3 RDY clear, a READ DATA answering the IC0|NR class in its own seven-byte result with the interrupt, SENSE INTERRUPT STATUS then empty, the real Xe10's not-ready shape) for DISK_DELAY = 20 guest frames and then, only when the 0xBE register's bit 2 is clear or the DOR's motor bit 0x08 is set, leaves ST0 = AI|drv (0xC0|u) and raises the interrupt again, with the drive READY, while a ready held back by that gate is announced (AI|drv) when the DOR's motor bit later rises with 0xBE bit 2 set (NP2kai io/fdc.c fdc_o94); a medium that parses after the delay is announced when it parses; and a mount event while the controller is held in reset raises nothing (fdc_reset zeroes fdc.stat). A change of the drive being sensed that lands inside SENSE INTERRUPT STATUS's result phase stays pending with its interrupt (NP2kai FDC_SenceintStatus clears the status at the command, before the change assigns it again), as does that drive's ready announcement (AI|drv) landing there, while a change of the OTHER drive there leaves the sensed drive's status consumed and reports only the other drive's. FAIL-FIRST: the base controller had no ready-change interrupt at all (no media_chg/frame_tick seam).
 //
 // THE EXPECTED VALUES ARE NP2kai's (commit 5939e0c6):
 //   eject/insert:  diskdrv_setfddex, fdd/diskdrv.c:256-284 -
@@ -265,6 +265,60 @@ module tb_pc9821_fdc_ready_change;
     frames(20);
     repeat (3) @(negedge clk);
     sense_is(8'hC0, "R7 ready after the delay");
+
+    // R8: a change of the drive being sensed, landing INSIDE that SENSE INTERRUPT STATUS's result
+    // phase (after ST0 is read, before PCN), stays pending: NP2kai's FDC_SenceintStatus takes the
+    // status and clears `fdc.stat[...]` when the command is accepted (io/fdc.c, `fdc.stat[fdc.us]
+    // = 0;` beside the buffer load), and diskdrv's change assigns `fdc.stat[drv]` afterwards, so
+    // the new status survives and the interrupt stands. FAIL-FIRST: the drain of the PCN byte
+    // cleared the drive's pending flag, the new AI|NR|drv was lost and no interrupt followed.
+    @(negedge clk); chg[0] = ~chg[0]; present[0] = 1'b0;      // eject drive 0: AI|NR|0
+    repeat (3) @(negedge clk);
+    check_irq(1'b1, "R8 eject interrupts");
+    wr8(3'd1, 8'h08);                                          // SENSE INTERRUPT STATUS
+    rd8(3'd0); rd8(3'd1);
+    check8(rd_val, 8'hC8, "R8 SENSE INT ST0 of the first eject");
+    @(negedge clk); chg[0] = ~chg[0];                          // a second change, mid-result
+    repeat (3) @(negedge clk);
+    rd8(3'd0); rd8(3'd1);                                      // PCN: the result ends here
+    repeat (3) @(negedge clk);
+    check_irq(1'b1, "R8 the change made during the result phase still interrupts");
+    sense_is(8'hC8, "R8 the change made during the result phase is reported");
+    sense_is(8'h80, "R8 then nothing pending");
+
+    // R9: a change of the OTHER drive inside drive 0's SENSE INTERRUPT STATUS result. Drive 0's
+    // status was taken by the command (FDC_SenceintStatus clears fdc.stat[us] at acceptance) and
+    // is not reported again; drive 1's new AI|NR|1 (diskdrv.c, its own fdc.stat[1]) is pending
+    // with its interrupt.
+    @(negedge clk); chg[0] = ~chg[0];                          // drive 0 (empty): AI|NR|0
+    repeat (3) @(negedge clk);
+    wr8(3'd1, 8'h08);
+    rd8(3'd0); rd8(3'd1);
+    check8(rd_val, 8'hC8, "R9 SENSE INT ST0 of drive 0's change");
+    @(negedge clk); chg[1] = ~chg[1]; present[1] = 1'b0;      // drive 1 ejected, mid-result
+    repeat (3) @(negedge clk);
+    rd8(3'd0); rd8(3'd1);                                      // PCN: the result ends here
+    repeat (3) @(negedge clk);
+    check_irq(1'b1, "R9 the other drive's change during the result phase interrupts");
+    sense_is(8'hC9, "R9 drive 1's change is reported, drive 0's is not repeated");
+    sense_is(8'h80, "R9 then nothing pending");
+
+    // R10: a drive's READY announcement (the insert delay ending) inside that drive's own SENSE
+    // INTERRUPT STATUS result: the AI|0 assigned after the command took AI|NR|0 survives.
+    @(negedge clk); chg[0] = ~chg[0];
+    repeat (20) @(negedge clk); present[0] = 1'b1;            // insert drive 0: AI|NR|0
+    frames(19);
+    check_irq(1'b1, "R10 the insert interrupts");
+    wr8(3'd1, 8'h08);
+    rd8(3'd0); rd8(3'd1);
+    check8(rd_val, 8'hC8, "R10 SENSE INT ST0 of the insert");
+    frames(1);                                                 // the 20th frame: ready, mid-result
+    repeat (3) @(negedge clk);
+    rd8(3'd0); rd8(3'd1);                                      // PCN: the result ends here
+    repeat (3) @(negedge clk);
+    check_irq(1'b1, "R10 the ready announced during the result phase interrupts");
+    sense_is(8'hC0, "R10 the ready is reported (AI|drv)");
+    sense_is(8'h80, "R10 then nothing pending");
 
   // ==== VERDICT ====
     if (fails != 0) $fatal(1, "TB_PC9821_FDC_READY_CHANGE: FAIL (%0d)", fails);

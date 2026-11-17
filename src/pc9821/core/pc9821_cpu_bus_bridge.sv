@@ -117,11 +117,21 @@ assign p_flush_done = c_flush_done & cpu_ce;
 // The uPD71071's accepted write raises a one-clk_sys pulse OUTSIDE the gated CPU domain.
 // z486 samples snoop_valid on posedge cpu_clk (l1_cache.sv:928 `snoop_valid_r <=
 // snoop_valid;`), so a pulse that lands in a cpu_ce=0 cycle has no ending edge and is
-// lost (an under-invalidation). Hold the pulse (and its address)
-// for the CPU the way the flush request is held, so every accepted write is captured
-// exactly once, on an enabled edge, with the address of the byte it invalidates. The
-// address is presented from the live pulse while it is high (a write accepted ON an
-// enabled edge carries that write's address) and from the latch while it waits.
+// lost (an under-invalidation). Every accepted write is held (with its address) and the CPU
+// is handed the snoop FROM THE HOLD ONLY, so it is captured exactly once, on the first enabled
+// edge after the write, with the address of the byte it invalidates.
+//
+// THE HOLD IS THE ONLY SOURCE (owner decision 2026-11-13, docs/trade-candidates.md T87). The
+// live pulse used to reach the CPU too (c_snoop_valid = p_snoop_valid | snoop_pend), so a write
+// accepted on an enabled edge was taken from the pulse itself: the platform's whole dma_ready
+// cone (the uPD71071's state -> dma_mem_req_pres -> the subsystem's DMA visibility pick ->
+// dma_snoop_valid) then ran on into both L1s' snoop logic in one clk_sys (xt: 6/6 seeds), and
+// the hold was set only by a write on a DISABLED edge. Now every write sets the hold whatever
+// cpu_ce is, the CPU's next enabled edge consumes it (set-wins is moot: the back-pressure below
+// never offers a write while one waits), and the cone ends at the hold. Cost: the invalidate is
+// one clk_sys later at full speed, or waits for the CPU's next enabled edge when the write lands
+// on one (a write in a disabled cycle is taken where it always was); no CPU stall, no DMA
+// throughput change (tb_pc9821_bridge_snoop_hold).
 //
 // BACK-PRESSURE. ONE snoop can wait: a second accepted write would replace
 // the waiting address (the mux above takes the live pulse over the latch), silently
@@ -138,14 +148,14 @@ assign p_flush_done = c_flush_done & cpu_ce;
 reg        snoop_pend;
 reg [31:0] snoop_addr_q;
 always @(posedge clk) begin
-    if (cpu_ce)              snoop_pend <= 1'b0;
-    else if (p_snoop_valid) begin
-        snoop_pend   <= 1'b1;
+    if (p_snoop_valid) begin
+        snoop_pend   <= 1'b1;            // every accepted write, enabled edge or not
         snoop_addr_q <= p_snoop_addr;
-    end
+    end else if (snoop_pend && cpu_ce)
+        snoop_pend   <= 1'b0;            // the CPU's enabled edge has taken it
 end
-assign c_snoop_valid = p_snoop_valid | snoop_pend;
-assign c_snoop_addr  = p_snoop_valid ? p_snoop_addr : snoop_addr_q;
+assign c_snoop_valid = snoop_pend;
+assign c_snoop_addr  = snoop_addr_q;
 assign p_snoop_busy  = snoop_pend;
 
 // ---- the one-CPU-cycle output pulses ----

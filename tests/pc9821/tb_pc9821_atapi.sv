@@ -3,7 +3,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_ATAPI: The CD-ROM answers as bank 1's ATAPI MASTER with the REAL pc9821_ata's one disk on bank 0, every expected value taken from NP2kai (cbus/ideio.c, cbus/atapicmd.c), from the Xe10's own IDE ROM or from the image the host model serves, never from the RTL: the IDE ROM's probe of bank 1's master (BANK3@0x0A0A) passes step by step - the pre-reset presence test (STATUS 0x00, the 0xEB/0x14 signature marking the unit ATAPI, ERROR 0x01), IDENTIFY DEVICE ending ERR+ABRT, the ready poll with its SRST-and-retry, and a PACKET INQUIRY whose byte 0 is 5 - so the ROM records a CD-ROM; device 0 on bank 1 reads the signature 0x01/0x01/0x14/0xEB with STATUS 0x00 after DEVICE RESET (ERROR 0x01, an interrupt) and 0x51/ERROR 0x01 after an SRST pulse, device 1 on bank 1 is an absent slave (STATUS and ALTERNATE STATUS 0x00, a command for it not executed), and bank 0's master is the hard disk; IDENTIFY DEVICE aborts with the signature and IDENTIFY PACKET DEVICE returns word 0 = 0x8580 and the model "NEC CD-ROM DRIVE:98"; a PACKET command shows the CoD phase (0x644 = 0x01, DRQ, no interrupt), INQUIRY returns NP2kai's 36 bytes ("NEC     CD-ROM DRIVE:98 1.0 ", type 5, removable) in a data phase whose 0x644/0x648/0x64A say IO and the byte count, then completes with 0x50 and 0x644 = 0x03; TEST UNIT READY with no medium and the first one after a mount answer CHECK with NOT READY / 0x3A in REQUEST SENSE (0x28 once NEC mode is on via MODE SENSE page 0x0F), the next one GOOD; READ CAPACITY returns the sector count and 2048; READ(10) streams each 2048-byte sector of an ISO and of a PCD (from the raw sector's MODE1 user data) through the slot's block handshake with one interrupt and byte count 2048 per sector, and a read past the end answers ILLEGAL REQUEST / 0x21; READ TOC format 0 returns the descriptors (LBA, MSF and NEC BCD forms) of a one-track ISO and of a three-track PCD header, lead-out 0xAA; MODE SENSE page 0x2A returns NP2kai's page with medium type 0x03 for a data+audio disc; PLAY AUDIO MSF streams the audio sectors' {R,L} samples into the CD-DA port and READ SUB-CHANNEL reports playing/paused/completed with the current position, which wanders by NP2kai's rand() & 7 frames while paused or completed; and PATACD.SYS's unit probe (bank 0/1, master/slave, IDENTIFY PACKET with the 0xEC fallback, word 0 bits 15:14 = 10, INQUIRY type 5, polled with nIEN, NOP after the packet command) finds the CD at bank 1's master, reads an all-zero identify page for the absent slave beside the disk, and finds nothing at the other three units; and the OSD's Eject CD-ROM (pc9821_mount_eject's size-0 event on slot 4, status[11] as the --cdrom top wires it) leaves no medium - TEST UNIT READY answers NOT READY / 0x3A every time and MODE SENSE reports medium type 0x70 - and a re-mount answers NOT READY / 0x28 once (NEC mode), then GOOD, and reads again; and a READ(10) whose block request waits while hps_io streams ANOTHER slot's words takes none of them; and a PLAY AUDIO MSF issued while the previous play's audio sector is still being fetched streams its own first sector whole and completes at its own end (NP2kai's synchronous playaudio: the superseded fetch's completion does not advance the new play); and with nIEN set a drive RELEASES INTRQ (ATA-3 Device Control: high impedance) so an unacknowledged CD request cannot hide the disk's next IRQ9 edge on the ORed line (MAME pc9801.cpp ideirq INPUT_MERGER_ANY_HIGH), while the request itself follows NP2kai's ideio.c - a completion under nIEN neither raises nor clears it and a status read under nIEN does not acknowledge it. 0x0433 reads 00 at bank 1 with nothing pending (the Xe10's `433=00`, not NP2kai ideio_i433's connected-device 0x02), and the CD's pending interrupt is its bit 1 at either bank selection until the status read (qemu-pc98 irq_levels). The MSF converter is pinned at its 4500-frame boundary: a mount of N sectors makes the converter's frame count N + 150 (atapicmd.c's 150-frame lead-in), so media of 4349/4350/4351 and 4424/4425/4426 sectors put the minute compare one frame below, exactly on and one frame above its edge and the seconds step's 74/75/76-frame tail there, and READ TOC MSF/BCD must answer 00:59:74, 01:00:00, 01:00:01, 01:00:74, 01:01:00 and 01:01:01. The CD-DA player reads ahead: behind a host that takes 20 ms per slot-4 request (longer than the 13.3 ms one sector lasts) an 800 ms play reaches the real src/soc/cdda.v ring's output whole, every sample in order and equal to the disc with no silent sample inside it; READ SUB-CHANNEL reports NP2kai's dacurpos, the next sector its mixer loads - one past the sector being heard, exactly lba0 + ceil(k / 588) after k samples have reached the speakers (ideio.c playdevaudio increments dacurpos as it loads a sector, before mixing it) - and reports completed only once every sample has left the ring; PAUSE and STOP silence the output at once, a paused drive reports that same position plus NP2kai's rand() & 7, and RESUME continues from the start of the sector that was being heard with no gap. A sector finishing in the very cycle of a PAUSE is merged into the held position (one past it) and one finishing in a STOP's cycle is discarded with the play (position 0). Another disc mounted over a playing one stops the play at once as NP2kai's mixer does when the medium goes away (ideio.c playdevaudio: daflag 0x14): no sample of the old disc reaches the speakers after the mount, no sector of the new disc is fetched, READ SUB-CHANNEL answers 0x14 at NP2kai's position, and the TEST UNIT READY that reports the new disc stops the player (0x13, position 0). A core reset in the middle of a play stops it as NP2kai's ideio_reset does on every machine reset (cbus/cbuscore.c resetfn[]; devinit daflag 0x15): the speakers go silent at once, no audio sector is fetched, the disc stays mounted and READ SUB-CHANNEL answers 0x15 with no position. A play's first sector completing in the very cycle of a PAUSE, or of another disc's mount over the playing one, counts as loaded, as NP2kai's dacurpos counts a sector the moment its mixer reads it (ideio.c playdevaudio): READ SUB-CHANNEL then reports one past it - 0x12 at lba0 + 1 + rand() & 7 with the lowest of 32 reports exactly lba0 + 1, and 0x14 at exactly lba0 + 1 - never lba0. A PAUSED play survives an eject and a different disc as it does in NP2kai (ideio_notify touches only the media flags; atapi_cmd_pauseresume tests only daflag 0x12): READ SUB-CHANNEL still answers 0x12 at the same position after the remount, a RESUME before any TEST UNIT READY answers GOOD and 0x11 and streams the NEW disc's samples from the paused sector, and the TEST UNIT READY that reports the new disc then stops the player (0x13, position 0). With NO disc in the drive (an eject clears NP2kai's READY flag) a RESUME of that pause, or a PLAY, answers GOOD with NO SENSE (atapi_cmd_pauseresume / playaudio_sub cmddone) and the play stops with 0x14, not 0x13, as NP2kai's playdevaudio stops it when the device is not READY: READ SUB-CHANNEL answers CHECK with the sense untouched while no disc is in, no sample is streamed, and after a remount it answers 0x14 at exactly the paused dacurpos (or the PLAY's start) with no rand(), a further RESUME changes nothing, and the TEST UNIT READY that reports the disc stops the player (0x13, position 0). A single-track image of raw 2352-byte sectors with no PCD header - the ECMA-130 sync at its start and a size that is a whole number of sectors, NP2kai's openiso/issec2352 image - mounts as one data track of size / 2352 sectors: READ CAPACITY answers that count and 2048, READ TOC one data track (0x14) with the lead-out at it, and READ(10) returns each sector's user bytes 16 bytes in (sec2352_read), or 24 in for MODE2 form 1 (after the CD-ROM XA subheader); the expected bytes are the image's own user data by construction of the ECMA-130 layout; a file that starts with the sync but is not a whole number of 2352-byte sectors reads as an ISO (size / 2048 sectors). A disc change in the middle of a READ(10) fails it as NP2kai's synchronous read does once the old disc is ejected (atapicmd.c atapi_dataread: sxsi_read fails, `drv->asc = 0x21; senderror(drv);`): a change during a data phase lets the buffered sector of the old disc drain whole and then answers CHECK, ILLEGAL REQUEST / 0x21 with no sector of the new disc, and a change while a sector's fetch is at the host presents no data phase and answers the same.
+// TB_PC9821_ATAPI: The CD-ROM answers as bank 1's ATAPI MASTER with the REAL pc9821_ata's one disk on bank 0, every expected value taken from NP2kai (cbus/ideio.c, cbus/atapicmd.c), from the Xe10's own IDE ROM or from the image the host model serves, never from the RTL: the IDE ROM's probe of bank 1's master (BANK3@0x0A0A) passes step by step - the pre-reset presence test (STATUS 0x00, the 0xEB/0x14 signature marking the unit ATAPI, ERROR 0x01), IDENTIFY DEVICE ending ERR+ABRT, the ready poll with its SRST-and-retry, and a PACKET INQUIRY whose byte 0 is 5 - so the ROM records a CD-ROM; device 0 on bank 1 reads the signature 0x01/0x01/0x14/0xEB with STATUS 0x00 after DEVICE RESET (ERROR 0x01, an interrupt) and 0x51/ERROR 0x01 after an SRST pulse, device 1 on bank 1 is an absent slave (STATUS and ALTERNATE STATUS 0x00, a command for it not executed), and bank 0's master is the hard disk; IDENTIFY DEVICE aborts with the signature and IDENTIFY PACKET DEVICE returns word 0 = 0x8580 and the model "NEC CD-ROM DRIVE:98"; a PACKET command shows the CoD phase (0x644 = 0x01, DRQ, no interrupt), INQUIRY returns NP2kai's 36 bytes ("NEC     CD-ROM DRIVE:98 1.0 ", type 5, removable) in a data phase whose 0x644/0x648/0x64A say IO and the byte count, then completes with 0x50 and 0x644 = 0x03; TEST UNIT READY with no medium and the first one after a mount answer CHECK with NOT READY / 0x3A in REQUEST SENSE (0x28 once NEC mode is on via MODE SENSE page 0x0F), the next one GOOD; READ CAPACITY returns the sector count and 2048; READ(10) streams each 2048-byte sector of an ISO and of a PCD (from the raw sector's MODE1 user data) through the slot's block handshake in one data phase per sector whose byte count reads 2048 and which raises its own interrupt (one more at the completion, none under nIEN: NP2kai atapi_dataread / cmddone), and a read past the end answers ILLEGAL REQUEST / 0x21; READ TOC format 0 returns the descriptors (LBA, MSF and NEC BCD forms) of a one-track ISO and of a three-track PCD header, lead-out 0xAA; MODE SENSE page 0x2A returns NP2kai's page with medium type 0x03 for a data+audio disc; PLAY AUDIO MSF streams the audio sectors' {R,L} samples into the CD-DA port and READ SUB-CHANNEL reports playing/paused/completed with the current position, which wanders by NP2kai's rand() & 7 frames while paused or completed; and PATACD.SYS's unit probe (bank 0/1, master/slave, IDENTIFY PACKET with the 0xEC fallback, word 0 bits 15:14 = 10, INQUIRY type 5, polled with nIEN, NOP after the packet command) finds the CD at bank 1's master, reads an all-zero identify page for the absent slave beside the disk, and finds nothing at the other three units; and the OSD's Eject CD-ROM (pc9821_mount_eject's size-0 event on slot 4, status[11] as the --cdrom top wires it) leaves no medium - TEST UNIT READY answers NOT READY / 0x3A every time and MODE SENSE reports medium type 0x70 - and a re-mount answers NOT READY / 0x28 once (NEC mode), then GOOD, and reads again; and a READ(10) whose block request waits while hps_io streams ANOTHER slot's words takes none of them; and a PLAY AUDIO MSF issued while the previous play's audio sector is still being fetched streams its own first sector whole and completes at its own end (NP2kai's synchronous playaudio: the superseded fetch's completion does not advance the new play); and with nIEN set a drive RELEASES INTRQ (ATA-3 Device Control: high impedance) so an unacknowledged CD request cannot hide the disk's next IRQ9 edge on the ORed line (MAME pc9801.cpp ideirq INPUT_MERGER_ANY_HIGH), while the request itself follows NP2kai's ideio.c - a completion under nIEN neither raises nor clears it and a status read under nIEN does not acknowledge it. 0x0433 reads 00 at bank 1 with nothing pending (the Xe10's `433=00`, not NP2kai ideio_i433's connected-device 0x02), and the CD's pending interrupt is its bit 1 at either bank selection until the status read (qemu-pc98 irq_levels). The MSF converter is pinned at its 4500-frame boundary: a mount of N sectors makes the converter's frame count N + 150 (atapicmd.c's 150-frame lead-in), so media of 4349/4350/4351 and 4424/4425/4426 sectors put the minute compare one frame below, exactly on and one frame above its edge and the seconds step's 74/75/76-frame tail there, and READ TOC MSF/BCD must answer 00:59:74, 01:00:00, 01:00:01, 01:00:74, 01:01:00 and 01:01:01; an ISO past 99 minutes answers NP2kai storemsf's FF:59:74 in the BCD form (449849 sectors 99:59:74, 449850 and 1048575 sectors FF:59:74) and its own 233:03:00 in the binary form at 1048575 sectors. The CD-DA player reads ahead: behind a host that takes 20 ms per slot-4 request (longer than the 13.3 ms one sector lasts) an 800 ms play reaches the real src/soc/cdda.v ring's output whole, every sample in order and equal to the disc with no silent sample inside it; READ SUB-CHANNEL reports NP2kai's dacurpos, the next sector its mixer loads - one past the sector being heard, exactly lba0 + ceil(k / 588) after k samples have reached the speakers (ideio.c playdevaudio increments dacurpos as it loads a sector, before mixing it) - and reports completed only once every sample has left the ring; PAUSE and STOP silence the output at once, a paused drive reports that same position plus NP2kai's rand() & 7, and RESUME continues from the start of the sector that was being heard with no gap. A sector finishing in the very cycle of a PAUSE is merged into the held position (one past it: READ SUB-CHANNEL answers 0x12 there, and 0x11 after RESUME) and one finishing in a STOP's cycle is discarded with the play (0x13 at position 0, NP2kai stop_daplay). Another disc mounted over a playing one stops the play at once as NP2kai's mixer does when the medium goes away (ideio.c playdevaudio: daflag 0x14): no sample of the old disc reaches the speakers after the mount, no sector of the new disc is fetched, READ SUB-CHANNEL answers 0x14 at NP2kai's position, and the TEST UNIT READY that reports the new disc stops the player (0x13, position 0). A core reset in the middle of a play stops it as NP2kai's ideio_reset does on every machine reset (cbus/cbuscore.c resetfn[]; devinit daflag 0x15): the speakers go silent at once, no audio sector is fetched, the disc stays mounted and READ SUB-CHANNEL answers 0x15 with no position. A play's first sector completing in the very cycle of a PAUSE, or of another disc's mount over the playing one, counts as loaded, as NP2kai's dacurpos counts a sector the moment its mixer reads it (ideio.c playdevaudio): READ SUB-CHANNEL then reports one past it - 0x12 at lba0 + 1 + rand() & 7 with the lowest report (within the jitter's 255-report period) exactly lba0 + 1, and 0x14 at exactly lba0 + 1 - never lba0. A PAUSED play survives an eject and a different disc as it does in NP2kai (ideio_notify touches only the media flags; atapi_cmd_pauseresume tests only daflag 0x12): READ SUB-CHANNEL still answers 0x12 at the same position after the remount, a RESUME before any TEST UNIT READY answers GOOD and 0x11 and streams the NEW disc's samples from the paused sector, and the TEST UNIT READY that reports the new disc then stops the player (0x13, position 0). With NO disc in the drive (an eject clears NP2kai's READY flag) a RESUME of that pause, or a PLAY, answers GOOD with NO SENSE (atapi_cmd_pauseresume / playaudio_sub cmddone) and the play stops with 0x14, not 0x13, as NP2kai's playdevaudio stops it when the device is not READY: READ SUB-CHANNEL answers CHECK with the sense untouched while no disc is in, no sample is streamed, and after a remount it answers 0x14 at exactly the paused dacurpos (or the PLAY's start) with no rand(), a further RESUME changes nothing, and the TEST UNIT READY that reports the disc stops the player (0x13, position 0). A single-track image of raw 2352-byte sectors with no PCD header - the ECMA-130 sync at its start and a size that is a whole number of sectors, NP2kai's openiso/issec2352 image - mounts as one data track of size / 2352 sectors: READ CAPACITY answers that count and 2048, READ TOC one data track (0x14) with the lead-out at it, and READ(10) returns each sector's user bytes 16 bytes in (sec2352_read), or 24 in for MODE2 form 1 (after the CD-ROM XA subheader); the expected bytes are the image's own user data by construction of the ECMA-130 layout; a file that starts with the sync but is not a whole number of 2352-byte sectors reads as an ISO (size / 2048 sectors). A disc change in the middle of a READ(10) fails it as NP2kai's synchronous read does once the old disc is ejected (atapicmd.c atapi_dataread: sxsi_read fails, `drv->asc = 0x21; senderror(drv);`): a change during a data phase lets the buffered sector of the old disc drain whole and then answers CHECK, ILLEGAL REQUEST / 0x21 with no sector of the new disc, and a change while a sector's fetch is at the host presents no data phase and answers the same.
 //
 // The CD is pc9821_atapi; the IDE read mux is the one pc9821_system builds (`cd_io_own` picks
 // the CD's byte). The host model serves hps_io slot 4 from an in-memory image: an ISO of
@@ -290,12 +290,38 @@ module tb_pc9821_atapi;
   integer host_delay = 6;   // clk cycles from the request to the ack (C13 models the ARM's latency)
   bit host_foreign = 0;     // C16: stream another slot's words (acks low) before serving the request
   // C26: hold the acknowledge of the next SECTOR request (not the header) after its last word,
-  // and drop it - which completes the fetch (e_done) - in the very cycle the drive executes a
-  // packet with opcode hold_op (exec_go). With hold_op 0 the case itself drops it, on the same
-  // falling edge that raises a mount (the case clears host_hold there).
+  // and drop it so that the fetch completes (e_done) in the very cycle the drive executes a
+  // packet with opcode hold_op (exec_go). The drive takes hps_io's stream through one register
+  // stage (pc9821_atapi's THE HPS WORD STREAM, ONE STAGE IN), so e_done follows the acknowledge's
+  // fall by one cycle: the acknowledge drops in the cycle BEFORE exec_go, the one carrying the
+  // packet's last 0x0641 write (pkt_words 5), whose edge moves the drive into S_EXEC. With hold_op
+  // 0 the case itself drops it, one falling edge after the one that raises a mount (the case
+  // clears host_hold there). c26_pause_hit/c26_mount_hit record that the coincidence happened.
   bit       host_hold = 0;
   reg [7:0] hold_op = 8'h00;
   integer   host_last_lba = -1;   // C27: the slot LBA of the latest sector request
+`ifndef NO_CD
+  // THE OFFSET STAGE (pc9821_atapi; docs/trade-candidates.md T88): every fetch spends exactly two
+  // cycles between E_IDLE and E_WAIT (whose entry raises sd_rd) - E_CALC registers the offset,
+  // E_SET forms the request from it - one more than the single-cycle E_CALC it replaced.
+  integer e_calc_n = 0, e_fetches = 0;
+  always @(posedge clk) begin
+    if (cd.e_st == 3'd1 || cd.e_st == 3'd4) e_calc_n = e_calc_n + 1;       // E_CALC, E_SET
+    else if (cd.e_st == 3'd2 && e_calc_n != 0) begin                         // E_WAIT
+      if (e_calc_n != 2) fail($sformatf("a fetch spent %0d cycles forming its request, want 2", e_calc_n));
+      if (!sd_rd) fail("a fetch entered E_WAIT without raising sd_rd");
+      e_calc_n = 0; e_fetches = e_fetches + 1;
+    end
+  end
+  // C26's coincidences, observed (white-box): the audio fetch's completion in the PAUSE's own
+  // execution cycle, and in the mount edge's own cycle
+  bit c26_pause_hit = 0, c26_mount_hit = 0;
+  always @(posedge clk) begin
+    if (cd.e_done && cd.e_kind == 2'd2 && cd.exec_go && cd.cmd == 8'hA0 && cd.cdb[0] == 8'h4B)
+      c26_pause_hit = 1;
+    if (cd.e_done && cd.e_kind == 2'd2 && cd.mount_edge) c26_mount_hit = 1;
+  end
+`endif
   always @(negedge clk) begin : host
     reg [31:0] lba; integer words;
     if (sd_rd && !sd_ack) begin
@@ -325,9 +351,11 @@ module tb_pc9821_atapi;
       if (host_hold && lba != 0) begin : held
         integer n;
         n = 0;
-        while (host_hold && !(hold_op != 8'h00 && cd.exec_go && cd.cmd == 8'hA0 &&
-                              cd.cdb[0] == hold_op) && n < 20000000) begin
-          @(negedge clk); n++;
+        #1;   // after the I/O task's writes of this edge (they are driven on the falling edge)
+        while (host_hold && !(hold_op != 8'h00 && io_wr && io_addr == 16'h0641 &&
+                              cd.st == 3'd1 /* S_PKT */ && cd.pkt_words == 3'd5 &&
+                              cd.cmd == 8'hA0 && cd.cdb[0] == hold_op) && n < 20000000) begin
+          @(negedge clk); #1; n++;
         end
         if (n >= 20000000) $fatal(1, "TB_PC9821_ATAPI: FAIL - C26: the held fetch's event never came");
         host_hold = 0;
@@ -343,6 +371,16 @@ module tb_pc9821_atapi;
       img_size = img.size();
       @(negedge clk); img_mounted = 1; repeat (3) @(negedge clk); img_mounted = 0;
       repeat (20000) @(negedge clk);   // the header fetch and (ISO) the lead-out MSF
+    end
+  endtask
+  // C19b: an ISO image of n sectors whose bytes are not all held (only the size matters, as above).
+  task automatic mount_iso_size(input integer n);
+    begin
+      img = new[32 * 2048];
+      pcd_mode = 0;
+      img_size = 64'(n) * 64'd2048;
+      @(negedge clk); img_mounted = 1; repeat (3) @(negedge clk); img_mounted = 0;
+      repeat (20000) @(negedge clk);
     end
   endtask
   // C19: an ISO of exactly n sectors. The mount's header is the drive's own iso_word for an ISO,
@@ -387,10 +425,24 @@ module tb_pc9821_atapi;
     cdda_n <= cdda_n + 1;
   end
 
+  // read10's interrupt accounting: the guest's own view of nIEN per bank (0x0432 bit 0 selects
+  // the bank, 0x074C bit 1 is nIEN; a core reset clears it), and the CD's INTRQ rising edges.
+  bit     sh_bank = 0;
+  bit     sh_nien [0:1] = '{0, 0};
+  integer cd_irq_rises = 0;
+  reg     cd_irq_q = 1'b0;
+  always @(posedge clk) begin
+    if (!rst_n) begin sh_nien[0] = 0; sh_nien[1] = 0; end
+    cd_irq_q <= cd_irq;
+    if (cd_irq && !cd_irq_q) cd_irq_rises <= cd_irq_rises + 1;
+  end
+
   // ==== port access (one strobe cycle, the iobus's shape) ====
   task automatic wr(input [15:0] a, input [7:0] d);
     begin
       @(negedge clk); io_addr = a; io_din = d; io_wr = 1;
+      if (a == 16'h0432) sh_bank = d[0];
+      if (a == 16'h074C) sh_nien[sh_bank] = d[1];
       @(negedge clk); io_wr = 0;
     end
   endtask
@@ -445,6 +497,15 @@ module tb_pc9821_atapi;
   byte rbuf [0:8191];
   integer rlen;
   reg [7:0] pk_status;
+  // Per data phase (read10 only, pk_ack): the byte count the drive announced in 0x648/0x64A and
+  // whether INTRQ was up when the guest found the phase; the ISR's STATUS read acknowledges it
+  // before the data is taken, so the next phase must raise its own. pk_done_irq: INTRQ at the
+  // completion, before the final STATUS read.
+  bit     pk_ack = 0;
+  integer pk_phases;
+  integer pk_cnt [0:63];
+  bit     pk_irq [0:63];
+  bit     pk_done_irq;
   task automatic packet(input byte c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, input string what);
     reg [7:0] s, ir, bl, bh; reg [15:0] w; integer cnt, phases;
     begin
@@ -467,6 +528,8 @@ module tb_pc9821_atapi;
         rd(16'h0644, ir); rd(16'h0648, bl); rd(16'h064A, bh);
         if (ir !== 8'h02) begin errors++; $display("FAIL: %s: data phase 0x644 %02x, want 02", what, ir); end
         cnt = {bh, bl};
+        if (phases < 64) begin pk_cnt[phases] = cnt; pk_irq[phases] = cd_irq; end
+        if (pk_ack) rd(16'h064E, s);
         for (int k = 0; k < (cnt + 1) / 2; k++) begin
           rdw(w);
           if (rlen < 8190) begin rbuf[rlen] = w[7:0]; rbuf[rlen + 1] = w[15:8]; end
@@ -476,6 +539,8 @@ module tb_pc9821_atapi;
         phases++;
         if (phases > 64) $fatal(1, "TB_PC9821_ATAPI: FAIL - %s: runaway data phases", what);
       end
+      pk_phases = phases;
+      pk_done_irq = cd_irq;
       rd(16'h064E, pk_status);
     end
   endtask
@@ -552,10 +617,53 @@ module tb_pc9821_atapi;
     end
   endtask
 
-  // the data of a READ(10), checked against the image's sectors
-  task automatic read10(input integer lba, input integer n, input string what);
+  // C23: format-1 READ SUB-CHANNEL reports (binary MSF: C23 plays outside NEC mode); each
+  // must carry status `st` at want..want+7 (dacurpos + rand() & 7), and within 255 reports (the
+  // jitter generator's period) one must sit at want itself: the held position.
+  task automatic c23_subq(input byte st, input integer want, input string what);
+    integer pos, pmin;
     begin
+      pmin = 1 << 30;
+      for (int q = 0; q < 255 && pmin != want; q++) begin
+        packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, {what, " / SUB-CHANNEL"});
+        pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;
+        if (pos < pmin) pmin = pos;
+        if (rbuf[1] !== st || pos < want || pos > want + 7) begin
+          fail($sformatf("%s: status %02x at LBA %0d, want %02x at %0d..%0d", what, rbuf[1], pos, st, want, want + 7));
+          return;
+        end
+      end
+      if (pmin != want) fail($sformatf("%s: lowest of 255 reports %0d, want %0d", what, pmin, want));
+    end
+  endtask
+
+  // the data of a READ(10), checked against the image's sectors, and its phases: NP2kai's
+  // atapi_dataread presents ONE sector per data phase (`drv->cy = 2048`, so 0x648/0x64A read
+  // 0x0800) and raises the interrupt for each (`setintr`, unless nIEN), and cmddone raises one
+  // more at the completion (atapicmd.c). Polled (nIEN set), no interrupt at all.
+  task automatic read10(input integer lba, input integer n, input string what);
+    integer r0;
+    bit     nien;
+    begin
+      nien = sh_nien[1];
+      r0 = cd_irq_rises;
+      pk_ack = 1;
       packet(8'h28, 0, 8'(lba >> 24), 8'(lba >> 16), 8'(lba >> 8), 8'(lba), 0, 8'(n >> 8), 8'(n), 0, what);
+      pk_ack = 0;
+      if (pk_phases != n) begin errors++; $display("FAIL: %s: %0d data phases, want one per sector (%0d)", what, pk_phases, n); end
+      for (int k = 0; k < pk_phases && k < 64; k++) begin
+        if (pk_cnt[k] != 2048) begin
+          errors++; $display("FAIL: %s: data phase %0d byte count %0d, want 2048", what, k, pk_cnt[k]);
+        end
+        if (pk_irq[k] !== !nien) begin
+          errors++; $display("FAIL: %s: data phase %0d INTRQ %0b with nIEN %0b", what, k, pk_irq[k], nien);
+        end
+      end
+      if (pk_done_irq !== !nien) begin errors++; $display("FAIL: %s: completion INTRQ %0b with nIEN %0b", what, pk_done_irq, nien); end
+      if (cd_irq_rises - r0 != (nien ? 0 : n + 1)) begin
+        errors++; $display("FAIL: %s: %0d interrupts, want %0d (one per sector and the completion, nIEN %0b)",
+                           what, cd_irq_rises - r0, nien ? 0 : n + 1, nien);
+      end
       expect_done(what);
       if (rlen != n * 2048) begin errors++; $display("FAIL: %s: %0d bytes, want %0d", what, rlen, n * 2048); end
       else for (int s = 0; s < n; s++) for (int i = 0; i < 2048; i++)
@@ -832,10 +940,13 @@ module tb_pc9821_atapi;
 
     // ==== C9: PATACD.SYS's unit probe (storage-expand report appendix A) ====
     begin
-      integer found;
+      integer found, cds;
       found = -1;
+      cds = 0;
       wr(16'h074C, 8'h02);   // polled: nIEN
-      for (int u = 0; u < 4 && found < 0; u++) begin
+      // Every unit is probed (no early exit), so the absent slave on BOTH banks reads the
+      // all-zero page and no unit but bank 1's master answers as a CD.
+      for (int u = 0; u < 4; u++) begin
         reg [7:0] s, r; reg [15:0] w0; integer ok;
         wr(16'h0432, 8'(u >> 1));
         wr(16'h064C, (u & 1) ? 8'hB0 : 8'hA0);
@@ -866,9 +977,13 @@ module tb_pc9821_atapi;
         rd(16'h074C, s);
         for (int k = 0; k < 2000 && s[7]; k++) rd(16'h074C, s);
         if (s[7]) $fatal(1, "TB_PC9821_ATAPI: FAIL - C9 NOP left the drive BSY");
-        if (ok) found = u;
+        if (ok) begin
+          if (found < 0) found = u;
+          cds++;
+        end
       end
       if (found != 2) begin errors++; $display("FAIL: C9 PATACD's probe found unit %0d, want 2 (bank 1 master)", found); end
+      if (cds != 1) begin errors++; $display("FAIL: C9 PATACD's probe found %0d CD units, want 1 (only bank 1's master)", cds); end
       if (cd_irq) fail("C9 an interrupt was raised under nIEN");
     end
 
@@ -1002,11 +1117,10 @@ module tb_pc9821_atapi;
         if (rbuf[1] !== 8'h11) begin fail($sformatf("C13 audio status %02x while playing", rbuf[1])); break; end
       end
       if (done_at < 0) fail("C13 the 80 ms play never completed in 400 ms (status stays 0x11)");
-      // the drive reports the end when the last sector is FETCHED into src/soc/cdda.v's ring, at
-      // most the ring's 2048 samples (46 ms) ahead of the speakers. NP2kai counts the sectors as
-      // its mixer consumes them, so it reports up to that much later; a game polling for the end
-      // sees it slightly early here, never late.
-      else if (done_at < 80 - 47) fail($sformatf("C13 the play completed after %0d ms, faster than its 80 ms of audio", done_at));
+      // NP2kai counts the sectors as its mixer consumes them, and the drive reports completed
+      // only once every sample has left the ring (C21 holds that to within one sector), so the
+      // 0x13 cannot come sooner than the 80 ms of audio less one sector (588 samples, 13.3 ms).
+      else if (done_at < 80 - 14) fail($sformatf("C13 the play completed after %0d ms, before its 80 ms of audio (less one sector) had played", done_at));
       else $display("C13: 6 sectors played in %0d ms", done_at);
       repeat (6000000) @(negedge clk);   // 60 ms: let the ring drain to the speakers
       $display("C13: %0d samples out of the ring, %0d wrong", c13_k, c13_bad);
@@ -1226,6 +1340,49 @@ module tb_pc9821_atapi;
                        8'h00, 8'h14, 8'hAA, 8'h00, 8'h00, bcd8(mm), bcd8(ss), bcd8(ff)},
                      $sformatf("C19 READ TOC MSF at %0d sectors (%02d:%02d:%02d)", n, mm, ss, ff));
       end
+      // C19b: AN ISO PAST 99 MINUTES. NP2kai's storemsf answers a BCD time over 99 minutes with
+      // FF:59:74 and a binary one over 255 minutes with 255:59:74 (atapicmd.c storemsf: `if
+      // (pos > 99) { ptr[1] = 0xff; ptr[2] = 0x59; ptr[3] = 0x74;`). 449849 sectors are
+      // 449999 frames = 99:59:74; 449850 are 100:00:00; 1048575 (the drive's 2 GiB capacity
+      // limit) are 1048725 frames = 233:03:00. The binary form is read after a reset clears NEC
+      // mode. FAIL-FIRST: the minute counter was 7 bits and the BCD digit capped at 9, so 100
+      // minutes read 91:00:00 (BCD) and 233 read 105 (binary).
+      for (int t = 0; t < 3; t++) begin
+        case (t)
+          0: n = 449849;
+          1: n = 449850;
+          default: n = 1048575;
+        endcase
+        mount_iso_size(n);
+        mm = (n + 150) / 4500;
+        ss = ((n + 150) / 75) % 60;
+        ff = (n + 150) % 75;
+        packet(8'h43, 8'h02, 0, 0, 0, 0, 0, 0, 8'd100, 0, "C19b READ TOC MSF");
+        expect_done("C19b READ TOC MSF");
+        expect_bytes('{8'h00, 8'h12, 8'h01, 8'h01,
+                       8'h00, 8'h14, 8'h01, 8'h00, 8'h00, 8'h00, 8'h02, 8'h00,
+                       8'h00, 8'h14, 8'hAA, 8'h00, 8'h00,
+                       (mm > 99) ? 8'hFF : bcd8(mm), (mm > 99) ? 8'h59 : bcd8(ss),
+                       (mm > 99) ? 8'h74 : bcd8(ff)},
+                     $sformatf("C19b READ TOC MSF (BCD) at %0d sectors (%0d:%02d:%02d)", n, mm, ss, ff));
+      end
+      rst_n = 0;
+      repeat (8) @(negedge clk);
+      rst_n = 1;
+      repeat (8) @(negedge clk);
+      sel_cd;
+      wr(16'h074C, 8'h02);
+      n = 1048575;
+      mount_iso_size(n);
+      mm = (n + 150) / 4500;
+      ss = ((n + 150) / 75) % 60;
+      ff = (n + 150) % 75;
+      packet(8'h43, 8'h02, 0, 0, 0, 0, 0, 0, 8'd100, 0, "C19b READ TOC MSF binary");
+      expect_done("C19b READ TOC MSF binary");
+      expect_bytes('{8'h00, 8'h12, 8'h01, 8'h01,
+                     8'h00, 8'h14, 8'h01, 8'h00, 8'h00, 8'h00, 8'h02, 8'h00,
+                     8'h00, 8'h14, 8'hAA, 8'h00, 8'h00, 8'(mm), 8'(ss), 8'(ff)},
+                   $sformatf("C19b READ TOC MSF (binary) at %0d sectors (%0d:%02d:%02d)", n, mm, ss, ff));
     end
 
     // ==== C20: CD-DA from a slow host: 20 ms from each slot-4 request to its acknowledge ====
@@ -1412,17 +1569,26 @@ module tb_pc9821_atapi;
       c23_op = 8'h4B;
       packet(8'h4B, 0, 0, 0, 0, 0, 0, 0, 0, 0, "C23 PAUSE with a sector finishing in its cycle");
       c23_op = 8'h00;
+      // What the guest reads: READ SUB-CHANNEL reports paused (0x12) at NP2kai's dacurpos plus
+      // rand() & 7 (atapicmd.c readsubch), so the lowest report is the held position, 13.
+      c23_subq(8'h12, 13, "C23 PAUSE + played in one cycle");
+      // The merge itself lands in the HEARD position (where a RESUME restarts) and the remaining
+      // length, which no READ SUB-CHANNEL reports (it answers dacurpos, the fetch position):
+      // those stay white-box.
       if (cd.daplaypos !== 20'd13 || cd.dacurpos !== 20'd13 || cd.dalength !== 20'd6)
         fail($sformatf("C23 PAUSE + played in one cycle: played %0d fetch %0d length %0d, want 13 13 6",
                        cd.daplaypos, cd.dacurpos, cd.dalength));
       packet(8'h4B, 0, 0, 0, 0, 0, 0, 0, 8'h01, 0, "C23 RESUME");
+      packet(8'h42, 0, 0, 8'h01, 0, 0, 0, 0, 8'd4, 0, "C23 SUB-CHANNEL after RESUME");
+      if (rbuf[1] !== 8'h11) fail($sformatf("C23 audio status %02x after RESUME, want 0x11 (playing)", rbuf[1]));
       repeat (100) @(negedge clk);
       c23_op = 8'h1B;
       packet(8'h1B, 0, 0, 0, 8'h01, 0, 0, 0, 0, 0, "C23 STOP with a sector finishing in its cycle");
       c23_op = 8'h00;
-      if (cd.daplaypos !== 20'd0 || cd.dacurpos !== 20'd0 || cd.daflag !== 3'd3)
-        fail($sformatf("C23 STOP + played in one cycle: played %0d fetch %0d flag %0d, want 0 0 3",
-                       cd.daplaypos, cd.dacurpos, cd.daflag));
+      // NP2kai stop_daplay: daflag 0x13 (completed), dacurpos 0, whatever finished in the cycle.
+      c23_subq(8'h13, 0, "C23 STOP + played in one cycle");
+      if (cd.daplaypos !== 20'd0)
+        fail($sformatf("C23 STOP + played in one cycle: played %0d, want 0", cd.daplaypos));
       $display("C23: PAUSE and STOP each merged a sector finishing in their own cycle");
       cdda_req = 1; c23_quiet = 0;
     end
@@ -1534,7 +1700,7 @@ module tb_pc9821_atapi;
     // so a PAUSE taken once the play's first sector has been read reports one past it: 0x12 at
     // lba0 + 1 + (rand() & 7) (atapicmd.c readsubch). Here that first fetch's completion (e_done:
     // every sample is in the ring) lands in the PAUSE's own cycle (R4: both events land), so the
-    // lowest of 32 reports must be lba0 + 1, never lba0. The mount over a playing drive is the
+    // lowest report must be lba0 + 1, never lba0. The mount over a playing drive is the
     // same merge with 0x14, which readsubch reports with no jitter: exactly lba0 + 1.
     begin
       integer f0, f1, pos, pmin;
@@ -1557,7 +1723,9 @@ module tb_pc9821_atapi;
       expect_done("C26 PAUSE");
       if (host_hold) fail("C26 the held fetch did not complete in the PAUSE's cycle");
       pmin = 1 << 30;
-      for (int q = 0; q < 32; q++) begin
+      // Up to the jitter generator's period (255 reports) until one sits at the held position:
+      // 32 reports were a window of the LFSR that the cases before this one happen to place.
+      for (int q = 0; q < 255 && pmin != 41; q++) begin
         packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C26 SUB-CHANNEL paused");
         pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;
         if (pos < pmin) pmin = pos;
@@ -1566,7 +1734,7 @@ module tb_pc9821_atapi;
                          rbuf[1], pos));
       end
       if (pmin != 41)
-        fail($sformatf("C26 paused after the first sector: lowest of 32 reports %0d, want NP2kai's dacurpos 41", pmin));
+        fail($sformatf("C26 paused after the first sector: lowest of 255 reports %0d, want NP2kai's dacurpos 41", pmin));
       packet(8'h1B, 0, 0, 0, 8'h01, 0, 0, 0, 0, 0, "C26 STOP");
       // the same merge against a mount (another disc over the playing one): 0x14, no jitter
       host_hold = 1; hold_op = 8'h00;
@@ -1578,13 +1746,22 @@ module tb_pc9821_atapi;
       disc_id = 1; make_pcd;
       img_size = img.size();
       // the mount edge and the held fetch's completion in one cycle
-      @(negedge clk); img_mounted = 1; sd_ack = 0; host_hold = 0;
-      repeat (3) @(negedge clk); img_mounted = 0;
+      // (the drive's mount_edge follows the bench's img_mounted by two cycles and its e_done
+      // follows the acknowledge's fall by one, through its HPS stream stage: so the acknowledge
+      // falls one edge after img_mounted rises; c26_mount_hit checks the two really coincide)
+      @(negedge clk); img_mounted = 1;
+      @(negedge clk); sd_ack = 0; host_hold = 0;
+      repeat (2) @(negedge clk); img_mounted = 0;
       repeat (20000) @(negedge clk);            // the new disc's header
       packet(8'h42, 8'h02, 8'h40, 8'h01, 0, 0, 0, 0, 8'd16, 0, "C26 SUB-CHANNEL after the mount");
       pos = rbuf[9] * 4500 + rbuf[10] * 75 + rbuf[11] - 150;
       if (rbuf[1] !== 8'h14 || pos != 41)
         fail($sformatf("C26 mount after the first sector: status %02x at LBA %0d, want 0x14 at 41", rbuf[1], pos));
+`ifndef NO_CD
+      if (e_fetches < 10) fail("the offset-stage monitor saw too few fetches");
+      if (!c26_pause_hit) fail("C26 the fetch's e_done never coincided with the PAUSE's exec_go");
+      if (!c26_mount_hit) fail("C26 the fetch's e_done never coincided with the mount edge");
+`endif
       $display("C26: the first sector completing in a PAUSE's and in a mount's cycle reports %0d (NP2kai: 41)", pmin);
       c23_quiet = 0;
       disc_id = 0;

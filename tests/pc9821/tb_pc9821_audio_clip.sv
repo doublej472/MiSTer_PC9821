@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The sound path under a dense worst case -- six full-level drums overlapping with six FM channels at maximum, the SSG at maximum and the 86-PCM voice playing at full scale, with the 0xA46C write-FIFO and the OPNA register queue (WRQ) flooded at the I/O floor cadence -- with three detections running throughout: (a) no dropped write or sample: every host write presented through the real pc9821_iobus master is accepted by the buffer and lands (WRQ entries drained to the chip, 0xA46C bytes stored in SDRAM byte-exact) now that both buffers back-pressure through io_wr_wait instead of silently dropping on full (the pre-fix WRQ lost 94/160 at this cadence and the 0xA46C FIFO dropped past 4 deep under SDRAM contention), with the stall itself counted so the no-drop result cannot be vacuous; (b) the die's drum bus: the six-drum sum is recomputed from jt08_adpcm_acc's per-drum slot inputs as the die's 16-bit two's-complement WRAP (YM2608-LLE fmopna_impl.c:5370) and compared with the DUT accumulator every slot; (c) no clipped-vs-expected sample: jt08_adpcm_acc's pcm_out must equal that wrapped round sum, never a clamped one (the pre-fix 16-bit clamp there flat-topped dense overlaps before the FM mix -- audible as drums clipping) and the output chain must equal the single-clamp saturating model of the wide FM+ADPCM junction (the ymfm clamp16 / NP2kai _saturation_s16 point) followed by the AC-coupled (zero-mean) SSG and a WIDE join with NO intermediate saturation (datapaths.md F1: the pre-fix tree flat-topped there even when the FM+SSG+PCM86 sum fit in 16 bits; the single clamp is at the final DAC), the over-16 stimulus kept non-vacuous. Phase 1 pins the 0 dB single-drum output to the same model, so the default path stays bit-identical.
+// The sound path under a dense worst case -- six full-level drums overlapping with six FM channels at maximum, the SSG at maximum and the 86-PCM voice playing at full scale, with the 0xA46C write-FIFO and the OPNA register queue (WRQ) flooded at the I/O floor cadence -- with three detections running throughout: (a) no dropped write or sample: every host write presented through the real pc9821_iobus master is accepted by the buffer and lands (WRQ entries drained to the chip, 0xA46C bytes stored in SDRAM byte-exact) now that both buffers back-pressure through io_wr_wait instead of silently dropping on full (the pre-fix WRQ lost 94/160 at this cadence and the 0xA46C FIFO dropped past 4 deep under SDRAM contention), with the stall itself counted so the no-drop result cannot be vacuous; (b) the die's drum bus: the six-drum sum is recomputed from jt08_adpcm_acc's per-drum slot inputs as the die's 16-bit two's-complement WRAP (YM2608-LLE fmopna_impl.c:5370) and compared with the DUT accumulator every slot; (c) no clipped-vs-expected sample: jt08_adpcm_acc's pcm_out must equal that wrapped round sum, never a clamped one (the pre-fix 16-bit clamp there flat-topped dense overlaps before the FM mix -- audible as drums clipping) and the OPNA output of BOTH channels (pc9821_opna mix_l/mix_r and snd_l/snd_r) must equal the single-clamp saturating model of the wide FM+ADPCM junction (the ymfm clamp16 / NP2kai _saturation_s16 point) followed by the AC-coupled (zero-mean) SSG and a WIDE join with NO intermediate saturation (the pre-fix tree flat-topped there even when the FM+SSG sum fit in 16 bits), the over-16 stimulus kept non-vacuous on each channel; the 86-PCM join and the final clamp past the OPNA output are tb_pc9821_snd86_join's and tb_pc9821_audio_mix_equiv's, this bench only requires the 86-PCM leg to be alive. Phase 1 holds the 0 dB single-drum output to the same model and under the reference ADPCM-A ceiling (15360).
 //
 // TB_PC9821_AUDIO_CLIP: the sound path under a DENSE worst case - six full-level
 // drums overlapping with six FM channels at maximum and the SSG at maximum, the
@@ -14,7 +14,7 @@
 //       drained to the chip; FIFO bytes stored in SDRAM, byte-exact). Pre-fix the
 //       WRQ silently dropped 94/160 at this cadence (T9a) and the 0xA46C FIFO
 //       dropped past 4 deep (S6): both are now back-pressure (pc9821_iobus holds
-//       S_IOWAIT while io_wr_wait is up) and this bench counts presented vs
+//       the lane in S_BYTE while io_wr_wait is up) and this bench counts presented vs
 //       accepted vs landed through the REAL iobus master.
 //   (b) THE DIE'S 16-BIT WRAP: the six-drum sum is recomputed here from
 //       jt08_adpcm_acc's per-drum slot inputs, wrapping at 16 bits exactly as the die
@@ -186,6 +186,7 @@ module tb_pc9821_audio_clip;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -221,7 +222,7 @@ module tb_pc9821_audio_clip;
                           pcm_cs  ? pcm_io_dout  : 8'hFF;
   assign device_rd_wait = opna_rd_wait;
   // pc9821_system's write-back-pressure mux: a device buffer that cannot accept
-  // a byte holds the guest's I/O write in pc9821_iobus's S_IOWAIT (the fix).
+  // a byte holds the guest's I/O write in pc9821_iobus's S_BYTE (lane_wr_wait, the fix).
   assign device_wr_wait = (opna_cs && opna_wr_wait) || (pcm_cs && pcm86_wr_wait);
 
   // The clock enable is derived from SYS_CLOCK_HZ; this bench runs at 100 MHz
@@ -417,6 +418,7 @@ module tb_pc9821_audio_clip;
   wire signed [19:0] drumacc = sound.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.acc;
   wire signed [19:0] presum   = sound.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.pcm_out;
   wire signed [19:0] fmsnd    = sound.u_opna.u_jt08.u_jt12.gen_adpcm.u_acc.u_left.snd;
+  wire signed [19:0] fmsnd_r  = sound.u_opna.u_jt08.u_jt12.gen_adpcm.u_acc.u_right.snd;
 
   // Reference-sourced expected values (see "WHERE THE EXPECTED VALUES COME FROM").
   // The SSG joins at psg_snd << 2 (the PC88 board mix) and is then AC-COUPLED by
@@ -436,10 +438,11 @@ module tb_pc9821_audio_clip;
 
   integer model_acc, model_raw, model_expected, model_started;
   integer clip_events, wrap_events, chain_events, bp_stall_events, join_over16, drum_wrapped;
+  integer join_over16_r;
   initial begin
     model_acc = 0; model_raw = 0; model_expected = 0; model_started = 0;
     clip_events = 0; wrap_events = 0; chain_events = 0; bp_stall_events = 0;
-    join_over16 = 0; drum_wrapped = 0;
+    join_over16 = 0; drum_wrapped = 0; join_over16_r = 0;
   end
 
   // The die's six-drum bus WRAPS at 16 bits (fmopna_impl.c:5367-5382,
@@ -466,7 +469,7 @@ module tb_pc9821_audio_clip;
     wrq_pushes = 0; wrq_lands = 0; pcm_pushes = 0;
   end
 
-  integer exp_mix, exp_fm;
+  integer exp_mix, exp_fm, exp_mix_r, exp_fm_r;
   always @(posedge clk) begin
     if (!reset) begin
       // ---- (b)/(c) the drum-sum model ----
@@ -507,6 +510,16 @@ module tb_pc9821_audio_clip;
         if ((sound.mix_l !== $signed(exp_mix[19:0])) || (opna_snd_l !== $signed(exp_mix[19:0])))
           chain_events = chain_events + 1;
       end
+      // The right channel through the same model (its own FM+ADPCM sum, the same SSG term:
+      // pc9821_opna joins the mono SSG to both channels).
+      exp_fm_r  = ($signed(fmsnd_r) > CLAMP16_MAX) ? CLAMP16_MAX :
+                  ($signed(fmsnd_r) < CLAMP16_MIN) ? CLAMP16_MIN : $signed(fmsnd_r);
+      exp_mix_r = exp_fm_r + ssg_term;
+      if ((exp_mix_r > CLAMP16_MAX) || (exp_mix_r < CLAMP16_MIN)) join_over16_r = join_over16_r + 1;
+      if (!$isunknown({fmsnd_r, sound.ssg_ac, sound.mix_r, opna_snd_r})) begin
+        if ((sound.mix_r !== $signed(exp_mix_r[19:0])) || (opna_snd_r !== $signed(exp_mix_r[19:0])))
+          chain_events = chain_events + 1;
+      end
 
       // ---- (a) presentation / acceptance / landing ----
       if (device_io_wr && opna_cs) io_strobes_opna = io_strobes_opna + 1;
@@ -518,7 +531,8 @@ module tb_pc9821_audio_clip;
       if (sound.dr_go)             wrq_lands       = wrq_lands       + 1;
       if (pcm86.u_buf.fifo_push)   pcm_pushes      = pcm_pushes      + 1;
       // The back-pressure engaged at least once: the stall is real, not vacuous.
-      if (device_wr_wait && (dut.state == pc9821_ports_pkg::S_IOWAIT) && (dut.io_hold == 0))
+      // Counted at the hold itself: S_BYTE on a device write whose wait is up (lane_wr_wait).
+      if (device_wr_wait && (dut.state == pc9821_ports_pkg::S_BYTE) && dut.lane_wr_wait)
         bp_stall_events = bp_stall_events + 1;
     end
   end
@@ -722,6 +736,8 @@ module tb_pc9821_audio_clip;
       fail("P2: the six-drum sum never left 16 bits: the die's 16-bit WRAP leg would be vacuous");
     if (join_over16 == 0)
       fail("P2: the join never passed 16 bits: the no-clamp check would be vacuous");
+    if (join_over16_r == 0)
+      fail("P2: the right join never passed 16 bits: its no-clamp check would be vacuous");
 
     // =================================================================
     // PHASE 3: WRQ FLOOD (the S2 overrun): 192 back-to-back host writes

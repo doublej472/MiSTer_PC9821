@@ -92,7 +92,7 @@ module tb_pc9821_artic_layout;
     .cache_flush_req(cache_flush_req), .cache_flush_busy(cache_flush_busy), .cache_flush_done(cache_flush_done)
   );
 
-  // [source: the port idiom is tb_pc9821_io_wait.sv's, which the bus actually
+  // [source: the port idiom is tb_pc9821_io_class.sv's, which the bus actually
   // takes - cpu_addr carries the BASE (bits 15:2 with the low two zeroed) and the
   // LANE rides in cpu_be. Passing the port as the address answers a different
   // port.]
@@ -132,7 +132,7 @@ module tb_pc9821_artic_layout;
 // ==== CHECKS ====
   reg [7:0] b5c, b5d, b5e, b5f;
   // read_byte's port and result. Module-level, not task arguments: this is the
-  // idiom tb_pc9821_io_wait.sv uses for measure_port, and Verilator rejected both
+  // idiom tb_pc9821_io_class.sv uses for measure_port, and Verilator rejected both
   // an output argument and an ANSI input header here.
   reg [15:0] probe_port;
   reg [7:0]  rd_byte;
@@ -224,6 +224,13 @@ module tb_pc9821_artic_layout;
       $finish;
     end
     else $fatal(1, "TB_PC9821_ARTIC_LAYOUT: FAIL (%0d errors)", errors);
+  end
+
+  // A DUT that never answers (a wait above that never ends) fails with a verdict here rather
+  // than hanging until the runner's outer timeout. Far above the bench's own run time.
+  initial begin
+    #10_000_000;
+    $fatal(1, "TB_PC9821_ARTIC_LAYOUT: TIMEOUT");
   end
 
 endmodule

@@ -1,0 +1,60 @@
+XE10T v1 sha=c35abe4437625641 crc=3E869E6C imgcrc=3E869E6C size=43632 build=gas-xe10w args= /SELFTEST /O SELF.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0032 cr0=00000032 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=70 bda0458=02 bda045C=40 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=10 bda0595=00
+I ID dos=6.20 bufseg=26D1 bufparas=4000 sel=00000000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=3DC4
+BEGIN:SELFTEST
+SELF CRC16 OK
+SELF CRC32 OK
+SELF SORT OK
+SELF IMAGE OK
+SELF GEN cases=587 bad=0 OK
+R SELFTEST RAMW16 unit=w n=8192 nop=0 rep=5 art=247/248/249 pit=1962/1964/1972 ctl_art=48/48/49 ctl_pit=361/362/368 shell=469F bshell=469F if1=247
+R SELFTEST RAMW16 unit=w n=8192 nop=2 rep=5 art=247/248/249 pit=1962/1964/1974 ctl_art=97/98/98 ctl_pit=764/766/770 shell=D9C9 bshell=D9C9 if1=248
+R SELFTEST RAMW16 unit=w n=8192 nop=4 rep=5 art=247/247/248 pit=1962/1965/1975 ctl_art=147/148/149 ctl_pit=1167/1167/1174 shell=DA3F bshell=DA3F if1=247
+R SELFTEST RAMW16 unit=w n=8192 nop=8 rep=5 art=307/308/309 pit=2445/2446/2455 ctl_art=248/249/250 ctl_pit=1972/1972/1980 shell=8617 bshell=8617 if1=307
+R SELFTEST RAMW16 unit=w n=8192 nop=16 rep=5 art=500/502/502 pit=3990/3992/4006 ctl_art=450/451/451 ctl_pit=3583/3583/3591 shell=F2ED bshell=F2ED if1=501
+R SELFTEST RAMW16 unit=w n=8192 nop=32 rep=5 art=903/903/905 pit=7208/7209/7228 ctl_art=852/852/854 ctl_pit=6806/6806/6816 shell=8A03 bshell=8A03 if1=904
+R SELFTEST RAMR16 unit=w n=8192 nop=0 rep=5 art=236/237/237 pit=1863/1866/1869 ctl_art=47/48/49 ctl_pit=366/366/368 shell=469F bshell=469F if1=236
+R SELFTEST W5F unit=io n=1024 nop=0 rep=5 art=550/551/551 pit=4386/4387/4391 ctl_art=5/6/7 ctl_pit=28/30/33 shell=FEF9 bshell=FEF9 if1=550
+WATCHDOG SELFTEST elapsed=15360
+SELF WATCHDOG OK
+END:SELFTEST rows=8 sum=36AF
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6145 pit=49165
+P CAL PITWIN i=1 art=6145 pit=49158
+P CAL PITWIN i=2 art=6144 pit=49156
+P CAL PITWIN i=3 art=6146 pit=49162
+P CAL PITWIN i=4 art=6146 pit=49163
+P CAL PITWIN i=5 art=6147 pit=49168
+P CAL PITWIN i=6 art=6145 pit=49157
+P CAL PITWIN i=7 art=6145 pit=49160
+P CAL PITEDGE edges=19 art=155650 vmax=65535 vmin=2
+P CAL VSYNC edges=60 art=326702 pit=2596058 tsc=-
+I CAL pit_mod=65536 ratio_x1000=7999 vsync_x10=54450 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=F9CE
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=20BE
+XE10T DONE sections=4 sum=06A60E4A

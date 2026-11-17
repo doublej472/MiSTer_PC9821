@@ -5,14 +5,14 @@
 // tolerates the SDRAM read latency. So it lives on the memory controller's THIRD port.
 //
 // LATENCY IS AFFORDABLE because the drain reads at most 4 bytes per sample frame against a
-// 1134-clk frame period (50 MHz / 44.1 kHz), so its read is a REQUEST/VALID handshake here
-// rather than the one-cycle block-RAM read it replaced.
+// frame period of f(clk_sys) / 44.1 kHz (about 2041 clk at the base 90 MHz), so its read is a
+// REQUEST/VALID handshake.
 //
 // THE WRITE NEEDS A FIFO because the guest's 0xA46C write is a one-cycle strobe and an SDRAM
 // write takes several. Back-to-back 0xA46C writes reach the FIFO every ~10-15 clk_sys at the
 // IO_MIN_HOLD=4 I/O cadence (a tight loop or REP OUTSB), which can outrun a contended SDRAM
 // round trip for a burst. So the FIFO is BACK-PRESSURED, not sized: wr_wait rises while it is
-// full and pc9821_pcm86/pc9821_iobus hold the CPU's I/O write in the bus's S_IOWAIT state
+// full and pc9821_pcm86/pc9821_iobus hold the CPU's I/O write in the bus's S_BYTE state
 // until there is room, so a guest byte is never dropped. This module is a byte-addressed
 // 2^15-byte memory and knows nothing about sample format -- the format is pc9821_pcm86.sv's.
 
@@ -192,13 +192,6 @@ module pc9821_pcm86_buf (
             endcase
         end
     end
-
-    // A full FIFO is a STALL, not a drop: `wr_wait` back-pressures the guest's I/O
-    // access through pc9821_iobus until the engine below has drained a slot. The
-    // depth-4 sizing is not a correctness claim (the guest can write once per
-    // ~10 clk_sys at IO_MIN_HOLD, faster than a contended SDRAM write); it is burst
-    // absorption only, and the `!fifo_full` push guard survives solely for a master
-    // that ignores `wr_wait`, where dropping still beats corrupting the FIFO.
 
 endmodule
 

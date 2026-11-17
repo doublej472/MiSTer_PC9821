@@ -206,14 +206,17 @@ module tb_interrupt_nmi;
         // ---------------------------------------------------------------------
         $display("");
         $display("========================================");
-        if (errors != 0)
+        if (errors != 0) begin
             $display("  TB_INTERRUPT_NMI: FAIL (%0d failed checks)", errors);
-        else if (nested_window === 1'b0 && post_iret_window === 1'b1 &&
+            $fatal(1, "TB_INTERRUPT_NMI: FAIL");
+        end else if (nested_window === 1'b0 && post_iret_window === 1'b1 &&
                  nested_control === 1'b0 && post_iret_control === 1'b0 &&
                  blocked_edge_latched === 1'b0)
             $display("  TB_INTERRUPT_NMI: PASS - window edge deferred, delivered only after IRET");
-        else
+        else begin
             $display("  TB_INTERRUPT_NMI: FAIL - unexpected NMI dispatch sequence");
+            $fatal(1, "TB_INTERRUPT_NMI: FAIL");
+        end
         $display("========================================");
         $finish;
     end
@@ -221,8 +224,7 @@ module tb_interrupt_nmi;
     // Bound the run.
     initial begin
         #100000;
-        $display("TB_INTERRUPT_NMI: TIMEOUT");
-        $finish;
+        $fatal(1, "TB_INTERRUPT_NMI: TIMEOUT");
     end
 
 endmodule

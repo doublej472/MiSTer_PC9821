@@ -545,6 +545,8 @@ module tb_gpr_hazard;
             test_failed = 1'b1;
         end
         test_done = 1'b1;
+        if (test_failed)
+            $fatal(1, "GPR HAZARD SURVEY FAIL");
         $finish;
     end
 
@@ -553,6 +555,6 @@ module tb_gpr_hazard;
         $display("GPR HAZARD SURVEY FAIL timeout");
         test_failed = 1'b1;
         test_done = 1'b1;
-        $finish;
+        $fatal(1, "GPR HAZARD SURVEY FAIL timeout");
     end
 endmodule

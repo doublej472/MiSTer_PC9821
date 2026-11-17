@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The 8259's priority resolver rewrite (the rotate-and-scan of the request, the in-service block and OCW2's level replaced by a mask-and-encode form with no barrel rotators) is cycle-for-cycle identical to the pre-rewrite module (pc9821_pic_ref.sv, the module as of 6b457f7f): over several hundred thousand cycles of random ICW1-ICW4 programming (with and without ICW3/ICW4, AEOI, SFNM, buffered), OCW1 masks, OCW2 commands of every form (non-specific and specific EOI, rotate on/off, set priority, rotate on AEOI), OCW3 (read IRR/ISR, special mask mode), random edge requests on all eight lines and random interrupt acknowledges, for a master-shaped and a cascade-shaped instance with and without the falling-edge withdraw lines, every output (dout, int_out, int_vec, int_irq, int_acked_irq, int_acked_valid and the three debug views) matches on every clk cycle.
+// The 8259's priority resolver rewrite (the rotate-and-scan of the request, the in-service block and OCW2's level replaced by a mask-and-encode form with no barrel rotators) is cycle-for-cycle identical to the pre-rewrite module (pc9821_pic_ref.sv, the module as of 6b457f7f): over several hundred thousand cycles of random ICW1-ICW4 programming (with and without ICW3/ICW4, AEOI, SFNM, buffered; an ICW1 with IC4=0 only while no AEOI or SFNM is set, since zeroing them there is the one deliberate change after the copy), OCW1 masks, OCW2 commands of every form (non-specific and specific EOI, rotate on/off, set priority, rotate on AEOI), OCW3 (read IRR/ISR, special mask mode), random edge requests on all eight lines and random interrupt acknowledges, for a master-shaped and a cascade-shaped instance with and without the falling-edge withdraw lines, every output (dout, int_out, int_vec, int_irq, int_acked_irq, int_acked_valid and the three debug views) matches on every clk cycle.
 
 // ==== DUT ====
 // pc9821_pic vs pc9821_pic_ref, same inputs, two parameterisations. The reference is the
@@ -40,6 +40,8 @@ module tb_pc9821_pic_equiv;
     .int_acked_valid(sr_av), .inta(inta), .dbg_imr(sr_dimr), .dbg_irr(sr_dirr), .dbg_isr(sr_disr));
 
   integer errors = 0, cycles = 0, seed = 7, intacks = 0, eois = 0, rots = 0;
+  // Either reference instance holds an AEOI or SFNM from an earlier ICW4 (see the ICW1 stimulus).
+  wire icw4_set = dmr_.aeoi | dmr_.icw4_sfnm | dsr_.aeoi | dsr_.icw4_sfnm;
   reg [31:0] x, y;
   wire [63:0] mo_a = {ma_dout, ma_vec, ma_dimr, ma_dirr, ma_disr, 5'd0, ma_irq, 5'd0, ma_air};
   wire [63:0] mo_r = {mr_dout, mr_vec, mr_dimr, mr_dirr, mr_disr, 5'd0, mr_irq, 5'd0, mr_air};
@@ -57,8 +59,17 @@ module tb_pc9821_pic_equiv;
       cs <= 1'b1; wr <= 1'b1;
       a0 <= x[4];
       case (x[8:5])
-        // ICW1 (bit 4) with random LTIM/SNGL/IC4
-        4'd0: begin a0 <= 1'b0; din <= {3'b000, 1'b1, y[3], y[2:0]} & 8'h1F; if (y[7:4] == 0) din <= 8'h1F; end
+        // ICW1 (bit 4) with random LTIM/SNGL/IC4. The one deliberate change since the
+        // reference copy: an ICW1 with IC4=0 now zeroes AEOI and SFNM (pc9821_pic's ICW1
+        // arm, the 8259A data sheet's "all functions selected in ICW4 are set to zero"),
+        // which the copy does not. While either flag is set an IC4=0 ICW1 is sent as
+        // IC4=1, so every stimulus here is one the two modules must still agree on; with
+        // both flags clear an IC4=0 ICW1 is unchanged and still exercised.
+        4'd0: begin
+          a0 <= 1'b0;
+          din <= {3'b000, 1'b1, y[3], y[2:1], y[0] | icw4_set};
+          if (y[7:4] == 0) din <= 8'h1F;
+        end
         // OCW2 forms: bit 4 and 3 clear
         4'd1, 4'd2, 4'd3, 4'd4, 4'd5, 4'd6: begin a0 <= 1'b0; din <= {y[7:5], 2'b00, y[2:0]}; eois = eois + 1; if (y[7]) rots = rots + 1; end
         // OCW3: bit 3 set, bit 4 clear

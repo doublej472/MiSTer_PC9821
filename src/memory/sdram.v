@@ -687,6 +687,30 @@ always @(posedge clk) begin
     gk_la_last  <= (gk_wn == (gk_wtot - 6'd1));
 end
 
+// S1-b look-ahead (0 cycles): every pin arm's REGISTER-ONLY condition and address field, one
+// cycle ahead. The output cells load the *_n nets (the output-pin note), so whatever decides a
+// command - the `cycle` compares of CONFIG, WRITE, WRITE_BURST, the ACT re-opens and REFRESH, the
+// READ arm's issue/split/drain tests, its column sum and auto-precharge compares, the gather
+// write's slot test - sat in front of the I/O cells with the whole 5.6 ns hop to the die edge
+// after it (the xt sweep, seed 2: cycle[1] -> 6 LUT levels -> dq_out_cell, -4.79 ns; cycle,
+// rd_seg_halfs, rd_total_halfs, rd_issued, gk_wc, gk_wtot -> ca_out, -1.9 to -3.8 ns). Each such
+// term is a function of registers alone, so it is loaded here from the same function of their
+// NEXT values (the *_n nets the register block loads them from): in every cycle the flop holds
+// exactly the value the expression has in that cycle, and the pin arms read flops. The one
+// exception, la_gw, reads gk_wtot rather than gk_wtot_n: gk_wtot changes only in the cycle after
+// a gather accept (gk_map_d, state ACT), whose next state is GATH_RD, never GATH_WR, the only
+// reader. The SIM-ONLY check after the register block holds every flop against its live form.
+// No reader moves a cycle; the pins are value- and cycle-identical (tools/check_sdram_pin_equiv.py
+// runs this controller beside its pre-cut self and compares every pin on every cycle).
+reg        la_c0, la_crp, la_crc, la_crcmrd, la_c2rc;   // cycle == 0 / T_RP / T_RC / T_RC+T_MRD / 2 T_RC
+reg        la_cwr0, la_crcd1, la_cge_rcd;               // cycle == wr_c0 / T_RCD+1, cycle >= T_RCD
+reg  [4:0] la_wb_h;                                     // WRITE_BURST's half index, cycle - T_RCD
+reg        la_wb_on, la_wb_last;                        // ... a half is due / it is the segment's last
+reg        la_rd_iss, la_rd_split, la_rd_drain, la_rd_ap;   // the READ arm's tests
+reg  [9:0] la_rd_col16;                                 // ... and its 16-bit column
+reg        la_rmw_iss;                                  // RMW_READ's issue test
+reg        la_gw;                                       // GATH_WR: a write slot is due (gk_wc < gk_wtot)
+
 // Row-crossing splits and the row+1 carry. {bank,row} is addr[25:11] on the large
 // geometry and addr[24:10] on the small one -- 15 bits either way -- so rc_next is the NEXT
 // ROW as a plain increment of that field: row 8191 of a bank carries into row 0 of the NEXT
@@ -1119,7 +1143,7 @@ always @* begin
         sd_ncs_n = init_chip;
         // t=0: PRECHG ALL. The cfg_cbr gate keeps this arm single-shot: `cycle` re-bases
         // to 0 after every CBR below and would otherwise re-issue the precharge.
-        if ((cycle == 5'd0) && (cfg_cbr == 4'd0)) begin
+        if (la_c0 && (cfg_cbr == 4'd0)) begin
             cmd_n   = CMD_PreCharge;
             a_n[10] = 1'b1;                // precharge all
         end
@@ -1134,13 +1158,13 @@ always @* begin
         // The 5-bit `cycle` saturates at 31 and cannot count T_RP + 8*T_RC + T_MRD (60 at
         // 100MHz), so instead of three fixed compare points the CBR slot re-bases `cycle`
         // after each refresh and cfg_cbr counts them off.
-        if ((cfg_cbr < 4'd8) && (cycle == ((cfg_cbr == 4'd0) ? T_RP : T_RC))) begin
+        if ((cfg_cbr < 4'd8) && ((cfg_cbr == 4'd0) ? la_crp : la_crc)) begin
             cmd_n     = CMD_AutoRefresh;
             cfg_cbr_n = cfg_cbr + 4'd1;
             cycle_n   = 5'd0;
         end
         // t=T_RC after the 8th CBR: Set Mode Register
-        if ((cfg_cbr == 4'd8) && (cycle == T_RC)) begin
+        if ((cfg_cbr == 4'd8) && la_crc) begin
             cmd_n     = CMD_SetModeReg;
             a_n[10:0] = MODE_REG;
         end
@@ -1151,7 +1175,7 @@ always @* begin
         // mode register (CAS latency, burst length) once the size arrives and addr[26] selects it.
         // On a one-chip module the second pass drives CS# high, which the chip ignores; it costs
         // one init sequence (T_RP + 8 T_RC + T_MRD clocks) once.
-        if ((cfg_cbr == 4'd8) && (cycle == (T_RC+T_MRD))) begin
+        if ((cfg_cbr == 4'd8) && la_crcmrd) begin
             if (!init_chip) begin
                 init_chip_n = 1'b1;
                 cfg_cbr_n = 4'd0;
@@ -1462,12 +1486,12 @@ always @* begin
                                         ((rd_received + 5'd1) == rd_total_halfs);
         // Issue CAS READ one per cycle once T_RCD reached (rd_cas0 where the tRAS guard can
         // delay a segment; the two are the same cycle wherever RD_GUARD is off)
-        if ((RD_GUARD ? (cycle >= rd_cas0) : (cycle >= T_RCD)) && (rd_issued < rd_total_halfs)) begin
-            if ((rd_issued == rd_seg_halfs) && !rd_row2) begin
+        if (la_rd_iss) begin
+            if (la_rd_split) begin
                 // The burst has run out of the row it started in. Drain it -- every issued half
                 // has landed -- then open the next row and carry on in this same state, which is
                 // the ACT the READ arm of ACT performs, from the same latches.
-                if (rd_received == rd_issued) begin
+                if (la_rd_drain) begin
                     cmd_n         = CMD_BankActivate;
                     sd_ncs_n   = rc_chip_buf;
                     sd_ba_n    = rc_next_buf[14:13];
@@ -1489,9 +1513,8 @@ always @* begin
                 // Segment 2 (rd_row2): columns restart at 0 in the row the split ACT opened,
                 // so issued counts from rd_seg_halfs -> issued-rd_seg_halfs. rd_issued >= rd_seg_halfs
                 // at a CAS is equivalent to rd_row2: the split drains before any later CAS issues.
-                automatic reg [9:0] col16 = rd_row2
-                    ? ({5'b0, rd_issued} - {5'b0, rd_seg_halfs})
-                    : ({rd_col_base, 1'b0} + {5'b0, rd_issued});
+                // S1-b: the column is la_rd_col16, this expression formed one cycle ahead.
+                automatic reg [9:0] col16 = la_rd_col16;
                 cmd_n      = CMD_Read;
                 // The second segment lives in the row the split ACT opened, which is the NEXT
                 // BANK's (and possibly the next chip's) after the F5 carry: its commands must
@@ -1502,10 +1525,8 @@ always @* begin
                 // Auto-precharge on the last half of EACH segment: the first row must be closed
                 // before the second ACT opens the next row (same bank).
                 {dqm_a_n, a_n}         = ax(req_large_buf
-                           ? {2'b00, ((rd_issued == rd_total_halfs-1) ||
-                                      (rd_issued == (rd_seg_halfs-1))), col16}
-                           : {2'b00, ((rd_issued == rd_total_halfs-1) ||
-                                      (rd_issued == (rd_seg_halfs-1))), 1'b0, col16[8:0]});
+                           ? {2'b00, la_rd_ap, col16}
+                           : {2'b00, la_rd_ap, 1'b0, col16[8:0]});
                 rd_issued_n = rd_issued + 5'd1;
             end
         end
@@ -1567,7 +1588,7 @@ always @* begin
         // last READ would begin its precharge inside tRAS (the guards' note).
         automatic reg [4:0] rmw_c0 = {1'b0, T_RCD} + ((rmw_total_reads == 2'd1) ? RD_SHIFT1[4:0]
                                                                                   : RD_SHIFT2[4:0]);
-        if ((cycle >= rmw_c0) && (rmw_issued < rmw_total_reads)) begin
+        if (la_rmw_iss) begin
             automatic reg [9:0] col16;
             automatic reg       half_sel;
             half_sel = (rmw_read_halfs == 2'b10) ? 1'b1 :
@@ -1612,7 +1633,7 @@ always @* begin
 
     // Re-open the row after the auto-precharged RMW read, then do a full-word write.
     RMW_ACT: begin
-        if (cycle == 5'd0) begin
+        if (la_c0) begin
             cmd_n      = CMD_BankActivate;
             sd_ncs_n = req_chip_buf;
             sd_ba_n = req_large_buf ? addr_buf[25:24] : addr_buf[24:23];
@@ -1630,7 +1651,7 @@ always @* begin
         automatic reg [4:0] wr_c0 = (!ADQM && (wr_halfs != 2'b11)) ? (T_RCD + WR_SHIFT1[4:0])
                                                                     : {1'b0, T_RCD};
         // low half at wr_c0
-        if (cycle == wr_c0 && wr_halfs[0]) begin
+        if (la_cwr0 && wr_halfs[0]) begin
             cmd_n      = CMD_Write;
             sd_ncs_n = req_chip_buf;
             sd_ba_n = req_large_buf ? addr_buf[25:24] : addr_buf[24:23];
@@ -1644,8 +1665,8 @@ always @* begin
         end
 
         // high half can immediately follow the low half; no idle bubble needed.
-        if ((cycle == wr_c0 && !wr_halfs[0] && wr_halfs[1]) ||
-            (cycle == (T_RCD+1) && wr_halfs == 2'b11)) begin
+        if ((la_cwr0 && !wr_halfs[0] && wr_halfs[1]) ||
+            (la_crcd1 && wr_halfs == 2'b11)) begin
             cmd_n      = CMD_Write;
             sd_ncs_n = req_chip_buf;
             sd_ba_n = req_large_buf ? addr_buf[25:24] : addr_buf[24:23];
@@ -1684,19 +1705,21 @@ always @* begin
     WRITE_BURST: begin
         // cycle and T_RCD are both < 32 here, so the half index fits 5 bits with room to spare.
         /* verilator lint_off WIDTHTRUNC */
-        automatic reg [4:0] h  = cycle - T_RCD;                 // half index 0..wr_seg_h-1
+        /* verilator lint_off UNUSEDSIGNAL */   // h[4:3]: the due test and the last-half compare are la_wb_on/la_wb_last
+        automatic reg [4:0] h  = la_wb_h;                       // half index 0..wr_seg_h-1 (S1-b)
+        /* verilator lint_on UNUSEDSIGNAL */
         automatic reg [4:0] hl = {2'b0, wr_seg_h};
         automatic reg wk = wr_second | h[1];     // dword of the PAIR whose half this is
         automatic reg [8:0] cb = wr_second ? 9'd0 : (req_large_buf ? addr_buf[10:2]
                                                                    : {1'b0, addr_buf[9:2]});
-        automatic reg       last_half = (h == (hl - 5'd1));
+        automatic reg       last_half = la_wb_last;
         /* verilator lint_on WIDTHTRUNC */
         automatic reg [31:0] wdat;
         wdat = wk ? din_hi_buf : din_buf;
 
         // The COLUMN is the segment's own dword index (h[2:1]), not wk: the pair's second word is
         // column 0 of its row, so a split segment's address must restart there.
-        if ((cycle >= T_RCD) && (h < hl)) begin
+        if (la_wb_on) begin
             cmd_n       = CMD_Write;
             // As in the READ arm: the pair's second segment writes the row its split ACT
             // opened -- the NEXT bank's/chip's after the row+1 carry.
@@ -1731,7 +1754,7 @@ always @* begin
     // have taken, so the ACT is one T_DAL_I after the first row's last WRITE -- exactly where the
     // next transaction's ACT would have been -- and the second row's writes follow T_RCD later.
     WRITE_BURST_ACT: begin
-        if (cycle == 5'd0) begin
+        if (la_c0) begin
             cmd_n       = CMD_BankActivate;
             sd_ncs_n = rc_chip_buf;
             sd_ba_n  = rc_next_buf[14:13];
@@ -1753,11 +1776,11 @@ always @* begin
         // Coverage note: the refresh path was in NO test before this - every bench's
         // transactions complete inside the auto-refresh interval, so no bench had
         // ever seen a REFRESH command at all. tb_pc9821_sdram now drives one to happen.
-        if ((cycle == T_RC) && (sdram_size == 2'd3)) begin
+        if (la_crc && (sdram_size == 2'd3)) begin
             cmd_n = CMD_AutoRefresh;
             sd_ncs_n = 1'b1;
         end
-        if (cycle == ((sdram_size == 2'd3) ? (T_RC + T_RC) : T_RC)) begin
+        if ((sdram_size == 2'd3) ? la_c2rc : la_crc) begin
             sd_ncs_n = 1'b0;
             state_n    = IDLE;
             busy_buf_n = 1'b0;
@@ -1770,7 +1793,7 @@ always @* begin
     // writes below need no re-ACT (the single-RMW path's per-store re-open is what this
     // session exists to amortise). gk_rmap walks the slots in entry order.
     GATH_RD: begin
-        if ((cycle >= T_RCD) && (gk_ri < gk_rtot)) begin : gk_issue
+        if (la_cge_rcd && (gk_ri < gk_rtot)) begin : gk_issue
             automatic reg [3:0] rmap_v;
             automatic reg [8:0] gcol;
             automatic reg [9:0] col16;
@@ -1797,7 +1820,7 @@ always @* begin
     // same slot order as the reads. Auto-precharge rides the LAST write (one precharge
     // for the whole session), and the exit keeps the write arm's own tDAL/tRC rule.
     GATH_WR: begin
-        if (gk_wc < gk_wtot) begin : gk_wissue
+        if (la_gw) begin : gk_wissue
             automatic reg [3:0] wmap_v;
             automatic reg [8:0] gcol;
             automatic reg [9:0] col16;
@@ -2061,6 +2084,71 @@ always @(posedge clk) begin : fsm_reg
 `endif
 end
 /* verilator lint_on PROCASSINIT */
+
+// S1-b: the look-ahead loads (see the declarations' note), each the arm's own expression over
+// the next values of the registers it reads.
+/* verilator lint_off WIDTHEXPAND */   // the same minimum-width timing parameters
+/* verilator lint_off WIDTHTRUNC */    // la_h_n / wr_c0_n / rmw_c0_n: 5 bits, as the arms' own regs
+wire [4:0] la_h_n   = cycle_n - T_RCD;
+wire [4:0] wr_c0_n  = (!ADQM && (wr_halfs_n != 2'b11)) ? (T_RCD + WR_SHIFT1[4:0]) : {1'b0, T_RCD};
+wire [4:0] rmw_c0_n = {1'b0, T_RCD} + ((rmw_total_reads_n == 2'd1) ? RD_SHIFT1[4:0] : RD_SHIFT2[4:0]);
+/* verilator lint_on WIDTHTRUNC */
+always @(posedge clk) begin : la_reg
+    la_c0       <= (cycle_n == 5'd0);
+    la_crp      <= (cycle_n == T_RP);
+    la_crc      <= (cycle_n == T_RC);
+    la_crcmrd   <= (cycle_n == (T_RC+T_MRD));
+    la_c2rc     <= (cycle_n == (T_RC + T_RC));
+    la_cwr0     <= (cycle_n == wr_c0_n);
+    la_crcd1    <= (cycle_n == (T_RCD+1));
+    la_cge_rcd  <= (cycle_n >= T_RCD);
+    la_wb_h     <= la_h_n;
+    la_wb_on    <= (cycle_n >= T_RCD) && (la_h_n < {2'b0, wr_seg_h_n});
+    la_wb_last  <= (la_h_n == ({2'b0, wr_seg_h_n} - 5'd1));
+    la_rd_iss   <= (RD_GUARD ? (cycle_n >= rd_cas0_n) : (cycle_n >= T_RCD)) && (rd_issued_n < rd_total_halfs_n);
+    la_rd_split <= (rd_issued_n == rd_seg_halfs_n) && !rd_row2_n;
+    la_rd_drain <= (rd_received_n == rd_issued_n);
+    la_rd_col16 <= rd_row2_n ? ({5'b0, rd_issued_n} - {5'b0, rd_seg_halfs_n})
+                             : ({rd_col_base_n, 1'b0} + {5'b0, rd_issued_n});
+    la_rd_ap    <= (rd_issued_n == rd_total_halfs_n-1) || (rd_issued_n == (rd_seg_halfs_n-1));
+    la_rmw_iss  <= (cycle_n >= rmw_c0_n) && (rmw_issued_n < rmw_total_reads_n);
+    la_gw       <= (gk_wc_n < gk_wtot);
+end
+/* verilator lint_on WIDTHEXPAND */
+
+`ifdef VERILATOR
+// S1-b's check: from the first edge on, every look-ahead flop equals its arm's live expression
+// (la_gw where it is read, GATH_WR).
+/* verilator lint_off PROCASSINIT */   // 0 until the first edge has loaded the flops
+reg la_live = 1'b0;
+/* verilator lint_on PROCASSINIT */
+/* verilator lint_off WIDTHEXPAND */
+/* verilator lint_off WIDTHTRUNC */
+wire [4:0] la_h_c   = cycle - T_RCD;
+wire [4:0] wr_c0_c  = (!ADQM && (wr_halfs != 2'b11)) ? (T_RCD + WR_SHIFT1[4:0]) : {1'b0, T_RCD};
+wire [4:0] rmw_c0_c = {1'b0, T_RCD} + ((rmw_total_reads == 2'd1) ? RD_SHIFT1[4:0] : RD_SHIFT2[4:0]);
+/* verilator lint_on WIDTHTRUNC */
+wire [9:0] la_col_c = rd_row2 ? ({5'b0, rd_issued} - {5'b0, rd_seg_halfs})
+                              : ({rd_col_base, 1'b0} + {5'b0, rd_issued});
+always @(posedge clk) begin : la_contract
+    la_live <= 1'b1;
+    if (la_live && (
+        (la_c0 !== (cycle == 5'd0)) || (la_crp !== (cycle == T_RP)) || (la_crc !== (cycle == T_RC)) ||
+        (la_crcmrd !== (cycle == (T_RC+T_MRD))) || (la_c2rc !== (cycle == (T_RC + T_RC))) ||
+        (la_cwr0 !== (cycle == wr_c0_c)) || (la_crcd1 !== (cycle == (T_RCD+1))) ||
+        (la_cge_rcd !== (cycle >= T_RCD)) || (la_wb_h !== la_h_c) ||
+        (la_wb_on !== ((cycle >= T_RCD) && (la_h_c < {2'b0, wr_seg_h}))) ||
+        (la_wb_last !== (la_h_c == ({2'b0, wr_seg_h} - 5'd1))) ||
+        (la_rd_iss !== ((RD_GUARD ? (cycle >= rd_cas0) : (cycle >= T_RCD)) && (rd_issued < rd_total_halfs))) ||
+        (la_rd_split !== ((rd_issued == rd_seg_halfs) && !rd_row2)) ||
+        (la_rd_drain !== (rd_received == rd_issued)) || (la_rd_col16 !== la_col_c) ||
+        (la_rd_ap !== ((rd_issued == rd_total_halfs-1) || (rd_issued == (rd_seg_halfs-1)))) ||
+        (la_rmw_iss !== ((cycle >= rmw_c0_c) && (rmw_issued < rmw_total_reads))) ||
+        ((state == GATH_WR) && (la_gw !== (gk_wc < gk_wtot)))))
+        $fatal(1, "sdram: an S1-b look-ahead flop differs from its live form (state %0d cycle %0d)", state, cycle);
+end
+/* verilator lint_on WIDTHEXPAND */
+`endif
 
 // ------------------------------------------------------------------------------------------
 // The output pins. Every SDRAM output is the IOE output register's value: the register a pin's

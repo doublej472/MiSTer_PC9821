@@ -288,6 +288,14 @@ module pc9821_hdd_image (
   // The raw image's capacity is pc9821_block_io's own rule, unchanged: floor(size/512),
   // saturating when the size does not fit 41 bits.
   wire [31:0] raw_cap = size_hi ? 32'hFFFFFFFF : size_lo[40:9];
+  // The probed drive's size behind one free-running stage (u_size_s, below the strobes), which
+  // every staged term below reads (the cur_unit mux itself was the head of the -1 to -1.9 ns
+  // residual into those stages on h5-e1a94b10). cur_unit is probe_unit for the whole probe and the
+  // size registers change only at a mount, so this is the live size from the probe's second cycle
+  // on.
+  wire [40:0] size_lo_s;
+  wire        size_hi_s;
+  wire [31:0] raw_cap_s = size_hi_s ? 32'hFFFFFFFF : size_lo_s[40:9];
 
   // An HDI's capacity: NP2kai's totals (cylinders x heads x sectors, at most 255 x 255 x 65535,
   // which fits 32 bits), clamped to the file's sectors after the header (0 when the header is
@@ -296,14 +304,23 @@ module pc9821_hdd_image (
   wire [15:0] geom_sh      = {8'd0, h_spt} * {8'd0, h_heads};
   wire [31:0] geom_sectors = {16'd0, geom_sh} * {16'd0, h_cyls};
   wire [31:0] hdr_secs     = {20'd0, h_hsize[20:9]};
-  wire [31:0] file_secs    = (raw_cap > hdr_secs) ? raw_cap - hdr_secs : 32'd0;
-  wire [31:0] hdr_cap      = (geom_sectors < file_secs) ? geom_sectors : file_secs;
+  wire [31:0] file_secs_s  = (raw_cap_s > hdr_secs) ? raw_cap_s - hdr_secs : 32'd0;
+  // The capacity, min(geometry, file sectors), behind two free-running register stages (three on
+  // the file-size side, which reads the staged size_lo_s), which is what the probe's completion
+  // loads: two chained multiplies, a subtract and a compare were one clk_sys cycle into
+  // capacity_r although every input is static long before that write. h_spt/h_heads/h_cyls/
+  // h_hsize are header words 10-14 and 4-5, captured as the header sector streams in, and the
+  // completion (a_req_done) follows the sector's remaining 240 words, at least one clk_sys each;
+  // size_lo_r/size_hi_r change only at a mount, and cur_unit is probe_unit for the whole probe.
+  // Mount time only: no guest-visible cycle moves. The stages are pc9821_static_stage instances
+  // strobed where the HDI verdict loads hdr_cap_q (u_geom, u_file_secs, u_hdr_cap below).
+  wire [31:0] geom_sectors_q, file_secs_q, hdr_cap_q;
+  wire [31:0] hdr_cap_n    = (geom_sectors_q < file_secs_q) ? geom_sectors_q : file_secs_q;
 
   // ==== fixed-VHD footer (big-endian, the image's LAST sector) ====
   // A fixed VHD is data at offset 0 plus a 512-byte footer; the tail probe needs a file that
   // is a whole number of sectors and has at least a sector before the footer, and a sector
   // count the 32-bit engine LBA can name.
-  wire        tail_ok  = !size_hi && (size_lo >= 41'd1024) && (size_lo[8:0] == 9'd0);
   wire [31:0] tail_lba = raw_cap - 32'd1;
 
   // The block port's 16-bit word carries the first byte in its LOW half, while every footer
@@ -318,12 +335,28 @@ module pc9821_hdd_image (
   wire        vhd_cookie_ok = &v_cookie_w;
   // current size: its bits [63:41] must be clear, so the size tests read v_cur_lo.
   wire        vhd_cur_hi_z  = v_cur_w24_z && (v_cur_w25_hi == 7'd0);
+  // a whole number of sectors with one before the footer (tail_ok_s), and current size + 512 <=
+  // the file size (vhd_fits_s; a size past 41 bits always holds it), both on the staged size
+  wire        tail_ok_s  = !size_hi_s && (size_lo_s >= 41'd1024) && (size_lo_s[8:0] == 9'd0);
+  wire        vhd_fits_s = size_hi_s || ({1'b0, v_cur_lo} + 42'd512 <= {1'b0, size_lo_s});
+
+  // THE PROBE VERDICT'S SIZE TERMS, staged like the HDI capacity above. The completion's choice
+  // between the HDI, the tail probe, the VHD and the raw image read the probed drive's size
+  // through the cur_unit mux in the completing cycle (probe_pending -> cur_unit -> size_lo ->
+  // the >= 1024 / fits compares -> capacity_r and hdr_off, -2.5 to -2.8 ns on every seed of the
+  // lane head's sweep). Every input is static long before that cycle: cur_unit is probe_unit
+  // from the probe's start, size_lo_r/size_hi_r change only at a mount (a mount of the probed
+  // drive sets its probe_pending, so its completion's verdict is not taken), and v_cur_lo is
+  // footer words 25-27, captured at least 228 words before the completion. One free-running
+  // stage is therefore the same value at the completion (u_raw_cap, u_tail_ok, u_vhd_fits below,
+  // each strobed where its verdict arm reads it).
+  wire [31:0] raw_cap_q;
+  wire        tail_ok_q, vhd_fits_q;
   wire        vhd_ok = vhd_cookie_ok &&
                        (&v_dof_w) &&                              // fixed: no dynamic header
                        v_type_hi_z && v_type_lo_2 &&              // type 2; 3/4 = dynamic/differencing
                        (v_cur_lo[8:0] == 9'd0) && (v_cur_lo != 41'd0) && vhd_cur_hi_z &&
-                       // current size + 512 <= the file size (a size past 41 bits always holds it)
-                       (size_hi || ({1'b0, v_cur_lo} + 42'd512 <= {1'b0, size_lo})) &&
+                       vhd_fits_q &&
                        (vhd_csum == ~vhd_sum);                    // one's complement, checksum field excluded
 
   // ==== the drive's data port ====
@@ -342,6 +375,45 @@ module pc9821_hdd_image (
   assign busy = (|probe_pending) || probe_busy || ata_pend || ata_inflight;
   // A mount pulse per drive.
   wire [1:0] mnt = {img_mounted1, img_mounted};
+  // A guest request for a drive that has NO image is answered with an error, never queued: the
+  // drive has no image now (state H_IDLE, after an eject), or its eject pulse is in this very
+  // cycle. pc9821_ata keeps issuing a command's next sectors after the medium went away (its
+  // read-ahead, pc9821_ata.sv:1597 "block_read    <= 1'b1;", is not gated on `mounted`), so such
+  // a request is reachable at any distance after an eject. The engine answers the same request
+  // the same way (pc9821_block_io.sv:260 "wire req_reject = !mounted || req_past_end || (req_write && readonly);",
+  // and in its eject cycle pc9821_block_io.sv:553 "else if (req_read || req_write) complete(1'b1);").
+  // Queued instead, it waited for an H_READY that never comes and the one-deep queue then refused
+  // the other drive's requests too.
+  wire req_no_image = (state[req_unit] == H_IDLE) || (mnt[req_unit] && (img_size < 64'd512));
+
+  // ==== the staged size and verdict terms (declared above), and the strobes that read them ====
+  // The engine's completion of a probe decides its drive's format (the a_req_done arm below);
+  // these are exactly the cycles in which each verdict arm reads a staged term, so each stage's
+  // static premise is asserted where it is used and nowhere else. A probe the engine answers
+  // with an error takes the not-an-HDI arms (tail_take, then raw_take or fits_take); the stage
+  // depths against the engine's earliest answer are pinned by tb_pc9821_hdd_probe_err.
+  wire verdict_go = a_req_done && probe_busy && !mnt[probe_unit] &&
+                    (state[probe_unit] == H_PROBE) && !probe_pending[probe_unit];
+  wire hdi_take   = verdict_go && !probe_kind[probe_unit] && hdr_valid && !a_req_error;
+  wire tail_take  = verdict_go && !probe_kind[probe_unit] && !(hdr_valid && !a_req_error);
+  wire fits_take  = verdict_go &&  probe_kind[probe_unit] && !a_req_error;
+  wire raw_take   = (tail_take && !tail_ok_q) ||
+                    (verdict_go && probe_kind[probe_unit] && !(vhd_ok && !a_req_error));
+  pc9821_static_stage #(.W(42), .DEPTH(1)) u_size_s (
+      .clk(clk), .d({size_hi, size_lo}), .q({size_hi_s, size_lo_s}),
+      .chk_en(hdi_take || tail_take || fits_take || raw_take));
+  pc9821_static_stage #(.W(32), .DEPTH(1)) u_geom (
+      .clk(clk), .d(geom_sectors), .q(geom_sectors_q), .chk_en(hdi_take));
+  pc9821_static_stage #(.W(32), .DEPTH(1)) u_file_secs (
+      .clk(clk), .d(file_secs_s), .q(file_secs_q), .chk_en(hdi_take));
+  pc9821_static_stage #(.W(32), .DEPTH(1)) u_hdr_cap (
+      .clk(clk), .d(hdr_cap_n), .q(hdr_cap_q), .chk_en(hdi_take));
+  pc9821_static_stage #(.W(32), .DEPTH(1)) u_raw_cap (
+      .clk(clk), .d(raw_cap_s), .q(raw_cap_q), .chk_en(raw_take));
+  pc9821_static_stage #(.W(1), .DEPTH(1)) u_tail_ok (
+      .clk(clk), .d(tail_ok_s), .q(tail_ok_q), .chk_en(tail_take));
+  pc9821_static_stage #(.W(1), .DEPTH(1)) u_vhd_fits (
+      .clk(clk), .d(vhd_fits_s), .q(vhd_fits_q), .chk_en(fits_take));
 
   always @(posedge clk) begin
     // The two one-cycle request outputs to the engine, cleared unless an arm below sets them.
@@ -459,16 +531,25 @@ module pc9821_hdd_image (
         if (probe_kind[start_unit]) vhd_sum <= 32'd0;
       end
 
-      // ---- take a guest request (one deep) ----
+      // ---- take a guest request (one deep), or answer one for a drive with no image ----
       if ((req_read || req_write) && !ata_pend) begin
-        ata_pend       <= 1'b1;
-        ata_pend_write <= req_write;
-        ata_pend_lba   <= req_lba;
-        ata_pend_unit  <= req_unit;
+        if (req_no_image) begin
+          req_done  <= 1'b1;
+          req_error <= 1'b1;
+        end else begin
+          ata_pend       <= 1'b1;
+          ata_pend_write <= req_write;
+          ata_pend_lba   <= req_lba;
+          ata_pend_unit  <= req_unit;
+        end
       end
 
       // ---- hand a guest request to the engine, offset by its drive's HDI header ----
+      // Not in an eject cycle of its drive: the eject arm above has already answered the queued
+      // request there, and dispatching it as well gave the request a second completion, the
+      // engine's.
       if (ata_pend && !ata_inflight && !probe_busy && !(|probe_pending) &&
+          !(mnt[ata_pend_unit] && (img_size < 64'd512)) &&
           (state[ata_pend_unit] == H_READY)) begin
         out_write         <= ata_pend_write;
         out_read          <= !ata_pend_write;
@@ -492,17 +573,17 @@ module pc9821_hdd_image (
               if (hdr_valid && !a_req_error) begin
                 // HDI: the front header decides; the tail is never read.
                 hdr_off[probe_unit]    <= h_hsize[20:9];
-                capacity_r[probe_unit] <= hdr_cap;
+                capacity_r[probe_unit] <= hdr_cap_q;
                 mounted_r[probe_unit]  <= 1'b1;
                 state[probe_unit]      <= H_READY;
-              end else if (tail_ok) begin
+              end else if (tail_ok_q) begin
                 // Not an HDI: read the last sector for a fixed-VHD footer.
                 probe_kind[probe_unit]    <= 1'b1;
                 probe_pending[probe_unit] <= 1'b1;
               end else begin
                 // Too small/unaligned to hold a footer: the raw image.
                 hdr_off[probe_unit]    <= 12'd0;
-                capacity_r[probe_unit] <= raw_cap;
+                capacity_r[probe_unit] <= raw_cap_q;
                 mounted_r[probe_unit]  <= 1'b1;
                 state[probe_unit]      <= H_READY;
               end
@@ -513,7 +594,7 @@ module pc9821_hdd_image (
               end else begin
                 // Dynamic/differencing or a bad footer: the raw image, as before.
                 hdr_off[probe_unit]    <= 12'd0;
-                capacity_r[probe_unit] <= raw_cap;
+                capacity_r[probe_unit] <= raw_cap_q;
               end
               mounted_r[probe_unit] <= 1'b1;
               state[probe_unit]     <= H_READY;

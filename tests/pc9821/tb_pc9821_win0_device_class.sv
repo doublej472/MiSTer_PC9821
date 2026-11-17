@@ -1,10 +1,10 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The window-0 overlay at 0x80000-0x9FFFF classifies like its TARGET, not like its own address (aliases.md A5): with 0x0461 = 0x0E the overlay IS the 0xF8000-0xFFFFF banked window, whose canonical encoding is served direct/uncached while the overlay matched none of the device terms and stayed cached over the same storage. A writer behind the cache (a canonical uncached store, a bank flip, the GRCG/EGC) then left the overlay's line stale where the canonical side read fresh. The z486 memory unit takes the platform's win0_unmapped verdict (pc9821_system sets it for EVERY moved window, 0x0461 != 0x08, because a window over plain RAM is also one byte with two names) and the backend models the window-0 bias. FAIL-FIRST: the overlay reads the pre-store bytes after a canonical store, over the banked window and over plain RAM; PASS: both encodings agree, and the verdict-0 identity window still caches.
+// The window-0 overlay at 0x80000-0x9FFFF classifies like its TARGET, not like its own address: with 0x0461 = 0x0E the overlay IS the 0xF8000-0xFFFFF banked window, whose canonical encoding is served direct/uncached while the overlay matched none of the device terms and stayed cached over the same storage. A writer behind the cache (a canonical uncached store, a bank flip, the GRCG/EGC) then left the overlay's line stale where the canonical side read fresh. The z486 memory unit takes the platform's win0_unmapped verdict (pc9821_system sets it for EVERY moved window, 0x0461 != 0x08, because a window over plain RAM is also one byte with two names) and the backend models the window-0 bias. FAIL-FIRST: the overlay reads the pre-store bytes after a canonical store, over the banked window and over plain RAM; PASS: both encodings agree, and the verdict-0 identity window still caches.
 //
 // The window-0 overlay at 0x80000-0x9FFFF classifies like its TARGET, not like its own
-// address (aliases.md A5). With 0x0461 = 0x0E the overlay IS the 0xF8000-0xFFFFF banked
+// address. With 0x0461 = 0x0E the overlay IS the 0xF8000-0xFFFFF banked
 // ROM window; the canonical encoding is served direct/uncached (the device aperture) while
 // the overlay used to match none of the device terms and stayed RAM-classified -- cached --
 // over the same storage. Any writer behind the cache (a canonical uncached store, a ROM

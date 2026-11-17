@@ -14,7 +14,9 @@ count may be off by one per timeout) does not fail a step's data: it makes the w
 INCONCLUSIVE, as does any step that was not applied. (The program's own `judge`, which picks where
 the sweep stops, also counts `fault` as a failure.) The window is the contiguous run of passing
 applied steps around step 0, per chip half and for the whole module; each edge is the last passing
-step, and a BEGIN with no STEP is a hang at that step (a failure). The step is the PLL's VCO/8:
+step, and a BEGIN with no STEP is a hang at that step (a failure). A hang in the closing FINAL
+re-check (its BEGIN +0 with no FINAL line) FAILS the run: it is the nominal phase; a capture with
+no FINAL at all (it stops before the re-check) is INCONCLUSIVE. The step is the PLL's VCO/8:
 154.3 ps at the 90 MHz build's 810 MHz VCO (rtl/pll's readback `phase_step_ps`).
 
 The verdict applies docs/sdram-margin.md's criterion: both sides of the window at least --need-ns
@@ -48,9 +50,11 @@ def parse(text: str) -> dict:
             else:
                 steps[int(off)] = rec
     hung = [o for o in begun if o not in steps]
-    if final is None and hung and hung[-1] == 0 and 0 in steps:
-        hung = hung[:-1]       # the FINAL step's BEGIN is a step-0 BEGIN too
-    return {"head": head, "steps": steps, "final": final, "hung": hung}
+    # sdshmoo.asm always closes a finished sweep with BEGIN +0 / FINAL (step 0 again). A second
+    # BEGIN +0 with no FINAL line is therefore a hang in that nominal re-check, not a step-0 BEGIN
+    # to discard; no second BEGIN +0 and no FINAL is a capture that stops before the re-check.
+    final_hung = final is None and 0 in steps and begun.count(0) >= 2
+    return {"head": head, "steps": steps, "final": final, "hung": hung, "final_hung": final_hung}
 
 
 def _status_bad(s: str) -> bool:
@@ -129,6 +133,10 @@ def report(text: str, step_ps: float, need_ns: float) -> int:
     for o in hung:
         print(f"{o:>+5} {o * step_ps / 1000:>+7.3f}  HANG     (BEGIN with no STEP)")
     final = d["final"]
+    if d["final_hung"]:
+        print("FINAL (step 0 again): HANG (BEGIN +0 with no FINAL line)")
+    elif final is None:
+        print("FINAL (step 0 again): absent - the capture stops before the closing re-check")
     if final is not None:
         if not applied(final, present):
             print(f"FINAL (step 0 again): n/a - NOT APPLIED (the phase read back {final.get('rb')})")
@@ -173,7 +181,9 @@ def report(text: str, step_ps: float, need_ns: float) -> int:
             unknown = True
     if final is not None and applied(final, present) and not step_ok(final):
         verdict = 1
-    if verdict == 0 and (faulted or not_applied or unknown
+    if d["final_hung"]:
+        verdict = 1
+    if verdict == 0 and (faulted or not_applied or unknown or final is None
                          or (final is not None and not applied(final, present))):
         if faulted:
             print("INSTRUMENT: `fault` is set (a PLL step timed out, or the flag powered up set):"
@@ -184,6 +194,8 @@ def report(text: str, step_ps: float, need_ns: float) -> int:
         if unknown:
             print("WINDOW: an edge was not measured (the sweep's range or a step not applied):"
                   " no margin verdict")
+        if final is None:
+            print("RUN: no FINAL re-check (the capture is torn or the run did not finish)")
         print("VERDICT: INCONCLUSIVE")
         return 3
     print(f"VERDICT: {'PASS' if verdict == 0 else 'FAIL'}")
@@ -234,6 +246,16 @@ def selftest() -> int:
     ds = parse("\n".join(short))
     assert window(ds["steps"], ds["hung"], None) == (-8, 2)
     assert report("\n".join(short), 154.32, 0.1) == 3
+    # A hang in the FINAL re-check (BEGIN +0, no FINAL) fails; a capture cut before it is
+    # inconclusive. Both used to drop the FINAL and print PASS.
+    fhang = lines[:-1]
+    df = parse("\n".join(fhang))
+    assert df["final"] is None and df["final_hung"] and df["hung"] == [11]
+    assert report("\n".join(fhang), 154.32, 1.0) == 1
+    cut = lines[:-2]
+    dc = parse("\n".join(cut))
+    assert dc["final"] is None and not dc["final_hung"]
+    assert report("\n".join(cut), 154.32, 1.0) == 3
     print("sdshmoo_decode selftest: PASS")
     return 0
 

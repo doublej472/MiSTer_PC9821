@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The time-sliced SDRAM schedule holds at 100 MHz: with a saturating z486 cache-line stream on requester 0 (4-dword read bursts and single-dword writes), the font/ROM line on requester 1, the 86-PCM on requester 2, and the GVRAM scanout's 80-dword line fetch on requester 3, the worst scanout line completes inside the 2014 clk_sys budget, the CPU sustains at least its measured 40 MB/s, and the round-robin arbiter gives the scanout a bounded slot (no more than three other accepts between its own) where the fixed priority that stood there could not.
+// The time-sliced SDRAM schedule holds at 100 MHz: with a saturating z486 cache-line stream on requester 0 (4-dword read bursts and single-dword writes), the font/ROM line on requester 1, the 86-PCM on requester 2, and the GVRAM scanout's 80-dword line fetch on requester 3, the worst scanout line completes inside the 2014 clk_sys budget, the CPU sustains at least a 40 MB/s floor (a regression canary under the 56.1 MB/s it measures at CL3, not a requirement any reference sets), and the round-robin arbiter gives the scanout a bounded slot (no more than three other accepts between its own) where the fixed priority that stood there could not.
 //
 // ---- the bench's own account of every number and where it comes from ----
 // This is the Stage 1 gate of the TDM schedule study. That study DERIVED the schedule from the
@@ -38,9 +38,11 @@
 //    CL2), so the bench keeps its 100 MHz grid and its model follows the controller to CL3.
 //
 //  * WHAT THIS DOES NOT PROVE, stated so nobody over-reads it: this bench runs the controller and
-//    its four requesters in ONE clock domain. The built design has the consumers on clk_sys (50
-//    MHz); clocking the controller at 100 MHz also needs a request/response crossing between the
-//    two domains, which is a real cost of this schedule and is OUT of this bench.
+//    its four requesters in ONE clock domain on a 100 MHz grid. The shipping build is also
+//    single-domain (the controller on clk_sys, trade T36 in docs/trade-candidates.md) but at
+//    90 MHz, not 100, so the figures here are this grid's and not the shipping clock's. The
+//    40 MB/s CPU floor is a regression canary under the 56.1 MB/s measured above; raising it to
+//    track the measurement would be a performance policy decision, which is the owner's.
 
 module tb_pc9821_sdram_tdm;
   // The controller runs at 100 MHz. FREQ is a PARAMETER, so the timing table follows it.
@@ -60,7 +62,7 @@ module tb_pc9821_sdram_tdm;
   localparam integer PCM_GAP = 2268;                 // one 44.1 kHz frame every 2268 cycles
   localparam integer WARMUP_LINES = 20;
   localparam integer MEAS_LINES = 200;
-  localparam integer CPU_MIN_MBPS_NUM = 40;          // the measured requirement
+  localparam integer CPU_MIN_MBPS_NUM = 40;          // a regression canary under the measured 56.1 MB/s, not a requirement
 
   reg clk = 0;
   always #(CYCLE_NS/2) clk = ~clk;
@@ -469,7 +471,7 @@ module tb_pc9821_sdram_tdm;
     if (worst_line > LINE_BUDGET)
       fail("the worst scanout line fetch EXCEEDED the 2014 clk_sys line budget -- the schedule does not hold");
     if (cpu_mbps < CPU_MIN_MBPS_NUM)
-      fail("the CPU fell below its measured 40 MB/s -- the schedule does not hold");
+      fail("the CPU fell below the 40 MB/s canary (it measures 56.1 MB/s at CL3) -- the schedule regressed");
     if (slot_violations != 0)
       fail("the scanout waited through more than three other accepts -- the arbiter is not a bounded rotation");
     if (worst_line == 0)

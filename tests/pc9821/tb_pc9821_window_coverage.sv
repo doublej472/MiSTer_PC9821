@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_WINDOW_COVERAGE:
-// Every address in window 0 is claimed by exactly one owner, for EVERY window base the 0x0461 register can select (all 256 of them, not the three or four the firmware is known to write, and not the 252 that no bench has ever driven).
+// Every address in window 0 is claimed by at least one owner (the absent area, the plane window or a mapped access: no hole that waits forever) and never by both the absent area and the plane window, for EVERY window base the 0x0461 register can select (all 256 of them, not the three or four the firmware is known to write, and not the 252 that no bench has ever driven), at one configuration (32 MiB of guest RAM, the IDE ROM window closed); which owner each base names is tb_pc9821_memory_map's.
 // Window 0 is the only guest-programmable relocation in the memory map, and it decides whether an address in 0x80000-0x9FFFF reaches guest RAM, the absent ROM area (which the machine answers with 0xFF and whose stores are discarded), the IDE option-ROM
 // window, or the GVRAM plane windows. Two failures matter and both are silent: a HOLE, where no owner claims the address and the CPU waits forever for a ready that no route will give it, and a DOUBLE claim, where two routes answer one access
 // and the loser can act on a completion that is not its own. The double-claim half is the invariant pc9821_memory_subsystem.sv's route-isolation block asserts, and it is what let the mapper take the TRAM route's response 37,763,735 cycles into
@@ -70,7 +70,7 @@ module tb_pc9821_window_coverage;
   wire        fw_shadow_dirty;
   wire [31:0] fw_shadow_base;
   wire        fw_shadow_store;
-  // The PEGC window-arm state (pegc-scope-REPORT.md 4 row 2): 0 = the pre-PEGC
+  // The PEGC window-arm state: 0 = the pre-PEGC
   // decode; the arms themselves are tb_pc9821_memmap_ref's cases.
   wire        pegc_256 = 1'b0;
   wire        pegc_plane = 1'b0;

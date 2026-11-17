@@ -6,14 +6,14 @@
 // TB_PC9821_ATA_IOWAIT:
 // The CPU-side cost of an IDE PIO sector read, measured through the real pc9821_iobus instead of a bench-inserted gap: one 16-bit data-port word (0x0640) is ONE bus access that walks two lanes and stalls the CPU for 8 clk_sys, because EVERY lane the access FETCHES pays its own class (the rule the capture supports, docs/probes/IO.TXT pricing 0x0640 and 0x0641 as accesses in their own right, rows IDED0/IDED1, and the machine's per-access values being that capture's IDE.TXT rows IDEDAT0/IDEDAT1) and the min-profile class table puts both IDE data lanes at its FSM floor (IO_MIN_HOLD = 4), so a 512-byte sector's data phase is 256 x 9 = 2304 clk_sys (11.1 MB/s at 50 MHz) and 2048 of those cycles are device-wait; the task file charges the same floor, the fabric holds device_rd_wait/device_rd_hold low as pc9821_system's decode does for every ATA port, so the measured cost is the class and nothing else, and the 256 words are byte-exact against a synthetic disk image with the CPU's own view of the port.
 
-// This bench exists because the tree's two throughput benches (ata_datapath,
-// ata_readahead) model the data port with a bench-inserted 28-cycle gap, i.e. the
-// SUPERSEDED class 30; the table was later re-anchored to the machine's
-// measured 8 and then dropped every non-floor class to 4, so both of those
-// benches were 5x pessimistic about the tree they test (risk 3).
-// A bench that inserts its own gap cannot notice that: this one takes the number
-// from pc9821_iobus itself, so a re-slowed class, an added S_DEVWAIT or a per-word
-// bubble on the ATA's data port changes the measured figure and fails.
+// This bench exists because the tree's throughput benches (ata_datapath, ata_readahead,
+// ata_throughput) drive pc9821_ata directly and so model the data port with a
+// bench-inserted gap; twice that gap went stale against the class table (a 28-cycle gap
+// for the superseded class 30, then a 6-clk word), each time silently. Those benches now
+// take their word cost (9 delivered) and task-file cost (5) from THIS bench's measured
+// figures, and a bench that inserts its own gap cannot notice a change: this one takes the
+// number from pc9821_iobus itself, so a re-slowed class, an added S_DEVWAIT or a per-word
+// bubble on the ATA's data port changes the measured figure and fails here first.
 //
 // The references for the machine's own per-access figures are the Xe10 captures, and
 // they are per BYTE: the ideprobe's timing loop is `in al,dx` (ideprobe.s `tmL_loop`,
@@ -139,6 +139,7 @@ module tb_pc9821_ata_iowait;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;

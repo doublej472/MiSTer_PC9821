@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// A conformance sweep of the PC-9821 ATA interface against NP2kai's cbus/ideio.c: the port register file (0x0430/0x0432/0x0433/0x0435 and the 0x064x/0x074x block), a PIO sector read and write, the status/error semantics (a command abort, an ERROR-register read, READ VERIFY) and the reset paths (software reset, DEVICE RESET, EXECUTE DEVICE DIAGNOSTIC, NOP) are each compared word for word with the reference, while the IDENTIFY words are asserted against the machine's capture with the PIO-only core's documented capability substitutions (docs/probes/IDE.TXT) for the same capacity. The NP2kai divergences Round 3 fixed are asserted; ten documented divergences (the measured 0x0430/0x074E/0x064C, the 0x0644/0x0646 post-reset default, the still-waived 0x90 diagnostic error signature, and the withdrawn multiple-mode words 47/59) print a WAIVED line, while DEVICE RESET is asserted against the MACHINE (status 0x51 / ERROR 0x04, docs/probes/IDE.TXT:343) where NP2kai's 0x01|0x80 disagrees, and so is the ERROR-register read, which keeps STATUS.ERR on the machine (IDE.TXT:343,349) where NP2kai's ideio_i642 clears it.
+// A conformance sweep of the PC-9821 ATA interface against NP2kai's cbus/ideio.c: the port register file (0x0430/0x0432/0x0433/0x0435 and the 0x064x/0x074x block), a PIO sector read and write, the status/error semantics (a command abort, an ERROR-register read, READ VERIFY) and the reset paths (software reset, DEVICE RESET, EXECUTE DEVICE DIAGNOSTIC, NOP) are each compared word for word with the reference, while the IDENTIFY words are asserted against the machine's capture with the PIO-only core's documented capability substitutions (docs/probes/IDE.TXT) for the same capacity. The NP2kai divergences Round 3 fixed are asserted; nine documented divergences (the measured 0x0430/0x074E/0x064C, the 0x0644/0x0646 post-reset default, the unmeasured 0x90 diagnostic interrupt, and the withdrawn multiple-mode words 47/59) print a WAIVED line, EXECUTE DEVICE DIAGNOSTIC's ERROR is asserted against the machine (0x01, docs/probes/IDE.TXT:342) where NP2kai's 0x81 disagrees, while DEVICE RESET is asserted against the MACHINE (status 0x51 / ERROR 0x04, docs/probes/IDE.TXT:343) where NP2kai's 0x01|0x80 disagrees, and so is the ERROR-register read, which keeps STATUS.ERR on the machine (IDE.TXT:343,349) where NP2kai's ideio_i642 clears it. READ NATIVE MAX ADDRESS (0xF8) is asserted against the machine too: ABORTED with ERROR 0x04 and STATUS 0x51, Sector Count and Sector Number rewritten to 01/01 and the cylinder and drive/head kept, for both drive/head forms, as the Xe10's HPA-less drive answers (docs/probes/XE10Z-XE10.TXT:217-219) and the ATA spec requires of a device whose IDENTIFY word 82 has bit 10 clear, where NP2kai loads the sector count (FAIL-FIRST: the core answered 0x50 with the count). IDENTIFY PACKET DEVICE (0xA1) to the hard disk is asserted against the machine: ERROR 0x04, STATUS 0x51, SC/SN 01/01 and the cylinder and drive/head kept (docs/probes/XE10Y-XE10-K3M.TXT IDENT cmd=A1), where NP2kai's cmdabort answers 0x41; and IDENTIFY DEVICE reads Sector Count 00 while the page is presented and FF after it (K3M IDENT cmd=EC), where NP2kai leaves it alone.
 
 module tb_pc9821_ata_conform;
 
@@ -87,8 +87,8 @@ module tb_pc9821_ata_conform;
   endtask
 
   // A case kept as a documented divergence: a measured-probe override (0x0430, 0x074E,
-  // power-on 0x064C), a value an EXISTING bench pins (0x0644/0x0646, the 0x90 error
-  // signature), or a reference split the core answers with qemu. PRINT the bytes and
+  // power-on 0x064C), a value an EXISTING bench pins (0x0644/0x0646), an unmeasured
+  // reference split (the 0x90 interrupt), or a reference split the core answers with qemu. PRINT the bytes and
   // count a waiver, do not assert either.
   task automatic waive(input [8*40-1:0] name, input [15:0] got, input [15:0] np2);
     begin
@@ -271,10 +271,12 @@ module tb_pc9821_ata_conform;
 
     // ---- 4. the data register with DRQ clear ----
     // NP2kai ideio_r16 returns 0 when a drive is present but DRQ is clear; qemu
-    // ide_data_readw returns 0 under the same condition. This core answers 0xFF.
+    // ide_data_readw returns 0 under the same condition. The Xe10 reads 0x0641 = 0xFF in
+    // that state (docs/probes/IDE.TXT:21 `0641=FF`, BSY and DRQ clear), which outranks both;
+    // 0x0640 keeps the references' 0x00 (the machine's byte there is not modelled).
     read_byte(16'h0640, lo);
     read_byte(16'h0641, hi);
-    check("reg_data_drq_clear", {hi, lo}, 16'h0000);
+    check_machine("reg_data_drq_clear", {hi, lo}, 16'hFF00);
 
     // ---- 5. IDENTIFY DEVICE ----
     write_byte(16'h064E, 8'hEC);
@@ -341,7 +343,7 @@ module tb_pc9821_ata_conform;
     check("read_data_words", read_errors[15:0], 16'd0);
     read_byte(16'h074C, value); check("read_complete_status", value, 8'h50);
     // NP2kai ideio_r16 calls incsec() after the last word, so the task-file sector number
-    // register advances past the sector just read. This core leaves it where the guest set.
+    // register advances past the sector just read; this core does the same.
     read_byte(16'h0646, value); check("read_advances_sector_number", value, 8'h06);
     read_byte(16'h0644, value); check("read_sector_count_after", value, 8'h00);
 
@@ -378,7 +380,7 @@ module tb_pc9821_ata_conform;
 
     // ---- 9. READ VERIFY (0x40) ----
     // NP2kai accepts it: `drv->status &= ~IDESTAT_BSY; setintr(drv);` with no error. qemu
-    // routes it to cmd_verify (success, SET_DSC). This core aborts it.
+    // routes it to cmd_verify (success, SET_DSC). This core completes it the same way.
     write_byte(16'h074C, 8'h04);
     write_byte(16'h074C, 8'h00);
     read_byte(16'h064E, value);
@@ -390,8 +392,10 @@ module tb_pc9821_ata_conform;
 
     // ---- 10. software reset ----
     // NP2kai ideio_o74c on SRST assert sets status = 0 and error = 0 for both drives; it
-    // does not set BSY. This core enters BSY. (qemu's ide_ctrl_write calls ide_bus_reset,
-    // which leaves READY|SEEK and error 0.)
+    // does not set BSY; this core follows it (status 0x00 while SRST is held, BSY only if a
+    // block transfer is still draining). The 0x00 is NP2kai's value: the machine's status
+    // DURING a held SRST is unmeasured. (qemu's ide_ctrl_write calls ide_bus_reset, which
+    // leaves READY|SEEK and error 0.)
     write_byte(16'h074C, 8'h04);
     read_byte(16'h074C, value); check("srst_assert_status", value, 8'h00);
     write_byte(16'h074C, 8'h00);
@@ -421,7 +425,8 @@ module tb_pc9821_ata_conform;
     // 0x01|0x80 is another drive's AMNF presence signature and its drvreset does not
     // set STATUS.ERR at all, so the reference and the machine disagree on this one
     // command; the machine and the ATA definition (a device reset is an ABORT: STATUS
-    // ERR + ERROR ABRT) agree, and they win. 0x90 below keeps its waiver.
+    // ERR + ERROR ABRT) agree, and they win. 0x90 below: its ERROR is measured too, its
+    // interrupt is not.
     srst;
     read_byte(16'h064E, value);
     write_byte(16'h064E, 8'h08);
@@ -430,13 +435,15 @@ module tb_pc9821_ata_conform;
 
     // NP2kai EXECUTE DEVICE DIAGNOSTIC (0x90) sets the same error signature and RETURNS
     // WITHOUT setintr (the case is handled before the shared epilogue). This core raises
-    // an interrupt and reports AMNF alone.
+    // an interrupt (still waived: the capture does not show whether INTRQ is raised) and
+    // reports AMNF alone, which is what the machine answers: "after 0x90 status = 50 ;
+    // after 0x90 ERROR(0642) = 01" (docs/probes/IDE.TXT:342), outranking NP2kai's 0x81.
     srst;
     read_byte(16'h064E, value);
     write_byte(16'h064E, 8'h90);
     read_byte(16'h074C, value); check("diagnostic_status", value, 8'h50);
     waive("diagnostic_irq", {15'b0, irq}, 16'd0);
-    read_byte(16'h0642, value); waive("diagnostic_error", value, 8'h81);
+    read_byte(16'h0642, value); check_machine("diagnostic_error", value, 8'h01);
 
     // ---- 12. end-of-image range validation ----
     // A data command at capacity-1 with a count that does NOT fit must be REJECTED. The four
@@ -497,24 +504,102 @@ module tb_pc9821_ata_conform;
     check("eoi_write_count256_no_oor", oor_writes, 0);
 
     // ---- 13. READ NATIVE MAX (0xF8) ----
-    // NP2kai ideio.c:1162-1173 loads the capacity-derived address into the task file before
-    // interrupting (sn = totals & 0xff, cy = (totals >> 8) & 0xffff, hd low nibble =
-    // (totals >> 24) & 0xf), leaving the high drive/head bits. 0xF8 once
-    // shared the STANDBY/IDLE arm and returned whatever address the caller had preloaded. A
-    // DIFFERENT address is preloaded here so all four fields must be rewritten.
-    // capacity = 13600 = 0x3520 -> sn 0x20, cy 0x0035, hd low nibble 0 (high nibble kept).
+    // ABORTED for both drive/head forms: the Xe10's drive answers F8 with ERROR 0x04 and
+    // STATUS 0x51 for dh=E0 and dh=A0 and Sector Count / Sector Number 01/01, Cylinder
+    // Low/High and drive/head as they were (docs/probes/XE10Z-XE10.TXT:218-219 `NMX F8 dh=E0
+    // tmo=00 st0=50 err=04 sc_sn_cl_ch_dh= 01 01 09 00 E0  st=51`, `NMX F8 dh=A0 ... err=04 ...
+    // A0  st=51`). The probe's F8 follows an IDENTIFY DEVICE (tools/hwprobe/xe10z/xe10z.s
+    // sec_nmx), which leaves the count at FF (section 15), so its 01 is the abort's write; the
+    // same drive's aborted IDENTIFY PACKET writes 01/01 over a preloaded 5A/A5 (section 14).
+    // That drive's IDENTIFY word 82 = 0x7003 (:217) has HPA (bit 10) clear, as the core's
+    // 0x4200 does, and the ATA spec has a device without the HPA feature set abort the
+    // command. NP2kai instead loads the sector count (ideio.c:1162-1173). A distinct value is
+    // preloaded in every field so both the rewrite and the kept fields are seen.
+    // FAIL-FIRST: the core left SC/SN as loaded.
     srst;
     read_byte(16'h064E, value);
+    write_byte(16'h0644, 8'h5A);
     write_byte(16'h0646, 8'hAA);
     write_byte(16'h0648, 8'hBB);
     write_byte(16'h064A, 8'hCC);
     write_byte(16'h064C, 8'hA5);
     write_byte(16'h064E, 8'hF8);
-    read_byte(16'h074C, value); check("native_max_status", value, 8'h50);
-    read_byte(16'h0646, value); check("native_max_sector_number", value, 8'h20);
-    read_byte(16'h0648, value); check("native_max_cylinder_low", value, 8'h35);
-    read_byte(16'h064A, value); check("native_max_cylinder_high", value, 8'h00);
-    read_byte(16'h064C, value); check("native_max_drive_head", value, 8'hA0);
+    read_byte(16'h074C, value); check_machine("native_max_status", value, 8'h51);
+    read_byte(16'h0642, value); check_machine("native_max_error", value, 8'h04);
+    read_byte(16'h0646, value); check_machine("native_max_sector_number", value, 8'h01);
+    read_byte(16'h0648, value); check_machine("native_max_cylinder_low", value, 8'hBB);
+    read_byte(16'h064A, value); check_machine("native_max_cylinder_high", value, 8'hCC);
+    read_byte(16'h064C, value); check_machine("native_max_drive_head", value, 8'hA5);
+    read_byte(16'h0644, value); check_machine("native_max_sector_count", value, 8'h01);
+    write_byte(16'h0644, 8'h5A);
+    write_byte(16'h0646, 8'hAA);
+    write_byte(16'h064C, 8'hA0);          // the CHS form exactly as captured (the second row)
+    write_byte(16'h064E, 8'hF8);
+    read_byte(16'h074C, value); check_machine("native_max_a0_status", value, 8'h51);
+    read_byte(16'h0642, value); check_machine("native_max_a0_error", value, 8'h04);
+    read_byte(16'h064C, value); check_machine("native_max_a0_drive_head", value, 8'hA0);
+    read_byte(16'h0644, value); check_machine("native_max_a0_sector_count", value, 8'h01);
+    read_byte(16'h0646, value); check_machine("native_max_a0_sector_number", value, 8'h01);
+    write_byte(16'h0644, 8'h5A);
+    write_byte(16'h0646, 8'hAA);
+    write_byte(16'h064C, 8'hE0);          // the LBA form, the capture's first row
+    write_byte(16'h064E, 8'hF8);
+    read_byte(16'h074C, value); check_machine("native_max_lba_status", value, 8'h51);
+    read_byte(16'h0642, value); check_machine("native_max_lba_error", value, 8'h04);
+    read_byte(16'h064C, value); check_machine("native_max_lba_drive_head", value, 8'hE0);
+    read_byte(16'h0646, value); check_machine("native_max_lba_sector_number", value, 8'h01);
+    read_byte(16'h0644, value); check_machine("native_max_lba_sector_count", value, 8'h01);
+
+    // ---- 14. IDENTIFY PACKET DEVICE (0xA1) to the hard disk ----
+    // The Xe10's drive aborts it with ERROR 0x04 and STATUS 0x51 and rewrites Sector Count and
+    // Sector Number to 01/01, Cylinder Low/High and drive/head kept, from a preload of
+    // 5A/A5/3C/C3/A0 (docs/probes/XE10Y-XE10-K3M.TXT:43 `X K3M IDENT cmd=A1 bank=00
+    // fmt=er.sc.sn.cl.ch.dh.alt.433.st tf0=00.5A.A5.3C.C3.A0.50.00.50 tf1=04.01.01.3C.C3.A0.51`).
+    // NP2kai's cmdabort gives 0x41 with the task file untouched. FAIL-FIRST: the core answered
+    // 0x41 with 5A/A5.
+    srst;
+    read_byte(16'h064E, value);
+    write_byte(16'h0644, 8'h5A);
+    write_byte(16'h0646, 8'hA5);
+    write_byte(16'h0648, 8'h3C);
+    write_byte(16'h064A, 8'hC3);
+    write_byte(16'h064C, 8'hA0);
+    write_byte(16'h064E, 8'hA1);
+    read_byte(16'h074C, value); check_machine("ident_packet_hdd_status", value, 8'h51);
+    read_byte(16'h0642, value); check_machine("ident_packet_hdd_error", value, 8'h04);
+    read_byte(16'h0644, value); check_machine("ident_packet_hdd_sector_count", value, 8'h01);
+    read_byte(16'h0646, value); check_machine("ident_packet_hdd_sector_number", value, 8'h01);
+    read_byte(16'h0648, value); check_machine("ident_packet_hdd_cylinder_low", value, 8'h3C);
+    read_byte(16'h064A, value); check_machine("ident_packet_hdd_cylinder_high", value, 8'hC3);
+    read_byte(16'h064C, value); check_machine("ident_packet_hdd_drive_head", value, 8'hA0);
+    read_byte(16'h064E, value); check_machine("ident_packet_hdd_status_064e", value, 8'h51);
+
+    // ---- 15. IDENTIFY DEVICE (0xEC) and the Sector Count ----
+    // The Xe10's drive reads SC 00 while the page is presented and FF once it has been taken,
+    // Sector Number and the cylinder untouched (docs/probes/XE10Y-XE10-K3M.TXT:42 `X K3M IDENT
+    // cmd=EC ... tf0=00.5A.A5.3C.C3.A0.50.00.50 tf1=00.00.A5.3C.C3.A0.58.00.58
+    // tf2=00.FF.A5.3C.C3.A0.50.00.50`). NP2kai leaves the count alone (ideio_r16 counts down
+    // for the sector reads only). FAIL-FIRST: the core left 5A in both places.
+    srst;
+    read_byte(16'h064E, value);
+    write_byte(16'h0644, 8'h5A);
+    write_byte(16'h0646, 8'hA5);
+    write_byte(16'h0648, 8'h3C);
+    write_byte(16'h064A, 8'hC3);
+    write_byte(16'h064C, 8'hA0);
+    write_byte(16'h064E, 8'hEC);
+    read_byte(16'h074C, value); check_machine("identify_drq_status", value, 8'h58);
+    read_byte(16'h0644, value); check_machine("identify_drq_sector_count", value, 8'h00);
+    read_byte(16'h0646, value); check_machine("identify_drq_sector_number", value, 8'hA5);
+    for (n = 0; n < 256; n = n + 1) begin
+      read_byte(16'h0640, lo);
+      read_byte(16'h0641, hi);
+    end
+    read_byte(16'h074C, value); check_machine("identify_done_status", value, 8'h50);
+    read_byte(16'h0644, value); check_machine("identify_done_sector_count", value, 8'hFF);
+    read_byte(16'h0646, value); check_machine("identify_done_sector_number", value, 8'hA5);
+    read_byte(16'h0648, value); check_machine("identify_done_cylinder_low", value, 8'h3C);
+    read_byte(16'h064A, value); check_machine("identify_done_cylinder_high", value, 8'hC3);
 
     // ==== VERDICT ====
     $display("NOTE ata_conform: %0d cases, %0d mismatched, %0d waived",

@@ -493,26 +493,21 @@ module tb_pc9821_8251;
     do_reset;
     config_tx_rx();
     send_key(1'b1, 1'b0, 8'h76);   // Esc: delivered, RXRDY stays set
-    // 16 more distinct keys, none of them typematic-sensitive within this burst.
-    send_key(1'b1, 1'b0, 8'h75);   // Up
-    send_key(1'b1, 1'b0, 8'h16);   // 1
-    send_key(1'b1, 1'b0, 8'h1E);   // 2
-    send_key(1'b1, 1'b0, 8'h26);   // 3
-    send_key(1'b1, 1'b0, 8'h25);   // 4
-    send_key(1'b1, 1'b0, 8'h2E);   // 5
-    send_key(1'b1, 1'b0, 8'h36);   // 6
-    send_key(1'b1, 1'b0, 8'h3D);   // 7
-    send_key(1'b1, 1'b0, 8'h3E);   // 8
-    send_key(1'b1, 1'b0, 8'h46);   // 9
-    send_key(1'b1, 1'b0, 8'h45);   // 0
-    send_key(1'b1, 1'b0, 8'h05);   // F1 (non-repeatable)
-    send_key(1'b1, 1'b0, 8'h06);   // F2
-    send_key(1'b1, 1'b0, 8'h04);   // F3
-    send_key(1'b1, 1'b0, 8'h0C);   // F4
-    send_key(1'b1, 1'b0, 8'h03);   // F5
+    // 16 more bytes: seven taps, Esc's break and a CAPS press. A held key's break keeps a
+    // slot of its own (A FULL QUEUE NEVER LOSES A BREAK in pc9821_kbd), so held makes
+    // alone could not fill the queue; a lock press owes no break.
+    send_key(1'b1, 1'b0, 8'h75);   send_key(1'b0, 1'b0, 8'h75);   // Up
+    send_key(1'b1, 1'b0, 8'h16);   send_key(1'b0, 1'b0, 8'h16);   // 1
+    send_key(1'b1, 1'b0, 8'h1E);   send_key(1'b0, 1'b0, 8'h1E);   // 2
+    send_key(1'b1, 1'b0, 8'h26);   send_key(1'b0, 1'b0, 8'h26);   // 3
+    send_key(1'b1, 1'b0, 8'h25);   send_key(1'b0, 1'b0, 8'h25);   // 4
+    send_key(1'b1, 1'b0, 8'h2E);   send_key(1'b0, 1'b0, 8'h2E);   // 5
+    send_key(1'b1, 1'b0, 8'h36);   send_key(1'b0, 1'b0, 8'h36);   // 6
+    send_key(1'b0, 1'b0, 8'h76);   // Esc's break
+    send_key(1'b1, 1'b0, 8'h58);   // CAPS
     repeat (4) @(posedge clk); #1;
     if (dut.fifo_cnt !== 5'd16) fail("FIFO did not reach capacity 16 (NP2kai KB_BUF is 128; this is the model's depth)");
-    send_key(1'b1, 1'b0, 8'h0B);   // the 17th key: overflow
+    send_key(1'b1, 1'b0, 8'h0B);   // F6, the 17th byte: overflow
     repeat (4) @(posedge clk); #1;
     status_read(value);
     if (!(value & 8'h10)) fail("a byte arriving with the receive side full did not set OE (NP2kai keyboard_send status|=0x10)");
@@ -522,7 +517,7 @@ module tb_pc9821_8251;
     status_read(value);
     if (value & 8'h10) fail("command bit 4 (ER) did not clear OE (NP2kai keyboard_o43)");
     if (!(value & 8'h02)) fail("ER cleared RXRDY: the unread byte is still there");
-    $display("WAIVED: the die's 1-byte receiver OVERWRITES the previously received character on overrun (uPD8251A datasheet, OE); NP2kai (KB_BUF=128) and QEMU (256) drop the NEW byte, and this model follows them. Only a guest 17 bytes behind ever sees this, so changing the direction is a maintainer decision (it would preserve releases over old makes).");
+    $display("WAIVED: the die's 1-byte receiver OVERWRITES the previously received character on overrun (uPD8251A datasheet, OE); NP2kai (KB_BUF=128) and QEMU (256) drop the NEW byte, and this model follows them. Only a guest 17 bytes behind ever sees this, so changing the direction is a maintainer decision; a BREAK is never the byte dropped either way (each owed break keeps a queue slot, tb_pc9821_kbd_overrun_break).");
 
     // ==== VERDICT ====
     if (errors == 0) begin

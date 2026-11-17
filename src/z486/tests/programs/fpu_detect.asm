@@ -1,15 +1,18 @@
 ; fpu_detect.asm - Test ESC instruction decode with modrm displacement
 ;
-; Test 1 (EM=1): Verifies ESC instructions with memory operands correctly
-; consume the modrm displacement byte(s). Uses CR0.EM=1 so ESC triggers #NM.
-; Handler skips 3 bytes. If decoder consumed wrong byte count, the MOV after
-; ESC would be at the wrong address.
+; Test 1 (EM=1): an ESC with a memory operand raises #NM (CR0.EM=1) with the
+; ESC's own address as the return IP, exactly once; the handler records both
+; and skips the 3-byte instruction.
 ;
 ; Test 2 (EM=0, DOS4GW-style): Replicates DOS/4GW's FPU detection sequence:
 ; FNINIT + FNSTSW [BP-2] + check status. With no FPU and EM=0, the ESC
-; instructions execute via microcode (JPEREQ must be taken). FNSTSW should
-; complete without hanging, and [BP-2] should retain its pre-set value
-; (0xFFFF) since no real FPU writes the status word.
+; instructions execute via microcode (JPEREQ must be taken). FNSTSW must
+; complete without hanging and leave [BP-2] either at its pre-set 0xFFFF (no
+; FPU writes it) or 0x0000 (the x87 build's status word after FNINIT); any
+; other value is a wrong-width or misaddressed store.  The instructions after
+; it run only if FNSTSW was decoded as 3 bytes.
+;
+; Test 3 (EM=0, SPEED600-style FLD TBYTE): detects only a hang.
 
 BITS 16
 org 0
@@ -41,9 +44,12 @@ start:
     lmsw ax
 
     xor ax, ax
+    mov [cs:nm_count], ax
+.esc1:
     db 0xDD, 0x7E, 0xFE  ; FNSTSW [BP-2] → #NM, handler skips 3 bytes
-    mov ax, 0xBEEF        ; must execute at correct EIP
-    cmp ax, 0xBEEF
+    cmp word [cs:nm_count], 1
+    jne .fail1
+    cmp word [cs:nm_ip], .esc1
     jne .fail1
 
     ; Clear EM
@@ -52,18 +58,19 @@ start:
     lmsw ax
 
     ;=== Test 2: EM=0, DOS4GW-style FPU detection ===
-    ; Pre-fill [BP-2] with 0xFF (non-zero) — real FNSTSW would write 0
-    push word 0xFFFF      ; [BP-2] = 0xFFFF
+    ; Pre-fill [BP-2] with 0xFFFF — a real FNSTSW would write 0
     mov bp, sp
+    push word 0xFFFF      ; [BP-2] = 0xFFFF
 
     db 0xDB, 0xE3         ; FNINIT — must not hang (JPEREQ taken)
     db 0xDD, 0x7E, 0xFE   ; FNSTSW [BP-2] — must not hang, must be 3 bytes
 
-    ; After FNSTSW: with no FPU, [BP-2] should still be non-zero (0xFF)
-    ; (A real FPU would write 0x0000 to [BP-2])
-    mov ax, 0xBEEF        ; verify EIP is correct (3 bytes consumed)
-    cmp ax, 0xBEEF
-    jne .fail2
+    mov ax, [bp-2]
+    cmp ax, 0xFFFF        ; no FPU: the slot is untouched
+    je .t2_ok
+    test ax, ax           ; an FPU: the status word after FNINIT is 0
+    jnz .fail2
+.t2_ok:
 
     ; Verify we didn't hang — reaching here means JPEREQ worked
     pop ax                ; clean stack
@@ -90,7 +97,7 @@ start:
     smsw ax
     and al, 0xFB
     lmsw ax
-    mov eax, 0x00000001   ; error code 1: EM=1 decode length
+    mov eax, 0x00000001   ; error code 1: EM=1 #NM count or return IP
     mov dx, DATA_PORT
     out dx, eax
     mov al, STATUS_FAIL
@@ -100,17 +107,7 @@ start:
     jmp $
 
 .fail2:
-    mov eax, 0x00000002   ; error code 2: EM=0 decode length / JPEREQ hang
-    mov dx, DATA_PORT
-    out dx, eax
-    mov al, STATUS_FAIL
-    mov dx, STATUS_PORT
-    out dx, al
-    hlt
-    jmp $
-
-.fail3:
-    mov eax, 0x00000003   ; error code 3: FLD TBYTE hang (JPEREQ self-loop)
+    mov eax, 0x00000002   ; error code 2: EM=0 FNSTSW store
     mov dx, DATA_PORT
     out dx, eax
     mov al, STATUS_FAIL
@@ -125,10 +122,18 @@ fpu_tbyte_data:
     dd 0x80000000
     dw 0x3FFF          ; 1.0 in 80-bit extended precision
 
-; #NM handler: skip 3-byte ESC instruction
+nm_count: dw 0
+nm_ip:    dw 0
+
+; #NM handler: record the return IP, skip the 3-byte ESC instruction
 nm_handler:
     push bp
     mov bp, sp
+    inc word [cs:nm_count]
+    push ax
+    mov ax, [bp+2]
+    mov [cs:nm_ip], ax
+    pop ax
     add word [bp+2], 3
     pop bp
     iret

@@ -45,7 +45,7 @@ is covered if some term holds A's and B's signals as its CONJUNCTS - either dire
 (A,B) and (A,C) but not (B,C). This walks that structure rather than counting terms or
 restating the text, so a grouped term and separate terms are treated the same way.
 
-Run: python3 tools/check_route_pairs.py
+Run: python3 tools/check_route_pairs.py [--selftest]
 """
 import itertools
 import pathlib
@@ -66,6 +66,10 @@ RESP_ROUTES = ["win", "open", "gvram", "peg", "map"]
 # A route's line response is its word response now (P3 deleted the 128-bit line form), so
 # there are two lists per route, not three.
 RESP_SUFFIXES = ["_cpu_ready", "_cpu_resp_valid"]
+# Signals that carry a responder suffix but are not responders of this level: the GRCG and the
+# EGC answer the GVRAM datapath (pc9821_gvram_arb's grcg_cpu_* / egc_cpu_* ports), whose own
+# answer is the `gvram` route. Anything else with the suffix is a route this check must know.
+NOT_RESP_ROUTES = {"grcg", "egc"}
 
 # The six ADDRESS routes, as the signal each is named by in its own pair lists. `map` is the
 # mapper's live request (its select is the complement, so it has no `<route>_select`).
@@ -116,11 +120,27 @@ def assertion_region(text: str) -> str:
     return re.sub(r"//[^\n]*", "", region)
 
 
-def all_conditions(text: str) -> list:
+def statement_after(text: str, at: int) -> str:
+    """The statement an `if (...)` governs: a whole begin/end block, or up to its `;`."""
+    m = re.match(r"\s*begin\b", text[at:])
+    if not m:
+        semi = text.find(";", at)
+        return text[at:semi if semi >= 0 else len(text)]
+    depth = 0
+    for w in re.finditer(r"\b(begin|end)\b", text[at:]):
+        depth += 1 if w.group(1) == "begin" else -1
+        if depth == 0:
+            return text[at:at + w.end()]
+    return text[at:]
+
+
+def all_conditions(text: str, fatal_only: bool = True) -> list:
     """Every paren-balanced `if (...)` condition in text, in source order.
 
     The check bodies contain $display calls whose parentheses defeat a regex, so this
-    balances from each `if (` instead.
+    balances from each `if (` instead. With fatal_only (the default) only a CHECK counts: a
+    condition whose statement is `$fatal`. Any other `if` in the region (a counter, a trace
+    print) is not a check, and a pair it happens to mention is not a pair any check can see.
     """
     out = []
     for m in re.finditer(r"\bif \(", text):
@@ -133,7 +153,8 @@ def all_conditions(text: str) -> list:
             elif c == ")":
                 depth -= 1
                 if depth == 0:
-                    out.append(text[open_paren + 1:i])
+                    if not fatal_only or "$fatal" in statement_after(text, i + 1):
+                        out.append(text[open_paren + 1:i])
                     break
     return out
 
@@ -209,14 +230,19 @@ def missing_from(have: set, routes) -> list:
 
 
 def main() -> int:
-    text = SRC.read_text()
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
+    return check(SRC.read_text())
+
+
+def check(text: str) -> int:
     region = assertion_region(text)
     problems = []
 
     # ---- the four responders: the accept / respond / respond-line pair lists ----
     for suffix in RESP_SUFFIXES:
         seen = {m for m in re.findall(r"\b([a-z_]+)" + re.escape(suffix) + r"\b", text)
-                if any(m.startswith(r) for r in RESP_ROUTES)}
+                if m not in NOT_RESP_ROUTES}
         if seen != set(RESP_ROUTES):
             problems.append(
                 f"responder{suffix}: the file has signals for {sorted(seen)}, but this "
@@ -270,6 +296,34 @@ def main() -> int:
     print(f"ROUTE-PAIR COVERAGE: PASS ({len(RESP_ROUTES)} responders "
           f"({len(all_pairs(RESP_ROUTES))} pairs, {len(RESP_SUFFIXES)} checks), "
           f"{len(SELECT_SIGNALS)} address routes ({len(all_pairs(SELECT_SIGNALS))} pairs))")
+    return 0
+
+
+def selftest() -> int:
+    """Plant each defect the check exists for in a copy of the real source; each must fail."""
+    import contextlib
+    import io
+    text = SRC.read_text()
+
+    def verdict(t: str) -> int:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return check(t)
+
+    assert verdict(text) == 0, "the unmodified source must pass"
+    at = text.rfind("`ifdef VERILATOR")
+    # a new responder whose name shares no prefix with a known one
+    assert verdict(text[:at] + "  wire xyz_cpu_ready, xyz_cpu_resp_valid;\n" + text[at:]) == 1, \
+        "a new route with a new name must fail"
+    # a select pair dropped from the overlap check, but mentioned by a non-$fatal `if`
+    drop = "(peg_reg_select && gvram_select))"
+    assert drop in text, "selftest anchor moved: re-point it"
+    cut = text.replace(drop, "1'b0)", 1)
+    assert verdict(cut) == 1, "a dropped select pair must fail"
+    tail = cut.rindex("endmodule")
+    masked = cut[:tail] + ("  always @(posedge clk) if (peg_reg_select && gvram_select) "
+                           "dbg_n <= dbg_n + 1;\n") + cut[tail:]
+    assert verdict(masked) == 1, "a non-check `if` must not cover a dropped pair"
+    print("check_route_pairs selftest: PASS")
     return 0
 
 

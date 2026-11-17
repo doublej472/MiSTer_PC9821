@@ -234,8 +234,7 @@ def main(argv: list[str]) -> int:
     # is reported once per pass and is a SETUP failure, so it must be caught here: a bad top
     # name yields a page of warnings and one line of error, and reading the warnings instead
     # gives a confident, meaningless baseline.
-    real_errors = [e for e in errors
-                   if "warning(s)" not in e and "was not found in design" not in e]  # noqa
+    real_errors = [e for e in errors if "warning(s)" not in e]
     if real_errors:
         print("LINT SETUP FAILED - fix the invocation before reading any warning:")
         for e in real_errors[:10]:

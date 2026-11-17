@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_EGC_REGS:
-// The EGC's register file and its GRCG back-compat gate, checked against NP2kai: the eight registers 0x04A0-0x04AE (access, fgbg, ope, fg, mask, bg, sft, leng) are write-only with 0xFF read-back, hold egc_reset()'s power-up values, drop every write while the EGC enable is clear, hold the mask register while 0x04A2's bits 13-14 are set, and re-arm the shifter on 0x04AC/0x04AE; then the GRCG-compat dispatch, where with the EGC gate clear the 0x7C/0x7E tile registers still own a plane-window store and with it set the EGC engine owns it instead, and where NP2kai's real gate (the EGC mode AND the GRCG CG-mode bit 7) keeps a store whose GRCG bit 7 is clear on the plain back-compat path - ASSERTED through the bench's own model of that AND (egc_disp_gate = egc_gate && grcg_cg, the same post-AND gate pc9821_system's gdc_egc_mem_gate forms). Section C is FAIL-FIRST: a configuration write (0x4A6 fg) issued while an EGC op is still in flight must NOT change that op - the op uses the register image it was ACCEPTED with, exactly as NP2kai's atomic op does - and must still take effect on the NEXT op (latched at the accept, not dropped); it fails on the pre-change pc9821_egc, where the produce read the registers live and the in-flight op took the new fg.
+// The EGC's register file and its GRCG back-compat gate, checked against NP2kai: the eight registers 0x04A0-0x04AE (access, fgbg, ope, fg, mask, bg, sft, leng) are write-only with 0xFF read-back at all sixteen ports, gate clear at power-up and gate set over written values (docs/probes/PORTS.TXT reads FF at 04A0..04AF), hold egc_reset()'s power-up values, drop every write while the EGC enable is clear, hold the mask register while 0x04A2's bits 13-14 are set, and re-arm the shifter on 0x04AC/0x04AE; then the GRCG-compat dispatch, where with the EGC gate clear the 0x7C/0x7E tile registers still own a plane-window store and with it set the EGC engine owns it instead, and where NP2kai's real gate (the EGC mode AND the GRCG CG-mode bit 7) keeps a store whose GRCG bit 7 is clear on the plain back-compat path - ASSERTED through the bench's own model of that AND (egc_disp_gate = egc_gate && grcg_cg, the same post-AND gate pc9821_system's gdc_egc_mem_gate forms). Section C is FAIL-FIRST: a configuration write (0x4A6 fg) issued while an EGC op is still in flight must NOT change that op - the op uses the register image it was ACCEPTED with, exactly as NP2kai's atomic op does - and must still take effect on the NEXT op (latched at the accept, not dropped); it fails on the pre-change pc9821_egc, where the produce read the registers live and the in-flight op took the new fg.
 
 module tb_pc9821_egc_regs;
   reg clk = 0;
@@ -122,6 +122,7 @@ module tb_pc9821_egc_regs;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -360,8 +361,10 @@ module tb_pc9821_egc_regs;
     //     own latches at 0xFFF0/0x00FF, mask=0xFFFF, leng=0x000F and the rest 0.
     expect_reset_regs("power-up");
 
-    // A1. Read-back: NP2kai attaches out handlers only (io/egc.c:101-107), so
-    //     every one of the sixteen ports is open bus 0xFF.
+    // A1. Read-back: the Xe10 reads 0xFF at every one of the sixteen ports
+    //     (docs/probes/PORTS.TXT, BEGIN:PORTS rows 04A0..04AF; byte and word
+    //     reads of 0x4A0/0x4A1 in docs/probes/KIT1-XE10-W4A0.TXT), and NP2kai
+    //     attaches out handlers only (io/egc.c:101-107).
     for (integer p = 0; p < 16; p = p + 1) begin
       io_read(16'h04A0 + p, value);
       if (value !== 8'hFF) begin
@@ -436,6 +439,19 @@ module tb_pc9821_egc_regs;
     io_write_byte(16'h04A1, 8'hA5);
     if (egc_access !== 16'hA55A) begin
       $display("FAIL byte access latched %04x, want A55A", egc_access); errors = errors + 1;
+    end
+
+    // A4b. Read-back with the gate SET and every register holding a written,
+    //      non-reset value: still 0xFF at all sixteen ports. NP2kai has no in
+    //      handler at 0x4A0-0x4AF whatever the EGC mode (io/egc.c:101-107), so a
+    //      read path that leaked a latched register only while the EGC is armed
+    //      (A1 runs with the gate clear and the reset image) shows here.
+    for (integer p = 0; p < 16; p = p + 1) begin
+      io_read(16'h04A0 + p, value);
+      if (value !== 8'hFF) begin
+        $display("FAIL gate-set read-back 0x%04x = %02x, want FF", 16'h04A0 + p, value);
+        errors = errors + 1;
+      end
     end
 
     // A5. The mask register is gated AGAIN by 0x4A2's foreground/background

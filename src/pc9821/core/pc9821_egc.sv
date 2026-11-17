@@ -244,18 +244,17 @@ module pc9821_egc (
   // per copy shares one of them. The parity split also stops Quartus merging the two copies, which
   // would leave four read ports on one memory, over the M10K limit.
   reg [5:0]  inptr, outptr;
+  wire [2:0] sft_src8 = acc_sft[2:0];
+  wire [2:0] sft_dst8 = acc_sft[6:4];   // the byte-unit feeder's 3-bit sub-byte shift
+  wire       sft_dir  = acc_sft[8];    // the descending direction: the mirror (see the header)
+  wire       sft_moved = (sft_src8 != sft_dst8);
+  wire       sft_right = (sft_src8 > sft_dst8);
   wire [2:0] efunc   = sft_dir ? (sft_right ? 3'd5 : (sft_moved ? 3'd3 : 3'd1))
                                : (sft_right ? 3'd4 : (sft_moved ? 3'd2 : 3'd0));
   wire [3:0] e_s8l   = sft_right ? (sft_src8 - sft_dst8) : (8 - (sft_dst8 - sft_src8));
   wire [3:0] e_s8r   = sft_right ? (8 - (sft_src8 - sft_dst8)) : (sft_dst8 - sft_src8);
 
   reg [31:0] lastvram [0:3];  // the quad of the last backend read
-
-  wire [2:0] sft_src8 = acc_sft[2:0];
-  wire [2:0] sft_dst8 = acc_sft[6:4];   // the byte-unit feeder's 3-bit sub-byte shift
-  wire       sft_dir  = acc_sft[8];    // the descending direction: the mirror (see the header)
-  wire       sft_moved = (sft_src8 != sft_dst8);
-  wire       sft_right = (sft_src8 > sft_dst8);
 
   // Plane geometry is not this module's business: a column address is
   // {page, plane_offset} and the plane identity is the byte-enable lane (D1).
@@ -275,7 +274,7 @@ module pc9821_egc (
   endfunction
 
   // The mask tables, NP2kai's bytemask_u0/u1 (mem/memegc.c:26-38) as closed forms. mask_u0's
-  // row is the start bit, its column remain-1, so it is `0xFF << (7 - start) >> (remain-1)`;
+  // row (idx[5:3]) is remain-1, its column (idx[2:0]) the start bit, so it is `0xFF << (7 - (remain-1)) >> start`;
   // mask_u1 is its own one-row case. Only the ascending tables are needed (mask_step bit-reverses).
   function [7:0] mask_u0(input [5:0] idx);
     begin
@@ -327,7 +326,7 @@ module pc9821_egc (
   // ---------------------------------------------------------------
   // z486's address output is 30 bits ("Physical address [31:2]", src/z486/z486.sv:78
   // `addr`) and pc9821_system forms the guest address as {z_addr, 2'b00}
-  // (src/pc9821/core/pc9821_system.sv:647 and :1061, the `.cpu_addr` connections), so
+  // (pc9821_system.sv:801 `.cpu_addr({z_addr, 2'b00})` and pc9821_system.sv:1235 `.cpu_addr({z_addr, 2'b00})`), so
   // every access reaches this module DWORD-ALIGNED and the operand's byte lane is
   // carried ONLY by cpu_be (src/z486/z486_pkg.sv:1181 `calc_be`). Deriving the lane
   // from cpu_offset[1:0] made it 0 for every access, so a 16-bit unit on lanes 2:3

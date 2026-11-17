@@ -1,13 +1,13 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// A window-0 access whose TARGET page is not guest RAM behaves exactly like the direct encoding of that page (aliases.md A6): past guest_ram_bytes both are open bus with stores discarded, and under sys16m with win0 over 0xF00000-0xF7FFFF both reach the PEGC EVRAM at peg_base. out_of_range used to test cpu_addr (0x80000, inside RAM) instead of the biased d_addr, so the fallthrough emitted raw d_addr and the overlay reached ordinary SDRAM behind the map. FAIL-FIRST: the overlay's store lands in SDRAM and reads back where the direct encoding reads F's, and the two encodings disagree byte for byte over the PEGC window. A window page below 8 is a hole on the real Xe10 (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17, RISKY /461): with 0x0461 = 00, 02, 04 or 06 every window word at 0x80000-0x9FFFC reads FFFFFFFF while the conventional memory the page names keeps its contents, and a store through the window at pages 00 and 02 never reaches that memory, while page 08 is the identity - FAIL-FIRST, the core aliased the conventional memory there.
+// A window-0 access whose TARGET page is not guest RAM behaves exactly like the direct encoding of that page: past guest_ram_bytes both are open bus with stores discarded, and under sys16m with win0 over 0xF00000-0xF7FFFF both reach the PEGC EVRAM at peg_base. out_of_range used to test cpu_addr (0x80000, inside RAM) instead of the biased d_addr, so the fallthrough emitted raw d_addr and the overlay reached ordinary SDRAM behind the map. FAIL-FIRST: the overlay's store lands in SDRAM and reads back where the direct encoding reads F's, and the two encodings disagree byte for byte over the PEGC window. A window page below 8 is a hole on the real Xe10 (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17, RISKY /461): with 0x0461 = 00, 01, 02, 04 or 06 every window word at 0x80000-0x9FFFC reads FFFFFFFF while the conventional memory the page names keeps its contents, and a store through the window at pages 00 and 01 (the two rows whose marker the capture stored) never reaches that memory, while page 08 is the identity - FAIL-FIRST, the core aliased the conventional memory there.
 //
 // A window-0 (0x0461) access whose TARGET page is not guest RAM behaves exactly like the
 // direct encoding of that page: the overlay must not reach ordinary SDRAM where the direct
 // encoding serves open bus (past guest_ram_bytes), and it must reach the PEGC EVRAM where
 // the direct encoding serves the PEGC window (win0 over 0xF00000-0xF7FFFF with sys16m on).
-// The defect (aliases.md A6) was out_of_range testing cpu_addr (0x80000, inside RAM) instead
+// The defect was out_of_range testing cpu_addr (0x80000, inside RAM) instead
 // of the biased d_addr (the target), so the fallthrough emitted raw d_addr to the backend.
 //
 // FAILS BEFORE: the overlay's store lands in SDRAM at the target and reads back through the
@@ -291,8 +291,9 @@ module tb_pc9821_win0_out_of_range;
     // ==== Case 3: pages 00-06 are a hole (docs/probes/KIT2-XE10-RISKY-461.TXT:5-17) ====
     // `R461 00 rb=01 win(80000 80400 90000 9FFFE)=FFFF FFFF FFFF FFFF dir=B625 7002 0001 82E8
     // mark(win before/after, cell)=FFFF FFFF 3C5A`: the window reads FFFF where the page's own
-    // memory holds data, and the marker stored through it never reaches the cell. Pages 02, 04
-    // and 06 read FFFF likewise (lines 9-15); page 08 is the identity (line 17).
+    // memory holds data, and the marker stored through it never reaches the cell. Page 01 is the
+    // same, marker included (line 7); pages 02, 04 and 06 read FFFF likewise (lines 9-15, no
+    // marker stored); page 08 is the identity (line 17).
     sys16m_en = 1'b0;
     win0_sel = 8'h08;
     req(32'h0000_0000, 1'b1, 32'h7002_B625, rd);
@@ -308,10 +309,19 @@ module tb_pc9821_win0_out_of_range;
     req(32'h0008_0000, 1'b1, 32'hC3A5_C3A5, rd);
     req(32'h0008_0000, 1'b0, 32'h0, rd);
     chk(rd, 32'hFFFF_FFFF, "R461 00: the marker reads back FFFF FFFF through the window");
+    // Page 01: `R461 01 ... win(...)=FFFF FFFF FFFF FFFF dir=0001 87E8 4558 0000 mark(win
+    // before/after, cell)=FFFF FFFF 3C5A` (line 7) - the second row whose marker was stored, so
+    // a store through the window is discarded there too.
+    win0_sel = 8'h01;
+    req(32'h0008_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 01: the window at 0x80000 reads FFFF FFFF");
+    req(32'h0008_0000, 1'b1, 32'hC3A5_C3A5, rd);
+    req(32'h0008_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'hFFFF_FFFF, "R461 01: the marker reads back FFFF FFFF through the window");
+    // Page 02 is READ only: its row prints `mark(...)=-`, so the capture stored nothing there.
     win0_sel = 8'h02;
     req(32'h0008_0400, 1'b0, 32'h0, rd);
     chk(rd, 32'hFFFF_FFFF, "R461 02: the window at 0x80400 reads FFFF FFFF");
-    req(32'h0008_0400, 1'b1, 32'h5A5A_5A5A, rd);
     win0_sel = 8'h04;
     req(32'h0009_FFFC, 1'b0, 32'h0, rd);
     chk(rd, 32'hFFFF_FFFF, "R461 04: the window at 0x9FFFC reads FFFF FFFF");
@@ -321,8 +331,8 @@ module tb_pc9821_win0_out_of_range;
     win0_sel = 8'h08;
     req(32'h0000_0000, 1'b0, 32'h0, rd);
     chk(rd, 32'h7002_B625, "R461 00: the page's own memory kept its word (dir)");
-    req(32'h0002_0400, 1'b0, 32'h0, rd);
-    chk(rd, 32'hA282_4558, "R461 02: the store through the hole never reached 0x20400");
+    req(32'h0001_0000, 1'b0, 32'h0, rd);
+    chk(rd, 32'h82E8_0001, "R461 01: the store through the hole never reached 0x10000 (dir)");
     req(32'h0008_0000, 1'b0, 32'h0, rd);
     chk(rd, 32'h3A41_0808, "R461 08: page 08 is the identity");
 

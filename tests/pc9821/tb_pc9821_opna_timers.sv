@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OPNA_TIMERS:
-// The PC-9801-86's two hardware timers actually fire, at the rate the machine's master clock implies, and reach the guest both ways a driver can use them: the overflow flag appears in the 0x188 status read, and the board's IRQ line asserts; the periods are measured in clk cycles against the YM2608's own formula at this board's 7.9872 MHz master clock, and two ratio checks assume no clock at all. It also proves where that IRQ LANDS: the board's factory-default INT5 is IRQ12 (the slave 8259's IR4, vector 0x14), so the timer line is wired to the slave - not the master IRQ5 - and an INTA cycle answers vector 0x14. Register 0x29 does not gate the Timer A interrupt: with 0x29 = 00 or 02 Timer A still interrupts at its own period, as the Xe10 does (docs/probes/YM29-XE10.TXT). PMD - the driver Touhou's sound runs through - drives playback from Timer B and effects from Timer A, both as interrupts, so "the timer registers exist" is not the property that matters; "an interrupt arrives at the right rate and the flag says so" is.
+// The PC-9801-86's two hardware timers actually fire, at the rate the machine's master clock implies, and reach the guest both ways a driver can use them: the overflow flag appears in the 0x188 status read, and the board's IRQ line asserts; the periods are measured in clk cycles against the YM2608's own formula at this board's 7.9872 MHz master clock, and two ratio checks assume no clock at all: the measured Timer B 16-count period is 4x the measured Timer A 64-count period (2304/144 = 16), and doubling Timer A's count doubles its measured period. It also proves where that IRQ LANDS once wired as the board's factory-default INT5 = IRQ12 (the slave 8259's IR4; this bench's own wiring, pc9821_system's is pinned by tools/check_wiring.py): the real pc9821_interrupts pair raises the master's cascade and not IRQ5, and an INTA cycle answers vector 0x14. Register 0x29 does not gate the Timer A interrupt: with 0x29 = 00 or 02 Timer A still interrupts at its own period, as the Xe10 does (docs/probes/YM29-XE10.TXT). PMD - the driver Touhou's sound runs through - drives playback from Timer B and effects from Timer A, both as interrupts, so "the timer registers exist" is not the property that matters; "an interrupt arrives at the right rate and the flag says so" is.
 //
 // ==== DUT ====
 // The board glue pc9821_opna driven at its own host port, so every access goes
@@ -242,6 +242,7 @@ module tb_pc9821_opna_timers;
   reg     [7:0] st;
   integer n_cycles;
   integer exp_a, exp_b;
+  integer n_b16, n_a64;   // the measured periods step 7 relates
   real    got_ms, exp_ms;
 
   task automatic check_period(input integer got, input real expected_clk,
@@ -270,7 +271,7 @@ module tb_pc9821_opna_timers;
     repeat (40) @(posedge clk);
     @(negedge clk); reset = 0;
     // The glue stretches the chip's reset over 16 clk&cen cycles
-    // (pc9821_opna.sv:120-133, `rst_cnt <= 5'd16;`); let it finish before any register access.
+    // (pc9821_opna.sv:138-151, `rst_cnt <= 5'd16;`); let it finish before any register access.
     repeat (2000) @(posedge clk);
 
     // ---- 1. nothing has fired and no IRQ is up --------------------------
@@ -293,6 +294,7 @@ module tb_pc9821_opna_timers;
     exp_b = 16.0 * TICK_B_CLK;
     measure_start_to_irq(8'h0A, 3000000, n_cycles);
     check_period(n_cycles, exp_b, "Timer B 16 counts");
+    n_b16 = n_cycles;
 
     // ---- 3. the overflow flag is visible in the 0x188 status read --------
     // Read after the interrupt, so this asserts the guest can see what the
@@ -350,23 +352,30 @@ module tb_pc9821_opna_timers;
     exp_a = 64.0 * TICK_A_CLK;
     measure_start_to_irq(8'h05, 3000000, n_cycles);
     check_period(n_cycles, exp_a, "Timer A 64 counts");
+    n_a64 = n_cycles;
 
     read_status(st);
     if (st[0] !== 1'b1)
       fail("Timer A's overflow flag is not visible in the 0x188 status read");
 
-    // ---- 7. the two rates relate by 16, with no clock assumption ---------
-    // 2304/144 = 16, so one Timer B step is 16 Timer A steps. This is a
-    // property of the chip alone: it holds whatever the master clock is, which
-    // is what stops a wrong assumed clock from making the whole bench agree
-    // with itself. It is asserted on the TICKS, so the different counts the
-    // two measurements use cannot flatter it.
-    if ((TICK_B_CLK / TICK_A_CLK) != 16.0) begin
-      $display("FAIL: the Timer B/Timer A step ratio is %0.3f, not 16",
-               TICK_B_CLK / TICK_A_CLK);
-      errors = errors + 1;
-    end else
-      $display("  Timer B step / Timer A step = 16 (2304/144)");
+    // ---- 7. the two MEASURED rates relate by 16, with no clock assumption ---------
+    // 2304/144 = 16, so one Timer B step is 16 Timer A steps: Timer B's 16 counts
+    // (16 x 2304 master clocks) last exactly as long as 4 x Timer A's 64 counts
+    // (64 x 144). This is a property of the chip alone: it holds whatever the master
+    // clock is, and it is asserted on the two periods the DUT produced (steps 2 and
+    // 6), so a wrong assumed clock - which scales both expectations alike - cannot make
+    // it agree with itself. 1% covers the start-phase quantisation (one 24-state
+    // sequencer wrap, about 150 clk, against 57692 and 230769 clk).
+    begin
+      real ratio;
+      ratio = (n_a64 > 0) ? $itor(n_b16) / $itor(n_a64) : 0.0;
+      if (!(ratio > 4.0 * 0.99 && ratio < 4.0 * 1.01)) begin
+        $display("FAIL: measured Timer B 16 counts / Timer A 64 counts = %0.4f (%0d / %0d clk), want 4 (2304*16 / (144*64))",
+                 ratio, n_b16, n_a64);
+        errors = errors + 1;
+      end else
+        $display("  measured Timer B 16 counts / Timer A 64 counts = %0.4f (want 4: 2304/144 = 16)", ratio);
+    end
 
     // ---- 8. the counter value is used, not ignored -----------------------
     // Double Timer A's count (64 -> 128) and the period must double. A counter
@@ -444,8 +453,9 @@ module tb_pc9821_opna_timers;
     // selects that level from PSG register 0x0E's readback, so the
     // line every check above measured must land on the SLAVE and answer vector 0x14, not
     // on the master and answer IRQ5's 0x0D. pic_slave_irq is this bench's copy of the
-    // system's concatenation, so this proves the OPNA reaches the slave as IRQ12 when
-    // wired that way; the system's own expression is the change under test.
+    // system's concatenation, so this proves the OPNA line answers vector 0x14 when wired
+    // to the slave's IR4; pc9821_system.sv's own wiring is pinned by tools/check_wiring.py,
+    // not by this bench.
     pic_rst_n = 1;
     repeat (4) @(posedge clk);
     // Firmware ICW values: master ICW2 0x08 with the cascade on IRQ7 (ICW3 0x80) and

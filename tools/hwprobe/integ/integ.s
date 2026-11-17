@@ -656,10 +656,10 @@ df_pe:
     mov     byte ptr [di], 0
     cmp     byte ptr [PATHBUF], '*'      /* '*:\x' = the drive given by /D:x (a manifest made for any CD drive letter) */
     jne     df_nostar
-    mov     al, [vdrive]
-    or      al, al
+    mov     ah, [vdrive]                /* AH, not AL: AL still holds the path's terminator */
+    or      ah, ah
     jz      df_nostar
-    mov     [PATHBUF], al
+    mov     [PATHBUF], ah
 df_nostar:
     cmp     al, 10
     je      df_eol

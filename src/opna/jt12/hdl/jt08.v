@@ -21,7 +21,7 @@
 
 // YM2608 wrapper
 // Clock enabled at 7.5 - 8.5MHz
-// LOCAL CHANGE (this repository, on top of r13/64): the RHYTHM (ADPCM-A) gain is a
+// LOCAL CHANGE (this repository): the RHYTHM (ADPCM-A) gain is a
 // 3-bit input port rather than a parameter, and is passed straight to jt12_top - the
 // OSD drives it at runtime (steps 0..5 = 0/-6/-12/-18/-24/-30 dB).
 
@@ -29,6 +29,8 @@ module jt08 (
     input           rst,        // rst should be at least 6 clk&cen cycles long
     input           clk,        // CPU clock
     input           cen,        // optional clock enable, if not needed leave as 1'b1
+    input           rst_nx,     // LOCAL PATCH (rst_nx seam, PC-98 core): rst one cycle early, for jt12_rst's posedge synchroniser; see jt12_rst.v's LOCAL PATCH
+    input           cen_nx,     // LOCAL PATCH (cen_nx seam, PC-98 core): the next cycle's cen, for jt12_div's posedge clock-enable registers; see jt12_div.v's LOCAL PATCH
     input   [2:0]   rhythm_gain_shift, // ADPCM-A (RHYTHM) bus attenuation; 0 = upstream
     // LOCAL CHANGE (B-4, this repository): 0xA460 bit 0 dropping switches the
     // FM to NP2kai's 3-channel mono configuration (cbus/board86.c:79-94).
@@ -82,6 +84,8 @@ u_jt12(
     .rst            ( rst          ),        // rst should be at least 6 clk&cen cycles long
     .clk            ( clk          ),        // CPU clock
     .cen            ( cen          ),        // optional clock enable, it not needed leave as 1'b1
+    .cen_nx         ( cen_nx       ),        // LOCAL PATCH (cen_nx seam, PC-98 core)
+    .rst_nx         ( rst_nx       ),        // LOCAL PATCH (rst_nx seam, PC-98 core)
     .din            ( din          ),
     .addr           ( addr         ),
     .cs_n           ( cs_n         ),

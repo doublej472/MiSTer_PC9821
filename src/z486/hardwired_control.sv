@@ -540,8 +540,10 @@ final $display("PB_UNISSUED dead-slot selections %0d, executed %0d",
 always @(posedge clk)
     if (reset_n && fold_active && uc_exec &&
         condition_true(exec_instr.branch_condition, flags_live))
-        $display("%0t JCC-FOLD MISMATCH: opcode=%02x flags=%08x",
-                 $time, exec_instr.opcode, flags_live);
+        // A folded Jcc retired as not-taken; a true condition here is a
+        // wrong branch, not a recoverable state.
+        $fatal(1, "JCC-FOLD MISMATCH: opcode=%02x flags=%08x",
+               exec_instr.opcode, flags_live);
 
 int unsigned ds_total, ds_empty, ds_seq, ds_flags, ds_ea, ds_memc;
 int unsigned ds_intr, ds_other, ds_other_1w, ds_keepslot;

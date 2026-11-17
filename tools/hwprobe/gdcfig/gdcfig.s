@@ -4,7 +4,7 @@
  * circles from octant arcs and partial arcs, rectangles (straight and turned), an area fill
  * with COMPLEMENT/CLEAR/REPLACE lines across it, patterned lines, dots, and 8x8 graphics
  * characters (zoom 1/2/4, slanted, two directions) through the GRCG. Run the SAME binary on
- * the core and on a real PC-9821 and compare the two pictures (todo item 126).
+ * the core and on a real PC-9821 and compare the two pictures (both captured: KIT1-XE10-GDCFIG.BIN).
  *
  * It sets 640x400 colour graphics (INT 18h AH=42h CH=C0h, AH=40h), clears the four planes,
  * turns the GRCG off and replays the stream below through ports 0xA2/0xA0, waiting on

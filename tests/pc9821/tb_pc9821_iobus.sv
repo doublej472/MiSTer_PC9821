@@ -1,9 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The I/O bus: the A20 gate (masked at power-on, and moved only by 0xF0/0xF2/0xF6 -- the system PPI's port C is a plain latch and not a second control), the 0x534 soft reset (only bit 0 requests one, and it masks A20), the ARTIC timestamp counter, the flush-pulse log over a full sweep, POST writes, and open-bus behaviour. It also decodes 0x043F's 0x2 nibble into the machine's three measured EMS-window states: 0x20 the identity (the ordinary VRAM planes, which the BIOS's own mode-set stub writes and the ITF writes back after its test), 0x22 the 64 KiB RAM page, and anything else unmapped when written from the page, while written from the identity it keeps the planes with no flush (docs/probes/DMAROUTE-XE10.TXT cases E1/E2). Further cases pin: the FDC 1.44M/RPM register 0x04BE is decoded (rpm[reg144[6:5]] | 0xFE, NP2kai io/fdc.c:1117-1134) and stays out of the unmapped telemetry, and the 0xF2 read tracks the A20 state (0xFE released / 0xFF masked, NP2kai cpuio_if2) instead of the old constant 0xFE. The word-read cases pin: a 16-bit read at 0x7C answers 0xFF:the-byte and never fetches 0x7D (the Xe10's `in ax,7Ch`, docs/probes/XE10T-XE10-AUDIT.TXT W007C `w1=FFFF`), while 0x7E keeps the byte split with 0x7F's open-bus 0xFF high byte and byte reads at 0x7C/0x7D are untouched -- FAIL-FIRST on the 0x7C word read alone (0x00C3, NP2kai's minus_term, where the machine's shape answers 0xFFC3). The machine-reset seed: the software-DIP store is walked back to its power-up image by the machine-reset strobe (the same `reset || !cpu_run` this module's other configuration latches re-sample), instead of surviving as the previous run left it - otherwise a reset brings the ITF's SET THE SOFTWARE DIP-SWITCH message back - and the CPU is held in its reset class for the whole 24-byte walk (`cpu_reset_req`, turned into the CPU's reset_n by a real pc9821_cpu_reset_gate instance in this bench), so no read can land on a half-seeded bank. The walk starts at the reset ASSERTION, so a window longer than the walk - every real reset: a reload's seconds, an OSD reset's SDRAM calibration - finishes inside it and asks for no hold at all, which is what keeps the boot golden exact, and a reset pulse SHORTER than the walk is checked from the other side (the hold is requested and the walk is observable with the store still partly corrupt, so that hold check is not vacuous). FAIL-FIRST: before the change the corrupt byte survives a platform reset. And the memory-switch strap cell 0x79 - the machine's stored extended-memory size in MiB - answers the OSD RAM size as a read fallback (the recorded derivation: total MiB minus 2, the inverse of the MEASURED 0x1E at 32 MiB), 0x0E at the 16 MiB default and 0x1E at 32 MiB, until the guest writes its own byte and wins for good; FAIL-FIRST, because the pre-fix threshold answered 0x00 at every guest below 18 MiB. And the ITF's cold-start flag 0x439 reads 0x00 out of a machine reset (BANK4@0x40D6-0x40DF takes the cold branch only on 0x00; the measured 0xB4 is the ITF's own write, BANK4@0x40EC-0x40F5) and keeps a written 0xB4 through out 0xF0's CPU reset; FAIL-FIRST, because the core answered 0xB4 at reset, the ITF took its warm branch and the OSD's held HELP never reached SETUP. And a software REBOOT re-enters through the ITF: with the BIOS top mapped (a DOS prompt) and Windows 95 WIN.COM's reboot stub replayed byte for byte (port 0x37 0x92/0x07/0x0B/0x0F/0x08, so SHUT0 = SHUT1 = 1), its out 0xF0 requests a CPU reset and leaves the BIOS top mapped (NP2kai io/cpuio.c cpuio_of0 moves no bank), and the BIOS reset entry's 0x534 toggle (BANK7@0xFD81F, read 0x7E, write 0x7F) requests a reset AND maps the ITF (top_bank 8), which is where every reference lands next - the same entry's own trampoline `out 0x43D,0 / jmp FFFF:0000` (BANK7@0xFD826-0xFD83D) under NP2kai, which decodes no 0x534, and QEMU's machine reset (pc98_mem_reset: `s->top_bank = BANK_ITF`); FAIL-FIRST, because a reset that kept the BIOS top re-entered FD80:0000 with the SHUT bits still set and looped on 0x534 forever behind the blanked GDCs - the black screen after `exit` from Windows 95's MS-DOS mode. The same 0x534 reboot returns the rest of the memory-map latch set to its machine-reset values, as QEMU's pc98_mem_reset does on that reset: the 0xD8000 IDE ROM gate open and its select at the IDE ROM (0xFC), the BIOS RAM gate and the IDE work-RAM gate shut, window 0 at 0x08 and window 1 at 0x0A, the top-window shadow disabled, and ONE soft_reboot pulse (QEMU restores the stored drive-bitmap byte, `s->f8e90_value = s->f8e90_reset`), while out 0xF0 pulses none; FAIL-FIRST, because the latches kept the DOS session's values. 0x9892 and 0x9894 read F0 out of reset and each latches bit 3 from a write whose high nibble is 0 (docs/probes/KIT2-XE10-RISKY-989.TXT: `W989 9892 08 -> ... 9892=F8`, while 55, AA, FF and the put-back F0 leave the byte as it was, each port on its own) and a 00 write clears it (the POST's bit-3 branch, BANK4@0x4AF5-0x4AFE).
-//
-// The I/O bus: the A20 gate (masked at power-on, and moved only by 0xF0/0xF2/0xF6 -- the system PPI's port C is a plain latch and not a second control), the 0x534 soft reset (only bit 0 requests one, and it masks A20), the ARTIC timestamp counter, the flush-pulse log over a full sweep, POST writes, and open-bus behaviour. It also decodes 0x043F's 0x2 nibble into the machine's three measured EMS-window states: 0x20 the identity (the ordinary VRAM planes, which the BIOS's own mode-set stub writes and the ITF writes back after its test), 0x22 the 64 KiB RAM page, and anything else unmapped when written from the page, while written from the identity it keeps the planes with no flush (docs/probes/DMAROUTE-XE10.TXT cases E1/E2). And it pins 0x043B bit 2 as the INVERTED request for the 15-16 MiB system-space hole - set asks for RAM there, clear enables the hole, reset leaves the bit clear (the hole on: NP2kai's zeroed latch, qemu's power-up sys16m = 1) - which is the bit the ITF's stage-0x25 memory test writes 0x04 to. It also pins the word-read assembly at the GRCG's ports: a 16-bit read at 0x7C answers {0xFF, the 0x7C byte} and never fetches port 0x7D - the Xe10's `in ax,7Ch` reads FFFF (docs/probes/XE10T-XE10-AUDIT.TXT W007C `w1=FFFF`), not NP2kai's minus_term zero - while 0x7E keeps the default byte split with the 0xFF open-bus high byte, and byte reads at 0x7C/0x7D are untouched.
+// The I/O bus: the A20 gate (masked at power-on, and moved only by 0xF0/0xF2/0xF6 -- the system PPI's port C is a plain latch and not a second control), the 0x534 soft reset (only bit 0 requests one, and it masks A20), the ARTIC timestamp counter, the flush-pulse log over a full sweep, POST writes, and open-bus behaviour. It also decodes 0x043F's 0x2 nibble into the machine's three measured EMS-window states: 0x20 the identity (the ordinary VRAM planes, which the BIOS's own mode-set stub writes and the ITF writes back after its test), 0x22 the 64 KiB RAM page, and anything else unmapped when written from the page, while written from the identity it keeps the planes with no flush (docs/probes/DMAROUTE-XE10.TXT cases E1/E2). Further cases pin: the FDC 1.44M/RPM register 0x04BE is decoded (rpm[reg144[6:5]] | 0xFE, NP2kai io/fdc.c:1117-1134) and stays out of the unmapped telemetry, and the 0xF2 read tracks the A20 state (0xFE released / 0xFF masked, NP2kai cpuio_if2) instead of the old constant 0xFE. The word-read cases pin: a 16-bit read at 0x7C answers 0xFF:the-byte and never fetches 0x7D (the Xe10's `in ax,7Ch`, docs/probes/XE10T-XE10-AUDIT.TXT W007C `w1=FFFF`), while 0x7E keeps the byte split with 0x7F's open-bus 0xFF high byte and byte reads at 0x7C/0x7D are untouched -- FAIL-FIRST on the 0x7C word read alone (0x00C3, NP2kai's minus_term, where the machine's shape answers 0xFFC3). The machine-reset seed: the software-DIP store is walked back to its power-up image by the machine-reset strobe (the same `reset || !cpu_run` this module's other configuration latches re-sample), instead of surviving as the previous run left it - otherwise a reset brings the ITF's SET THE SOFTWARE DIP-SWITCH message back - and the CPU is held in its reset class for the whole 24-byte walk (`cpu_reset_req`, turned into the CPU's reset_n by a real pc9821_cpu_reset_gate instance in this bench), so no read can land on a half-seeded bank. The walk starts at the reset ASSERTION, so a window longer than the walk - every real reset: a reload's seconds, an OSD reset's SDRAM calibration - finishes inside it and asks for no hold at all, which is what keeps the boot golden exact, and a reset pulse SHORTER than the walk is checked from the other side (the hold is requested and the walk is observable with the store still partly corrupt, so that hold check is not vacuous). FAIL-FIRST: before the change the corrupt byte survives a platform reset. And the memory-switch strap cell 0x79 - the machine's stored extended-memory size in MiB - answers the OSD RAM size as a read fallback (the recorded derivation: total MiB minus 2, the inverse of the MEASURED 0x1E at 32 MiB), 0x0E at the 16 MiB default and 0x1E at 32 MiB, until the guest writes its own byte and wins for good; FAIL-FIRST, because the pre-fix threshold answered 0x00 at every guest below 18 MiB. And the ITF's cold-start flag 0x439 reads 0x00 out of a machine reset (BANK4@0x40D6-0x40DF takes the cold branch only on 0x00; the measured 0xB4 is the ITF's own write, BANK4@0x40EC-0x40F5) and keeps a written 0xB4 through out 0xF0's CPU reset; FAIL-FIRST, because the core answered 0xB4 at reset, the ITF took its warm branch and the OSD's held HELP never reached SETUP. And a software REBOOT re-enters through the ITF: with the BIOS top mapped (a DOS prompt) and Windows 95 WIN.COM's reboot stub replayed byte for byte (port 0x37 0x92/0x07/0x0B/0x0F/0x08, so SHUT0 = SHUT1 = 1), its out 0xF0 requests a CPU reset and leaves the BIOS top mapped (NP2kai io/cpuio.c cpuio_of0 moves no bank), and the BIOS reset entry's 0x534 toggle (BANK7@0xFD81F, read 0x7E, write 0x7F) requests a reset AND maps the ITF (top_bank 8), which is where every reference lands next - the same entry's own trampoline `out 0x43D,0 / jmp FFFF:0000` (BANK7@0xFD826-0xFD83D) under NP2kai, which decodes no 0x534, and QEMU's machine reset (pc98_mem_reset: `s->top_bank = BANK_ITF`); FAIL-FIRST, because a reset that kept the BIOS top re-entered FD80:0000 with the SHUT bits still set and looped on 0x534 forever behind the blanked GDCs - the black screen after `exit` from Windows 95's MS-DOS mode. The same 0x534 reboot returns the rest of the memory-map latch set to its machine-reset values, as QEMU's pc98_mem_reset does on that reset: the 0xD8000 IDE ROM gate open and its select at the IDE ROM (0xFC), the BIOS RAM gate and the IDE work-RAM gate shut, window 0 at 0x08 and window 1 at 0x0A, the top-window shadow disabled, and ONE soft_reboot pulse (QEMU restores the stored drive-bitmap byte, `s->f8e90_value = s->f8e90_reset`), while out 0xF0 pulses none; FAIL-FIRST, because the latches kept the DOS session's values. 0x9892 and 0x9894 read F0 out of reset and each latches bit 3 from a write whose high nibble is 0 (docs/probes/KIT2-XE10-RISKY-989.TXT: `W989 9892 08 -> ... 9892=F8`, while 55, AA, FF and the put-back F0 leave the byte as it was, each port on its own) and a 00 write clears it (the POST's bit-3 branch, BANK4@0x4AF5-0x4AFE). And it pins 0x043B bit 2 as the INVERTED request for the 15-16 MiB system-space hole - set asks for RAM there, clear enables the hole, reset leaves the bit clear (the hole on: NP2kai's zeroed latch, qemu's power-up sys16m = 1) - which is the bit the ITF's stage-0x25 memory test writes 0x04 to.
 
 
 module tb_pc9821_iobus;
@@ -139,6 +137,7 @@ module tb_pc9821_iobus;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -418,7 +417,7 @@ module tb_pc9821_iobus;
       // to the FSM minimum: the 0x0071 8253 must still cover one PIT tick,
       // 0x5F (a posted write plus the access behind it) is still the longest, and the
       // GDC/IDE/default classes all measure the
-      // same 4-cycle floor (+1 presenting cycle, `tb_pc9821_io_wait`).
+      // same 4-cycle floor (+1 presenting cycle, `tb_pc9821_io_class`).
       localparam integer IO_MIN_HOLD = 4;
       localparam integer IO_MIN_MEASURED = IO_MIN_HOLD + 1;
       integer pit_cycles, wait_cycles, behind_cycles, gdc1_cycles, gdc2_cycles, ide_cycles;
@@ -438,15 +437,16 @@ module tb_pc9821_iobus;
       end
       // THE SURVIVING RANKING: the 0x5F wait > 8253 21 > the FSM floor. The machine's
       // measured ladder below the 8253 is deliberately not matched, so the GDC, IDE and
-      // default classes are all the same FSM floor now. tb_pc9821_io_wait states the
-      // same contract from the 0x0043 reference class; this one keeps the 0x0071.
+      // default classes are all the same FSM floor now. tb_pc9821_io_class sweeps every
+      // port's class and tb_pc9821_io_5f times the 0x5F write against the machine; this
+      // one keeps the ranking itself, at the 0x0071.
       if (!(wait_cycles > pit_cycles && pit_cycles > gdc2_cycles)) begin
         $display("FAIL the surviving floor ranking is broken: wait=%0d pit=%0d gdc2=%0d",
                  wait_cycles, pit_cycles, gdc2_cycles);
         errors = errors + 1;
       end
       // The GDC classes and the IDE data port all take the FSM floor: each
-      // measured count is the class value plus the presenting cycle (`tb_pc9821_io_wait`).
+      // measured count is the class value plus the presenting cycle (`tb_pc9821_io_class`).
       if (!(gdc1_cycles == IO_MIN_MEASURED && gdc2_cycles == IO_MIN_MEASURED &&
             ide_cycles == IO_MIN_MEASURED)) begin
         $display("FAIL a non-floor class is not the %0d-cycle FSM floor: gdc1=%0d gdc2=%0d ide=%0d",
@@ -559,7 +559,7 @@ module tb_pc9821_iobus;
     // complete invalidation has been emitted: the 32 KiB window at
     // 0xF8000-0xFFFFF AND the same storage's other encodings -- its
     // 0xFF8000-0xFFFFFF sys16m mirror, its win0=0x0E overlay at
-    // 0x98000-0x9FFFF (aliases.md A2) and the fw_high alias at
+    // 0x98000-0x9FFFF and the fw_high alias at
     // 0xFFFF8000-0xFFFFFFFF -- 8192 lines in all.
     clear_flush_log();
     write_byte(16'h043D, 8'h12);
@@ -578,8 +578,25 @@ module tb_pc9821_iobus;
       errors = errors + 1;
     end
 
+    // With 0x043D's BIOS-top state latched a 0x043F bank select does NOT move the window:
+    // docs/probes/SHADOWW.TXT `st06 043D=02 043F=E8 053D=1F F8000:0000=A1 F8E8F/90=00/04`,
+    // the 0x043D write first (probe2.s sh_st_loop). The state is unchanged, so no flush.
+    clear_flush_log();
+    write_byte(16'h043F, 8'hE8);
+    if (top_bank != 4'd9) begin
+      $display("FAIL 0x043F=0xE8 under 0x043D=0x12 moved the window top_bank=%0d, want 9", top_bank);
+      errors = errors + 1;
+    end
+    if (flush_pulses != 0) begin
+      $display("FAIL held 0x043F bank select emitted %0d flush request(s)", flush_pulses);
+      errors = errors + 1;
+    end
+
     // 0x043F: direct bank selection, 0xE0 | (bank << 1). This is what makes
-    // the eight 32 KiB ROM banks reachable at all.
+    // the eight 32 KiB ROM banks reachable at all - under 0x043D's ITF state, which is
+    // where the firmware makes every select (BANK6@0x5302 `out 0x43D,0x00` before its
+    // `out 0x43F,0xE2`).
+    write_byte(16'h043D, 8'h00);
     clear_flush_log();
     write_byte(16'h043F, 8'hE6);
     if (top_bank != 4'd3) begin
@@ -591,7 +608,7 @@ module tb_pc9821_iobus;
     // The 0x20 nibble is the EMS page window, which is unrelated to the ROM
     // window: it must leave the window alone -- but it moves the 64 KiB window
     // at 0xB0000-0xBFFFF between three storages (planes / EMS page / open), so
-    // it sweeps ITS encodings (aliases.md A4): 0xB0000-0xBFFFF, its
+    // it sweeps ITS encodings: 0xB0000-0xBFFFF, its
     // 0xFB0000-0xFBFFFF mirror and its win0=0x0A overlay at 0x90000-0x9FFFF.
     // Its low
     // nibble picks one of the machine's THREE measured states
@@ -821,7 +838,7 @@ module tb_pc9821_iobus;
     end
     // Closing it must invalidate anything cached from the window. The 0x053D
     // flush covers every line the gate decides and every ENCODING of it
-    // (aliases.md A3): 0xD8000-0xFFFFF (the 8 KiB option-ROM window plus the
+    //: 0xD8000-0xFFFFF (the 8 KiB option-ROM window plus the
     // 64 KiB lower BIOS plus the 32 KiB banked window, 160 KiB = 10240 lines),
     // its 0xFD8000-0xFFFFFF mirror (10240 more), the win0=0x0C/0x0E overlay
     // encodings at 0x88000-0x9FFFF (6144), and the banked window's fw_high
@@ -868,7 +885,7 @@ module tb_pc9821_iobus;
     // writes 0x063C = (read & 0xFC) | 3 immediately before `call far
     // D800:000C` (BANK6 offset 0x567C-0x5698), so a 0x063C write must not
     // disable the window. The firmware's own far call proves the window stays
-    // enabled; see notes/08-ide.md. It DOES change what the window shows (select
+    // enabled. It DOES change what the window shows (select
     // 3 is BANK0 0x4000-0x7FFF, docs/probes/D8BANK-XE10.TXT), so it costs exactly
     // the one L1 flush every remap of the window owes (tb_pc9821_cache_flush).
     write_byte(16'h053D, 8'h10);
@@ -911,6 +928,9 @@ module tb_pc9821_iobus;
     // writing the byte back turned the gate on. The measured 0x1F has bit 4 (the
     // window, on) and bit 1 (the gate, on) both set; with the gate off and the
     // window on the same byte reads 0x1D.
+    // EVIDENCE: only 0x1F is measured (docs/probes/R10.TXT `053D=1F`, whose own note reads
+    // `043F/0461/0463/053D read back a strap, not a mirror of the write`); 0x1D with the gate clear is this
+    // core's read-modify-write contract (the gate in the bit it is written to), not a capture.
     write_byte(16'h053D, 8'h10);           // window on, gate off
     if (bios_ram_gate) fail("0x053D = 0x10 left the writable BIOS copy set");
     read_byte(16'h053D, 8'h1D);            // bit 1 = 0: the gate reads where it is written
@@ -1145,9 +1165,9 @@ module tb_pc9821_iobus;
     //   * the twelve data ports are one byte each; the port nibble picks the
     //     register and bit 6 of 0x8F1F picks the bank (0x80 = bank A,
     //     0xC0 = bank B);
-    //   * one bit of 0x84 (bit 1) is a machine strap a write cannot move: it is
-    //     unmeasured, NP2kai withholds it (io/dipsw.c) and the measured power-up
-    //     byte 0x7C has it clear. EVERY OTHER BIT IS WRITABLE, the per-register
+    //   * EVERY BIT IS WRITABLE: 0x84's bits 1 and 0, which NP2kai withholds
+    //     (io/dipsw.c), are stored by the Xe10 in both banks
+    //     (docs/probes/XE10Z-XE10.TXT:208-211; tb_pc9821_pram asserts it), the per-register
     //     PARITY bits (bit 0 of 0x84, bit 4 of 0x85, bit 7 of the rest) included -
     //     THIS BENCH USED TO ASSERT THE OPPOSITE and was inverted on the machine's
     //     evidence: the firmware writes those bits (SETUP's parity idiom
@@ -1194,7 +1214,7 @@ module tb_pc9821_iobus;
     read_byte(16'h8D1E, 8'h7F);             // idx 9
     read_byte(16'h8E1E, 8'h49);             // idx 10
     read_byte(16'h8F1E, 8'h98);             // idx 11
-    // A write cannot move 0x84's bit 1 (the one withheld strap) - and bank A's index 1
+    // Bank A's index 1
     // stores its bit 4 ALONE (its other bits go to port 0x31): the Xe10 reads 0x851E = 02
     // after the ITF's E3 merge and 12 after a write of 12 (docs/probes/XE10CFG-XE10-CFG0.TXT,
     // XE10CFG-XE10-CFGWR.TXT), so writing 0x5A reads back 0x02 | 0x10 = 0x12.
@@ -1379,10 +1399,13 @@ module tb_pc9821_iobus;
       uw0 = unmapped_writes;
 
       // 0x3FDB/0x3FDF is the PIT alias the authentic ITF's timer self-test uses
-      // (BANK4@0x373). In this bench device_io_dout stands in for the PIT, so
-      // the assertion is that the port is decoded at all.
+      // (BANK4@0x373). In this bench device_io_dout (0xC3) stands in for the PIT, so the
+      // alias must reach the device bus with the PIT's chip select and answer the stub's byte
+      // (not the fabric's 0xFF), besides keeping the unmapped counters still (below).
       read_raw(16'h3FDB, value);
+      if (value !== 8'hC3) fail("0x3FDB (the PIT alias) did not answer the device bus's byte");
       read_raw(16'h3FDF, value);
+      if (value !== 8'hC3) fail("0x3FDF (the PIT alias) did not answer the device bus's byte");
 
       // Measured straps/latches.
       read_byte(16'h063D, 8'hEC);          // bit 6 set (do NOT use QEMU's 0x04)
@@ -1558,9 +1581,10 @@ module tb_pc9821_iobus;
       end
       write_byte(16'h00F2, 8'h00);        // leave A20 released, as before
 
-      // ARTIC timestamp counter: two reads separated by hundreds of clocks
-      // must differ, which a constant cannot do. 0x5D and 0x5E mirror the same
-      // byte on the machine (NP2kai artic.c attaches both to cnt[15:8]).
+      // ARTIC timestamp counter: only that 0x5D is DECODED (not open bus) is asserted here.
+      // That the counter ADVANCES, its rate and the 0x5D/0x5E mirror (NP2kai artic.c attaches
+      // both to cnt[15:8]) belong to tb_pc9821_artic_word / _layout / _atomic: 400 clocks are
+      // under two 307.2 kHz ticks, so this block cannot tell a frozen counter from a live one.
       read_raw(16'h005C, value);
       repeat (400) @(posedge clk);
       read_raw(16'h005D, value);

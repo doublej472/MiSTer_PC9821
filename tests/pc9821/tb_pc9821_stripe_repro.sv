@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_STRIPE_REPRO: the observed horizontal stripe under the CONTENDED case the earlier value benches never drove. tb_pc9821_planewin_draw draws a full-screen picture with a raster flush per row and read every byte back right, but it drove the scanout and the CPU one after the other; this bench drives them TOGETHER through the DEPLOYED route - the real pc9821_memory_subsystem (so the response-route queue is in the path), the real pc9821_gvram, the real sdram_sync_bridge (the controller on clk_sys, here 50 MHz) and the real src/memory/sdram.v controller - with the scanout's line fetch ticking every raster line on its own port while the CPU runs a plane-window row stream (the graphics library's rep movsw / rep stosw shape: consecutive 16-bit stores down a row, the LAST one a partial byte), and compares every plane byte of the row against a software model.
+// TB_PC9821_STRIPE_REPRO: the observed horizontal stripe under the CONTENDED case the earlier value benches never drove. tb_pc9821_planewin_draw draws a full-screen picture and reads every byte back right, but it drove the scanout and the CPU one after the other; this bench drives them TOGETHER through the DEPLOYED route - the real pc9821_memory_subsystem (so the response-route queue is in the path), the real pc9821_gvram, the real sdram_sync_bridge (the controller on clk_sys, here 50 MHz) and the real src/memory/sdram.v controller - with the scanout's line fetch ticking every raster line on its own port while the CPU runs a plane-window row stream (the graphics library's rep movsw / rep stosw shape: consecutive 16-bit stores down a row, the LAST one a partial byte), and compares every plane byte of the row against a software model; the GRCG TDW and EGC 0x3100 copy trials seed and compare all four planes, and the display-page trial ticks each line fetch on one page, flips the page while that fetch runs, and requires the fetched line to hold the ticked page's bytes on every plane.
 
 `default_nettype none
 
@@ -14,6 +14,7 @@ module tb_pc9821_stripe_repro;
   localparam integer CYCLE_SYS_NS   = 20;
   localparam integer CAS = 2;
   localparam integer LINE_COLS = 80;
+  localparam integer PF_BASE   = 3200;   // the page-change trial's line (clear of the other trials)
 
   reg clk = 0;
   always #(CYCLE_SYS_NS/2)   clk = ~clk;      // 50 MHz: the subsystem AND the SDRAM controller
@@ -64,7 +65,7 @@ module tb_pc9821_stripe_repro;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -166,6 +167,7 @@ module tb_pc9821_stripe_repro;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -187,10 +189,10 @@ module tb_pc9821_stripe_repro;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -314,6 +316,11 @@ module tb_pc9821_stripe_repro;
       v = off[1] ? d[31:16] : d[15:0];
     end
   endtask
+
+  // TRIAL 4's page-1 source: a distinct pattern per plane (plane 0 keeps the trial's old one).
+  function [15:0] egc_src_word(input integer plane, input integer off);
+    egc_src_word = (16'hA500 ^ 16'(plane * 16'h1B3C)) ^ {8'd0, 8'(off)};
+  endfunction
 
   function [7:0] model_byte(input integer widx, input integer plane);
     begin
@@ -552,23 +559,26 @@ module tb_pc9821_stripe_repro;
     end
   endtask
 
+  // Every plane: the TDW store writes the tile to all four (the model holds {t,t,t,t}).
   task automatic check_tdw_row(input integer wb, input [8*24-1:0] label);
+    integer tp;
     begin
-      for (c = 0; c < 40; c = c + 1) begin
-        word_rd(2'd0, 15'(wb + 2*c), got);
-        if (got[7:0] !== model_byte(wb + 2*c, 0)) begin
-          if (bad < 6)
-            $display("FAIL stripe_repro: %0s word %0d got %02x want %02x",
-                     label, wb+2*c, got[7:0], model_byte(wb+2*c, 0));
-          bad = bad + 1;
+      for (tp = 0; tp < 4; tp = tp + 1)
+        for (c = 0; c < 40; c = c + 1) begin
+          word_rd(tp[1:0], 15'(wb + 2*c), got);
+          if (got[7:0] !== model_byte(wb + 2*c, tp)) begin
+            if (bad < 6)
+              $display("FAIL stripe_repro: %0s plane %0d word %0d got %02x want %02x",
+                       label, tp, wb+2*c, got[7:0], model_byte(wb+2*c, tp));
+            bad = bad + 1;
+          end
+          if (got[15:8] !== model_byte(wb + 2*c + 1, tp)) begin
+            if (bad < 6)
+              $display("FAIL stripe_repro: %0s plane %0d word %0d got %02x want %02x",
+                       label, tp, wb+2*c+1, got[15:8], model_byte(wb+2*c+1, tp));
+            bad = bad + 1;
+          end
         end
-        if (got[15:8] !== model_byte(wb + 2*c + 1, 0)) begin
-          if (bad < 6)
-            $display("FAIL stripe_repro: %0s word %0d got %02x want %02x",
-                     label, wb+2*c+1, got[15:8], model_byte(wb+2*c+1, 0));
-          bad = bad + 1;
-        end
-      end
     end
   endtask
 
@@ -650,21 +660,24 @@ module tb_pc9821_stripe_repro;
     if (fails != 0) fail("a concurrent sprite RMW did not read back");
 
     // ---- TRIAL 4: the EGC copy (page 1 -> page 0), concurrent with the scanout. ----
-    // The music room's dominant shape. Page 1 plane 0 is painted through the plain path (a 16-bit
-    // word per EVEN offset, so each unit is one dword lane pair), the EGC copies the 16-bit unit
-    // down a run, and page 0 plane 0 is read back and compared against the source.
+    // The music room's dominant shape. Page 1's FOUR planes are painted through the plain path,
+    // each with its own pattern (a 16-bit word per EVEN offset, so each unit is one dword lane
+    // pair), the EGC copies the 16-bit unit down a run - the 0x3100 compare read captures all four
+    // planes from one read (EGCREAD.CSV RD17_P_*) and the write stores all four - and page 0's
+    // four planes are read back and compared against the source.
     fails = 0;
     for (trials = 0; trials < 8; trials = trials + 1) begin
       tick_period = 40 + trials * 40;
       bad = 0;
       wbase = 8 + (trials % 4) * 8;
-      // paint page 1 plane 0, one 16-bit word per even offset
-      for (c = 0; c < SPR_ROWS; c = c + 1) begin
-        gvram_access_page = 1'b1;
-        v = 16'hA500 ^ {8'd0, (wbase + 2*c) };
-        word_wr(2'd0, 15'(wbase + 2*c), v);
-        gvram_access_page = 1'b0;
-      end
+      // paint page 1's four planes, one 16-bit word per even offset
+      for (p = 0; p < 4; p = p + 1)
+        for (c = 0; c < SPR_ROWS; c = c + 1) begin
+          gvram_access_page = 1'b1;
+          v = egc_src_word(p, wbase + 2*c);
+          word_wr(p[1:0], 15'(wbase + 2*c), v);
+          gvram_access_page = 1'b0;
+        end
       settle;
       scan_line = 0; scan_lines = 0;
       scan_enable = 1'b1;
@@ -686,17 +699,18 @@ module tb_pc9821_stripe_repro;
       egc_enable = 1'b0;
       scan_run = 1'b0;
       settle;
-      // verify: page 0 plane 0 carries page 1 plane 0's pattern
-      for (c = 0; c < SPR_ROWS; c = c + 1) begin
-        gvram_access_page = 1'b0;
-        word_rd(2'd0, 15'(wbase + 2*c), got);
-        if (got !== (16'hA500 ^ {8'd0, (wbase + 2*c)})) begin
-          if (bad < 6)
-            $display("FAIL stripe_repro: EGC trial %0d unit %0d off %0d page0 got %04x want %04x",
-                     trials, c, wbase + 2*c, got, 16'hA500 ^ {8'd0, (wbase + 2*c)});
-          bad = bad + 1;
+      // verify: each page-0 plane carries the same page-1 plane's pattern
+      for (p = 0; p < 4; p = p + 1)
+        for (c = 0; c < SPR_ROWS; c = c + 1) begin
+          gvram_access_page = 1'b0;
+          word_rd(p[1:0], 15'(wbase + 2*c), got);
+          if (got !== egc_src_word(p, wbase + 2*c)) begin
+            if (bad < 6)
+              $display("FAIL stripe_repro: EGC trial %0d plane %0d unit %0d off %0d page0 got %04x want %04x",
+                       trials, p, c, wbase + 2*c, got, egc_src_word(p, wbase + 2*c));
+            bad = bad + 1;
+          end
         end
-      end
       $display("NOTE stripe_repro: EGC trial %0d (period %0d, base %0d): %0d scanout line(s), %0d mismatches",
                trials, tick_period, wbase, scan_lines, bad);
       if (bad != 0) fails = fails + 1;
@@ -800,21 +814,55 @@ module tb_pc9821_stripe_repro;
     // from the LIVE page takes the other page's write-combining word onto the line - the reported
     // "short strip from elsewhere in the picture". ----
     begin : page_flip
-      integer pf_k;
-      // The page flips mid-fetch, repeatedly. The fetch latches scan_page_q and line_base_q at the
-      // line tick and its read is one clk_sys deep, so a flip cannot redirect a beat (the earlier
-      // bug); with the array in block RAM there is also no forwarding tag built from a live page.
-      // The section drives the interleaving; the deterministic byte checks above are the verdict.
+      integer pf_k, pf_c, pf_pl, pf_g, pf_mid, pf_bad;
+      reg [31:0] pf_want [0:1][0:LINE_COLS-1];
+      reg [15:0] pf_v;
+      // The two pages carry DIFFERENT pictures on the fetched line (every plane), so a beat taken
+      // from the wrong page is visible in the assembled line. Each fetch is ticked on page
+      // pf_k[0], the page is flipped to the other one while that fetch is still running, and when
+      // the fetch finishes the line buffer must hold exactly the page latched at ITS tick: the
+      // fetch latches scan_page_q and line_base_q at the line tick, and the flip takes effect
+      // only at the next tick (tb_pc9821_gdc_text.sv's page flip: the display page applies at
+      // once, i.e. from the next fetched line).
+      for (pf_pl = 0; pf_pl < 2; pf_pl = pf_pl + 1)
+        for (p = 0; p < 4; p = p + 1)
+          for (pf_c = 0; pf_c < LINE_COLS; pf_c = pf_c + 2) begin
+            pf_v = {8'(8'h3C + pf_pl * 8'h81 + p * 8'h17 + pf_c + 1), 8'(8'h3C + pf_pl * 8'h81 + p * 8'h17 + pf_c)};
+            gvram_access_page = pf_pl[0];
+            word_wr(p[1:0], 15'(PF_BASE + pf_c), pf_v);
+            pf_want[pf_pl][pf_c][p*8 +: 8]     = pf_v[7:0];
+            pf_want[pf_pl][pf_c + 1][p*8 +: 8] = pf_v[15:8];
+          end
+      gvram_access_page = 1'b0;
+      settle;
+      pf_mid = 0; pf_bad = 0;
       scan_enable = 1'b1;
-      for (pf_k = 0; pf_k < 600; pf_k = pf_k + 1) begin
+      for (pf_k = 0; pf_k < 64; pf_k = pf_k + 1) begin
         scan_page = pf_k[0];
-        tick((pf_k % 4) * LINE_COLS);
-        repeat (30) @(posedge clk);   // the fetch's 80 columns run inside this window
+        tick(PF_BASE);
+        repeat (1 + (pf_k % 24)) @(posedge clk);
+        if (dut.u_gvram_scan.fetch_active || dut.u_gvram_scan.fetch_req_d) pf_mid = pf_mid + 1;
+        scan_page = !pf_k[0];                   // the flip, mid-fetch
+        pf_g = 0;
+        while ((dut.u_gvram_scan.fetch_active || dut.u_gvram_scan.fetch_req_d) && (pf_g < 8000)) begin
+          @(posedge clk); pf_g = pf_g + 1;
+        end
+        for (pf_c = 0; pf_c < LINE_COLS; pf_c = pf_c + 1)
+          if (dut.u_gvram_scan.line_buf[{dut.u_gvram_scan.wr_sel, 7'(pf_c)}] !== pf_want[pf_k[0]][pf_c]) begin
+            if (pf_bad < 6)
+              $display("FAIL stripe_repro: page-change fetch %0d (page %0d) col %0d = %08x, want %08x",
+                       pf_k, pf_k[0], pf_c, dut.u_gvram_scan.line_buf[{dut.u_gvram_scan.wr_sel, 7'(pf_c)}],
+                       pf_want[pf_k[0]][pf_c]);
+            pf_bad = pf_bad + 1;
+          end
       end
       scan_page   = 1'b0;
       scan_enable = 1'b0;
       repeat (60) @(posedge clk);
-      $display("NOTE stripe_repro: page-change: 600 display-page flips driven mid-fetch with no torn line");
+      $display("NOTE stripe_repro: page-change: 64 fetches, %0d flipped mid-fetch, %0d wrong column(s)",
+               pf_mid, pf_bad);
+      if (pf_mid < 32) fail("page-change: fewer than half of the flips landed while the fetch was running");
+      if (pf_bad != 0) fail("page-change: a line fetch took columns from the page it was not ticked on");
     end
 
     // ==== VERDICT ====

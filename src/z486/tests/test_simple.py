@@ -13,6 +13,7 @@ import tempfile
 import argparse
 import math
 import os
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / 'tests'
@@ -172,8 +173,17 @@ def run_case(case):
         print('END   RAM: ', ' '.join(f"{k:08x}:{v:02x}" for k, v in final_ram))
         print(f"Command: {' '.join(cmd)}")
 
-    p = sp.run(cmd, cwd=str(TESTS), stdout=sp.PIPE, stderr=sp.STDOUT, text=True)
+    try:
+        p = sp.run(cmd, cwd=str(TESTS), stdout=sp.PIPE, stderr=sp.STDOUT, text=True)
+    finally:
+        os.unlink(memhex)
     out = p.stdout
+    if p.returncode != 0:
+        print(f"\033[91msimulator exited {p.returncode}\033[0m")
+        return False, out
+    if not final_regs and not final_ram:
+        print("\033[91mcase has no final registers or RAM to compare\033[0m")
+        return False, out
 
     # Parse results
     regs = {}
@@ -314,6 +324,7 @@ def main():
     except Exception as e:
         if VERBOSE:
             print(f"[warn] Failed to write {result_path}: {e}")
+    return 0 if total and passed == total else 1
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -259,6 +259,35 @@ module pc9821_block_io #(
   // half-finished block.
   wire req_reject = !mounted || req_past_end || (req_write && readonly);
 
+  // THE HPS WORD STREAM, ONE STAGE IN. hps_io's read stream (sd_ack, sd_buff_wr, sd_buff_addr,
+  // sd_buff_dout) enters the engine through one register stage and EVERY consumer of it reads the
+  // staged copy: the word decode (stream_word, the bounds checks, the count), the window cache's
+  // fill and slot marks, the drive's fill port (buf_we/buf_addr/buf_data, which pc9821_block_share
+  // hands to pc9821_hdd_image's header and footer capture and to pc9821_fdd_media's block buffer),
+  // the acknowledge (F_REQ) and the completion (F_ACKED, fetch_ack_done). Those were single-cycle
+  // paths from hps_io's registers, whose address moves every word: hps_io -> hdd_image's geometry
+  // and footer captures (xt: 2/6 seeds, to -1.60 ns; a missed word leaves the disk with a wrong or
+  // unrecognised geometry until a remount) and sd_ack -> fdd_media's block RAM write enable (xt:
+  // 1/6 seeds, -1.90 ns; a missed word leaves a stale word in the floppy's block). The whole stream
+  // moving together, the engine sees exactly the sequence it saw, one clk_sys later: the host
+  // handshake (sd_rd/sd_wr fall one cycle after the acknowledge, a request completes one cycle
+  // after the acknowledge falls) is one clk_sys later against an HPS round trip of microseconds,
+  // and nothing the guest reads moves. The one use left live is the WRITE direction's read port
+  // (buf_rd_addr): hps_io presents sd_buff_addr and samples sd_buff_din at its own fixed latency.
+  // tools/check_seq_equiv.py --proof block_io_hps_stage proves the engine is its previous self with
+  // exactly this stage on its input.
+  /* verilator lint_off PROCASSINIT */   // the initialisers ARE the stage's power-up values (no word)
+  reg        hs_ack = 1'b0, hs_wr = 1'b0;
+  reg [12:0] hs_addr = 13'd0;
+  reg [15:0] hs_dout = 16'd0;
+  /* verilator lint_on PROCASSINIT */
+  always @(posedge clk) begin
+    hs_ack  <= sd_ack;
+    hs_wr   <= sd_buff_wr;
+    hs_addr <= sd_buff_addr;
+    hs_dout <= sd_buff_dout;
+  end
+
   // The transfer's word span: one handshake carries fetch_total sectors of 256 words. The
   // single-block case reduces to this module's original checks word for word.
   wire [12:0] fetch_span = {fetch_total, 8'd00};
@@ -269,10 +298,10 @@ module pc9821_block_io #(
   // transfer as this sector: with the CD-ROM's CD-DA streaming on slot 4, the disk's sectors
   // arrived as CD audio (Policenauts' intro). pc9821_atapi
   // gates its own stream the same way (e_word).
-  wire stream_word = fetch_active && sd_ack && !fetch_write && sd_buff_wr;
-  wire valid_buffer_word = stream_word && (sd_buff_addr < fetch_span);
+  wire stream_word = fetch_active && hs_ack && !fetch_write && hs_wr;
+  wire valid_buffer_word = stream_word && (hs_addr < fetch_span);
   wire current_buffer_error = stream_word &&
-      ((sd_buff_addr >= fetch_span) || (words_received == fetch_span));
+      ((hs_addr >= fetch_span) || (words_received == fetch_span));
   wire all_words_received = (words_received == fetch_span) ||
                             (valid_buffer_word && words_received == (fetch_span - 13'd1));
 
@@ -295,7 +324,7 @@ module pc9821_block_io #(
   // transfer, and the single-block and write requests complete right there. A multi-block
   // transfer completes its REQUEST earlier (slot 0, below); this edge then only retires
   // the fetch engine.
-  wire fetch_ack_done = fetch_active && (fetch_st == F_ACKED) && !sd_ack;
+  wire fetch_ack_done = fetch_active && (fetch_st == F_ACKED) && !hs_ack;
 
   wire eject = img_mounted && (img_size < 64'd512);
   // A replacement of the image under a write the host has not acknowledged (the F_REQ arm).
@@ -310,8 +339,8 @@ module pc9821_block_io #(
   // overwrite its fill buffer - so tail words only fill the window cache.
   wire serve_stream = (serve_st == S_STREAM) && !fetch_write;
   assign buf_we   = serve_stream ? stream_word : ((serve_st == S_REPLAY) && replay_out_valid);
-  assign buf_addr = (serve_st == S_REPLAY) ? replay_out_addr : sd_buff_addr[7:0];
-  assign buf_data = (serve_st == S_REPLAY) ? cache_q : sd_buff_dout;
+  assign buf_addr = (serve_st == S_REPLAY) ? replay_out_addr : hs_addr[7:0];
+  assign buf_data = (serve_st == S_REPLAY) ? cache_q : hs_dout;
 
   // Write direction: present the drive's buffer at whatever address the host asks for.
   // The drive muxes its read port to this address while it waits for a block write.
@@ -476,17 +505,17 @@ module pc9821_block_io #(
       // valid word also lands in its window slot, and a slot's last word marks it
       // complete; only complete slots are ever served.
       if (stream_word) begin
-        if ((sd_buff_addr >= fetch_span) || (words_received == fetch_span))
+        if ((hs_addr >= fetch_span) || (words_received == fetch_span))
           transfer_error <= 1'b1;
         else
           words_received <= words_received + 13'd1;
       end
       if (valid_buffer_word && fetch_win) begin
-        cache_ram[sd_buff_addr[WIN_ADDR_BITS-1:0]] <= sd_buff_dout;
+        cache_ram[hs_addr[WIN_ADDR_BITS-1:0]] <= hs_dout;
         /* verilator lint_off WIDTHTRUNC */   // same reason as the mask's declaration: a
         // valid_buffer_word's slot field is inside the mask by construction.
-        if (sd_buff_addr[7:0] == 8'd255)
-          win_mask[sd_buff_addr[10:8]] <= 1'b1;
+        if (hs_addr[7:0] == 8'd255)
+          win_mask[hs_addr[10:8]] <= 1'b1;
         /* verilator lint_on WIDTHTRUNC */
       end
 
@@ -515,9 +544,9 @@ module pc9821_block_io #(
         // A request PRESENTED in this same cycle is ANSWERED, never dropped. This is the one
         // cycle in which the acceptance block below cannot run, so a requester that handed its
         // request over here would otherwise wait for a completion no edge can ever produce: the
-        // disk holds BSY in X_WAIT_BLOCK (pc9821_ata.sv:872 (xfer_state <= X_WAIT_BLOCK;)) and
+        // disk holds BSY in X_WAIT_BLOCK (pc9821_ata.sv:969 (xfer_state <= X_WAIT_BLOCK;)) and
         // never sees its block_done, and the floppy holds `rbusy` so it never asks again
-        // (pc9821_fdd_media.sv:1126 "if (bwant && !rbusy && !blk_req_rd) begin") - a silent hang,
+        // (pc9821_fdd_media.sv:1142 "if (bwant && !rbusy && !blk_req_rd) begin") - a silent hang,
         // not the visible abort every other eject alignment produces. The medium the request was
         // for is gone, so the answer is that same error. (A pulse while a serve is owed is still
         // neither latched nor queued: the branch above already owns that completion.)
@@ -531,7 +560,7 @@ module pc9821_block_io #(
           end
           F_REQ: begin
             // the handshake is presented until the host acknowledges it
-            if (sd_ack) begin
+            if (hs_ack) begin
               sd_rd <= 1'b0;
               sd_wr <= 1'b0;
               fetch_st <= F_ACKED;
@@ -552,7 +581,7 @@ module pc9821_block_io #(
           default: begin
             // F_ACKED: the words stream while sd_ack is high; the request side owns the
             // completion (below). The fetch engine retires at the ack fall.
-            if (!sd_ack) begin
+            if (!hs_ack) begin
               fetch_st <= F_IDLE;
               words_received <= 13'd0;
               transfer_error <= 1'b0;

@@ -154,8 +154,12 @@ PROP_NARROW = PROP
 
 PLANTS = [
     # the adjacency fact taken against the wrong neighbour
-    ("      nx_adj[3'(wp - 3'd1)]    <= alloc_now ? ({1'b0, in_addr[18:2]} == ({1'b0, last_addr} + 18'd1)) : nx_adj[3'(wp - 3'd1)];   // 18 bits: the window's last dword and its first are NOT adjacent",
-     "      nx_adj[3'(wp - 3'd1)]    <= alloc_now ? (in_addr[18:2] == last_addr) : nx_adj[3'(wp - 3'd1)];"),
+    # (since the pair facts are compared from registers the cycle after the allocation: last_addr
+    # against prev_addr, its value before the allocation)
+    ("  wire        fresh_adj = ({1'b0, last_addr} == ({1'b0, prev_addr} + 18'd1));   // 18 bits, as at the allocation",
+     "  wire        fresh_adj = (last_addr == prev_addr);"),
+    # the fresh fact stored into the wrong entry
+    ("    nx_fresh_i <= 3'(wp - 3'd1);", "    nx_fresh_i <= wp;"),
     # the newest-dword register not updated by the allocation
     ("      last_addr    <= alloc_now ? in_addr[18:2] : last_addr;\n", ""),
     # the run read at the wrong slot

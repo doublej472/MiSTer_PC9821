@@ -100,7 +100,7 @@ module tb_pc9821_video_scanout;
   reg  [1:0]  pal_wchan = 2'd0;
   reg  [3:0]  pal_wdata = 4'd0;
   wire [7:0]  r_out, g_out, b_out;
-  // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
+  // The PEGC arm's inputs: tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
   reg        mix_pegc_256 = 1'b0;
   reg        mix_pal256_wr_en = 1'b0;

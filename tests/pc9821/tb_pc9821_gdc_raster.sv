@@ -5,9 +5,10 @@
 //
 // ---- the bench's own account of where each expectation comes from ----
 // THE MACHINE, not the RTL, and every number is a machine property:
-//  * the PC-98's 24 kHz text mode is 848 dots x 440 lines with 640 x 400 active. The module header
-//    states it and cites its own provenance ("Geometry and timing are described in
-//    notes/06-gdc-video.md"), and marks the geometry line "verified in note 12 section 4".
+//  * the PC-98's 24 kHz text mode is 848 dots x 440 lines with 640 x 400 active: NP2kai's
+//    defsyncm24 (io/gdc.c:42), the block gdc_biosreset loads on a 24 kHz machine, decodes to
+//    106 characters = 848 dots by 440 lines (pc9821_crtc.sv's "THE DEFAULT IS NP2kai's
+//    defsyncm24" comment carries the field-by-field decode and the FLIP.TXT capture).
 //  * the dot clock is 21.0526 MHz: the PC-98's standard text dot rate, and the one this core's
 //    pixel enable is built to produce - pc9821_system.sv derives it as 50 MHz * 7063303/2^24 =
 //    21.0526347 MHz (0.15 ppm high) and names the frame rate that implies, 848 * 440 * 56.42 Hz.

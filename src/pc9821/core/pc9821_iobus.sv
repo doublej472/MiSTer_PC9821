@@ -200,11 +200,12 @@ module pc9821_iobus #(
   // bench keeps the one-cycle timing.
   input wire        device_rd_hold,
   // The write back-pressure. A device whose WRITE cannot be accepted right now
-  // (its buffer would drop the byte) HOLDS this HIGH: the S_IOWAIT state stays
-  // put while it is set AND the access is a device write, so the CPU stalls
-  // before the S_BYTE strobe ever fires and the write is never lost. This is
+  // (its buffer would drop the byte) HOLDS this HIGH: S_BYTE stays on the lane
+  // while it is set AND the lane is a device write, with the strobe withheld, so
+  // the CPU stalls and the write is presented once, when the device can take it
+  // (lane_wr_wait, beside device_io_wr). This is
   // what turns the OPNA register queue's and the 86-PCM 0xA46C FIFO's silent
-  // drop-on-full into back-pressure (NP2kai applies every write). Checked before
+  // drop-on-full into back-pressure (NP2kai applies every write). Checked at
   // the strobe, exactly like device_rd_wait is honoured at it. Reads are
   // unaffected. An UNDRIVEN input is 0, so every other device and every bench
   // keeps the existing timing.
@@ -305,6 +306,7 @@ module pc9821_iobus #(
     output wire [31:0] dma_mem_addr,
     output wire [31:0] dma_mem_addr_nx,   // the address dma_mem_addr loads next (pc9821_dmac mem_addr_nx)
     output wire        dma_mem_load,      // ... and the cycle it loads (pc9821_dmac mem_load)
+    output wire        dma_mem_load_we,   // ... and whether that byte is a store (pc9821_dmac mem_load_we)
     output wire [31:0] dma_mem_din,
     output wire [3:0]  dma_mem_be,
     output wire        dma_mem_req,
@@ -332,9 +334,12 @@ module pc9821_iobus #(
     output reg       win0_sel_moved,
     // 0x043B bit 2: the 15-16 MiB SYSTEM-SPACE hole. BIT 2 SET asks for RAM there (the
     // hole NOT used); bit 2 CLEAR enables it - no RAM at 0xF00000-0xF9FFFF, and
-    // 0xFA0000-0xFFFFFF aliasing the low 0xA0000-0xFFFFF. Reset leaves the hole OFF, so
-    // 15-16 MiB is RAM until the guest clears the bit. Consumed by pc9821_memory_subsystem,
-    // which translates BEFORE its route selects.
+    // 0xFA0000-0xFFFFFF aliasing the low 0xA0000-0xFFFFF. Reset leaves the hole ON
+    // (sys16m_en = 1, so 0x043B reads 0xFB: the reset arm below), so 15-16 MiB is not RAM
+    // until the guest sets the bit. The Xe10 holds the same state at the DOS prompt
+    // (docs/probes/KIT2-XE10-RISKY-43B.TXT:3 `ASFOUND 043B=FB`, and its as-found row :5 reads
+    // F80000 as open bus and FA0000 as the 0A0000 mirror). Consumed by
+    // pc9821_memory_subsystem, which translates BEFORE its route selects.
     output wire sys16m_en,
     output wire ide_rom_enable,
     // 0x063C bits 1-0, the 0xD8000 window's ROM bank select (docs/probes/D8BANK-XE10.TXT):
@@ -376,9 +381,10 @@ module pc9821_iobus #(
     // task files (so the IDE ROM finds its drives), as a machine reset does.
     output reg        soft_reboot,
 
-    // EGC gate: the EGC's extended-mode bit (FF2 num 2) AND the GRCG's CG-mode
-    // bit (0x7C bit 7), supplied by pc9821_gdc_text. Both are required and both
-    // are satisfied by every real sequence -- master.lib EGC_ON writes
+    // EGC gate: pc9821_crtc's gfx_egc_gate, the EGC's extended-mode bit (FF2 num 2;
+    // `assign gfx_egc_gate = mode2_egc;`). The GRCG's CG-mode bit (0x7C bit 7) is ANDed in
+    // on the memory-dispatch side only (pc9821_system's u_egc_mem_gate), not on this
+    // register-file gate. Every real sequence satisfies both -- master.lib EGC_ON writes
     // `out 6Ah,07h / out 6Ah,05h / out 7Ch,80h / out 6Ah,06h`, and the main
     // BIOS's own enable (BANK7@0x0B08) is the same shape -- so the register
     // file is write-only while the EGC is off.
@@ -469,12 +475,6 @@ module pc9821_iobus #(
   reg [7:0] itf_stage;   // declared before its only reader: a reg may not be referenced
   assign dbg_itf_stage = itf_stage;   // first (iverilog read the name as a 1-bit net)
 
-  // The ARTIC counter's upper half as the firmware reads it: `in ax,0x5E` returns byte 0x5E in
-  // AL (cnt[15:8], the 0x5D mirror) and byte 0x5F in AH (cnt[23:16]), so the word is cnt[23:8].
-  // The firmware's delay() helper in the IDE option ROM spins on exactly this value
-  // (BANK3@0x0B1B and 0x0B2A), so reporting it is what settles whether that loop can ever exit.
-  assign dbg_artic_hi = artic_cnt[23:8];
-
   // How long ONE I/O access occupies the bus. A per-class machine property: the class
   // gate belongs to the ACCESS, not the device. TWO TABLES, chosen per access by the OSD's
   // I/O timing field (io_timing_xe10): Fast, below, and Xe10, the machine's measured times
@@ -528,6 +528,14 @@ module pc9821_iobus #(
   //                   W8_00A4 314.7 (lines 406, 398) - the same fast write class, so a VSYNC
   //                   handler's `out 0x64` costs the machine's time, not the default write's.
   //                   Their reads are the default class (unmeasured).
+  //   318 W           0xA3 and 0xA5, the CG code-low and CG line latches beside 0xA4, write at
+  //                   the same fast class (XE10W /MISAL2, docs/probes/XE10W-XE10-MIS2RUN1.TXT
+  //                   and -MIS2RUN2.TXT): IOOB_3, `out dx,al` at 0xA3 then 0xA4 with an
+  //                   inc/dec between, is 699.4/693.0 ns net = W8_00A4's 314.7 + the inc/dec
+  //                   (IOIB_3 1649.9 less two default reads, 66.9) + 317.8 for 0xA3; IOOW_5,
+  //                   `out dx,ax` at 0xA5 (0xA5 and 0xA6), is 317.9/314.7, the same as IOOW_4
+  //                   at 0xA4, which no default-class 0xA5 could be. 0xA1 and 0xA9 stay at the
+  //                   default (no capture writes them). Their reads are the default class
   //   414 both        text GDC 0x60/0x62: R8_0060/R8_0062 413.3 (line 308). The write direction
   //                   is unmeasured as a plain write and takes the class's read value - the
   //                   same choice for the rows below
@@ -575,9 +583,18 @@ module pc9821_iobus #(
   // tools/hwprobe/speed/speed_decode.py: `IN02 188.90 ns/op net 133.34 ns` = 12 clk_sys for
   // `in al,dx` at 0x02, whose Fast access is IO_MIN_HOLD = 4) leaves 12 - 4 = 8 clk_sys outside
   // the bus. The z486 runs at clk_sys, so the share is a CYCLE count at every profile clock.
-  // Every Xe10 class is far above it (the fastest, 0x0FAA's 296 ns, is 15 clk_sys at 50 MHz),
-  // so the difference stays above the FSM's own cycles.
+  // THE XE10 HOLD SUBTRACTION HAS NO UNDERFLOW GUARD. S_IOWAIT loads io_hold with the lanes'
+  // classes (each class - 1) less 2 + IO_XE10_CPU_CYC + 2 in 12-bit unsigned arithmetic. The
+  // fastest Xe10 class, 0x0FAA's 255 ns (IO_NS_FAA), is 23 clk_sys at the base 90 MHz and 13 at
+  // 50 MHz, which holds exactly 0; below about 47 MHz (13 cycles = 255 ns) it would wrap to a
+  // ~4090-cycle stall. Every preset (90-120 MHz) is above that, and build_profile.py refuses a
+  // --custom clk_sys below it (xe10_hold_problem; its --selftest re-reads IO_NS_FAA,
+  // IO_XE10_CPU_CYC and this subtraction from this file).
   localparam [15:0] IO_XE10_CPU_CYC = 16'd8;
+  // The Xe10's overlap of the high lane of a read word at an odd port inside its dword (lanes 1
+  // and 2): 2 x IOIW_0 791.5 - IOIW_1 1455.9 = 127.1 ns (XE10W /MISAL2, the comment at
+  // io_access_hold). A FLOOR, so with the classes' ceil the access is never short of the machine.
+  localparam [15:0] IO_XE10_ODD_OVL = 16'((SYS_CLOCK_HZ * 64'd127) / 64'd1_000_000_000);
 
   function automatic [15:0] io_access_cycles(input [15:0] portnum, input wr, input xe10);
     begin
@@ -642,7 +659,8 @@ module pc9821_iobus #(
           16'h00A0, 16'h00A2:  io_access_cycles = IO_NS_GDC2;
           16'h006A, 16'h00A6:  io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_EGC_R;
           16'h007C, 16'h007E, 16'h0064,
-          16'h00A4:            io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_SLOW_R;
+          16'h00A3, 16'h00A4,
+          16'h00A5:            io_access_cycles = wr ? IO_NS_FAST_W : IO_NS_SLOW_R;
           16'h09A0, 16'h09A8:  io_access_cycles = IO_NS_9A0;  // the PEGC query and the 31 kHz select, 353 ns
           16'h0FAA:            io_access_cycles = IO_NS_FAA;  // the accelerator index port, 255 ns
           default:             io_access_cycles = wr ? IO_NS_SLOW_W : IO_NS_SLOW_R;
@@ -659,8 +677,18 @@ module pc9821_iobus #(
   // 788.4 = R8_0188 791.5) and so does its word write (W16_04A8 314.7 = the byte writes'
   // 314.7-317.9), so the HIGH lane of an even-aligned pair (lane 1 after lane 0, lane 3 after
   // lane 2) costs its one walk cycle and no class. Not measured, and left at one class per
-  // pair: a 32-bit access (two pairs) and a word that starts at an odd port (two lanes that are
-  // not a pair).
+  // pair: a 32-bit access (two pairs).
+  // A WORD AT AN ODD PORT INSIDE ITS DWORD (lanes 1 and 2, one CPU bus cycle with byte enables
+  // 0110) is measured by XE10W /MISAL2 (docs/probes/XE10W-XE10-MIS2RUN1.TXT, -MIS2RUN2.TXT), and
+  // the two directions differ:
+  //   a WRITE costs ONE class, as a pair does: IOOW_5 (`out dx,ax` at 0xA5) 317.9/314.7 ns net
+  //   against IOOW_4 (`out dx,ax` at 0xA4) 317.9 in both runs, so lane 2 pays no class
+  //   (xe10_pair_hi);
+  //   a READ costs both lanes' classes less IO_XE10_ODD_OVL: IOIW_1 (`in ax,dx` at 0x31) 1455.9
+  //   in both runs against IOIW_0 and IOIW_2 (`in ax,dx` at 0x30, 0x32) 791.5, a default-class
+  //   lane each, so 2 x 791.5 - 1455.9 = 127.1 ns of the second lane overlaps the first.
+  // A word that CROSSES a dword (at port 4n+3) is two CPU bus cycles, two requests here, each
+  // priced on its own (z486 paging_unit's PG_CROSS_* split; nothing marks the second half).
   //
   //   be_walk:  every lane the access requests. Each costs at least one cycle (the "one
   //            cycle per further lane").
@@ -678,10 +706,11 @@ module pc9821_iobus #(
   // a walked-but-unfetched high lane one class plus one cycle. tb_pc9821_io_class measures a two-lane read of 0x5E/0x5F against it (34 clk_sys
   // in Fast: 4 + 30).
   // This function is FAST's hold (S_IDLE). XE10's is the same arithmetic over its own table,
-  // pipelined in S_IOWAIT (hold_xe10, beside io_hold's declaration), with two differences:
-  // the high lane of a fetched even-aligned pair pays no class (xe10_pair_hi), and the CPU's
-  // own share (IO_XE10_CPU_CYC) comes off ONCE per access - it is one instruction, however
-  // many lanes it walks.
+  // pipelined in S_IOWAIT (hold_xe10, beside io_hold's declaration), with three differences:
+  // the high lane of a fetched even-aligned pair, or of a write word at lanes 1-2, pays no class
+  // (xe10_pair_hi); the high lane of a read word at lanes 1-2 pays its class less
+  // IO_XE10_ODD_OVL; and the CPU's own share (IO_XE10_CPU_CYC) comes off ONCE per access - it
+  // is one instruction, however many lanes it walks.
   function automatic [15:0] io_access_hold(input [15:0] lane0_port,
                                           input [3:0] be_walk, input [3:0] be_fetch,
                                           input wr);
@@ -727,7 +756,10 @@ module pc9821_iobus #(
   localparam [11:0] IO_POST_5F = 12'((SYS_CLOCK_HZ * 64'd1744 + 64'd999_999_999) / 64'd1_000_000_000);
   reg [11:0] post_5f;
   reg [2:0] state;
-  reg [31:0] base_addr, write_data;
+  /* verilator lint_off UNUSEDSIGNAL */   // base_addr[31:16]: an I/O port is 16 bits; the CPU's
+  reg [31:0] base_addr;                   // dword address is latched whole and only [15:2] is read
+  /* verilator lint_on UNUSEDSIGNAL */
+  reg [31:0] write_data;
   reg [3:0] pending_be;
   reg request_write;
   reg [31:0] read_data;
@@ -817,6 +849,11 @@ module pc9821_iobus #(
   assign dbg_gate = {ide_rom_enable, rom_gate_ide, pci_d8_select[1:0]};
   assign d8_bank = pci_d8_select[1:0];
 
+  // The system-port match lines (one-hot), declared before their first reader. The decode that
+  // drives them is "ONE decode for every SYSTEM port" below. 110 bits is the system-port set;
+  // order is ascending in pc9821_ports_pkg.sv.
+  wire [109:0] hit;
+
   // The pc9821_cache_flush instance that stood here is replaced by the
   // cache_flush_req pulse (declared above) and the core's busy/done handshake.
   // S_FLUSH's `if (flush_done)` is the ONE consumer of the done pulse; the
@@ -830,7 +867,7 @@ module pc9821_iobus #(
   // there); this fires if that ever stops being true. `cache_flush_busy` is also
   // high for a guest INVD/WBINVD walk, which covers an event the same way: it
   // sweeps both L1s and holds the CPU for its whole window.
-  // translate_off
+  // synthesis translate_off
   // The two `case (1'b1)` over `hit` (the read arm below and the write arm in the S_BYTE block)
   // carry `synthesis parallel_case`: every line is an equality of port_addr with a DISTINCT constant
   // (the 110 `assign hit[...]` lines below), so at most one is ever set and the case's source-order priority is
@@ -846,7 +883,7 @@ module pc9821_iobus #(
     if (!reset && flush_start && flush_busy)
       $fatal(1, "pc9821_iobus: cache_flush request issued while the core is busy (a redundant walk)");
   end
-  // translate_on
+  // synthesis translate_on
 
   /* verilator lint_off UNUSEDSIGNAL */   // be[3] is unused on purpose: the FOURTH lane is
   function automatic [1:0] first_lane(input [3:0] be);   // the ELSE branch, so with no earlier enable set the access must be lane 3
@@ -866,11 +903,18 @@ module pc9821_iobus #(
   // the lowest pending enable IS the held lane in every S_DEVWAIT cycle and the
   // lane needs no held copy or state select (tools/check_iobus_lane_inv.py proves
   // it by induction; the select sat at the head of the device-bus cones).
-  wire [1:0] lane = first_lane(pending_be);
-  /* verilator lint_off UNUSEDSIGNAL */   // only the low 16 bits are the port address
-  wire [31:0] lane_addr = base_addr + {30'd0, lane};   // (port_addr below); the upper
-  /* verilator lint_on UNUSEDSIGNAL */    // half is not read by anything here
-  wire [15:0] port_addr = lane_addr[15:0];
+  // `lane` is a REGISTER loaded one step ahead (lane_nx, at the bottom), equal to
+  // first_lane(pending_be) in every cycle (tools/check_iobus_lane_inv.py proves it), so the lane
+  // port, the lane datum and the device chip selects start from flip-flops: see THE LANE WALK.
+  reg  [1:0] lane;
+  // The lane's port is the dword base with the lane in its two low bits: base_addr[1:0] is 0 in
+  // every reachable state (its only assignments are the reset's 32'd0 and S_IDLE's
+  // {cpu_addr[31:2], 2'b00}), so base_addr + lane never carries and the concatenation IS the sum.
+  // It is written as a concatenation because this is a single-cycle path: a multi-lane access
+  // walks its lanes in back-to-back S_BYTE cycles, so the next lane's port decode reaches every
+  // device's write enable one cycle after pending_be moves, and an adder's carry chain at the
+  // head of that cone cost ~2 ns of it (the seed-3 release fit's 86-PCM drain FSM endpoint).
+  wire [15:0] port_addr = {base_addr[15:2], lane};
   // THE WORD-READ TERMINATION: what a 16-bit IN at an 8-bit port answers on the Xe10
   // (docs/probes/XE10T-XE10-AUDIT.TXT, the `X AUDIT W<port>` rows: b0/b1 the two byte reads
   // P and P+1, w1/w2 `in ax,P` with EAX preloaded A55AC33C, d `in eax,P`). Two shapes:
@@ -949,8 +993,12 @@ module pc9821_iobus #(
                            term_tail[1] ? term_hi(term_cls0) : 8'hFF, 8'hFF};
   wire [3:0] access_be_fetch = access_be_walk & ~term_tail;
   // Xe10's 16-bit rule on the REGISTERED access (the pipelined hold's first stage): the high lane
-  // of a fetched even-aligned pair pays no class (not io_access_hold, which is Fast's).
-  wire [3:0] xe10_pair_hi = {hold_walk[2] & pending_be[2], 1'b0, hold_walk[0] & pending_be[0], 1'b0};
+  // of a fetched even-aligned pair pays no class (not io_access_hold, which is Fast's), and nor
+  // does lane 2 of a WRITE word at lanes 1-2 (xe10_odd_word); lane 2 of such a READ pays its
+  // class less IO_XE10_ODD_OVL (both measured: the comment at io_access_hold).
+  wire       xe10_odd_word = (hold_walk == 4'b0110);
+  wire [3:0] xe10_pair_hi = {hold_walk[2] & pending_be[2], xe10_odd_word & request_write,
+                             hold_walk[0] & pending_be[0], 1'b0};
   integer    xl;
   wire [1:0] term_skip_n = {1'b0, term_tail[1]} + {1'b0, term_tail[3]};
   // Reset state is the ITF: the CPU fetches its first instruction from
@@ -981,8 +1029,19 @@ module pc9821_iobus #(
       (lane_wdata == 8'h02 || lane_wdata == 8'h12) ? BANK_BIOS_TOP :
       (lane_wdata == 8'h00 || lane_wdata == 8'h10 ||
        lane_wdata == 8'h18) ? BANK_ITF : top_bank;
+  // A 0x043F bank select moves the window only while 0x043D holds the ITF state: with 0x043D =
+  // 0x02 latched (top_bank == BANK_BIOS_TOP) the machine keeps the BIOS top and its shadow
+  // mapped (docs/probes/SHADOWW.TXT st06 `043D=02 043F=E8 ... F8000:0000=A1 F8E8F/90=00/04`, the
+  // 0x043D write first and the 0x043F write second, probe2.s sh_st_loop), while under 0x043D =
+  // 0x00 the same select does move it (st04/st05). The firmware's own selects all run under
+  // 0x043D = 0x00 (the ITF from reset; the main BIOS's bank-1 copy, BANK6@0x5302-0x532A, writes
+  // 0x043D = 0x00 before its 0x043F = 0xE2 and 0x043D = 0x02 after its 0x043F = 0xE8). NOT
+  // CAPTURED: whether such a write is remembered and shown by a later 0x043D = 0x00 (this core
+  // drops it, so 0x043D = 0x00 selects the ITF exactly as before), and any value but 0xE8/0xEE
+  // under 0x043D = 0x02.
   wire [3:0] next_bank_043f =
-      (lane_wdata[7:4] == 4'hE) ? {1'b0, lane_wdata[3:1]} : top_bank;
+      (lane_wdata[7:4] == 4'hE && top_bank != BANK_BIOS_TOP) ? {1'b0, lane_wdata[3:1]} :
+                                                              top_bank;
   // The EMS window's 0x043F 0x2-nibble state a write would install (see the
   // ems_state declaration): 0x20 the identity, 0x22 the RAM page, any other 0x2x
   // unmapped when the page is (or was left) selected and the identity when the identity is.
@@ -1004,8 +1063,8 @@ module pc9821_iobus #(
                                    (ems_state == 2'd0)       ? 2'd0 : 2'd2) :
                                    ems_state;
   // 0x043F's 0x8 nibble turns the window's writable shadow on (see the port declaration).
-  // It is sticky until reset: the nibble is a one-way enable, and no site in the ROM set
-  // writes it back to zero.
+  // It is sticky until reset or the 0x534 reboot (both clear it): the nibble is a one-way
+  // enable, and no site in the ROM set writes it back to zero.
   wire next_top_shadow_en = (lane_wdata[7:4] == 4'h8) ? 1'b1 : top_shadow_en;
   // The window-base page a 0x0461 write installs. Bit 0 is not part of the page
   // number: measured, 0x0461 = 0x09 maps exactly where 0x08 maps (the machine's
@@ -1031,7 +1090,7 @@ module pc9821_iobus #(
                        ((hit[HX_043F]) && (next_top_shadow_en != top_shadow_en));
   // ems_state swaps three storages under 0xB0000-0xBFFFF (planes / the EMS
   // page / open bus), so every 0x2x write must sweep the window's encodings
-  // (aliases.md A4).
+  //.
   wire ems_map_change = (hit[HX_043F]) && (next_ems_state != ems_state);
   // 0x063C's bits 1-0 swap the ROM under 0xD8000-0xDBFFF (selects 0/2 the IDE option ROM,
   // 1 BANK0 0x0000-0x3FFF, 3 BANK0 0x4000-0x7FFF: docs/probes/D8BANK-XE10.TXT), and the
@@ -1106,15 +1165,12 @@ module pc9821_iobus #(
   // same 85-port set also had to be split into chip selects by a second decode in the same file's
   // sibling, and two hand-kept lists drift. The instance at
   // the bottom of this file is that one decode; `device_port` is its claim.
-  //
-  // 110 bits is the system-port set. Order is ascending in pc9821_ports_pkg.sv.
-  wire [109:0] hit;
+  // The match lines are `hit`, declared above.
 
-  // The per-port comments below are carried verbatim from the two classifier plane
-  // functions this decode replaced; each sits above the first port it named. The
-  // ports are sorted (device then system) so a comment can appear above a different
-  // member of the group it describes.
-  // master/slave PIC
+  // The per-port comments among the match lines below are carried from the classifier plane
+  // function this decode replaced; each sits above the first port it named, so a comment can
+  // appear above a different member of the group it describes. (The DEVICE ports' comments
+  // live with their selects in pc9821_device_select.)
   // PREDECODE. The 110 match lines below are an equality of the 16-bit port with a distinct
   // constant; the constants share only 14 distinct high bytes and 83 distinct low bytes, so each
   // line is `hb_<high byte> && lb_<low byte>` over two shared byte compares instead of its own
@@ -1219,35 +1275,6 @@ module pc9821_iobus #(
   wire lb_F3 = (port_addr[7:0] == 8'hF3);
   wire lb_F4 = (port_addr[7:0] == 8'hF4);
   wire lb_F6 = (port_addr[7:0] == 8'hF6);
-  // uPD4990A/4993A calendar: command latch, mode latch, tick rate.
-  // keyboard uPD8251A data/status
-  // text GDC, mode, CRTC and palette
-  // PIT channels/control
-  // CG window: code high/low, line, pattern (0x56xx user CG RAM)
-  // graphics display/access page select
-  // PC-9801-86 sound: the base register-select/data pair (0x188/0x18A)
-  // and the extension bank (0x18C/0x18E). They go through the device bus
-  // so the OPNA gets its own chip select and, for reads, the one read
-  // cycle a registered chip output needs.
-  // PC-98 IDE connection/channel and task-file registers
-  // The second channel's task file. The machine answers 0x740-0x74A
-  // with the measured float (0x0F at each even register, 0xFF at each
-  // odd partner: `0740 0F... 074A 0F`). They route to pc9821_ata, whose own float case answers the byte.
-  // The PC-9801-118's game port, 0x1480-0x1487, which the card answers on all eight
-  // addresses (NP2kai cbus/board118.c:816-822). They have to be claimed HERE or the
-  // GDC's low-byte decode owns them; pc9821_device_select names the card's select.
-  // The 0x3FD9..0x3FDF alias of the same four registers, which is the
-  // only form the authentic ITF uses (BANK4@0x373 reads 0x3FDB).
-  // The same card's OTHER device, the 86-PCM block (0xA462-0xA46E, the
-  // even ports; the odd partners stay open bus as separate port values).
-  // It has its own chip select, pc9821_system's pcm_cs, and answers its
-  // registers in the strobe cycle. 0xA460 is NOT here: it is card-level
-  // glue shared with the OPNA and stays a system port above.
-  // The Roland MPU-PC98II, the C-bus MIDI card (pc9821_mpu), at the pair MMD.COM hard-codes:
-  // +0 is the data register and +2 the status/command register (NP2kai cbus/mpu98ii.c:1177-1179
-  // attaches exactly `port` and `port | 2`). The card is presented on the DEVICE bus, so these
-  // two are device ports that pc9821_system routes, like the OPNA and the game port. MPU_EN 0
-  // ties them off, which leaves the device half and the whole decode exactly as it was.
   assign hit[HX_0001] = (hb_00 && lb_01);
   assign hit[HX_0003] = (hb_00 && lb_03);
   assign hit[HX_0005] = (hb_00 && lb_05);
@@ -1339,7 +1366,7 @@ module pc9821_iobus #(
   assign hit[HX_0461] = (hb_04 && lb_61);
   assign hit[HX_0463] = (hb_04 && lb_63);
   // The EGC register file, 0x04A0-0x04AE. It is NOT a device port: the
-  // device fabric routes 0x04A0/0x04A2 to pc9821_gdc_text on the low byte
+  // device fabric routes 0x04A0/0x04A2 to pc9821_gdc2 on the low byte
   // alone (0xA0/0xA2 = the GDC2 status), so a device-port decode would
   // answer the GDC2 status byte there instead of the machine's 0xFF. The
   // ports are decoded here, their writes latch below, and their reads are
@@ -1555,6 +1582,7 @@ module pc9821_iobus #(
   // by itself the memory-size gate. A real machine's
   // resting value on the pair is UNMEASURED and the probe never writes it.
   reg [7:0] msw_addr;
+  reg       msw_79_written;   // cell 0x79 written by the guest (THE ONE CELL ... below)
   (* ramstyle = "M10K, no_rw_check" *) reg [7:0] msw_reg [0:255];
   // Power-up contents only, via INIT. A synchronous reset loop over the array
   // would force it into 2,048 flip-flops instead of one RAM block (measured: the
@@ -1605,7 +1633,6 @@ module pc9821_iobus #(
   // The strap's OSD source is SAMPLED AT MACHINE RESET ONLY (cfg_ram_mib_eff, the same
   // strobe bios_set_eff/gdc_strap_eff latch on): a memory-switch cell must not move under
   // the running firmware when the OSD's RAM Size field changes mid-run.
-  reg        msw_79_written;
   /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
   reg  [6:0] cfg_ram_mib_eff = 7'd16;
   /* verilator lint_on PROCASSINIT */
@@ -1643,10 +1670,11 @@ module pc9821_iobus #(
   // array "uninferred due to asynchronous read logic". The pointer advances one
   // byte on EVERY access, so the registered read must address the byte live at the next
   // edge -- unk_ptr + 1 while this S_BYTE advances it -- which is what reads a word's two
-  // bytes back in order across consecutive S_BYTE cycles. The read index is masked to the
-  // array's 64 entries: at unk_ptr == 63 the +1 would address unk_win[64], one past the end
-  // (the firmware re-selects 0x18F0 every eight bytes and never wraps, but a >64-byte walk
-  // must fetch a defined byte, not X).
+  // bytes back in order across consecutive S_BYTE cycles. The read index stays inside the
+  // array's 64 entries: the index expression is self-determined and 6 bits wide, so at
+  // unk_ptr == 63 the +1 wraps to entry 0 (the `& 6'h3F` only states that). The firmware
+  // re-selects 0x18F0 every eight bytes and never wraps, but a >64-byte walk fetches a defined
+  // byte, not X.
   reg [7:0] unk_rdata;
   always @(posedge clk) begin
     if ((state == S_BYTE) && request_write && unk_port)
@@ -1728,7 +1756,7 @@ module pc9821_iobus #(
       .dev_dack(dma_dev_dack), .dev_we(dma_dev_we), .dev_stb(dma_dev_stb),
       .dev_tc(dma_dev_tc), .dev_ch(dma_dev_ch), .dev_dout(dma_dev_dout),
       .dev_din(fdc_dma_out),
-      .mem_addr(dma_mem_addr), .mem_addr_nx(dma_mem_addr_nx), .mem_load(dma_mem_load), .mem_we(dma_mem_we), .mem_be(dma_mem_be),
+      .mem_addr(dma_mem_addr), .mem_addr_nx(dma_mem_addr_nx), .mem_load(dma_mem_load), .mem_load_we(dma_mem_load_we), .mem_we(dma_mem_we), .mem_be(dma_mem_be),
       .mem_din(dma_mem_din), .mem_dout(dma_mem_dout), .mem_req(dma_mem_req),
       .mem_ready(dma_mem_ready), .mem_resp_valid(dma_mem_resp_valid),
       // mem_tc stays connected to its unused wire (see the flush launch site):
@@ -1755,7 +1783,7 @@ module pc9821_iobus #(
   // factor (3200 at 50 MHz: 307200 = 2^12*3*5^2, 50000000 = 2^7*5^8), so the phase needs only
   // MOD states: dividing sum = phase + ARTIC_HZ and tick = sum >= SYS_CLOCK_HZ by G is EXACT,
   // so the tick SEQUENCE is identical at every clock profile rather than merely on average and
-  // the guest-visible artic_cnt does not move. pc9821_pit.sv:75 (`A 14-bit accumulator replaces the 33-bit`)
+  // the guest-visible artic_cnt does not move. pc9821_pit.sv:79 (`A 14-bit accumulator replaces the 33-bit`)
   // is the same transform on the 2.4576 MHz source.
   function automatic integer artic_gcd(input integer a, input integer b);
     integer t;
@@ -1770,6 +1798,11 @@ module pc9821_iobus #(
   localparam integer ARTIC_W   = $clog2(ARTIC_MOD + 1);      // 14 at 50 MHz
   reg  [ARTIC_W-1:0] artic_phase;
   reg  [31:0]        artic_cnt;
+  // The ARTIC counter's upper half as the firmware reads it: `in ax,0x5E` returns byte 0x5E in
+  // AL (cnt[15:8], the 0x5D mirror) and byte 0x5F in AH (cnt[23:16]), so the word is cnt[23:8].
+  // The firmware's delay() helper in the IDE option ROM spins on exactly this value
+  // (BANK3@0x0B1B and 0x0B2A), so reporting it is what settles whether that loop can ever exit.
+  assign dbg_artic_hi = artic_cnt[23:8];
   wire [ARTIC_W:0]   artic_sum  = {1'b0, artic_phase} + ARTIC_INC[ARTIC_W-1:0];
   wire               artic_tick = (artic_sum >= ARTIC_MOD[ARTIC_W:0]);
   // The wrapped phase, read only on a tick, so the truncated subtract's low ARTIC_W bits are
@@ -1926,11 +1959,15 @@ module pc9821_iobus #(
 
   // Per-index access rules for the twelve switch bytes.
   //
-  //   data_mask: the bits the guest may write. Only 0x84's bit 1 is withheld: it is
-  //              SETUP's sound "BIOS detach" bit (its writer BANK3@0x3AE7-0x3AF4, which on
-  //              the Xe10 only ever writes 0 there; the measured power-up byte 0x7C has it
-  //              clear and NP2kai withholds it, io/dipsw.c `set = value & 0xfc;`).
-  //              EVERY OTHER BIT IS WRITABLE, THE PARITY BITS INCLUDED - because the
+  //   data_mask: the bits the guest may write: EVERY BIT of every data port in both banks
+  //              (bank A 0x851E's bit-4-only store aside, below). 0x841E's bits 1 and 0 are
+  //              stored too: the Xe10 stores them in both banks
+  //              (docs/probes/XE10Z-XE10.TXT:208-211 `SDIP bank=80 port=841E was=7C wrote=7E
+  //              got=7E back=7C`, `... wrote=7D got=7D ...`, `SDIP bank=C0 port=841E was=8F
+  //              wrote=8D got=8D back=8F`, `... wrote=8E got=8E ...`). NP2kai withholds them
+  //              (io/dipsw.c `set = value & 0xfc;`) and is overruled by the capture; the core
+  //              used to withhold bit 1 as SETUP's sound "BIOS detach" bit (BANK3@0x3AE7-0x3AF4).
+  //              THE PARITY BITS ARE WRITABLE TOO - because the
   //              machine writes them and the firmware depends on writing them. The
   //              old mask froze each register's parity bit (bit 0 for 0x84, bit 4 for
   //              0x85, bit 7 for the rest - NP2kai's per-register table, which is a
@@ -1971,12 +2008,6 @@ module pc9821_iobus #(
   // MEASURED: the rule is applied to the block because the store, the mask and the
   // read are one mechanism, not twelve (a write-then-read round for the other
   // eleven is the owed capture).
-  function automatic [7:0] sdip_data_mask(input [3:0] idx);
-    case (idx)
-      4'h0: sdip_data_mask = 8'hFD;   // bit 1 only: SETUP's sound BIOS-detach bit (see above)
-      default: sdip_data_mask = 8'hFF; // everything else, parity bits included
-    endcase
-  endfunction
 
   // The power-up image of the two banks (index 0 is 0x841E, 23 is 0x8F1E). THE ONE
   // COPY of the default machine configuration: the reset path and the OSD's "Reset
@@ -2197,14 +2228,14 @@ module pc9821_iobus #(
   // collision on DIFFERENT cells the flop form wrote both, so this form drops the walk's
   // byte for that one cycle and its walk advances past it -- one byte of a 24-byte walk,
   // and only when a guest write to the 0x84-0x8F data block lands in the same 20 ns as the
-  // action. The guest byte is still built from the addressed cell and the per-index data
-  // mask, so 0x84's bit 1 - the one withheld bit - keeps its power-up image value.
+  // action. The guest byte is still built from the addressed cell and the write mask
+  // (sdip_wmask), so bank A 0x851E's withheld bits keep their stored value.
   wire       sdip_guest_we = (state == S_BYTE) && request_write && sdip_data_port && sdip_writable;
   // Bank A's 0x851E (index 1) stores its bit 4 alone: the Xe10 reads 0x851E = 02 after the
   // ITF's boot merge wrote E3 there (BANK4@0x46CC-0x46D9; docs/probes/XE10CFG-XE10-CFG0.TXT),
   // and 12 / 02 after writes of 12 / 02 (XE10CFG-XE10-CFGWR.TXT `RT 851E was=02 wrote=12
   // got=12 ... back=02`). The write's other bits go to port 0x31 (P31 below).
-  wire [7:0] sdip_wmask = (sdip_bank_index == 5'd1) ? 8'h10 : sdip_data_mask(sdip_index);
+  wire [7:0] sdip_wmask = (sdip_bank_index == 5'd1) ? 8'h10 : 8'hFF;   // every other cell: all bits (data_mask above)
   wire [7:0] sdip_guest_data = (sdip_q & ~sdip_wmask) | (lane_wdata & sdip_wmask);
   wire       sdip_we       = sdip_guest_we || sdip_seq_active;
   wire [4:0] sdip_waddr    = sdip_guest_we ? sdip_bank_index : sdip_seq_idx;
@@ -2251,8 +2282,6 @@ module pc9821_iobus #(
   end
   /* verilator lint_on UNUSEDSIGNAL */
 
-  integer i;
-
   // The classifier is the OR of the shared match lines above: one plane, not two
   // 85-arm and 102-arm equality cases. sdip_data_port/sdip_ctrl_port have no single match
   // line (0x841E-0x8F1E is a stride-of-0x100 run), so they keep their own test.
@@ -2263,7 +2292,18 @@ module pc9821_iobus #(
   wire system_port = |hit[109:0] || sdip_data_port || sdip_ctrl_port || dma_port;
   assign device_io_addr = port_addr;
   assign device_io_din = lane_wdata;
-  assign device_io_wr = (state == S_BYTE) && request_write && device_port;
+  // The device's write back-pressure on the lane being presented (device_wr_wait: the OPNA
+  // queue's or the 86-PCM FIFO's, decoded by pc9821_system from this lane's port). Every lane
+  // of a write, the first included, is held on it in S_BYTE with the strobe withheld, and is
+  // strobed exactly once on the cycle the wait drops (the event deferred, not lost:
+  // docs/single-cycle-event-discipline.md R7). S_IOWAIT no longer waits on it: a check there
+  // covered only the access's first lane (lane 2 of an `out dx,eax` at 0x0188, 0x018A the data
+  // port, met a full queue and pc9821_opna's wrq_push `!wrq_cnt[WRQ_BITS]` guard dropped the
+  // write), and with this hold in place it only released a waited first lane one cycle later
+  // (removed with the owner's approval as a latency improvement). A lane whose device is not
+  // full walks exactly as before.
+  wire lane_wr_wait = device_port && request_write && device_wr_wait;
+  assign device_io_wr = (state == S_BYTE) && request_write && device_port && !device_wr_wait;
   assign device_io_rd = (state == S_BYTE) && !request_write && device_port;
 
   // The FDC (0x90/0x92/0x94, the 1.44M/RPM register at 0x04BE, and the
@@ -2462,8 +2502,9 @@ module pc9821_iobus #(
   // other bits), and its READER returns port 0x31's data with that bit. Index 0's pair does
   // the same at bit 0 (`and al,0xFE / jnp / or al,0x01`) and the rest at bit 7, which is
   // NP2kai's per-register table. So the value this read presents is the value the machine's
-  // own SETUP would have STORED, and sdip_data_mask keeps index 1 at 0xEF because a guest
-  // write to bit 4 could only be that same parity maintenance - the read owns it instead.
+  // own SETUP would have STORED: a guest write to bit 4 could only be that same parity
+  // maintenance, so the read owns it. (What the store keeps of a write is sdip_wmask's
+  // separate, measured rule: bank A index 1 stores its bit 4 alone.)
   // Bit 4 is the memory-switch init switch (the msw_hold port's note): SET (the measured
   // 0xF3) unless the latched hold selection clears it. The parity below masks bit 4, as
   // the ITF's merge does (`and ax,0x10EF`), so the hold cannot move dip2_parity.
@@ -2763,7 +2804,7 @@ module pc9821_iobus #(
       // latch, not the last byte written.
       hit[HX_A460]: lane_rdata = 8'h40 | {7'b0, sound_extend};
       // The twelve software-DIP data ports read their stored byte verbatim -- no
-      // parity bit is forced (see the store's comment beside sdip_data_mask for
+      // parity bit is forced (see the store's data_mask comment above sdip_wmask for
       // the capture that refutes the recompute and the one port it measures).
       // THE ONE EXCEPTION IS BANK A INDEX 1: bit 4 there is the register's OWN
       // parity bit and is presented from the reset-qualified strap
@@ -2787,7 +2828,7 @@ module pc9821_iobus #(
       dbg_last_io_wr   <= 1'b0;
       dbg_last_io_stb  <= 1'b0;
     end else if (state == S_BYTE &&
-                 !(device_port && !request_write && device_rd_wait)) begin
+                 !(device_port && !request_write && device_rd_wait) && !lane_wr_wait) begin
       dbg_last_io_addr <= port_addr;
       dbg_last_io_data <= request_write ? lane_wdata : lane_rdata;
       dbg_last_io_rd   <= !request_write;
@@ -2906,18 +2947,6 @@ module pc9821_iobus #(
       // The DIP store's addressed walk is NOT reset here: it must be able to run during
       // this reset window (THE MACHINE-RESET SEED beside the store owns it, with its own power-up
       // values). Resetting it here would clear every step the seed walk takes.
-      for (i = 0; i < 4; i = i + 1) begin
-      end
-      // The bank and bound latches' power-up bytes: the machine's AS-FOUND AT THE
-      // DOS PROMPT (RDBACK.TXT:153-157, PORTS.TXT:169-172), not chip reset values.
-      // 0x25's 0x0E is ONE sample on the channel DOS's own transfers use; the
-      // other three read 0x00 there and so does 0x29. The latch itself is what the
-      // capture proves (write A5 -> read 05); see the declaration above.
-      // The bank bytes are indexed BY CHANNEL, so these seeds are the ports'
-      // as-found bytes (RDBACK.TXT:153-156 `port=0025 before=0E`,
-      // PORTS.TXT:170 `0025%0E`) placed on the channel each port maps to: 0x21->1,
-      // 0x23->2, 0x25->3, 0x27->0. Read through the ports they are therefore
-      // unchanged: 00, 00, 0E, 00.
     end else begin
       // ARTIC free-running counter (see the declaration).
       if (artic_tick) artic_phase <= artic_wrap;
@@ -2983,19 +3012,13 @@ module pc9821_iobus #(
         // require S_BYTE), so the access is simply made to take its time. The
         // CPU holds cpu_valid until cpu_ready, so the guest stalls in the
         // access exactly as it would on the machine. A device write that the
-        // device cannot accept (device_wr_wait: the OPNA queue's or the 86-PCM
-        // FIFO's back-pressure) stalls HERE, before the S_BYTE strobe, so the
-        // write is presented exactly once and never dropped - the same idea as
-        // device_rd_hold holding S_DEVWAIT. Reads keep their one-cycle timing.
+        // device cannot accept (device_wr_wait) does NOT wait here: S_BYTE holds
+        // it, for every lane (lane_wr_wait, beside device_io_wr).
         S_IOWAIT: begin
-          // A device write that the device cannot accept stalls HERE, before the
-          // S_BYTE strobe, so the write is presented exactly once and never
-          // dropped (device_wr_wait). Reads keep their one-cycle timing.
-          //
-          // The wait is re-checked EVERY CYCLE once the bus-time hold has
-          // expired: io_hold HOLDS at zero rather than wrapping 0 -> 2047, which
-          // would quantize the re-check to 2048-cycle chunks and leave a freed
-          // device waiting up to 2047 dead cycles (the shortest-stall rule). The bus-time class hold itself is untouched.
+          // Once the bus-time hold has expired the exit is re-checked EVERY CYCLE:
+          // io_hold HOLDS at zero rather than wrapping, which would quantize the
+          // re-check (the posted 0x5F write's wait below) to whole counter periods
+          // (the shortest-stall rule). The bus-time class hold itself is untouched.
           // A posted 0x5F write still occupying the bus (post_5f) holds every
           // following access here, before its strobe, until that write's time is up.
           // XE10: the first two S_IOWAIT cycles compute the Xe10 hold from the registered
@@ -3008,6 +3031,7 @@ module pc9821_iobus #(
               /* verilator lint_off WIDTHTRUNC */   // a lane's class is at most 719 cycles (5990 ns at 120 MHz)
               hold_cls[xl] <= (hold_walk[xl] && pending_be[xl] && !xe10_pair_hi[xl])
                               ? io_access_cycles(base_addr[15:0] + 16'(xl), request_write, 1'b1) - 16'd1
+                                - ((xl == 2 && xe10_odd_word && !request_write) ? IO_XE10_ODD_OVL : 16'd0)
                               : 16'd0;
               /* verilator lint_on WIDTHTRUNC */
           end else if (hold_xe10 == 2'd2) begin
@@ -3018,7 +3042,7 @@ module pc9821_iobus #(
             io_hold <= hold_cls[0] + hold_cls[1] + hold_cls[2] + hold_cls[3] + {10'd0, hold_skip}
                        - 12'd2 - 12'(IO_XE10_CPU_CYC) - 12'd2;
           end else if (io_hold == 12'd0) begin
-            if ((post_5f == 12'd0) && !(device_port && request_write && device_wr_wait))
+            if (post_5f == 12'd0)
               state <= S_BYTE;
           end else begin
             io_hold <= io_hold - 12'd1;
@@ -3031,6 +3055,9 @@ module pc9821_iobus #(
           if (device_port && !request_write && !flush_required &&
               device_rd_wait) begin
             state <= S_DEVWAIT;
+          end else if (lane_wr_wait) begin
+            // The lane's device cannot take the write yet (lane_wr_wait, beside device_io_wr):
+            // stay on this lane, no strobe and nothing consumed, until it can.
           end else begin
           pending_be <= pending_be & ~lane_mask;
           // The 0x18F2/0x18F3 window pointer advances on EVERY access, read or
@@ -3073,9 +3100,8 @@ module pc9821_iobus #(
                 // The 0x8 nibble is the top-window shadow enable; every other nibble's
                 // state is set below exactly as before.
                 top_shadow_en <= next_top_shadow_en;
-                if (lane_wdata[7:4] == 4'hE) begin
-                  top_bank <= {1'b0, lane_wdata[3:1]};
-                end
+                // The bank select, held off while 0x043D = 0x02 is latched (next_bank_043f).
+                top_bank <= next_bank_043f;
                 // The 0x2 nibble's low nibble chooses which of the three measured states the
                 // window takes (next_ems_state, see the ems_state declaration). 0x20 is the
                 // identity, so it is the state that must NOT divert the planes.
@@ -3342,8 +3368,11 @@ module pc9821_iobus #(
           end
         end
 
+        // S_BYTE already cleared the flushing lane from pending_be and loaded `lane` with the
+        // NEXT pending one, so `last_lane` (pending_be less the current lane) is true here with
+        // one lane still owed: the walk ends only when nothing is pending.
         S_FLUSH: if (flush_done)
-          state <= last_lane ? S_REPLY : S_BYTE;
+          state <= (pending_be == 4'd0) ? S_REPLY : S_BYTE;
 
         S_REPLY: begin
           cpu_dout <= read_data;
@@ -3357,10 +3386,10 @@ module pc9821_iobus #(
         // pipelined CPU need not present one request per valid, and two back-to-back
         // accesses to this port with valid held would deadlock here. See
         // pc9821_memory_subsystem.sv's responder contract; the same state is implemented the same
-        // unconditional way in pc9821_window_responder.sv:366 (S_HOLD: state <= S_IDLE) -- the one
+        // unconditional way in pc9821_window_responder.sv:509 (S_HOLD: state <= S_IDLE) -- the one
         // engine of the TRAM and CG windows -- in
         // pc9821_open_bus.sv:73 (S_HOLD: state <= S_IDLE) and
-        // pc9821_grcg.sv:511 (G_HOLD:  gstate <= G_IDLE) - each file's one-cycle unconditional hold
+        // pc9821_grcg.sv:522 (G_HOLD:  gstate <= G_IDLE) - each file's one-cycle unconditional hold
         // ARM, which is the anchor, not the accept state it is entered from.
         //
         // The bubble is PROTOCOL, and z486 asserts it: its ext_valid_r clears on the
@@ -3454,21 +3483,57 @@ module pc9821_iobus #(
   end
 `endif
 
+  // ==================== THE LANE WALK, ONE STEP AHEAD ======================
+  // A multi-lane access walks its lanes in BACK-TO-BACK S_BYTE cycles (S_BYTE: `pending_be <=
+  // pending_be & ~lane_mask; state <= ... S_BYTE`), so the next lane's port, its datum and its
+  // chip select meet the devices' write enables one cycle after pending_be moves. With `lane`
+  // and the selects decoded from pending_be in that cycle, the path pending_be -> lane -> port
+  // decode -> dev_bus_cs -> device_io_wr & cs -> a device's registers was a genuine single-cycle
+  // path through the whole decode, and every device's write cone missed setup in STA (the
+  // release fits, seeds 2 and 3: -2 to -4.8 ns; on seed 3 it reached the 86-PCM's drain FSM, the
+  // th05 Music Room sound loss). Here the NEXT cycle's pending_be and dword base are formed from
+  // the same conditions the FSM below assigns them under (reset, S_IDLE's accept, S_BYTE's and
+  // S_DEVWAIT's lane clears; nothing else writes either), and the lane and the decode of the
+  // next lane's port are registered from them. Every value is the one the combinational form
+  // had in the same cycle, so no access changes length: the decode simply runs in the cycle
+  // BEFORE its use instead of in it (tools/check_iobus_lane_inv.py proves lane ==
+  // first_lane(pending_be) and that the selects were decoded from this cycle's port_addr).
+  wire        lane_idle_acc = (state == S_IDLE) && cpu_valid;
+  wire        lane_advance  = ((state == S_BYTE) &&
+                               !(device_port && !request_write && !flush_required && device_rd_wait) &&
+                               !lane_wr_wait)
+                           || ((state == S_DEVWAIT) && !device_rd_hold);
+  wire [3:0]  pending_be_nx = reset         ? 4'd0 :
+                              lane_idle_acc ? (access_be_walk & ~term_tail) :
+                              lane_advance  ? (pending_be & ~lane_mask) : pending_be;
+  wire [15:2] base_port_nx  = reset         ? 14'd0 :
+                              lane_idle_acc ? cpu_addr[15:2] : base_addr[15:2];
+  wire [1:0]  lane_nx       = first_lane(pending_be_nx);
+  wire [15:0] port_addr_nx  = {base_port_nx, lane_nx};
+  always @(posedge clk) lane <= lane_nx;
+
   // ==================== THE ONE DEVICE-BUS DECODE =========================
-  // The chip selects and the bus claim are one decode, over this fabric's own latched port
-  // address (see dev_bus_cs's header in pc9821_device_select.sv). Nothing here is registered:
-  // device_io_addr is `port_addr`, which the access FSM already holds stable for the whole
-  // access, so the selects are valid in the access's own cycle. The claim stays inside this file (device_port above): nothing
-  // outside needs it, only the chip selects cross the port list.
+  // The chip selects and the bus claim are one decode (see dev_bus_cs's header in
+  // pc9821_device_select.sv), of the NEXT cycle's port (port_addr_nx above), registered: in
+  // every cycle sel_q holds the decode of that cycle's port_addr. The claim stays inside this
+  // file (device_port above): nothing outside needs it, only the chip selects cross the port list.
   wire dev_bus_cs;
+  wire pic_master_nx, pic_slave_nx, pit_nx, interrupt_nx, cal_nx, kbd_nx, ata_nx, opna_nx,
+       pcm_nx, gameport_nx, mpu_nx, sdph_nx, dev_bus_nx, gdc_nx;
   pc9821_device_select #(.MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN),
                          .GAMEPORT_118(GAMEPORT_118)) u_device_select (
-      .addr(device_io_addr),
-      .pic_master_cs(pic_master_cs), .pic_slave_cs(pic_slave_cs), .pit_cs(pit_cs),
-      .interrupt_cs(interrupt_cs), .cal_cs(cal_cs), .kbd_cs(kbd_cs),
-      .ata_cs(ata_cs), .opna_cs(opna_cs), .pcm_cs(pcm_cs), .gameport_cs(gameport_cs),
-      .mpu_cs(mpu_cs), .sdph_cs(sdph_cs), .dev_bus_cs(dev_bus_cs), .gdc_cs(gdc_cs)
+      .addr(port_addr_nx),
+      .pic_master_cs(pic_master_nx), .pic_slave_cs(pic_slave_nx), .pit_cs(pit_nx),
+      .interrupt_cs(interrupt_nx), .cal_cs(cal_nx), .kbd_cs(kbd_nx),
+      .ata_cs(ata_nx), .opna_cs(opna_nx), .pcm_cs(pcm_nx), .gameport_cs(gameport_nx),
+      .mpu_cs(mpu_nx), .sdph_cs(sdph_nx), .dev_bus_cs(dev_bus_nx), .gdc_cs(gdc_nx)
   );
+  reg [13:0] sel_q;
+  always @(posedge clk)
+    sel_q <= {pic_master_nx, pic_slave_nx, pit_nx, interrupt_nx, cal_nx, kbd_nx, ata_nx,
+              opna_nx, pcm_nx, gameport_nx, mpu_nx, sdph_nx, dev_bus_nx, gdc_nx};
+  assign {pic_master_cs, pic_slave_cs, pit_cs, interrupt_cs, cal_cs, kbd_cs, ata_cs,
+          opna_cs, pcm_cs, gameport_cs, mpu_cs, sdph_cs, dev_bus_cs, gdc_cs} = sel_q;
 
 endmodule
 

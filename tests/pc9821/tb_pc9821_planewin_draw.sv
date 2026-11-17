@@ -1,11 +1,11 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PLANEWIN_DRAW: a FULL-SCREEN multi-plane picture drawn through the GVRAM plane windows (0xA8000-0xBFFFF) is asserted BY VALUE at every plane byte, so a store that lands the WRONG WORD in a few columns shows up as a horizontal stripe from elsewhere in the picture. Every shape the games issue is driven: plane-major and row-major multi-plane draws, the raster's flush interleaved per row, all four planes written to the SAME columns, a second pass over the picture, the `or es:[di],ax` read-modify-write composite, a 32-bit plane store (the four-byte width), and the graphics library's own `rep movsw` whole-plane stream at consecutive offsets. The check is a software model compared after a raster flush.
+// TB_PC9821_PLANEWIN_DRAW: a FULL-SCREEN multi-plane picture drawn through the GVRAM plane windows (0xA8000-0xBFFFF) is asserted BY VALUE at every plane byte, so a store that lands the WRONG WORD in a few columns shows up as a horizontal stripe from elsewhere in the picture. Every shape the games issue is driven: plane-major and row-major multi-plane draws, a raster line tick interleaved per row, all four planes written to the SAME columns, a second pass over the picture, the `or es:[di],ax` read-modify-write composite, a 32-bit plane store (the four-byte width), and the graphics library's own `rep movsw` whole-plane stream at consecutive offsets. The check is a software model read back through the CPU port, and every phase starts from bytes its own stores must change (a clear to 0x00, or a stream salt that differs from the previous stream's), so a dropped store cannot pass on the previous phase's identical bytes.
 //
-// WHY THIS EXISTS. The existing value benches draw at most one 16x16 sprite (tb_pc9821_sprite) or a single line (tb_pc9821_gvram_combine). The word-keyed write-combining buffer holds EIGHT words and a full-screen picture walks rows 80 words apart, so only a full-screen walk cycles the buffer enough to expose an eviction/fill slot that lands a word from another row, and only a streamed whole-plane walk reaches the row and plane ends.
+// WHY THIS EXISTS. The existing value benches draw at most one 16x16 sprite (tb_pc9821_sprite) or a single line (tb_pc9821_gvram_combine). It was written for the 8-word write-combining buffer a full-screen walk would cycle; the plane store has been on-chip block RAM since 6d79d25e, so the phases now pin that every word of a full-screen picture, drawn in each order the games use, lands at its own address, and that a streamed whole-plane walk reaches the row and plane ends.
 //
-// The check is a plain software model: every plane byte the store writes is recorded in `exp_mem` (with `expw`/`exp_col` for the streamed phases) and the picture is read back and compared. The read-back is preceded by a raster tick so the write-combining buffer has drained (its words are only visible in SDRAM after a flush).
+// The check is a plain software model: every plane byte the store writes is recorded in `exp_mem` (with `expw`/`exp_col` for the streamed phases) and the picture is read back through the CPU port and compared. Every phase starts from a picture its own stores must change (a clear to 0x00, or a stream salt that differs from the previous stream's), so a dropped store cannot pass on the previous phase's identical bytes.
 
 `default_nettype none
 
@@ -14,7 +14,7 @@ module tb_pc9821_planewin_draw;
   localparam integer CYCLE_NS = 20;
   localparam [31:0]  GVRAM_BASE = 32'h0300_0000;
 
-  localparam integer ROWS = 120;    // > 8 rows so the 8-slot WCB cycles many times
+  localparam integer ROWS = 120;    // a full-screen-scale picture: 120 rows x 80 bytes x 4 planes
   localparam integer COLS = 80;     // one plane row = 80 bytes = 40 16-bit words
 
   reg clk = 0;
@@ -94,13 +94,14 @@ module tb_pc9821_planewin_draw;
     end
   endtask
 
-  // A raster line tick with the scanout enabled: sets flush_pending, so the WCB writes its dirty
-  // words back and the SDRAM mirror is current. Wait for the flush to drain.
+  // A raster line tick with the scanout enabled, then a settle delay. The name is historical:
+  // the plane store was an SDRAM mirror behind a write-combining buffer that this tick flushed;
+  // since 6d79d25e it is on-chip block RAM, there is nothing to flush or wait on, and verify()
+  // reads every byte back through the CPU port, so its checks do not depend on this tick.
   task automatic flush_now;
     begin
       @(negedge clk); scan_enable = 1'b1; scan_line_tick = 1'b1;
       @(negedge clk); scan_line_tick = 1'b0;
-      while (1'b0) @(posedge clk);
       repeat (4) @(posedge clk);
       scan_enable = 1'b0;
     end
@@ -162,7 +163,7 @@ module tb_pc9821_planewin_draw;
     end
   endtask
 
-  // Read the whole picture back (after a flush) and assert every byte.
+  // Read the whole picture back through the CPU port and assert every byte.
   task automatic verify(input [8*200-1:0] what);
     integer r, p, c;
     reg [7:0] got;
@@ -221,17 +222,18 @@ module tb_pc9821_planewin_draw;
   // the image, so this phase streams all four planes linearly and records a value that is
   // unique per (plane, word index), so a wrong word from any other offset or plane shows up.
   reg [15:0] expw [0:3][0:16383];
-  function automatic [15:0] linmark(input integer plane, input integer k);
+  function automatic [15:0] linmark(input integer plane, input integer k, input [15:0] salt);
     begin
       // k*0x9E37 is a bijection mod 2^16 (the multiplier is odd), so a different k always
-      // yields a different word, and the plane term separates the planes.
-      linmark = 16'((k * 16'h9E37) + (plane * 16'h1234));
+      // yields a different word, and the plane term separates the planes; the salt makes a
+      // repeated stream store different words from the one before it.
+      linmark = 16'((k * 16'h9E37) + (plane * 16'h1234)) ^ salt;
     end
   endfunction
 
   // A LINEAR plane stream: present the access, wait for the accept, and immediately present the
   // next -- cpu_valid stays high the whole way, exactly as a `rep movsw` leaves it.
-  task automatic stream_planes;
+  task automatic stream_planes(input [15:0] salt);
     integer plane, k;
     reg [15:0] v;
     begin
@@ -239,12 +241,12 @@ module tb_pc9821_planewin_draw;
       cpu_valid  = 1'b1;
       cpu_be     = 4'b0011;
       win_offset = 15'd0;
-      cpu_din    = {16'd0, linmark(0, 0)};
+      cpu_din    = {16'd0, linmark(0, 0, salt)};
       win_plane  = 2'd0;
       for (plane = 0; plane < 4; plane = plane + 1) begin
         win_plane = plane[1:0];
         for (k = 0; k < 16384; k = k + 1) begin
-          v = linmark(plane, k);
+          v = linmark(plane, k, salt);
           expw[plane][k] = v;
           win_offset = 15'(k * 2);
           // off[1] rides the byte enables exactly as z486 presents it: an even 16-bit store on
@@ -413,27 +415,30 @@ module tb_pc9821_planewin_draw;
           draw_word(p, r, c / 2);
     verify("A plane-major full-screen draw");
 
-    // ---- PHASE B: row-major. For each row, all four planes of the row, then the next row. The
-    // four plane stores to a row's word land back-to-back, which is the coalescer's merge case. ----
+    // ---- PHASE B: row-major. For each row, all four planes of the row, then the next row: the
+    // four plane stores to a row's word land back-to-back. From a cleared picture. ----
+    clear_all(8'h00);
     for (r = 0; r < ROWS; r = r + 1)
       for (p = 0; p < 4; p = p + 1)
         for (c = 0; c < COLS; c = c + 2)
           draw_word(p, r, c / 2);
     verify("B row-major full-screen draw");
 
-    // ---- PHASE C: the same draw with a raster flush every row, which drains the WCB mid-picture
-    // and forces the next row's fills through a freshly emptied buffer. ----
+    // ---- PHASE C: the same draw with a raster line tick (the scanout's fetch) between rows. From
+    // a cleared picture. ----
+    clear_all(8'h00);
     for (r = 0; r < ROWS; r = r + 1) begin
       for (p = 0; p < 4; p = p + 1)
         for (c = 0; c < COLS; c = c + 2)
           draw_word(p, r, c / 2);
       flush_now;
     end
-    verify("C flush-per-row full-screen draw");
+    verify("C line-tick-per-row full-screen draw");
 
     // ---- PHASE D: overlay. All four planes written to the SAME columns with DIFFERENT values,
     // one word at a time, so every store must supersede the previous plane's byte in the same
-    // word. Read back per plane. ----
+    // word. Read back per plane. From a cleared picture. ----
+    clear_all(8'h00);
     for (r = 0; r < ROWS; r = r + 1)
       for (c = 0; c < COLS; c = c + 2)
         for (p = 0; p < 4; p = p + 1)
@@ -495,11 +500,12 @@ module tb_pc9821_planewin_draw;
     verify_dwords("W 32-bit plane store stream");
 
     // ---- PHASE L: the game's real shape (GRPEGC.COM's `rep movsw` plane stream) ----
-    stream_planes;
+    stream_planes(16'h0000);
     verify_planes("L linear whole-plane stream");
 
-    // ---- PHASE M: the same stream again, so every word is already held or already written ----
-    stream_planes;
+    // ---- PHASE M: the same stream again over the written planes, with a different salt so every
+    // word it stores differs from the one L left there ----
+    stream_planes(16'hA5C3);
     verify_planes("M second linear plane stream");
 
     $display("NOTE planewin_draw: %0d checks total, %0d error(s)", checks, errors);

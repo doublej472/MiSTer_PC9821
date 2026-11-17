@@ -1,14 +1,14 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DBG_CPU: The CPU debug instrument (pc9821_dbg_cpu) puts out the record format tools/decode_dbglog.py reads, every record whole: the sampler's per-window counters sum to exactly the events driven (the event in the snapshot cycle included) with its flags, PIC and CS:EIP fields and a sequence number that gaps on a skipped sample; the memory snoop reports every CPU write and every read-response beat inside its window and none outside it (bursts, overlapping reads, a write and a beat in one cycle), and with the UART stalled and the queue overrun the delivered events plus the 0x32 LOST counts equal the events driven; the frozen trace fires on the PC, WRITE and RELOAD (zero-then-nonzero) triggers and on the second-stage window only after the first, honours the ARM_S delay and a POST count above 63, and dumps the last 2^TRACE_AW issues oldest first through several ring wraps followed by the trigger record; and a ring too small for the offered load drops whole records, never a part of one.
+// TB_PC9821_DBG_CPU: The CPU debug instrument (pc9821_dbg_cpu) puts out the record format tools/decode_dbglog.py reads, every record whole: the sampler's per-window counters sum to exactly the events driven (the event in the snapshot cycle included) with its flags, PIC and CS:EIP fields and a sequence number that gaps on a skipped sample, and its INTR-high byte counts a window past 2^19 cycles unsaturated; the memory snoop reports every CPU write and every read-response beat inside its window and none outside it (bursts, overlapping reads, a write and a beat in one cycle), and with the queue overrun, the UART stalled and then draining under the flood, the delivered events plus the 0x32 LOST counts equal the events driven (the losses of a LOST record's own start cycle included); the frozen trace fires on the PC, WRITE and RELOAD (zero-then-nonzero) triggers and on the second-stage window only after the first, honours the ARM_S delay and a POST count above 63, and dumps the last 2^TRACE_AW issues oldest first through several ring wraps followed by the trigger record; and a ring too small for the offered load drops whole records, never a part of one.
 //
 // WHY THIS EXISTS. The pn-stall instrument was built and fixed on hardware: an 8 KiB ring with an
 // 11-bit drain index, a sample counter that lost the event of its own snapshot cycle, a post-trigger
 // count too narrow for a longer window. Each is a width or an edge, invisible in the shape of
 // the records and obvious in a count, which is how the checks below are written: every expected
 // number is computed from the STIMULUS (the issues, writes and beats this bench drove), never from
-// the DUT. Five DUTs share one bus; each is parameterised for the part it proves.
+// the DUT. Six DUTs share one bus; each is parameterised for the part it proves.
 
 `default_nettype none
 
@@ -36,10 +36,10 @@ module tb_pc9821_dbg_cpu;
   reg [3:0] m_be = 4'h0;
   reg [7:0] m_burst = 8'h0;
 
-  localparam integer NI = 5;
+  localparam integer NI = 6;
   wire [NI-1:0] lw;
   wire [7:0]    lb [0:NI-1];
-  reg  [NI-1:0] en = 5'b10111;         // the UART takes a byte (D's is held off until its overrun test)
+  reg  [NI-1:0] en = 6'b110111;        // the UART takes a byte (D's is held off until its overrun test)
   wire [NI-1:0] acc = lw & en;
 
   // A: sampler + snoop + RELOAD trigger with a second stage, a 16-entry trace (wraps)
@@ -97,6 +97,16 @@ module tb_pc9821_dbg_cpu;
         .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
         .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
         .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[4]), .log_we(lw[4]), .log_accept(acc[4]));
+  // F: a window of 600,000 clocks, past 2^19 (the 10 ms window is 900,000 clocks at 90 MHz)
+  pc9821_dbg_cpu #(.LOG_CLK_HZ(6_000_000), .RING_AW(9), .SAMPLER_EN(1), .SAMPLE_MS(100), .SNOOP_EN(0), .TRIG_KIND(0))
+    uf (.clk(clk), .cpu_cs(cpu_cs), .cpu_eip(cpu_eip), .cpu_pe(cpu_pe), .cpu_vm(cpu_vm), .cpu_if(cpu_if),
+        .cpu_intr(cpu_intr), .cpu_sp(cpu_sp), .cpu_flags(cpu_flags), .inta_ready(inta_ready), .inta_vec(inta_vec),
+        .vsync_irq(vsync_irq), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .imr(imr), .irr(irr), .isr(isr),
+        .s_imr(s_imr), .s_isr(s_isr), .ata_block_read(ata_block_read), .gate_read(gate_read), .gate_addr(gate_addr),
+        .issue(issue), .issue_eip(issue_eip),
+        .lio_stb(1'b0), .lio_wr(1'b0), .lio_addr(16'h0000), .lio_data(8'h00), .m_valid(m_valid), .m_ready(m_ready), .m_write(m_write),
+        .m_addr(m_addr), .m_be(m_be), .m_burst(m_burst), .m_line(m_line), .m_wdata(m_wdata),
+        .m_resp_valid(m_resp_valid), .m_rdata(m_rdata), .log_byte(lb[5]), .log_we(lw[5]), .log_accept(acc[5]));
 
   // ==== STIMULUS ====
   reg [31:0] lfsr = 32'hD00DF00D;
@@ -447,6 +457,9 @@ module tb_pc9821_dbg_cpu;
     end
     tick(300);
     en[3] = 1'b1;
+    // ... and flooded WHILE it drains: the queue stays full, so every write is lost, including
+    // those in the cycle each LOST record starts (the count must still add up)
+    for (k = 0; k < 3000; k = k + 1) bus_write(32'h0000_8000 + 4 * (k % 1024), 4'hF, 32'h7000_0000 + k);
     tick(3000);
     en[3] = 1'b0; tick(2000);                            // stall again mid-drain, then a random pace
     for (k = 0; k < 20000; k = k + 1) begin en[3] = (rnd() % 3 == 0); tick(1); end
@@ -483,6 +496,24 @@ module tb_pc9821_dbg_cpu;
         for (i = 0; i < ncap[k]; i = i + 1) $fwrite(dump_fd, "%c", cap[k][i]);
         $fclose(dump_fd);
       end
+    end
+
+    // ---- 7. the INTR-high byte past 2^19 cycles (DUT F, after the dumps: the long run overfills
+    // the other DUTs' captures) ----
+    // INTR held high across two whole 600,000-clock windows: the full window reads 600000>>12 = 146
+    cpu_intr = 1'b1;
+    tick(1_300_000);
+    cpu_intr = 1'b0;
+    tick(10);
+    parse(5);
+    begin : chi_long
+      integer rr, best;
+      best = 0;
+      for (rr = 0; rr < nrec[5]; rr = rr + 1) begin
+        o = rec_off[5][rr];
+        if (cap[5][o+23] > best) best = cap[5][o+23];
+      end
+      if (best != 146) fail($sformatf("INTR-high byte peaked at %0d for a 600,000-cycle window, expected 146 (600000>>12)", best));
     end
 
     // ==== VERDICT ====

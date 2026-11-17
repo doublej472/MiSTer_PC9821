@@ -45,6 +45,19 @@ All of them run as `QUARTUS_POST_STA_TCL` (the script's absolute path) in a `too
   4,000 worst clk_sys endpoints at the worst corner (`ends_sys.rpt`), the worst hold endpoints
   (`ends_sys_hold.rpt`), every SDRAM I/O path at all four corners, a per-corner summary
   (`corners.txt`), and `keepdb.tar` (the fitted database, so later queries need no re-fit).
+  It also writes `ends_all_setup.rpt` (every endpoint under 0.5 ns, any clock pair), the audio and
+  iobus cone reports, `cones.txt` (the reset release, the fan-out of the reset tree's copies with
+  the count of copies the fit kept, and the hps_io configuration-word writes, all of which the SDC
+  times), `exceptions.txt` (`tools/timing/sdc_audit.tcl`: each registered exception's object
+  count, and the paths it hides when re-timed without it; `tools/check_sdc_exceptions.py --fit` judges
+  it) and `ena_paths.tsv` (`tools/timing/cen_census.tcl`: the clock-enable driver and its register
+  fan-in at both ends of every failing clk_sys path). Copy the script to the fit host and pass its
+  path as `--remote-env QUARTUS_POST_STA_TCL=...`; the two scripts it sources are read from the fitted
+  tree.
+- `tools/timing/cen_census.py RUNDIR...` groups `ena_paths.tsv` by the known clock-enable generators
+  (each with the minimum number of clk_sys cycles between its pulses, from its RTL) and says which
+  failing groups have both ends on one enable: the candidates a `set_multicycle_path -setup N -hold
+  N-1` could cover exactly. A candidate still needs its RTL read before it is proposed.
 - `tools/timing/census.py table|ladder|skew|show|families|md ENDS_RPT...` classifies every endpoint
   into the cones below. `table` prints each cone's worst slack, its gap to WNS and its endpoint
   counts within 0.3 and 1.0 ns per fit; `ladder` the WNS as cone groups are removed in order;
@@ -156,6 +169,37 @@ proof. The RTL comments cite them by these names.
 - **S2.** The SDRAM controller forms the next-row field and the gather session's slot maps one
   cycle after the accept, from the accept's own latches; no reader can run in that cycle, and the
   RTL asserts both facts in simulation against the accept-time form.
+- **S1-b, the SDRAM pin look-ahead.** Every pin arm's register-only test and address field (the
+  `cycle` compares of CONFIG, WRITE, WRITE_BURST, the re-opens and REFRESH; the READ arm's
+  issue/split/drain tests, column and auto-precharge; the gather write's slot test) is a flop loaded
+  from the same function of the registers' next values, so the output cells' D inputs start from
+  flops instead of six LUT levels ahead of the 5.6 ns hop to the die edge (`cycle` -> `dq_out_cell`,
+  -4.79 ns on the xt sweep). Pin- and cycle-identical (`tools/check_sdram_pin_equiv.py`; the SIM-ONLY
+  `la_contract` holds each flop against its live form in every sdram bench).
+- **The DMA channel address.** `pc9821_dmac`'s `mem_addr_nx` reads `cur_addr_q`, a register equal to
+  `ch_addr[cur]` in every cycle (loaded with the next `ch_addr` at the next `cur`: S_IDLE's want
+  priority, S_FIN's fold, the CPU's raw writes), so S_FIRST's load into the subsystem's route decode
+  starts from a flop, not from S_IDLE's `cur` through the channel mux (`check_seq_equiv --proof
+  dmac_cur_addr`; a SIM-ONLY check holds the invariant in every DMA bench). That left the map itself,
+  `cur_addr_q` -> the memory map -> the load registers, 13-15 ns flop to flop; T89 (an owner-taken
+  trade, not zero-cycle) closes it with an S_SEL state, an address snapshot `ld_addr` written two
+  cycles before every load, and the `pc9821_mc_dmaaddr` multicycle on exactly that path.
+- **The HPS word stream, one stage in.** `pc9821_atapi` and `pc9821_block_io` (the engine behind the
+  disks' and floppies' slots) take hps_io's read stream (`sd_ack`, `sd_buff_wr`, `sd_buff_addr`,
+  `sd_buff_dout`) through one register stage, and every consumer reads the staged copy (the word
+  decode, the header and CD-DA captures, the buffer fills, the acknowledge and the completion), so
+  each module sees the sequence it saw, one clk_sys later; block_io's write-direction read port stays
+  on the live address hps_io samples. Not zero-cycle, but host-side only: the handshake moves one
+  clk_sys against an HPS round trip of microseconds, and nothing the guest reads moves
+  (`check_seq_equiv --proof atapi_hps_stage` / `block_io_hps_stage`: each module is its previous self
+  with exactly that stage on its input).
+- **C5-pair, the pair facts from registers.** `pc9821_pegc_storebuf`'s pair facts (`nx_adj`,
+  `nx_row_lg`, `nx_row_sm`) are no longer compared at the allocation from the live `in_addr` (the
+  CPU's `ext_addr_r` through the window decode): in the cycle after it both dwords of the new pair
+  are registers (`last_addr`, `prev_addr`), so the compare runs then and is stored at the end of that
+  cycle, and the fact the allocation's entry reads in that one cycle is the compare itself. Every
+  reader sees the stored values the old compare produced, in the same cycle (`check_seq_equiv` against
+  the parent, proven with no strengthening; `check_storebuf_head_inv` over the same names).
 - **The download gate.** `cpu_run` is a register of `pc9821_rom_loader` (`rom_ready &&
   !load_error`, written from the two flags' next state), and `loader_owns` is
   `load_valid || !rom_ready`; neither reads the live `ioctl_download` any more. The one cycle that

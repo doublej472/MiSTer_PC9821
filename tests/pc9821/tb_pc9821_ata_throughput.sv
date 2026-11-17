@@ -3,14 +3,14 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The steady-state DOS file-read pipeline priced per cycle through the real pc9821_ata and pc9821_block_io with a parameterised HPS host model, for 32-sector reads at an insw cadence (one 16-bit word per 6 clk_sys + loop/INT overhead) under three cadences (one READ SECTORS, one READ MULTIPLE, a per-sector-command loop) x latency {0, 50, 200, 4600} x stream cost {1, 8} clk/word: every cycle is sorted into the per-word PIO handshake, the guest's inter-sector gap, the command's block-fetch stall or the mid-stream read-ahead stall, and the run reports clk/sector and KB/s at 50 MHz. It pins that a streaming read is DRAIN-bound even at the measured 4600-clk HPS latency (under 3000 clk/sector where a handshake-per-512-byte adapter is fetch-bound at 4856 (4600 + the sector's 256-word handshake, the bench's own arithmetic)), and that the interrupt cadence stays NP2kai's (one per sector for READ SECTORS, one per block for READ MULTIPLE) with every word byte-exact.
+// The steady-state DOS file-read pipeline priced per cycle through the real pc9821_ata and pc9821_block_io with a parameterised HPS host model, for 32-sector reads at an insw cadence (one 16-bit word per 9 clk_sys and a task-file byte per 5, the costs tb_pc9821_ata_iowait measures through the real pc9821_iobus, + loop/INT overhead) under three cadences (one READ SECTORS, one READ MULTIPLE, a per-sector-command loop) x latency {0, 50, 200, 4600} x stream cost {1, 8} clk/word: every cycle is sorted into the per-word PIO handshake, the guest's inter-sector gap, the command's block-fetch stall or the mid-stream read-ahead stall, and the run reports clk/sector and KB/s at 50 MHz. It pins that a streaming read is DRAIN-bound even at the measured 4600-clk HPS latency: at each stream cost w the READ SECTORS run must land under the midpoint between the guest's own drain floor (256 x (9 + 2) = 2816 clk/sector) and the 4600 + 256 x w clk/sector a handshake-per-512-byte adapter is bound to (4856 at w=1, 6648 at w=8, the bench's own arithmetic), and that the interrupt cadence stays NP2kai's (one per sector for READ SECTORS, one per block for READ MULTIPLE) with every word byte-exact.
 //
 // The steady-state DOS file-read pipeline measured end to end -- the real pc9821_ata task
 // file and PIO serializer, the real pc9821_block_io adapter, and a parameterised HPS host
 // model (request->ack latency and a per-word stream cost) -- for a DOS-style read of MANY
-// sectors at a tight `insw` cadence (one 16-bit 0x0640/0x0641 word per 6 clk_sys, the class
+// sectors at a tight `insw` cadence (one 16-bit 0x0640/0x0641 word per 9 clk_sys, the class
 // table's cost measured through the real pc9821_iobus by tb_pc9821_ata_iowait
-// (delivered=6/stall=5 per word), plus the loop's per-word instruction overhead), with the
+// (delivered=9/stall=8 per word), plus the loop's per-word instruction overhead), with the
 // INT-service and per-boundary ack modelled and EVERY cycle sorted into exactly one bucket
 // of the breakdown: the per-word PIO handshake, the guest's cadence overhead (REP loop +
 // inter-sector INT/ack/poll gap), the command's block-fetch stall, and the mid-stream stall
@@ -206,7 +206,11 @@ module tb_pc9821_ata_throughput;
   // access; INT_CYCLES the ISR entry/exit around the 0x064E ack. All task waits are
   // negedge-to-negedge, so one wait = one period = exactly one counted posedge and the
   // bucket sum must equal the wall count.
-  localparam WORD_CYCLES = 6;
+  // WORD_CYCLES and TF_CYCLES are tb_pc9821_ata_iowait's MEASURED delivered costs through
+  // the real pc9821_iobus (a 16-bit data word: 9 delivered / 8 stalled, each of its two
+  // lanes paying the class floor; a task-file byte: 5 / 4). A change to the class table
+  // moves iowait first, and these follow it.
+  localparam WORD_CYCLES = 9;
   localparam TF_CYCLES   = 5;
   localparam REP_EXTRA   = 2;
   localparam INT_CYCLES  = 60;
@@ -379,6 +383,10 @@ module tb_pc9821_ata_throughput;
   // The bound slots: the read-sectors stream at the measured HPS latency, at both stream
   // costs (filled by report() below).
   integer ps_bound_w1 = 0, ps_bound_w8 = 0;
+  localparam integer HPS_LAT_BOUND = 4600;
+  localparam integer DRAIN_FLOOR   = 256 * (WORD_CYCLES + REP_EXTRA);       // 2816
+  localparam integer PS_BOUND_W1   = (DRAIN_FLOOR + HPS_LAT_BOUND + 256 * 1) / 2;   // 3836
+  localparam integer PS_BOUND_W8   = (DRAIN_FLOOR + HPS_LAT_BOUND + 256 * 8) / 2;   // 4732
 
   task report(input integer which, input integer lat, input integer wclk,
               input integer blk, input integer irqs);
@@ -462,22 +470,27 @@ module tb_pc9821_ata_throughput;
 
     // ==== bounds: what this bench is about ====
     // At the measured HPS latency a streaming read must be DRAIN-bound (the per-word PIO
-    // handshake is the bottleneck), not fetch-bound: one handshake per 512 bytes caps the
-    // stream at (4600 + 256*w)/sector = 4856 clk at w=1. The read-ahead window amortises
-    // the handshake over its blocks, so a 32-sector stream must land under 3000 clk/sector
-    // (the drain's 1536 + the modelled cadence + the warm-up fetches exposed at the head).
-    $display("BOUND read-sectors lat=4600: per_sector word=1 %0d word=8 %0d",
-             ps_bound_w1, ps_bound_w8);
+    // handshake is the bottleneck), not fetch-bound. The two regimes, per sector:
+    //   drain floor  the guest's own words, 256 x (WORD_CYCLES + REP_EXTRA) = 2816, before
+    //                any INT/ack/poll gap or exposed fetch;
+    //   fetch bound  one handshake per 512 bytes caps the stream at HPS_LAT + 256 x w (the
+    //                round trip plus the sector's stream): 4856 at w=1, 6648 at w=8.
+    // The read-ahead window amortises the handshake over its blocks, so a 32-sector stream
+    // lands near the drain floor (the warm-up fetches exposed at the head add a few hundred
+    // clk/sector); the bound is the MIDPOINT of the two regimes, so it moves with the
+    // constants and a lost amortisation (fetch-bound) or a lost overlap fails it.
+    $display("BOUND read-sectors lat=4600: per_sector word=1 %0d (bound %0d) word=8 %0d (bound %0d)",
+             ps_bound_w1, PS_BOUND_W1, ps_bound_w8, PS_BOUND_W8);
     if (ps_bound_w1 == 0 || ps_bound_w8 == 0) begin
       $display("FAIL the bound runs never reported");
       errors = errors + 1;
     end
-    if (ps_bound_w1 > 3000) begin
-      $display("FAIL a streaming read at the measured HPS latency is fetch-bound (%0d clk/sector at word=1): the per-handshake latency is not amortised", ps_bound_w1);
+    if (ps_bound_w1 > PS_BOUND_W1) begin
+      $display("FAIL a streaming read at the measured HPS latency is fetch-bound (%0d clk/sector at word=1, bound %0d): the per-handshake latency is not amortised", ps_bound_w1, PS_BOUND_W1);
       errors = errors + 1;
     end
-    if (ps_bound_w8 > 4200) begin
-      $display("FAIL a streaming read with an 8 clk/word host is fetch-bound (%0d clk/sector)", ps_bound_w8);
+    if (ps_bound_w8 > PS_BOUND_W8) begin
+      $display("FAIL a streaming read with an 8 clk/word host is fetch-bound (%0d clk/sector, bound %0d)", ps_bound_w8, PS_BOUND_W8);
       errors = errors + 1;
     end
 

@@ -125,6 +125,10 @@ module pc9821_grcg (
     output wire [63:0] cl_hold_wdata2,      // cl_wdata2_r
     input  wire [31:0] cl_rdata,
     input  wire        cl_done,
+    // OSD I/O timing = Xe10's read latency (pc9821_gvram_arb's grcg_rd_hold, a level): a TCR
+    // read's response waits in G_RESP while it is set. 0 (Fast, and an undriven port) changes
+    // nothing.
+    input  wire        rd_hold,
 
     // Telemetry: the walk's own activity, so pc9821_gvram can count the cycles the CPU
     // is held for a GRCG store and split RMW from TDW. `dbg_busy` is the FSM away from G_IDLE
@@ -289,7 +293,11 @@ module pc9821_grcg (
   // The ready is a one-cycle REGISTERED level the cycle after the accept, so it is presented for
   // a whole clk_sys (the responder handshake z486 samples) rather than only in the accept cycle.
   reg  store_ready_q;
-  assign cpu_ready      = store_ready_q || (gstate == G_RESP);
+  // A READ's accept also waits out Xe10's latency hold (`rd_hold`): G_RESP is held, without
+  // its ready, until the hold its own array accept armed runs out (pc9821_gvram_arb's XE10 TABLE).
+  // A store's G_RESP (the all-planes-disabled no-op) is never held.
+  wire   resp_held      = rd_hold && !wr_q;
+  assign cpu_ready      = store_ready_q || ((gstate == G_RESP) && !resp_held);
 
   // ---------------------------------------------------------------------------
   // THE PRESENTATION BUBBLE
@@ -363,8 +371,12 @@ module pc9821_grcg (
   assign dbg_busy  = (gstate != G_IDLE);
   assign dbg_rmw   = rmw_q;
   assign dbg_write = wr_q;
-  // One pulse per accepted STORE: the G_IDLE branch into the walk/TDW arms, which is the cycle the
-  // CPU's store command latches (be_q/din_q/wr_q) and `expand_gate` owns it. A TCR read
+  // One pulse per accepted STORE: the G_IDLE branch out of idle, which is the cycle the CPU's
+  // store command latches (be_q/din_q/wr_q) and `expand_gate` owns it. The all-planes-disabled
+  // store (mode[3:0] == 0xF, which store_accept excludes) is COUNTED too: it goes G_IDLE ->
+  // G_RESP with wr_q and rmw_q latched, so its G_RESP cycles are in the perf record's GR or GT
+  // (dbg_busy && dbg_write) as well, and (GR+GT)/GS stays "cycles per GRCG store, no-ops
+  // included" on both sides of the ratio. A TCR read
   // (cpu_write low) is not a store, and a store with the GRCG gate clear never reaches this module
   // (pc9821_gvram's cc_owns_grcg requires expand_gate for a write), so the two exclusions are
   // stated rather than assumed. `gstate == G_IDLE` makes it a one-cycle pulse however long the
@@ -501,7 +513,7 @@ module pc9821_grcg (
         // states after the accept are dead cycles that only held the next store off. A READ keeps
         // both, because its accept and its response must be SEPARATE cycles (the contract
         // quoted above). Measured on the RMW erase: 31.3 -> 29.4 clk_sys/store.
-        G_RESP:  gstate <= wr_q ? G_IDLE : G_RESP2;
+        G_RESP:  gstate <= wr_q ? G_IDLE : resp_held ? G_RESP : G_RESP2;
         G_RESP2: gstate <= G_HOLD;
         // ONE unconditional bubble for the READ arm. It must NOT wait
         // for cpu_valid to drop: z486 clears its external valid for exactly ONE cycle after

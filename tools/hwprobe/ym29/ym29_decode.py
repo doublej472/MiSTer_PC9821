@@ -104,6 +104,10 @@ def parse(text: str) -> dict:
 
 
 def classify(r: dict, t: str) -> str:
+    # a window whose handler hit ISR_SAT (a line that would not drop) is not an interrupt count:
+    # on a control row it voids the timer, on a bit row it makes the verdict MIXED
+    if r.get("sat"):
+        return "saturated"
     if r["n"] > 0:
         return "irq"
     if (r["st_end"] & TIMER_BIT[t]) or r.get("flags", 0) > 0:
@@ -129,12 +133,6 @@ def timer_verdict(cap: dict, t: str) -> str:
     if all(c == "irq" for c in on + off):
         return "NO-GATE"
     return "MIXED"
-
-
-def verdict(cap: dict) -> str:
-    """v1 compatibility: Timer A's verdict alone."""
-    v = timer_verdict(cap, "A")
-    return "VOID" if v in ("n/a", "MIXED") else v
 
 
 def overall(cap: dict) -> str:
@@ -245,6 +243,13 @@ def selftest() -> int:
         (_sample(True, True).replace("USE b=0188 id=01", "USE b=0188 id=00"), ("VOID", "VOID")),
         # one bit-clear row interrupts while the other is gated
         (_sample(True, True).replace("IRQB v29=01 n=0", "IRQB v29=01 n=21"), ("GATES", "MIXED")),
+        # a saturated window is not an interrupt count: on a bit row MIXED, on a control row VOID
+        (_sample(False, False).replace("IRQ  v29=02 n=21 st_end=00 st_isr=01 irr_end=A0 ticks=61440 "
+                                       "pit0=F897 pit1=7886 sat=0",
+                                       "IRQ  v29=02 n=4000 st_end=00 st_isr=01 irr_end=A0 ticks=61440 "
+                                       "pit0=F897 pit1=7886 sat=1"), ("MIXED", "NO-GATE")),
+        (_sample(False, False).replace("IRQB v29=1F n=21", "IRQB v29=1F n=4000").replace(
+            "sat=0\r\nPOLLB v29=1F", "sat=1\r\nPOLLB v29=1F", 1), ("NO-GATE", "VOID")),
     ]
     for i, (text, want) in enumerate(cases):
         cap = parse(text)

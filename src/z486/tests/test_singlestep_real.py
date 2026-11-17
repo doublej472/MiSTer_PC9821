@@ -340,6 +340,41 @@ def undefined_flags_mask(nbytes, init_regs, shxd_count):
     return mask
 
 
+def expects_stack_fault(init, final_regs):
+    """The capture ends at the #SS (12) or #GP (13) real-mode handler."""
+    ram = dict(init.get('ram', []))
+    final_cs = final_regs.get('cs')
+    final_eip = final_regs.get('eip')
+    for vector in (12, 13):
+        a = vector * 4
+        if all(a + k in ram for k in range(4)):
+            ip = ram[a] | ram[a + 1] << 8
+            cs = ram[a + 2] | ram[a + 3] << 8
+            if final_cs == cs and final_eip == ip + 1:
+                return True
+    return False
+
+
+def is_grp2_sal6(nbytes):
+    """Group-2 /6 (C0/C1/D0-D3 with ModRM reg 6): the reserved SAL encoding.
+
+    The SingleStepTests capture masks every arithmetic flag of these files
+    (C0.6 ... D3.6 global mask fffff72a), as /6 is undocumented, but the 386EX
+    results in them follow SHL exactly (every non-faulting D0.6/D1.6 case ends
+    with OF == CF ^ SF, the SHL rule), and NP2kai's group-2 tables run /6 as
+    SHL (i386c/ia32/inst_table.c insttable_G2Eb[] row 6).  The runner compares
+    them with /4's mask (AF only, the shift's undefined flag) instead.
+    """
+    prefixes = {0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3}
+    idx = 0
+    while idx < len(nbytes) and nbytes[idx] in prefixes:
+        idx += 1
+    if idx + 1 >= len(nbytes):
+        return False
+    return (nbytes[idx] in (0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3) and
+            ((nbytes[idx + 1] >> 3) & 7) == 6)
+
+
 def is_div_fault(nbytes, init_regs, final_regs):
     """DIV/IDIV (F6/F7 /6,/7) that raised a divide error (CS changed)."""
     prefixes = {0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF0, 0xF2, 0xF3}
@@ -482,7 +517,10 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
             if opcode == 0x0F and idx + 1 < len(nbytes):
                 op2 = nbytes[idx + 1]
                 is_stack_pop = op2 in (0xA1, 0xA9)  # POP FS, POP GS
-            if is_stack_pop:
+            # Only a capture that ends in the #SS/#GP handler expects the
+            # fault: a far RET/IRET changes CS on success too, and must be
+            # compared (the captured CS:EIP is the handler entry + 1, the HLT).
+            if is_stack_pop and expects_stack_fault(init, final_regs):
                 if VERBOSE:
                     print(f"Skipping stack pop test (expects segment limit fault)")
                 return True, [], "SKIP: stack pop segment limit fault"
@@ -607,6 +645,8 @@ def run_test(test, global_mask, cpu_mode='486', notrace=False, _repeat=0):
     final_mask = fin.get('mask')
     if final_mask is None:
         final_mask = global_mask
+    if final_mask and 'eflags' in final_mask and is_grp2_sal6(nbytes):
+        final_mask = dict(final_mask, eflags=0xFFFFFFEF)
 
     # Check results
     ok = True
@@ -1021,9 +1061,14 @@ def run_test_parallel(args):
     try:
         # Disable tracing for parallel runs (faster + no trace file conflicts)
         ok, errors, out = run_test(test, global_mask, cpu_mode, notrace=True)
-        return (moo_file_name, test_idx, ok, errors)
+        return (moo_file_name, test_idx, ok, errors, is_skip(out))
     except Exception as e:
-        return (moo_file_name, test_idx, False, [f"Exception: {str(e)}"])
+        return (moo_file_name, test_idx, False, [f"Exception: {str(e)}"], False)
+
+
+def is_skip(out):
+    """run_test's third value names a skipped (uncompared) case."""
+    return isinstance(out, str) and out.startswith("SKIP")
 
 
 def format_cell_stats(p, t, w, use_color):
@@ -1520,9 +1565,11 @@ def main():
 
         # Process results
         passed = 0
+        skipped = 0
         agg = {}
 
-        for (moo_file_name, test_idx, ok, errors), (test, _, moo_file, _) in zip(results, test_metadata):
+        for (moo_file_name, test_idx, ok, errors, skip), (test, _, moo_file, _) in zip(results, test_metadata):
+            skipped += skip
             # Format status
             status_plain = 'PASS' if ok else 'FAIL'
             if use_color:
@@ -1563,6 +1610,7 @@ def main():
     else:
         # Serial execution (single file or verbose mode)
         passed = 0
+        skipped = 0
         agg = {}
 
         for test, global_mask, moo_file, test_idx in test_metadata:
@@ -1573,6 +1621,7 @@ def main():
                 ok = False
                 errors = [str(e)]
                 out = ""
+            skipped += is_skip(out)
 
             # Format status
             status_plain = 'PASS' if ok else 'FAIL'
@@ -1653,6 +1702,8 @@ def main():
     # Print summary again at the end
     pct = (passed / total * 100.0) if total else 0.0
     print(f"\nSummary: {passed}/{total} ({pct:.1f}%)")
+    if skipped:
+        print(f"{skipped} of the passes were skipped, not compared")
 
     # Print skipped test counts
     if skipped_fault_count > 0 or skipped_lock_count > 0:

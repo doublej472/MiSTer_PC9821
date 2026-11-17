@@ -1,4 +1,4 @@
-// TEST REFERENCE: pc9821_crtc as of ad9ed84c (before the V1-a registered geometry), renamed. Never edited; the lockstep bench tb_pc9821_crtc_geom_equiv proves the shipped module against it.
+// TEST REFERENCE: pc9821_crtc as of ad9ed84c (before the V1-a registered geometry), renamed. Held in lockstep: a deliberate behaviour change to pc9821_crtc is mirrored here in the same commit (git log names each), and the lockstep bench tb_pc9821_crtc_geom_equiv proves the shipped module against it.
 // PC-9821 CRTC: the 24 kHz text raster, the text-cell fetch/render and the pixel outputs.
 // It owns the raster counters and their measured geometry, the
 // text RAM and the fetch pipeline, the render registers and pixel generator, the cursor and

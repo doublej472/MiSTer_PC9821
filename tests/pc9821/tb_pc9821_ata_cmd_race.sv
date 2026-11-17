@@ -178,6 +178,33 @@ module tb_pc9821_ata_cmd_race;
     end
   endtask
 
+  // Wait (bounded, 16 clk) for the media command's block request to reach the adapter, then
+  // one clk more for the FSM to settle in X_WAIT_BLOCK: the dispatch latency (MEDIA_WAIT) is
+  // not guest-visible, so the setup does not pin it. The callers judge ad_reqs.
+  task wait_issued;
+    integer k;
+    begin
+      k = 0;
+      while (ad_reqs == 0 && k < 16) begin
+        @(negedge clk);
+        k = k + 1;
+      end
+      repeat (2) @(negedge clk);
+    end
+  endtask
+
+  // Wait (bounded, 16 clk) for the FSM to reach a state; the caller judges it.
+  task poll_state(input [2:0] want);
+    integer k;
+    begin
+      k = 0;
+      while (dut.xfer_state !== want && k < 16) begin
+        @(negedge clk);
+        k = k + 1;
+      end
+    end
+  endtask
+
   // Drain one presented sector: 256 word reads (0x640 lo, 0x641 hi advances).
   task drain_sector;
     integer w;
@@ -208,11 +235,13 @@ module tb_pc9821_ata_cmd_race;
     // plus nothing else - the takeover issues no request for IDENTIFY).
     // ---------------------------------------------------------------
     read_sectors_lba(8'h02, 8'h10);
-    repeat (3) @(negedge clk);
+    wait_issued;
     if (ad_reqs != 1) fail("S1 setup: the READ never reached the block adapter");
     if (dut.xfer_state !== 3'd1) fail("S1 setup: expected X_WAIT_BLOCK");
     cmd_write_with_done(8'hEC);            // THE COLLISION
-    @(negedge clk);
+    // Bounded poll, not a fixed clk: the dispatch latency is not guest-visible. A dropped
+    // byte never reaches X_PIO_IDENTIFY (the retired READ presents its sector, X_PIO_DATA).
+    poll_state(3'd2);
     if (dut.xfer_state !== 3'd2)
       fail("S1: the IDENTIFY command write was dropped against the stale transfer state");
     read_byte(16'h0640, value);
@@ -228,9 +257,10 @@ module tb_pc9821_ata_cmd_race;
     // ---------------------------------------------------------------
     reset_drive;
     read_sectors_lba(8'h02, 8'h30);
-    repeat (3) @(negedge clk);
+    wait_issued;
     write_byte(16'h064E, 8'hEC);           // mid X_WAIT_BLOCK, no completion
-    @(negedge clk);
+    // Long enough for any dispatch latency to have taken the command, were it accepted.
+    repeat (8) @(negedge clk);
     if (dut.xfer_state !== 3'd1)
       fail("S2: a command write mid-transfer must still be ignored while BSY");
     fire_done;                             // the transfer completes normally
@@ -245,19 +275,19 @@ module tb_pc9821_ata_cmd_race;
     // ---------------------------------------------------------------
     reset_drive;
     read_sectors_lba(8'h01, 8'h50);
-    repeat (3) @(negedge clk);
+    wait_issued;
     fire_done;
     repeat (3) @(negedge clk);
     drain_sector;                          // the sector retires to X_IDLE
     if (dut.xfer_state !== 3'd0) fail("S3 setup: the drained transfer did not retire");
     write_byte(16'h064E, 8'hEC);
-    repeat (2) @(negedge clk);
+    poll_state(3'd2);
     if (dut.xfer_state !== 3'd2) fail("S3: IDENTIFY after a normal completion failed");
     read_byte(16'h0640, value);
     if (value !== 8'h4A) fail("S3: IDENTIFY word 0 wrong after the race fix");
     reset_drive;
     read_sectors_lba(8'h01, 8'h70);
-    repeat (3) @(negedge clk);
+    wait_issued;
     if (ad_reqs != 1) fail("S3: READ SECTORS after the takeover path did not issue");
 
     // ==== VERDICT ====
@@ -268,6 +298,13 @@ module tb_pc9821_ata_cmd_race;
       $finish;
     end
     else $fatal(1, "TB_PC9821_ATA_CMD_RACE: FAIL (%0d errors)", errors);
+  end
+
+  // A DUT that never answers (a wait above that never ends) fails with a verdict here rather
+  // than hanging until the runner's outer timeout. Far above the bench's own run time.
+  initial begin
+    #10_000_000;
+    $fatal(1, "TB_PC9821_ATA_CMD_RACE: TIMEOUT");
   end
 
 endmodule

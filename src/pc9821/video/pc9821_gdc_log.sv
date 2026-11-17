@@ -1,8 +1,9 @@
 // PC-9821 display-programming log: a DEBUG INSTRUMENT (build_profile.py --dbg-gdc, DBG_GDC_EN).
 //
 // Every write the guest makes to the display-programming ports goes out on the debug UART as a
-// five-byte record, so a hardware session can capture what a game programs (the Policenauts
-// attract demo's vertical offset) without simulating minutes of guest time.
+// seven-byte record (nine for the 0x19 attribute record), so a hardware session can capture what
+// a game programs (the Policenauts attract demo's vertical offset) without simulating minutes of
+// guest time.
 //
 // Record: 0xA5, type, a 16-bit millisecond time (big-endian), the raster line (pc9821_crtc's
 // vline, 16 bits big-endian) the write landed on, one value byte. The graphics scanout's decode

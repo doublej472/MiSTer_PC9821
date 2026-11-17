@@ -24,7 +24,7 @@
 // and the integrator/comb output d5[25:10] is exactly floor((sum h_k x[4m-k]) / 1024) in
 // 16-bit two's complement (its mod-2^27 wraparound is exact because the true sum fits 26 bits
 // signed, |sum| <= 2^15 * 2^10 = 2^25, the +1 integrator headroom at IW = 27). The engine
-// computes acc = sum x*(h_k<<7) in 42 bits (no wrap possible, |acc| <= 2^32) and takes
+// computes acc = sum x*(h_k<<7) in its 34-bit ACCW (no wrap possible, |acc| <= 2^32) and takes
 // acc[32:17] = the same floor - its overflow clamp never fires for these coefficients. The
 // value stream, the decimation phase (vcnt == 3, the integrator/comb form's `decim`), the
 // out_valid cadence and the gain are those of the integrator/comb form: no gain, no clamp

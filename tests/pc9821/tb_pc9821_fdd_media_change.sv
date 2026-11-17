@@ -754,6 +754,20 @@ module tb_pc9821_fdd_media_change;
     read_one(2'd1, 1'b0, 8'h00, 8'h00, 8'h01, "M3 drive 1 reads the NEW image");
     check_sector(2, 8'h01, 8'h00, 1024, 1024);
 
+    // THE RECOVERIES' CONTROLLER-RESET POLL. Each DOR reset above restarts the uPD765A's drive
+    // poll, which interrupts with AI|drv for every ready drive at its first hit with the
+    // controller idle (pc9821_fdc's rst_poll; docs/probes/XE10T-XE10-FDC2A.TXT RST_M, pinned by
+    // tb_pc9821_fdc_reset_int). It is not what this bench pins, and where it lands depends on how
+    // fast the phases above ran: it fell after the bench's end until the registered FDC handoff
+    // (owner decision 2026-11-12, docs/trade-candidates.md T84) slowed this bench's DMA model by a
+    // cycle per byte (the model samples DRQ in the cycle after its strobe, earlier than
+    // pc9821_dmac), which moved it into M6. Waiting for it and draining it here keeps its AI out
+    // of every phase below.
+    n = 0;
+    while (fdc.poll_arm && (n < 2000000)) begin @(negedge clk); n = n + 1; end
+    if (fdc.poll_arm) $fatal(1, "TB_PC9821_FDD_MEDIA_CHANGE: the controller-reset poll never ran");
+    drain_sense(8'hC0);
+
     // ---------------- M4: a mount on the OTHER drive while a read is in flight -----------
     $display("PHASE M4 at %0t", $time);
     // Drive 0 is mid-DMA; drive 1 is swapped back to B. Drive 1's READY drops at once (its

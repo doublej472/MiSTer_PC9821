@@ -383,14 +383,13 @@ module tb_gpr_write_merge;
         if (failures == 0) begin
             $display("GPR WRITE MERGE TEST PASS");
         end else begin
-            $display("GPR WRITE MERGE TEST FAIL: %0d case(s)", failures);
+            $fatal(1, "GPR WRITE MERGE TEST FAIL: %0d case(s)", failures);
         end
         $finish;
     end
 
     initial begin
         repeat (1000) #1;
-        $display("GPR WRITE MERGE TEST FAIL timeout");
-        $finish;
+        $fatal(1, "GPR WRITE MERGE TEST FAIL timeout");
     end
 endmodule

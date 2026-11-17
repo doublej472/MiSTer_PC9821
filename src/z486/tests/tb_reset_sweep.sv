@@ -4,8 +4,12 @@
 // i_first/fault_suppress_delay_slot/any_fault_r were never reset, so each pulse
 // must still restart cleanly from the reset vector and reach the program end.
 module tb_reset_sweep(
-    // Set by the bench when the sweep has finished; the C++ main polls it.
-    output reg sweep_done
+    // Set by the bench when the sweep has finished; the C++ main polls it,
+    // and returns non-zero unless sweep_pass is set with it.  ($fatal cannot
+    // carry the verdict here: sim_main_reset_sweep.cpp ignores the sim-only
+    // checks a mid-instruction reset trips.)
+    output reg sweep_done,
+    output reg sweep_pass
 );
     import z486_pkg::*;
 
@@ -185,6 +189,7 @@ module tb_reset_sweep(
                  anyf_held, anyf_high);
         $display("  Swept offsets 1..%0d (%0d landed mid-program)", clean + 8, checked);
         $display("========================================");
+        sweep_pass = fails == 0;
         if (fails == 0)
             $display("  TB_RESET_SWEEP: PASS - every mid-instruction reset restarted and completed correctly");
         else
@@ -214,6 +219,7 @@ module tb_reset_sweep(
 
     initial begin
         sweep_done = 1'b0;
+        sweep_pass = 1'b0;
         load_program();
         ready = 1'b1;
         resp_valid = 1'b0;

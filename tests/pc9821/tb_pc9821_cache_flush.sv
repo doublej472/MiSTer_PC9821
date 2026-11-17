@@ -3,7 +3,7 @@
 // ==== WHAT THIS PROVES ====
 // Every flush trigger collapses to one whole-L1 cache_flush request, and the write waits for done.
 //
-// Every flush trigger through the real pc9821_iobus write path collapses to exactly ONE whole-L1 cache_flush request to the core - a one-cycle cache_flush_req pulse, released before the next launch - and the write completes only after the core answers cache_flush_done: the 0x043F=0xA0 guest flush, a bank or shadow change, an ems_state change (the 0x043F 0x2x writes AND the silent ems_state <= 0 in the other 0x043F writes), a 0x043B sys16m remap, a 0x0461 window-0 change, a 0x053D gate change and a 0x063C select that changes the 0xD8000 window's bank each pulse exactly once, while a redundant no-change write pulses nothing and no request is ever issued while the core's walk is busy.
+// Every flush trigger through the real pc9821_iobus write path collapses to exactly ONE whole-L1 cache_flush request to the core - a one-cycle cache_flush_req pulse, released before the next launch - and the write completes only after the core answers cache_flush_done: the 0x043F=0xA0 guest flush, a 0x043D bank change, a 0x043F E-nibble bank select under 0x043D = 0x00 (docs/probes/SHADOWW.TXT st04/st05), a shadow-enable change (0x043F=0x80, which leaves ems_state alone), an ems_state change (the 0x043F 0x2x writes), a 0x043B sys16m remap, a 0x0461 window-0 change, a 0x053D gate change and a 0x063C select that changes the 0xD8000 window's bank each pulse exactly once, while a redundant no-change write pulses nothing - nor does a 0x043F = 0xE8 under 0x043D = 0x12, where the machine keeps the BIOS top (SHADOWW.TXT st06); the iobus serialises its lanes in S_FLUSH, so the model's walk is never busy at a new request here and the busy-overlap guard is only the iobus's own assertion; a flush-triggering lane followed by exactly one more lane (an `out dx,ax` at 0x043D or at 0x063C) still presents that lane, with its byte, once the flush is done.
 //
 // This is the PLATFORM half of the cache-flush migration (fork
 // src/z486/docs/platform-integration.md, "Native cache-flush port"): the old
@@ -89,7 +89,7 @@ module tb_pc9821_cache_flush;
   wire [1:0] ems_state;
   reg device_rd_hold = 1'b0;
   reg device_wr_wait = 1'b0;
-    // The GDC FF2 query state (a pc9821_iobus input since readbacks.md P6);
+    // The GDC FF2 query state (a pc9821_iobus input);
     // tied quiet here - this bench is not about the FF2 read-back.
     wire [10:0] gdc_ff2_state = 11'd0;
 
@@ -107,6 +107,9 @@ module tb_pc9821_cache_flush;
   reg  [3:0] model_left = 4'd0;
   integer flush_pulses = 0;
   integer done_pulses = 0;
+  // A request launched while the model's walk is busy. The iobus serialises its lanes in
+  // S_FLUSH (each write waits for done), so with no guest INVD walk in this model the count
+  // stays 0 by construction: it is a tripwire, not a tested case.
   integer req_while_busy = 0;
   time    last_req_time = 0;
   time    last_done_time = 0;
@@ -157,6 +160,7 @@ module tb_pc9821_cache_flush;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -208,6 +212,61 @@ module tb_pc9821_cache_flush;
       cpu_be = 0;
       while (dut.state != 0) @(negedge clk);
       repeat (2) @(negedge clk);
+    end
+  endtask
+
+  // A multi-lane write (an `out dx,ax` the CPU presents as ONE dword-aligned access with
+  // two byte enables). Same handshake as write_byte.
+  task automatic write_lanes(input [15:0] dword_port, input [3:0] be, input [31:0] data);
+    begin
+      p0 = flush_pulses;
+      d0 = done_pulses;
+      @(negedge clk);
+      cpu_addr = {16'd0, dword_port[15:2], 2'b00};
+      cpu_be = be;
+      cpu_din = data;
+      cpu_write = 1;
+      cpu_valid = 1;
+      while (!cpu_ready) @(negedge clk);
+      ready_time = $time;
+      @(negedge clk);
+      cpu_valid = 0;
+      cpu_write = 0;
+      cpu_be = 0;
+      while (dut.state != 0) @(negedge clk);
+      repeat (2) @(negedge clk);
+    end
+  endtask
+
+  // Every byte-lane write the FSM presents, recorded from the last-I/O latch (which loads
+  // at S_BYTE for every walked lane): the lanes after a flush-triggering lane must still be
+  // walked once the flush is done.
+  reg  [15:0] seen_port [0:7];
+  reg  [7:0]  seen_data [0:7];
+  integer     seen_n = 0;
+  always @(posedge clk) begin
+    if (dbg_last_io_stb && dbg_last_io_wr) begin
+      if (seen_n < 8) begin
+        seen_port[seen_n] = dbg_last_io_addr;
+        seen_data[seen_n] = dbg_last_io_data;
+      end
+      seen_n = seen_n + 1;
+    end
+  end
+
+  task automatic check_walk2(input [8*80-1:0] tag, input [15:0] port_a, input [7:0] data_a,
+                             input [15:0] port_b, input [7:0] data_b);
+    begin
+      if (seen_n != 2) begin
+        $display("FAIL %0s: %0d lane write(s) presented, want 2", tag, seen_n);
+        errors = errors + 1;
+      end else if (seen_port[0] != port_a || seen_data[0] != data_a ||
+                   seen_port[1] != port_b || seen_data[1] != data_b) begin
+        $display("FAIL %0s: lanes %04h=%02h %04h=%02h, want %04h=%02h %04h=%02h", tag,
+                 seen_port[0], seen_data[0], seen_port[1], seen_data[1],
+                 port_a, data_a, port_b, data_b);
+        errors = errors + 1;
+      end
     end
   endtask
 
@@ -281,10 +340,11 @@ module tb_pc9821_cache_flush;
     write_byte(16'h043F, 8'h22);
     check_no_flush("0x043F=0x22 redundant ems write");
 
-    // ==== The silent ems_state <= 0 reset inside another 0x043F write, combined
-    // with the shadow enable's own change: ONE pulse for the whole write ====
+    // ==== A shadow-enable change (0x043F=0x80): ONE pulse. The write leaves ems_state
+    // alone (pc9821_iobus next_ems_state moves it only on a 0x2x nibble, qemu
+    // pc98-mem.c mem_bankctl_write), so the shadow term alone fires ====
     write_byte(16'h043F, 8'h80);
-    check_one_flush("0x043F=0x80 shadow+ems change");
+    check_one_flush("0x043F=0x80 shadow change");
     write_byte(16'h043F, 8'h80);
     check_no_flush("0x043F=0x80 redundant write");
 
@@ -322,6 +382,38 @@ module tb_pc9821_cache_flush;
     check_no_flush("0x063C select 2 -> 0 (same window)");
     write_byte(16'h063C, 8'h7C);                 // only the read-back bits 7:2 move
     check_no_flush("0x063C read-back-only bits");
+
+    // ==== A flush-triggering lane followed by exactly ONE more lane ====
+    // `out dx,ax` at 0x043D is one access at dword 0x043C with be=0110: lane 1 (0x043D) flips
+    // the bank (BIOS top -> ITF, a flush), lane 2 (0x043E) must still be presented after the
+    // flush's done. The flush leaves exactly one pending lane, the shape S_FLUSH's exit must
+    // walk rather than drop.
+    seen_n = 0;
+    write_lanes(16'h043C, 4'b0110, 32'h00_5A_00_00);
+    check_one_flush("out dx,ax at 0x043D (bank flip in lane 1)");
+    check_walk2("out dx,ax at 0x043D", 16'h043D, 8'h00, 16'h043E, 8'h5A);
+    // The same shape from lane 0: `out dx,ax` at 0x063C (be=0011), lane 0 changes the 0xD8000
+    // select (0 -> 1), lane 1 (0x063D) must still be presented.
+    seen_n = 0;
+    write_lanes(16'h063C, 4'b0011, 32'h00_00_A5_FD);
+    check_one_flush("out dx,ax at 0x063C (select change in lane 0)");
+    check_walk2("out dx,ax at 0x063C", 16'h063C, 8'hFD, 16'h063D, 8'hA5);
+
+    // ==== The 0x043F E-nibble bank select (the main BIOS's bank-1 copy) ====
+    // The lane-1 write above left 0x043D = 0x00 (the ITF state). Under it a 0x043F = 0xE2
+    // moves the window to bank 1 (docs/probes/SHADOWW.TXT st04/st05; the BIOS's own copy,
+    // BANK6@0x5302-0x532A, writes 0x043D = 0x00 before its 0x043F = 0xE2), so the cached
+    // lines of the old bank must go; reselecting it moves nothing. Under 0x043D = 0x12 (the
+    // BIOS top latched) the machine keeps the BIOS top for 0x043F = 0xE8 (SHADOWW.TXT st06),
+    // so that write remaps nothing and must not flush.
+    write_byte(16'h043F, 8'hE2);
+    check_one_flush("0x043F=0xE2 bank select under 0x043D=0x00");
+    write_byte(16'h043F, 8'hE2);
+    check_no_flush("0x043F=0xE2 redundant bank select");
+    write_byte(16'h043D, 8'h12);
+    check_one_flush("0x043D=0x12 back to the BIOS top");
+    write_byte(16'h043F, 8'hE8);
+    check_no_flush("0x043F=0xE8 under 0x043D=0x12 (BIOS top kept)");
 
     // ==== VERDICT ====
     if (errors == 0) begin

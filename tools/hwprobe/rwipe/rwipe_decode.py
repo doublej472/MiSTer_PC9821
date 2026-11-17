@@ -223,6 +223,12 @@ def show_op(s: dict, events: bool) -> None:
             print(f'    {t:8.1f} ms  {name} {x}')
 
 
+def med(v: list, width: int, prec: int) -> str:
+    """The median of v formatted to width.prec, or n/a for a run with no STEP rows (a torn
+    capture, or a WIPE bracket logged without its steps)."""
+    return f"{statistics.median(v):{width}.{prec}f}" if v else f"{'n/a':>{width}}"
+
+
 def show(path: str, steps: bool, events: bool = False) -> list[dict]:
     rs = [summary(r) for r in parse(path)]
     print(f'== {path}')
@@ -232,8 +238,8 @@ def show(path: str, steps: bool, events: bool = False) -> list[dict]:
         if 'wipe_ms' in s:
             isr_ms = sum(x[2] for x in s['isr'])
             print(f"{s['tag']:6} {s['opt']:5} {s['patch'] or '-':5} {s['clab_ms']:8.1f} {s['pre_ms']:7.1f} "
-                  f"{s['wipe_ms']:8.1f} {statistics.median(s['step']):7.3f} {statistics.median(s['fill']):6.3f} "
-                  f"{statistics.median(s['rows']):6.3f} {statistics.median(s['flip']):5.3f} {isr_ms:7.2f} "
+                  f"{s['wipe_ms']:8.1f} {med(s['step'], 7, 3)} {med(s['fill'], 6, 3)} "
+                  f"{med(s['rows'], 6, 3)} {med(s['flip'], 5, 3)} {isr_ms:7.2f} "
                   f"{s['post_ms']:8.1f} {s.get('loop_ns', 0):7.2f} {s.get('frame_ms', 0):6.3f} {s['free']}")
         else:
             print(f"{s['tag']:6} {s['opt']:5} {s['patch'] or '-':5} {s['clab_ms']:8.1f}   (no wipe stamps)"

@@ -117,6 +117,8 @@ SSHP=""
 MISTER_PASS="${MISTER_PASS-1}"   # the stock MiSTer root password; MISTER_PASS= (empty) uses ssh keys
 if [ -n "$MISTER_PASS" ]; then export SSHPASS="$MISTER_PASS"; SSHP="sshpass -e"; fi
 SSHO="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
+# scp -O: the card's sshd has no sftp subsystem, and a modern scp defaults to sftp.
+SCPO="-O $SSHO"
 
 machine=xe10
 both=0
@@ -417,7 +419,7 @@ if [ "$copy" = "1" ]; then
     # fit by tools/build.py. An RBF without it cannot be checked: say so, do not pretend.
     hdmi_gate output_files/artifact-timing.json "$RBF" || exit 1
     echo "copying RBF -> $DEST"
-    $SSHP scp $SSHO "$RBF" $HOST:$DEST
+    $SSHP scp $SCPO "$RBF" $HOST:$DEST
     LOCAL_SUM=$(sha256sum "$RBF" | awk '{print $1}')
     REMOTE_SUM=$($SSHP ssh $SSHO $HOST "sha256sum '$DEST'" | awk '{print $1}')
     [ "$LOCAL_SUM" = "$REMOTE_SUM" ] || { echo "RBF checksum mismatch" >&2; exit 1; }
@@ -465,7 +467,7 @@ for m in $MACHINES; do
     if [ "$force_pack" = "1" ] ||
        ! $SSHP ssh $SSHO $HOST "test -f '$GAMES/$PACK'"; then
         echo "copying pack ($m) -> $GAMES/$PACK"
-        $SSHP scp $SSHO "$LOCAL_PACK" $HOST:$GAMES/$PACK
+        $SSHP scp $SCPO "$LOCAL_PACK" $HOST:$GAMES/$PACK
         LOCAL_SUM=$(sha256sum "$LOCAL_PACK" | awk '{print $1}')
         REMOTE_SUM=$($SSHP ssh $SSHO $HOST "sha256sum '$GAMES/$PACK'" | awk '{print $1}')
         # The loader cannot tell a truncated pack from a complete one, so the check
@@ -497,7 +499,7 @@ done
 if [ -n "$IMG" ] && [ "$copy" = "1" ]; then
     [ -f "$IMG" ] || { echo "image not found: $IMG" >&2; exit 1; }
     echo "copying image -> $GAMES/$IMGNAME"
-    $SSHP scp $SSHO "$IMG" $HOST:$GAMES/$IMGNAME
+    $SSHP scp $SCPO "$IMG" $HOST:$GAMES/$IMGNAME
 fi
 
 # The floppies go up the same way, into the same games folder, and a missing file is a
@@ -512,7 +514,7 @@ for pair in "0:$FDD0" "1:$FDD1"; do
     name=$(basename "$path")
     if [ "$copy" = "1" ]; then
         echo "copying FDD$drv image -> $GAMES/$name"
-        $SSHP scp $SSHO "$path" $HOST:$GAMES/$name
+        $SSHP scp $SCPO "$path" $HOST:$GAMES/$name
     fi
     if [ "$drv" = "0" ]; then FDDNAME0=$name; else FDDNAME1=$name; fi
 done
@@ -522,7 +524,7 @@ if [ -n "$HDD2" ]; then
     HDD2NAME=$(basename "$HDD2")
     if [ "$copy" = "1" ]; then
         echo "copying HDD2 image -> $GAMES/$HDD2NAME"
-        $SSHP scp $SSHO "$HDD2" $HOST:$GAMES/$HDD2NAME
+        $SSHP scp $SCPO "$HDD2" $HOST:$GAMES/$HDD2NAME
     fi
 fi
 

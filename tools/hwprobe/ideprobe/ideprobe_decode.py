@@ -22,6 +22,10 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import markers  # noqa: E402  (tools/hwprobe/markers.py: the anchored BEGIN:/END: split)
 
 # The 0x5F I/O-wait port is the machine's documented 600 ns / 30 clk_sys class
 # (the 0x5F wait as the machine documents it). Every other class's clk_sys is its excess over the
@@ -39,21 +43,10 @@ STATUS_BITS = [
 
 
 def sections(text: str) -> dict[str, list[str]]:
-    """Split a capture into {section_name: [lines]} by BEGIN:/END: markers."""
-    out: dict[str, list[str]] = {}
-    cur: str | None = None
-    for line in text.splitlines():
-        m = re.search(r"BEGIN:([A-Z]+)", line)
-        if m:
-            cur = m.group(1)
-            out.setdefault(cur, [])
-            continue
-        if re.search(r"END:([A-Z]+)", line):
-            cur = None
-            continue
-        if cur is not None:
-            out[cur].append(line)
-    return out
+    """Split a capture into {section_name: [lines]} by its line-anchored BEGIN:/END: markers
+    (tools/hwprobe/markers.py). It matched `BEGIN:` anywhere in a line, with names of letters
+    only, so prose naming a marker opened a phantom section or closed the current one early."""
+    return markers.sections(text)[0]
 
 
 PORT_RE = re.compile(r"\b([0-9A-Fa-f]{4})=([0-9A-Fa-f]{2}|--)(?![0-9A-Fa-f])")
@@ -391,6 +384,10 @@ def print_irq(irq: dict) -> None:
 # --------------------------------------------------------------------------
 def decode(text: str) -> None:
     sec = sections(text)
+    found, opens, closes = markers.sections(text)
+    open_ = markers.hung(opens, closes)
+    if open_:
+        print(f"** HUNG (BEGIN: with no END:): {', '.join(open_)} - that section's rows are partial **")
 
     if "PORTMAP" in sec:
         print("== PORTMAP: interface, task file as found, legacy bytes ==")
@@ -407,7 +404,7 @@ def decode(text: str) -> None:
             print(f"  {name:14} {row}")
         bank = bank_lines(sec["PORTMAP"])
         if bank:
-            print("  BANK 0432 (the crux: the core gates the block on bit 7):")
+            print("  BANK 0432:")
             print(f"    as found = {bank.get('found', '?')}")
             print(f"    0432<-01 rb/st = {bank.get('b01', '?')}")
             print(f"    0432<-80 rb/st = {bank.get('b80', '?')}")
@@ -416,10 +413,7 @@ def decode(text: str) -> None:
             print(
                 "    NP2kai (cbus/ideio.c ideio_o430) latches dat & 0x71 ONLY when bit 7\n"
                 "    is clear, and getidedev uses bank[1] & 0x7f: value 01 = the built-in\n"
-                "    IDE, and a write with bit 7 set is a NO-OP. The core's pc9821_ata.sv\n"
-                "    wire ide_block_mapped = channel_reg[7] is the reverse of that: if the\n"
-                "    0432<-01 status above is 0x50 (live) and the core answers 0x0E, the\n"
-                "    core's gate is the boot blocker."
+                "    IDE, and a write with bit 7 set is a NO-OP."
             )
 
     if "REG" in sec:

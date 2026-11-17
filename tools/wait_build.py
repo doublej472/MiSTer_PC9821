@@ -72,6 +72,13 @@ def wait(tree: Path, start_timeout: float, interval: float, deadline: float | No
             if record.get("state") != "running":
                 break
             if not pid_alive(pid):
+                # The build may have written its final status and exited between the read above
+                # and this check: re-read once before calling it killed.
+                fresh = read_status(status_path)
+                if fresh is not None:
+                    record = fresh
+                if record.get("state") != "running":
+                    break
                 print("wait_build: the build process is gone while still marked running "
                       "- it was killed before it could finish")
                 _report(record, Path(str(record.get("log", ""))))

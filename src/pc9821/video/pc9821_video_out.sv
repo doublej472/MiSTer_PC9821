@@ -13,14 +13,15 @@
 //           its 31.46 kHz lines are already a VGA monitor's rate, so the doubler (which would make
 //           62.9 kHz) stands aside. The OSD's "Doubled" means "for a VGA monitor", which the 31 kHz
 //           picture is as it stands.
-// The video PLL is GENERATED as the RECONFIGURABLE variant (pc9821_vpll_ctl: the 24 kHz and 31 kHz
-// settings in pc9821_vclk_pkg), and moves between them when the guest flips 0x09A8 bit 0. There is
+// The video PLL is GENERATED as the RECONFIGURABLE variant at the 24 kHz setting (pc9821_vpll_ctl:
+// the 24 kHz and 31 kHz settings in pc9821_vclk_pkg), and moves between them when the guest flips
+// 0x09A8 bit 0. There is
 // no 15 kHz TV converter (no composite/S-Video output).
 //
 // THE BOUNDARY. The raster (pc9821_crtc and everything guest-visible) stays on clk_sys, gated by the
 // exact dot enable (pc9821_dot_ce), as the model of the machine; only its OUTPUT crosses.
 // Each dot is written into a 16-entry FIFO on its clk_sys enable and read out on a dot enable of the
-// video clock (every 2nd clock). Both enables run at exactly the same rate (the dot's own: 400/19 MHz,
+// video clock (every 2nd clock). Both enables run at exactly the same rate (the dot's own: 400/19 MHz within 0.04 ppm,
 // or 25.168 MHz of the 31 kHz clock while 0x09A8 bit 0 is set) from the same 50 MHz reference
 // (pc9821_dot_ce says why exactly), so the FIFO's fill only wobbles by the enables' +-1 clock phase and
 // the synchroniser's latency, around the half-full point it is primed to: nothing is ever dropped or
@@ -179,10 +180,12 @@ generate if (DBL_EN) begin : g_line_doubler
 	// it with MiSTer.ini composite_sync=1, where a 3-line pulse holds (tested on that monitor).
 	// The rule for the analog output keeps the active area and the refresh exact and leaves the
 	// sync shape free for compatibility: so the doubled VSYNC starts where the GDC's does (on an
-	// HSYNC leading edge, pc9821_crtc's VSYNC pin) and ends three measured doubled line periods later,
-	// on the third HSYNC leading edge after it; the line count, the frame and the picture are untouched.
-	// Always (a doubled picture is not a PC-98 signal anyway); native
-	// 24 kHz carries the GDC's own pulse.
+	// HSYNC leading edge, pc9821_crtc's VSYNC pin) and ends 3 x (the measured doubled line period)
+	// clk_vid clocks after that leading edge - a clock count, which lands on the third HSYNC leading
+	// edge because the pulse starts on one; the line count, the frame and the picture are untouched.
+	// The doubled output always takes this pulse (a doubled picture is not a PC-98 signal anyway);
+	// native 24 kHz carries the GDC's own pulse. dv_lc/dv_lp are 12 bits, so a doubled line of up
+	// to 4095 clk_vid is measured (the default is 848).
 	/* verilator lint_off PROCASSINIT */   // power-up values, no reset (as the line doubler)
 	reg        dv_hq = 1'b1, dv_vq = 1'b1, dv_cut = 1'b0;
 	reg [11:0] dv_lc = 12'd1, dv_lp = 12'd848;   // clocks since the hsync leading edge; the line period

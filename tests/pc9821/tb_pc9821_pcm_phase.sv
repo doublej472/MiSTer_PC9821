@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The 86-PCM's 0xA466 phase bit free-runs at the selected sample rate and keeps toggling while playback is DISABLED, because a driver calibrates the card by watching that bit before it ever starts playback and would hang on a frozen one.
+// The 86-PCM's 0xA466 phase bit free-runs at the selected sample rate (its period one sample period at every one of the eight rate indices of NP2kai's pcm86rate8 table) and keeps toggling while playback is DISABLED, because a driver calibrates the card by watching that bit before it ever starts playback and would hang on a frozen one.
 //
 // ---- the bench's own account of where the expectation comes from ----
 //
@@ -27,8 +27,13 @@
 //   starts; qemu's does not, and a driver waiting for transitions on a frozen bit
 //   is the hang qemu's own comment warns about."
 //
-// That is what makes this worth a test rather than a comment. TWO REFERENCES
-// DISAGREE: NP2kai free-runs, qemu gates the accumulator. A future change that
+// (The RTL header's "qemu's does not" is not what qemu does: qemu-pc98
+// hw/audio/pc98-opna.c:474-491 opna_pcm_read computes bit 0 from the virtual clock,
+// `muldiv64(now, rate*2, 1e9) & 1`, with no playback test either - it free-runs too, but
+// at the table's 8x clock, not the sample rate. The references disagree on the RATE;
+// this bench follows NP2kai's sample-rate period.)
+//
+// That is what makes this worth a test rather than a comment. A future change that
 // "simplifies" the block toward qemu's shape is a plausible mistake, it would look
 // like a tidy-up, and nothing in this tree would catch it -- the existing pcm86
 // bench explicitly masks bit 0 ("the free-running sample phase, so it is masked")
@@ -206,6 +211,27 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(50_000_000)) dut (
       errors = errors + 1;
     end
     check_period(4535, 4, "free-running phase period at rate index 4 (11025 Hz, playback disabled)");
+
+    // ---- 2b. every other rate index, playback still disabled ------------------
+    // NP2kai sound/pcm86c.c:34-35 pcm86rate8[] = {352800, 264600, 176400, 132300,
+    // 88200, 66150, 44010, 33075} (eight times each sample rate), so the period at index
+    // i is 50e6 * 8 / pcm86rate8[i] clk: 1511.7, 2267.6, 3023.4, 6046.9, 9088.9 and
+    // 12093.8 for indices 1, 2, 3, 5, 6 and 7, held to the nearest clk +/- 4.
+    begin : all_rates
+      integer r;
+      integer rate8 [0:7];
+      rate8[0] = 352800; rate8[1] = 264600; rate8[2] = 176400; rate8[3] = 132300;
+      rate8[4] = 88200;  rate8[5] = 66150;  rate8[6] = 44010;  rate8[7] = 33075;
+      for (r = 1; r < 8; r = r + 1) begin
+        if (r == 4) continue;
+        write_port(P_FIFO, 8'(r));
+        repeat (4) @(posedge clk);
+        check_period((400_000_000 + rate8[r] / 2) / rate8[r], 4,
+                     "free-running phase period at a rate index from the pcm86rate8 table");
+      end
+      write_port(P_FIFO, 8'h04);
+      repeat (4) @(posedge clk);
+    end
 
     // ---- 3. and it is the same rate with playback ENABLED -------------------
     // The enable must not change the clock the guest calibrates against.

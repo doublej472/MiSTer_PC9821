@@ -8,9 +8,9 @@ live in `docs/` ([`docs/README.md`](docs/README.md) is the index; the contributo
 
 ## What the project is
 
-A PC-9821 (NEC Xe10/Xe) core for MiSTer, built on the vendored z486 CPU (`src/z486/`). It boots
-the user's own NEC Xe10/Xe ROM dumps to DOS and runs Touhou 1-5, DOOM, Policenauts and other
-PC-98 software. No firmware is redistributed: the ROMs, the YM2608 rhythm ROM and disk images
+A PC-9821 (NEC Xe10) core for MiSTer, built on the vendored z486 CPU (`src/z486/`). It boots
+the user's own NEC Xe10 ROM dumps to DOS (the Xe set does not boot yet) and runs Touhou 1-5,
+DOOM, Policenauts and other PC-98 software. No firmware is redistributed: the ROMs, the YM2608 rhythm ROM and disk images
 are runtime inputs the user supplies.
 
 ## Repository layout
@@ -93,7 +93,7 @@ Each line is binding; the linked section carries the rule in full.
 - **A knob that changes constants is a compile-time parameter, not a runtime mux** ([policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **Comments carry hardware facts**, cited; a `file:NNN` citation quotes its target ([policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **Latency and performance trades are raised, not decided by a contributor** ([policies](docs/policies.md#the-rules-that-bind-every-change)).
-- **The boot golden is a canary, not a constant** (`CYCLES used=930528`; [policies](docs/policies.md#the-rules-that-bind-every-change)).
+- **The boot golden is a canary, not a constant** (`CYCLES used=1706091`; [policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **Generated files: fix the generator, then regenerate** ([policies](docs/policies.md#the-rules-that-bind-every-change)).
 - **A power-up value lives on an internal register, never on an output-port initializer**
   (Quartus ignores those; [policies](docs/policies.md#the-rules-that-bind-every-change)).
@@ -118,7 +118,7 @@ Each line is binding; the linked section carries the rule in full.
   records; a sync is a verbatim `cp -r` of upstream `sys/` and moves both records). Never edit
   it; report bugs upstream.
 - `src/opna/` (jt12/jt49/jt08) is vendored from PC88_MiSTer at the commit
-  `src/opna/LICENSE-SCOPE.md` pins (`tools/check_opna_vendor_diff.py --upstream <checkout>` proves the ten recorded deltas). Do not refactor it. A change is a marked, reference-backed
+  `src/opna/LICENSE-SCOPE.md` pins (`tools/check_opna_vendor_diff.py --upstream <checkout>` proves the thirteen recorded deltas). Do not refactor it. A change is a marked, reference-backed
   `LOCAL CHANGE`/`LOCAL FIX`/`LOCAL PATCH` block added to that file's list of local changes, so a
   diff against the pinned upstream reports exactly that list.
 
@@ -139,9 +139,11 @@ then the gates below. Do not edit `src/z486/` directly, not even comments. An em
 must land here first is a marked `LOCAL PATCH (PC-9821 core)` block plus a numbered entry in the
 map, and it is owed to the fork. `tools/check_z486_patch_diff.py --upstream <fork checkout at the
 vendored commit>` (or `$Z486_UPSTREAM`) proves the tree matches the map; without a baseline it
-prints a loud SKIP (exit 2), never a pass.
+prints a loud SKIP (exit 2), never a pass. The fork's `main` branch holds exactly the commit
+vendored here (the owner, 2026-11-14): a re-vendor's commit is pushed to the fork before the
+re-vendor, and the fork's `main` is fast-forwarded to it when the re-vendor merges.
 
-The CPU contract: `bash tests/pc9821/run_z486_suite.sh` passes every program (335/335 today; the runner fails below 309), and
+The CPU contract: `bash tests/pc9821/run_z486_suite.sh` passes every program (338/338 today; the runner fails below 309), and
 `make -C src/z486/tests dhrystone JOBS=4` reads exactly `242611 cy / 121837 instr / CPI 1.991`
 ([`docs/dhrystone-numbers.md`](docs/dhrystone-numbers.md)). A change may move these, but must
 report the new values with per-change attribution.
@@ -188,13 +190,13 @@ controller change shows in as a cycle count (the boot golden and the CPU Dhrysto
 python3 tools/bench.py --all                 # the Verilator battery
 python3 tools/check_lint.py
 python3 tools/gen_bench_sources.py --check
-bash tests/pc9821/run_z486_suite.sh          # 335/335
-timeout 2400 bash tests/pc9821/run_boot.sh   # boot golden: CYCLES used=930528
+bash tests/pc9821/run_z486_suite.sh          # 338/338
+timeout 2400 bash tests/pc9821/run_boot.sh   # boot golden: CYCLES used=1706091
 bash tests/pc9821/run_integrated_build.sh    # compile-only: the boot, portharness, userdisk,
                                              # throttle and dma_snoop_throttle tops the battery
                                              # cannot build
 make -C src/z486/tests dhrystone JOBS=4      # 242611 cy / 121837 instr / CPI 1.991, exact
-bash tests/pc9821/run_boot_real.sh           # boot on the real SDRAM controller: CYCLES used=942534
+bash tests/pc9821/run_boot_real.sh           # boot on the real SDRAM controller: CYCLES used=1706106
 python3 tools/dhrystone_real.py              # Dhrystone on the real SDRAM controller: 271807, exact
 ```
 
@@ -210,22 +212,26 @@ FAIL: prove a new or strengthened one with `tools/mutate_bench.py`
 The static contract checks take seconds; run each as `python3 <check>` (what each proves, and the
 SAT proofs' memory caps, are in [`docs/testing.md`](docs/testing.md#the-static-contract-checks)):
 `build_profile.py --check`, `build_profile.py --selftest`, and under `tools/`: `check_wiring.py`,
-`check_egc_snapshot.py`, `check_tests.py`, `bench.py --selftest`,
+`check_egc_snapshot.py`, `check_tests.py`, `bench.py --selftest`, `gen_bench_sources.py --selftest`,
 `gen_egc_compare_vectors.py --check`, `gen_gdc_compare_vectors.py --check`,
 `gen_gdc_draw_vectors.py --check`, `gen_keymap_table.py --check`,
 `mutate_bench.py --plan tests/pc9821/mutations.json --check-plan`, `check_dbglog_contract.py`,
 `check_telemetry_contract.py`, `check_osd_contract.py`, `check_port_lists.py`,
-`check_route_pairs.py`, `check_shared_strobes.py`, `check_cpu_domain.py`,
+`check_route_pairs.py` (and `--selftest`), `check_shared_strobes.py`, `check_cpu_domain.py`,
 `check_mister_layout.py`, `check_dead_files.py`, `check_iobus_hit_equiv.py`,
-`check_tool_citations.py`, `check_line_citations.py`, `check_z486_patch_diff.py`,
-`check_opna_vendor_diff.py`, `check_todo_split.py`, `pc98_hdd_convert.py --selftest`,
+`check_tool_citations.py`, `check_line_citations.py`, `check_doc_citations.py` (and
+`--selftest`), `check_z486_patch_diff.py`,
+`check_opna_vendor_diff.py`, `check_ref_copies.py` (and `--selftest`), `check_todo_split.py`, `check_release_hygiene.py` (and `--selftest`), `pc98_hdd_convert.py --selftest`,
 `cue2pcd.py --selftest`, `fdconv.py --selftest`,
 `mister/zclick.py --selftest`, `mister/ztype.py --selftest`, `decode_cdlog.py --selftest`,
 `mister_load_loop.py --selftest`, `hwprobe/xe10t/xe10t_decode.py --selftest`,
 `hwprobe/mputest/mputest_decode.py --selftest`,
 `check_win0_moved_inv.py`, `check_iobus_lane_inv.py`, `check_arb_resp_inv.py`,
 `check_gdc_egc_gate_inv.py`, `check_storebuf_head_inv.py`, `check_cpu_run_inv.py`,
-`check_micro_equiv.py`, `check_fir_acc_bound.py`, `check_powerup_init.py`. Proofs run by hand (X-lock, decode and netlist
+`check_micro_equiv.py`, `check_fir_acc_bound.py`, `check_powerup_init.py`, `check_static_stage.py`
+(and `--selftest`), `check_sdc_exceptions.py`
+(and `--selftest`; `--fit <sweep>` judges a fit's exception counts), and
+`tests/pc9821/test_firmware_tools.py` (the pack builder and checker on a synthetic machine). Proofs run by hand (X-lock, decode and netlist
 equivalence) and the userdisk instrument are in [`docs/testing.md`](docs/testing.md).
 
 ## Testing on a real MiSTer
@@ -271,11 +277,12 @@ its history are never pushed there. A release candidate passes, on its exact tre
 the full gate; a 6-seed sweep with the chosen seed clearing the `pll_hdmi` floor and the SDRAM I/O
 gate (`--min-sdram-io`, [`docs/sdram-margin.md`](docs/sdram-margin.md)); the 10-load screen and the scripted regression on every test card, its
 `boot-loop` item included (`--boot-count 6` or more, the boot after the load counted) and its `speeds`
-item (a boot at CPU Speed 33, 25 and 16 MHz); and a representative sample
+item (a boot and a measured speed at CPU Speed 33, 25 and 16 MHz; the run exits 0, no requested item skipped); and a representative sample
 of the game list (hard-disk, CD and floppy titles, the mouse-driven and CD-audio ones, and Windows 95)
 checked by eye, with screenshots kept for every title
 ([`docs/mister-testing.md`](docs/mister-testing.md#game-test-sets)). Before the push: no game names in
-README, no machine names or private paths anywhere, and the maintainer reviews the squashed commit.
+README, no machine names or private paths anywhere (`tools/check_release_hygiene.py`, with the names in the
+untracked `.build/hygiene-names.txt`; without that file it SKIPs, exit 2), and the maintainer reviews the squashed commit.
 A CPU fork commit is pushed to the fork only after a hardware run of a core that vendors it.
 
 ## The open-work list

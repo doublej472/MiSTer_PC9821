@@ -81,18 +81,20 @@ module pc9821_interrupts #(
   wire [2:0] master_irq, slave_irq_num;
   wire [2:0] master_acked_irq, slave_acked_irq;
   wire master_acked_valid, slave_acked_valid;
+  wire [7:0] slave_dbg_imr, slave_dbg_irr, slave_dbg_isr;
   wire pic_ack;
   // The cascade ack is decided at the ACKNOWLEDGE EDGE, from the live highest-priority
   // request: the slave latches its own in-service bit on that same edge, so the master's
   // IRQ7-in-service, this pulse and the slave's ISR set all refer to one cycle of `highest`.
   wire cascade_ack = pic_ack && (master_irq == 3'd7);
-  // The vector, by contrast, is muxed from the ACKED IRQ (int_acked_irq), not the live
+  // The vector, by contrast, is muxed from the ACKED IRQ (master_acked_irq, the master PIC's
+  // int_acked_irq), not the live
   // highest. int_vec is latched to the acked IRQ at the ack edge, so picking with the live
   // highest could name the slave while the vector value is the master's. AND IT IS QUALIFIED
   // BY THE ACK EVENT'S OWN VALIDITY: after a prior cascade ack a master-level SPURIOUS
-  // ack (inta with nothing to serve) left int_acked_irq frozen at 7 and this mux answered
+  // ack (inta with nothing to serve) left master_acked_irq frozen at 7 and this mux answered
   // the slave's parked spurious vector 0x17 where the 8259 convention is the MASTER's own
-  // icw2_vec|7 = 0x0F. int_acked_valid is latched at the ack edge,
+  // icw2_vec|7 = 0x0F. master_acked_valid (the PIC's int_acked_valid) is latched at the ack edge,
   // so a spurious ack selects master_vec (which the PIC parks at icw2_vec|7 on that same
   // edge) and only a real cascade ack selects the slave - whose own spurious answer, 0x17,
   // is exactly the slave-side convention when the cascade fires with the slave idle.
@@ -153,7 +155,12 @@ module pc9821_interrupts #(
   // never taken: `n14=0`). Bit 7 = IRQ15, the calendar: the masked slave IRR follows its line
   // (the CASC rows read IRQ15's bit set and then clear with IR7 masked, CASC_CTL `s_irr=90
   // ... s_irr1=00`).
-  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10)) slave (
+  // WD_FILTER bit 4: IR4 is the shared INT5 line, which pc9821_irq_share and pc9821_pcm86
+  // drop for ONE cycle to give an event under a held line its own edge; that bubble must not
+  // withdraw a request still pending (pc9821_pic's WD_FILTER note). The withdraws measured
+  // above are lasting drops (~12 us after the 0x27 reset), which the filter takes one cycle later.
+  pc9821_pic #(.BASE_VEC(8'h10), .WD_MASK(8'h9A), .WD_UNMASKED(8'h10),
+               .WD_FILTER(8'h10)) slave (
       .clk(clk), .rst_n(reset_n), .cs(slave_cs), .wr(io_wr), .rd(io_rd),
       .a0(io_addr[1]), .din(io_din), .dout(slave_dout), .ir_in(slave_irq),
       .int_out(slave_int), .int_vec(slave_vec), .int_irq(slave_irq_num),
@@ -183,7 +190,6 @@ module pc9821_interrupts #(
       .cpu_inta_din(cpu_inta_din), .cpu_inta_ready(cpu_inta_ready)
   );
 
-  wire [7:0] slave_dbg_imr, slave_dbg_irr, slave_dbg_isr;
   assign dbg_s_imr = slave_dbg_imr;
   assign dbg_s_isr = slave_dbg_isr;
 

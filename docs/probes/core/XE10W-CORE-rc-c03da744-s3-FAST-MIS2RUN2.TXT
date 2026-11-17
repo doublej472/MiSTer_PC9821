@@ -1,0 +1,494 @@
+XE10T v1 sha=c35abe4437625641 crc=3E869E6C imgcrc=3E869E6C size=43632 build=gas-xe10w args= /MISAL2 /O MIS2RUN2.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0030 cr0=00000030 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=70 bda0458=02 bda045C=C0 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=50 bda0594=10 bda0595=00
+I ID dos=6.20 bufseg=26D1 bufparas=4000 sel=02000000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=42D5
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6145 pit=49160
+P CAL PITWIN i=1 art=6145 pit=49160
+P CAL PITWIN i=2 art=6145 pit=49159
+P CAL PITWIN i=3 art=6145 pit=49160
+P CAL PITWIN i=4 art=6145 pit=49160
+P CAL PITWIN i=5 art=6145 pit=49159
+P CAL PITWIN i=6 art=6145 pit=49159
+P CAL PITWIN i=7 art=6145 pit=49160
+P CAL PITEDGE edges=19 art=155649 vmax=65535 vmin=0
+P CAL VSYNC edges=60 art=326674 pit=2596058 tsc=-
+I CAL pit_mod=65536 ratio_x1000=7999 vsync_x10=54445 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=3555
+BEGIN:MISAL2
+STATE MISAL2 egc=off grcg=off a6=0 q07=00 q04=00 q0A=00
+STATE MISAL2 as_found bda054C=4F bda054D=50 bufparas=4000
+R MISAL2 RLWH_0 unit=w n=4096 nop=0 rep=5 art=68/68/73 pit=539/540/576 ctl_art=42/42/43 ctl_pit=329/329/335 shell=490B bshell=490B if1=68
+R MISAL2 RLWH_1 unit=w n=4096 nop=0 rep=5 art=68/68/69 pit=539/539/547 ctl_art=42/42/42 ctl_pit=329/330/333 shell=0DD8 bshell=0DD8 if1=68
+R MISAL2 RLWH_3 unit=w n=4096 nop=0 rep=5 art=124/124/125 pit=987/987/995 ctl_art=42/42/42 ctl_pit=329/329/334 shell=129F bshell=129F if1=124
+R MISAL2 RLWH_15 unit=w n=4096 nop=0 rep=5 art=208/208/209 pit=1657/1658/1664 ctl_art=42/42/42 ctl_pit=329/330/333 shell=510D bshell=510D if1=208
+R MISAL2 RLWM_0 unit=w n=4000 nop=0 rep=5 art=311/314/314 pit=2479/2506/2507 ctl_art=26/26/26 ctl_pit=199/200/201 shell=2A72 bshell=2A72 if1=314
+R MISAL2 RLWM_1 unit=w n=4000 nop=0 rep=5 art=314/314/314 pit=2506/2507/2510 ctl_art=26/26/26 ctl_pit=199/200/202 shell=65B1 bshell=65B1 if1=314
+R MISAL2 RLWM_3 unit=w n=4000 nop=0 rep=5 art=413/413/414 pit=3300/3301/3304 ctl_art=26/26/26 ctl_pit=199/200/202 shell=2FDB bshell=2FDB if1=413
+R MISAL2 RLWM_15 unit=w n=4000 nop=0 rep=5 art=379/379/380 pit=3027/3028/3031 ctl_art=26/26/26 ctl_pit=199/199/202 shell=8286 bshell=8286 if1=379
+R MISAL2 RLDH_0 unit=d n=4096 nop=0 rep=5 art=82/82/87 pit=651/651/687 ctl_art=42/42/42 ctl_pit=329/329/333 shell=490B bshell=490B if1=82
+R MISAL2 RLDH_1 unit=d n=4096 nop=0 rep=5 art=138/138/139 pit=1098/1099/1105 ctl_art=42/42/42 ctl_pit=329/330/333 shell=0DD8 bshell=0DD8 if1=138
+R MISAL2 RLDH_2 unit=d n=4096 nop=0 rep=5 art=138/138/139 pit=1099/1099/1106 ctl_art=42/42/42 ctl_pit=330/330/333 shell=952C bshell=952C if1=138
+R MISAL2 RLDH_13 unit=d n=4096 nop=0 rep=5 art=222/222/222 pit=1769/1770/1775 ctl_art=42/42/42 ctl_pit=330/330/333 shell=4E4A bshell=4E4A if1=222
+R MISAL2 RLDM_0 unit=d n=4000 nop=0 rep=5 art=311/315/315 pit=2484/2512/2513 ctl_art=26/26/26 ctl_pit=200/200/202 shell=2A72 bshell=2A72 if1=315
+R MISAL2 RLDM_1 unit=d n=4000 nop=0 rep=5 art=413/413/414 pit=3300/3301/3304 ctl_art=26/26/26 ctl_pit=200/200/202 shell=65B1 bshell=65B1 if1=413
+R MISAL2 RLDM_13 unit=d n=4000 nop=0 rep=5 art=379/381/381 pit=3027/3040/3041 ctl_art=26/26/26 ctl_pit=200/200/201 shell=C8EC bshell=C8EC if1=381
+R MISAL2 RLBH_0 unit=b n=4096 nop=0 rep=5 art=68/68/73 pit=539/539/576 ctl_art=42/42/42 ctl_pit=329/330/333 shell=490B bshell=490B if1=68
+R MISAL2 RSWH_0 unit=w n=4096 nop=0 rep=5 art=102/102/102 pit=809/810/815 ctl_art=42/42/42 ctl_pit=329/330/333 shell=490B bshell=490B if1=102
+R MISAL2 RSWH_0 unit=w n=4096 nop=2 rep=5 art=102/102/103 pit=809/809/815 ctl_art=68/68/69 ctl_pit=539/539/543 shell=1ACB bshell=1ACB if1=102
+R MISAL2 RSWH_0 unit=w n=4096 nop=4 rep=5 art=124/124/125 pit=988/988/994 ctl_art=96/96/97 ctl_pit=762/763/768 shell=094E bshell=094E if1=124
+R MISAL2 RSWH_0 unit=w n=4096 nop=8 rep=5 art=180/180/181 pit=1435/1436/1442 ctl_art=152/152/152 ctl_pit=1210/1210/1215 shell=01E3 bshell=01E3 if1=180
+R MISAL2 RSWH_0 unit=w n=4096 nop=16 rep=5 art=292/292/293 pit=2330/2330/2338 ctl_art=264/264/265 ctl_pit=2105/2105/2110 shell=09AA bshell=09AA if1=292
+R MISAL2 RSWH_0 unit=w n=4096 nop=32 rep=5 art=516/516/517 pit=4119/4120/4128 ctl_art=487/487/488 ctl_pit=3894/3895/3901 shell=47F9 bshell=47F9 if1=516
+R MISAL2 RSWH_1 unit=w n=4096 nop=0 rep=5 art=102/102/103 pit=809/810/814 ctl_art=42/42/42 ctl_pit=329/330/333 shell=0DD8 bshell=0DD8 if1=102
+R MISAL2 RSWH_1 unit=w n=4096 nop=2 rep=5 art=102/102/103 pit=809/810/815 ctl_art=68/68/69 ctl_pit=539/539/543 shell=C585 bshell=C585 if1=102
+R MISAL2 RSWH_1 unit=w n=4096 nop=4 rep=5 art=124/124/125 pit=988/988/994 ctl_art=96/96/97 ctl_pit=762/763/767 shell=0C20 bshell=0C20 if1=124
+R MISAL2 RSWH_1 unit=w n=4096 nop=8 rep=5 art=180/180/181 pit=1435/1436/1441 ctl_art=152/152/153 ctl_pit=1210/1210/1215 shell=51B4 bshell=51B4 if1=180
+R MISAL2 RSWH_1 unit=w n=4096 nop=16 rep=5 art=292/292/293 pit=2330/2331/2337 ctl_art=264/264/264 ctl_pit=2105/2105/2111 shell=0482 bshell=0482 if1=292
+R MISAL2 RSWH_1 unit=w n=4096 nop=32 rep=5 art=516/516/517 pit=4120/4120/4127 ctl_art=487/487/488 ctl_pit=3895/3895/3901 shell=7511 bshell=7511 if1=516
+R MISAL2 RSWH_3 unit=w n=4096 nop=0 rep=5 art=202/202/203 pit=1611/1611/1616 ctl_art=42/42/42 ctl_pit=329/330/333 shell=129F bshell=129F if1=202
+R MISAL2 RSWH_3 unit=w n=4096 nop=2 rep=5 art=202/202/203 pit=1612/1612/1617 ctl_art=68/68/69 ctl_pit=539/539/543 shell=CD0B bshell=CD0B if1=202
+R MISAL2 RSWH_3 unit=w n=4096 nop=4 rep=5 art=202/202/203 pit=1612/1612/1618 ctl_art=96/96/97 ctl_pit=762/763/766 shell=B899 bshell=B899 if1=202
+R MISAL2 RSWH_3 unit=w n=4096 nop=8 rep=5 art=222/222/223 pit=1771/1771/1778 ctl_art=152/152/153 ctl_pit=1210/1210/1215 shell=08E3 bshell=08E3 if1=222
+R MISAL2 RSWH_3 unit=w n=4096 nop=16 rep=5 art=334/334/335 pit=2666/2666/2674 ctl_art=264/264/264 ctl_pit=2104/2105/2110 shell=45AE bshell=45AE if1=334
+R MISAL2 RSWH_3 unit=w n=4096 nop=32 rep=5 art=558/558/559 pit=4455/4456/4464 ctl_art=487/487/488 ctl_pit=3894/3895/3900 shell=E375 bshell=E375 if1=558
+R MISAL2 RSWH_15 unit=w n=4096 nop=0 rep=5 art=202/202/203 pit=1612/1612/1616 ctl_art=42/42/42 ctl_pit=329/330/333 shell=510D bshell=510D if1=202
+R MISAL2 RSWH_15 unit=w n=4096 nop=2 rep=5 art=202/202/203 pit=1611/1612/1618 ctl_art=68/68/69 ctl_pit=539/539/543 shell=FE2F bshell=FE2F if1=202
+R MISAL2 RSWH_15 unit=w n=4096 nop=4 rep=5 art=202/202/203 pit=1611/1612/1618 ctl_art=96/96/97 ctl_pit=763/763/766 shell=336C bshell=336C if1=202
+R MISAL2 RSWH_15 unit=w n=4096 nop=8 rep=5 art=222/222/223 pit=1771/1771/1778 ctl_art=152/152/153 ctl_pit=1210/1210/1215 shell=CF30 bshell=CF30 if1=222
+R MISAL2 RSWH_15 unit=w n=4096 nop=16 rep=5 art=334/334/335 pit=2666/2666/2673 ctl_art=264/264/264 ctl_pit=2105/2105/2110 shell=D367 bshell=D367 if1=334
+R MISAL2 RSWH_15 unit=w n=4096 nop=32 rep=5 art=558/558/559 pit=4456/4456/4464 ctl_art=487/487/488 ctl_pit=3894/3895/3901 shell=A64E bshell=A64E if1=558
+R MISAL2 RSWM_0 unit=w n=4000 nop=0 rep=5 art=99/100/100 pit=790/791/794 ctl_art=26/26/26 ctl_pit=199/199/201 shell=2A72 bshell=2A72 if1=99
+R MISAL2 RSWM_0 unit=w n=4000 nop=2 rep=5 art=99/99/100 pit=791/791/795 ctl_art=53/53/53 ctl_pit=418/418/420 shell=EA8E bshell=EA8E if1=100
+R MISAL2 RSWM_0 unit=w n=4000 nop=4 rep=5 art=108/108/108 pit=854/855/860 ctl_art=80/80/81 ctl_pit=636/636/638 shell=C61A bshell=C61A if1=107
+R MISAL2 RSWM_0 unit=w n=4000 nop=8 rep=5 art=162/162/163 pit=1292/1292/1297 ctl_art=135/135/135 ctl_pit=1073/1073/1076 shell=8DE5 bshell=8DE5 if1=162
+R MISAL2 RSWM_0 unit=w n=4000 nop=16 rep=5 art=271/271/272 pit=2165/2165/2171 ctl_art=244/244/245 ctl_pit=1946/1947/1951 shell=79B4 bshell=79B4 if1=271
+R MISAL2 RSWM_0 unit=w n=4000 nop=32 rep=5 art=490/490/491 pit=3913/3913/3920 ctl_art=462/462/463 ctl_pit=3694/3695/3700 shell=EFB7 bshell=EFB7 if1=490
+R MISAL2 RSWM_1 unit=w n=4000 nop=0 rep=5 art=99/100/100 pit=791/791/795 ctl_art=25/26/26 ctl_pit=198/199/202 shell=65B1 bshell=65B1 if1=100
+R MISAL2 RSWM_1 unit=w n=4000 nop=2 rep=5 art=99/99/100 pit=791/791/795 ctl_art=53/53/53 ctl_pit=417/417/420 shell=8282 bshell=8282 if1=99
+R MISAL2 RSWM_1 unit=w n=4000 nop=4 rep=5 art=107/107/108 pit=855/855/860 ctl_art=80/80/81 ctl_pit=636/636/639 shell=A154 bshell=A154 if1=107
+R MISAL2 RSWM_1 unit=w n=4000 nop=8 rep=5 art=162/162/163 pit=1291/1292/1296 ctl_art=135/135/135 ctl_pit=1072/1073/1076 shell=12D2 bshell=12D2 if1=163
+R MISAL2 RSWM_1 unit=w n=4000 nop=16 rep=5 art=271/271/272 pit=2165/2166/2171 ctl_art=244/244/245 ctl_pit=1946/1947/1950 shell=5B0D bshell=5B0D if1=271
+R MISAL2 RSWM_1 unit=w n=4000 nop=32 rep=5 art=490/490/491 pit=3913/3913/3920 ctl_art=462/462/463 ctl_pit=3694/3694/3700 shell=0F95 bshell=0F95 if1=490
+R MISAL2 RSWM_15 unit=w n=4000 nop=0 rep=5 art=197/197/198 pit=1574/1574/1578 ctl_art=26/26/26 ctl_pit=199/199/202 shell=8286 bshell=8286 if1=197
+R MISAL2 RSWM_15 unit=w n=4000 nop=2 rep=5 art=197/197/198 pit=1574/1574/1579 ctl_art=53/53/53 ctl_pit=417/417/420 shell=8359 bshell=8359 if1=197
+R MISAL2 RSWM_15 unit=w n=4000 nop=4 rep=5 art=197/197/198 pit=1574/1574/1578 ctl_art=80/80/81 ctl_pit=635/636/639 shell=FD81 bshell=FD81 if1=197
+R MISAL2 RSWM_15 unit=w n=4000 nop=8 rep=5 art=203/203/204 pit=1619/1619/1625 ctl_art=135/135/135 ctl_pit=1073/1073/1076 shell=2D9E bshell=2D9E if1=203
+R MISAL2 RSWM_15 unit=w n=4000 nop=16 rep=5 art=312/312/313 pit=2493/2493/2499 ctl_art=244/244/245 ctl_pit=1947/1947/1951 shell=C0A4 bshell=C0A4 if1=312
+R MISAL2 RSWM_15 unit=w n=4000 nop=32 rep=5 art=531/531/532 pit=4240/4241/4248 ctl_art=462/462/463 ctl_pit=3694/3695/3700 shell=BEEA bshell=BEEA if1=531
+R MISAL2 RSDH_0 unit=d n=4096 nop=0 rep=5 art=102/102/102 pit=810/810/815 ctl_art=42/42/42 ctl_pit=329/330/333 shell=490B bshell=490B if1=102
+R MISAL2 RSDH_0 unit=d n=4096 nop=2 rep=5 art=110/110/111 pit=876/877/882 ctl_art=68/68/69 ctl_pit=539/539/543 shell=1ACB bshell=1ACB if1=110
+R MISAL2 RSDH_0 unit=d n=4096 nop=4 rep=5 art=138/138/139 pit=1100/1100/1106 ctl_art=96/96/97 ctl_pit=763/763/766 shell=094E bshell=094E if1=138
+R MISAL2 RSDH_0 unit=d n=4096 nop=8 rep=5 art=194/194/195 pit=1548/1548/1553 ctl_art=152/152/153 ctl_pit=1210/1211/1215 shell=01E3 bshell=01E3 if1=197
+R MISAL2 RSDH_0 unit=d n=4096 nop=16 rep=5 art=306/306/307 pit=2442/2442/2448 ctl_art=264/264/264 ctl_pit=2105/2105/2109 shell=09AA bshell=09AA if1=306
+R MISAL2 RSDH_0 unit=d n=4096 nop=32 rep=5 art=530/530/531 pit=4231/4232/4239 ctl_art=487/487/488 ctl_pit=3895/3895/3901 shell=47F9 bshell=47F9 if1=530
+R MISAL2 RSDH_1 unit=d n=4096 nop=0 rep=5 art=202/202/203 pit=1611/1612/1616 ctl_art=42/42/42 ctl_pit=329/330/334 shell=0DD8 bshell=0DD8 if1=202
+R MISAL2 RSDH_1 unit=d n=4096 nop=2 rep=5 art=202/202/203 pit=1611/1612/1617 ctl_art=68/68/69 ctl_pit=539/539/543 shell=C585 bshell=C585 if1=202
+R MISAL2 RSDH_1 unit=d n=4096 nop=4 rep=5 art=202/202/203 pit=1612/1612/1617 ctl_art=96/96/97 ctl_pit=762/763/767 shell=0C20 bshell=0C20 if1=202
+R MISAL2 RSDH_1 unit=d n=4096 nop=8 rep=5 art=236/236/237 pit=1883/1883/1889 ctl_art=152/152/153 ctl_pit=1210/1210/1215 shell=51B4 bshell=51B4 if1=236
+R MISAL2 RSDH_1 unit=d n=4096 nop=16 rep=5 art=348/348/349 pit=2777/2778/2786 ctl_art=264/264/264 ctl_pit=2105/2105/2110 shell=0482 bshell=0482 if1=348
+R MISAL2 RSDH_1 unit=d n=4096 nop=32 rep=5 art=572/572/573 pit=4567/4568/4576 ctl_art=487/487/488 ctl_pit=3895/3895/3900 shell=7511 bshell=7511 if1=572
+R MISAL2 RSDH_2 unit=d n=4096 nop=0 rep=5 art=202/202/203 pit=1612/1612/1617 ctl_art=42/42/42 ctl_pit=329/330/333 shell=952C bshell=952C if1=202
+R MISAL2 RSDH_2 unit=d n=4096 nop=2 rep=5 art=202/202/203 pit=1612/1612/1618 ctl_art=68/68/69 ctl_pit=539/539/544 shell=C94C bshell=C94C if1=202
+R MISAL2 RSDH_2 unit=d n=4096 nop=4 rep=5 art=202/202/203 pit=1612/1612/1618 ctl_art=96/96/97 ctl_pit=763/763/767 shell=6AD5 bshell=6AD5 if1=202
+R MISAL2 RSDH_2 unit=d n=4096 nop=8 rep=5 art=236/236/237 pit=1882/1883/1890 ctl_art=152/152/153 ctl_pit=1210/1210/1214 shell=AC58 bshell=AC58 if1=236
+R MISAL2 RSDH_2 unit=d n=4096 nop=16 rep=5 art=348/348/349 pit=2777/2778/2786 ctl_art=264/264/264 ctl_pit=2105/2105/2110 shell=6538 bshell=6538 if1=348
+R MISAL2 RSDH_2 unit=d n=4096 nop=32 rep=5 art=572/572/573 pit=4567/4568/4575 ctl_art=487/487/488 ctl_pit=3894/3895/3901 shell=A847 bshell=A847 if1=572
+R MISAL2 RSDH_13 unit=d n=4096 nop=0 rep=5 art=202/202/203 pit=1612/1612/1617 ctl_art=42/42/42 ctl_pit=329/330/333 shell=4E4A bshell=4E4A if1=202
+R MISAL2 RSDH_13 unit=d n=4096 nop=2 rep=5 art=202/202/203 pit=1612/1612/1617 ctl_art=68/68/69 ctl_pit=539/539/543 shell=F6A1 bshell=F6A1 if1=202
+R MISAL2 RSDH_13 unit=d n=4096 nop=4 rep=5 art=202/202/203 pit=1611/1611/1618 ctl_art=96/96/97 ctl_pit=763/763/767 shell=87D5 bshell=87D5 if1=202
+R MISAL2 RSDH_13 unit=d n=4096 nop=8 rep=5 art=236/236/237 pit=1882/1883/1890 ctl_art=152/152/153 ctl_pit=1210/1210/1215 shell=9667 bshell=9667 if1=236
+R MISAL2 RSDH_13 unit=d n=4096 nop=16 rep=5 art=348/348/349 pit=2778/2778/2785 ctl_art=264/264/264 ctl_pit=2105/2105/2110 shell=924B bshell=924B if1=348
+R MISAL2 RSDH_13 unit=d n=4096 nop=32 rep=5 art=572/572/573 pit=4567/4568/4576 ctl_art=487/487/488 ctl_pit=3894/3895/3901 shell=302A bshell=302A if1=572
+R MISAL2 RSDM_0 unit=d n=4000 nop=0 rep=5 art=99/100/100 pit=790/791/795 ctl_art=25/26/26 ctl_pit=199/199/202 shell=2A72 bshell=2A72 if1=100
+R MISAL2 RSDM_0 unit=d n=4000 nop=2 rep=5 art=100/100/100 pit=790/790/795 ctl_art=53/53/53 ctl_pit=417/418/421 shell=EA8E bshell=EA8E if1=99
+R MISAL2 RSDM_0 unit=d n=4000 nop=4 rep=5 art=121/121/122 pit=963/964/968 ctl_art=80/80/81 ctl_pit=635/636/639 shell=C61A bshell=C61A if1=121
+R MISAL2 RSDM_0 unit=d n=4000 nop=8 rep=5 art=176/176/176 pit=1400/1401/1406 ctl_art=135/135/135 ctl_pit=1072/1073/1076 shell=8DE5 bshell=8DE5 if1=176
+R MISAL2 RSDM_0 unit=d n=4000 nop=16 rep=5 art=285/285/286 pit=2275/2275/2280 ctl_art=244/244/245 ctl_pit=1946/1947/1950 shell=79B4 bshell=79B4 if1=285
+R MISAL2 RSDM_0 unit=d n=4000 nop=32 rep=5 art=503/503/504 pit=4022/4023/4029 ctl_art=462/462/463 ctl_pit=3694/3694/3699 shell=EFB7 bshell=EFB7 if1=503
+R MISAL2 RSDM_13 unit=d n=4000 nop=0 rep=5 art=197/197/198 pit=1574/1574/1578 ctl_art=26/26/26 ctl_pit=198/199/201 shell=C8EC bshell=C8EC if1=197
+R MISAL2 RSDM_13 unit=d n=4000 nop=2 rep=5 art=197/197/198 pit=1574/1574/1578 ctl_art=53/53/53 ctl_pit=417/418/420 shell=831C bshell=831C if1=197
+R MISAL2 RSDM_13 unit=d n=4000 nop=4 rep=5 art=197/197/198 pit=1574/1574/1579 ctl_art=80/80/81 ctl_pit=636/636/639 shell=E2C6 bshell=E2C6 if1=197
+R MISAL2 RSDM_13 unit=d n=4000 nop=8 rep=5 art=217/217/217 pit=1728/1729/1735 ctl_art=135/135/135 ctl_pit=1072/1073/1076 shell=9927 bshell=9927 if1=217
+R MISAL2 RSDM_13 unit=d n=4000 nop=16 rep=5 art=326/326/327 pit=2602/2603/2609 ctl_art=244/244/244 ctl_pit=1947/1947/1951 shell=F347 bshell=F347 if1=326
+R MISAL2 RSDM_13 unit=d n=4000 nop=32 rep=5 art=544/544/545 pit=4350/4350/4358 ctl_art=462/462/463 ctl_pit=3694/3694/3700 shell=8323 bshell=8323 if1=544
+R MISAL2 RSBH_0 unit=b n=4096 nop=0 rep=5 art=102/102/102 pit=809/810/815 ctl_art=42/42/42 ctl_pit=329/330/333 shell=490B bshell=490B if1=102
+R MISAL2 RSBH_0 unit=b n=4096 nop=2 rep=5 art=102/102/103 pit=809/810/815 ctl_art=68/68/69 ctl_pit=539/539/543 shell=1ACB bshell=1ACB if1=102
+R MISAL2 RSBH_0 unit=b n=4096 nop=4 rep=5 art=124/124/125 pit=988/989/994 ctl_art=96/96/97 ctl_pit=763/763/767 shell=094E bshell=094E if1=124
+R MISAL2 RSBH_0 unit=b n=4096 nop=8 rep=5 art=180/180/181 pit=1435/1436/1442 ctl_art=152/152/153 ctl_pit=1210/1210/1214 shell=01E3 bshell=01E3 if1=180
+R MISAL2 RSBH_0 unit=b n=4096 nop=16 rep=5 art=292/292/293 pit=2330/2330/2337 ctl_art=264/264/264 ctl_pit=2105/2105/2110 shell=09AA bshell=09AA if1=292
+R MISAL2 RSBH_0 unit=b n=4096 nop=32 rep=5 art=516/516/517 pit=4119/4120/4127 ctl_art=487/487/488 ctl_pit=3894/3895/3900 shell=47F9 bshell=47F9 if1=516
+R MISAL2 RMSW_0 unit=w n=2048 nop=0 rep=5 art=40/40/55 pit=315/316/437 ctl_art=2/2/2 ctl_pit=8/9/10 shell=4298 bshell=4298 if1=40
+R MISAL2 RMSW_1 unit=w n=2048 nop=0 rep=5 art=55/55/70 pit=431/432/558 ctl_art=2/2/2 ctl_pit=9/9/10 shell=57FE bshell=57FE if1=54
+R MISAL2 RMSW_3 unit=w n=2048 nop=0 rep=5 art=54/54/68 pit=429/430/542 ctl_art=2/2/2 ctl_pit=9/9/10 shell=7D32 bshell=7D32 if1=54
+R MISAL2 RMSS_1 unit=w n=2048 nop=0 rep=5 art=57/57/68 pit=453/453/542 ctl_art=2/2/2 ctl_pit=9/9/11 shell=960D bshell=960D if1=57
+R MISAL2 RMSS_3 unit=w n=2048 nop=0 rep=5 art=57/57/70 pit=452/453/555 ctl_art=2/2/2 ctl_pit=9/9/11 shell=67E0 bshell=67E0 if1=57
+R MISAL2 RMSD_0 unit=d n=1024 nop=0 rep=5 art=30/30/41 pit=231/232/319 ctl_art=2/2/2 ctl_pit=8/9/10 shell=DEAE bshell=DEAE if1=29
+R MISAL2 RMSD_1 unit=d n=1024 nop=0 rep=5 art=37/37/53 pit=290/291/416 ctl_art=2/2/2 ctl_pit=8/9/10 shell=CBC8 bshell=CBC8 if1=36
+R MISAL2 RMSD_2 unit=d n=1024 nop=0 rep=5 art=37/37/52 pit=291/291/407 ctl_art=2/2/2 ctl_pit=9/9/11 shell=F462 bshell=F462 if1=37
+R MISAL2 IOIW_0 unit=io n=1024 nop=0 rep=5 art=52/52/53 pit=413/413/414 ctl_art=4/4/5 ctl_pit=28/29/30 shell=A602 bshell=A602 if1=52
+R MISAL2 IOIW_1 unit=io n=1024 nop=0 rep=5 art=63/63/63 pit=497/497/499 ctl_art=4/4/4 ctl_pit=28/29/31 shell=93B1 bshell=93B1 if1=63
+R MISAL2 IOIW_2 unit=io n=1024 nop=0 rep=5 art=52/52/53 pit=413/413/414 ctl_art=4/4/5 ctl_pit=28/29/30 shell=CD64 bshell=CD64 if1=52
+R MISAL2 IOIW_3 unit=io n=1024 nop=0 rep=5 art=80/80/80 pit=636/637/639 ctl_art=4/4/4 ctl_pit=28/28/30 shell=F8D7 bshell=F8D7 if1=80
+R MISAL2 IOIB_3 unit=io n=1024 nop=0 rep=5 art=108/108/108 pit=861/861/863 ctl_art=4/4/4 ctl_pit=28/29/31 shell=F8D7 bshell=F8D7 if1=108
+R MISAL2 IOOW_4 unit=io n=1024 nop=0 rep=5 art=59/59/60 pit=469/469/471 ctl_art=4/4/5 ctl_pit=29/29/30 shell=87C7 bshell=87C7 if1=59
+R MISAL2 IOOW_5 unit=io n=1024 nop=0 rep=5 art=59/59/59 pit=469/469/471 ctl_art=4/4/4 ctl_pit=28/29/31 shell=B274 bshell=B274 if1=59
+R MISAL2 IOOW_3 unit=io n=1024 nop=0 rep=5 art=77/77/77 pit=608/609/611 ctl_art=4/4/5 ctl_pit=28/29/31 shell=0FDE bshell=0FDE if1=77
+R MISAL2 IOOB_3 unit=io n=1024 nop=0 rep=5 art=101/101/102 pit=804/805/807 ctl_art=4/4/4 ctl_pit=28/29/30 shell=0FDE bshell=0FDE if1=101
+P MISAL2 RASTER_O frames=8 art=43557 hi=792 to=0
+STATE MISAL2 grcg=00 gvram reads phase=_O
+R MISAL2 GRW_0_O unit=w n=512 nop=0 rep=5 art=76/77/77 pit=606/607/609 ctl_art=4/4/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=77
+R MISAL2 GRW_1_O unit=w n=512 nop=0 rep=5 art=76/77/77 pit=606/607/609 ctl_art=4/4/5 ctl_pit=31/31/33 shell=EFCC bshell=EFCC if1=76
+R MISAL2 GRW_3_O unit=w n=512 nop=0 rep=5 art=152/152/152 pit=1208/1208/1210 ctl_art=4/4/5 ctl_pit=31/31/33 shell=A5A6 bshell=A5A6 if1=152
+R MISAL2 GRD_0_O unit=d n=512 nop=0 rep=5 art=77/77/77 pit=606/607/609 ctl_art=4/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=77
+R MISAL2 GRD_1_O unit=d n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1210 ctl_art=4/4/5 ctl_pit=31/31/33 shell=EFCC bshell=EFCC if1=152
+R MISAL2 GRD_2_O unit=d n=512 nop=0 rep=5 art=152/152/152 pit=1208/1208/1210 ctl_art=4/5/5 ctl_pit=30/31/33 shell=8093 bshell=8093 if1=152
+R MISAL2 GRB_0_O unit=b n=512 nop=0 rep=5 art=76/76/77 pit=607/607/610 ctl_art=4/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=76
+R MISAL2 GLSW_0_O unit=w n=512 nop=0 rep=5 art=77/77/77 pit=607/607/609 ctl_art=1/2/2 ctl_pit=6/7/10 shell=D39C bshell=D39C if1=77
+R MISAL2 GLSW_1_O unit=w n=512 nop=0 rep=5 art=114/114/114 pit=908/908/910 ctl_art=1/1/2 ctl_pit=6/7/8 shell=020C bshell=020C if1=114
+R MISAL2 GLSD_0_O unit=d n=256 nop=0 rep=5 art=39/39/39 pit=306/307/309 ctl_art=1/1/2 ctl_pit=7/7/8 shell=BE20 bshell=BE20 if1=39
+R MISAL2 GLSD_1_O unit=d n=256 nop=0 rep=5 art=77/77/77 pit=607/607/609 ctl_art=1/1/2 ctl_pit=6/7/8 shell=3DA6 bshell=3DA6 if1=77
+R MISAL2 GMVR_0_O unit=w n=512 nop=0 rep=5 art=77/77/77 pit=607/607/609 ctl_art=1/1/2 ctl_pit=7/7/9 shell=717D bshell=717D if1=77
+R MISAL2 GMVR_1_O unit=w n=512 nop=0 rep=5 art=114/114/114 pit=907/908/910 ctl_art=1/1/2 ctl_pit=6/7/8 shell=6AEE bshell=6AEE if1=114
+R MISAL2 GMVV_0_O unit=w n=512 nop=0 rep=5 art=99/99/99 pit=789/789/791 ctl_art=1/1/2 ctl_pit=6/7/8 shell=AB9F bshell=AB9F if1=99
+R MISAL2 GMVV_1_O unit=w n=512 nop=0 rep=5 art=148/148/149 pit=1180/1181/1183 ctl_art=1/1/2 ctl_pit=7/7/8 shell=B29F bshell=B29F if1=148
+R MISAL2 TCRW_0_O unit=w n=512 nop=0 rep=5 art=77/77/77 pit=606/607/609 ctl_art=4/4/5 ctl_pit=31/31/34 shell=BDFC bshell=BDFC if1=77
+R MISAL2 TCRW_1_O unit=w n=512 nop=0 rep=5 art=76/77/77 pit=607/607/609 ctl_art=4/4/5 ctl_pit=30/31/34 shell=EFCC bshell=EFCC if1=77
+R MISAL2 TCRW_3_O unit=w n=512 nop=0 rep=5 art=152/152/152 pit=1208/1208/1211 ctl_art=4/4/5 ctl_pit=30/31/34 shell=A5A6 bshell=A5A6 if1=152
+R MISAL2 TCRB_0_O unit=b n=512 nop=0 rep=5 art=76/77/77 pit=606/607/609 ctl_art=4/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=76
+R MISAL2 BLSS_0_O unit=row n=50 nop=0 rep=5 art=34/34/34 pit=264/265/270 ctl_art=2/2/3 ctl_pit=11/12/14 shell=21B9 bshell=21B9 if1=34
+R MISAL2 BLSS_1_O unit=row n=50 nop=0 rep=5 art=49/49/49 pit=383/384/386 ctl_art=2/2/3 ctl_pit=11/12/15 shell=AF1E bshell=AF1E if1=49
+R MISAL2 BLSS_9_O unit=row n=50 nop=0 rep=5 art=48/48/48 pit=379/380/383 ctl_art=2/2/2 ctl_pit=10/11/13 shell=EB11 bshell=EB11 if1=48
+R MISAL2 XCW_0_O unit=w n=512 nop=0 rep=5 art=20/20/21 pit=155/155/159 ctl_art=4/4/5 ctl_pit=31/31/34 shell=5B3A bshell=5B3A if1=20
+R MISAL2 XCW_0_O unit=w n=512 nop=2 rep=5 art=22/22/23 pit=170/171/175 ctl_art=8/8/8 ctl_pit=59/59/61 shell=DA36 bshell=DA36 if1=22
+R MISAL2 XCW_0_O unit=w n=512 nop=4 rep=5 art=27/27/28 pit=212/213/217 ctl_art=11/11/12 ctl_pit=87/87/90 shell=8666 bshell=8666 if1=27
+R MISAL2 XCW_0_O unit=w n=512 nop=8 rep=5 art=34/34/35 pit=268/269/273 ctl_art=18/18/19 ctl_pit=143/143/145 shell=6A49 bshell=6A49 if1=34
+R MISAL2 XCW_0_O unit=w n=512 nop=16 rep=5 art=48/48/49 pit=380/381/385 ctl_art=32/32/33 ctl_pit=254/255/258 shell=6398 bshell=6398 if1=48
+R MISAL2 XCW_0_O unit=w n=512 nop=32 rep=5 art=76/76/77 pit=604/604/611 ctl_art=60/60/61 ctl_pit=478/478/483 shell=3F45 bshell=3F45 if1=76
+R MISAL2 XCW_1_O unit=w n=512 nop=0 rep=5 art=20/20/20 pit=154/154/159 ctl_art=4/5/5 ctl_pit=30/31/33 shell=7E0F bshell=7E0F if1=20
+R MISAL2 XCW_1_O unit=w n=512 nop=2 rep=5 art=22/22/22 pit=170/171/175 ctl_art=8/8/8 ctl_pit=58/59/61 shell=5204 bshell=5204 if1=22
+R MISAL2 XCW_1_O unit=w n=512 nop=4 rep=5 art=27/27/28 pit=212/213/217 ctl_art=11/12/12 ctl_pit=87/87/90 shell=01D5 bshell=01D5 if1=27
+R MISAL2 XCW_1_O unit=w n=512 nop=8 rep=5 art=34/34/35 pit=268/268/273 ctl_art=18/18/19 ctl_pit=142/143/146 shell=B805 bshell=B805 if1=34
+R MISAL2 XCW_1_O unit=w n=512 nop=16 rep=5 art=48/48/49 pit=380/381/386 ctl_art=32/32/33 ctl_pit=254/255/258 shell=F279 bshell=F279 if1=48
+R MISAL2 XCW_1_O unit=w n=512 nop=32 rep=5 art=76/76/77 pit=604/604/611 ctl_art=60/60/61 ctl_pit=478/478/483 shell=A9B1 bshell=A9B1 if1=76
+R MISAL2 XCW_3_O unit=w n=512 nop=0 rep=5 art=36/36/37 pit=284/284/288 ctl_art=4/4/5 ctl_pit=30/31/33 shell=3465 bshell=3465 if1=36
+R MISAL2 XCW_3_O unit=w n=512 nop=2 rep=5 art=36/36/37 pit=284/284/288 ctl_art=8/8/8 ctl_pit=59/59/61 shell=5241 bshell=5241 if1=36
+R MISAL2 XCW_3_O unit=w n=512 nop=4 rep=5 art=36/36/37 pit=284/284/289 ctl_art=11/11/12 ctl_pit=87/87/90 shell=1E92 bshell=1E92 if1=36
+R MISAL2 XCW_3_O unit=w n=512 nop=8 rep=5 art=41/41/42 pit=326/326/331 ctl_art=18/18/19 ctl_pit=143/143/146 shell=0CBC bshell=0CBC if1=41
+R MISAL2 XCW_3_O unit=w n=512 nop=16 rep=5 art=53/53/54 pit=422/422/429 ctl_art=32/32/33 ctl_pit=254/255/259 shell=C19A bshell=C19A if1=53
+R MISAL2 XCW_3_O unit=w n=512 nop=32 rep=5 art=81/81/82 pit=645/646/653 ctl_art=60/60/61 ctl_pit=478/479/484 shell=9478 bshell=9478 if1=81
+R MISAL2 XCB_0_O unit=b n=512 nop=0 rep=5 art=18/18/19 pit=140/141/144 ctl_art=4/4/5 ctl_pit=31/31/34 shell=5B3A bshell=5B3A if1=18
+R MISAL2 XCB_0_O unit=b n=512 nop=2 rep=5 art=20/20/21 pit=156/157/161 ctl_art=8/8/8 ctl_pit=59/59/61 shell=DA36 bshell=DA36 if1=20
+R MISAL2 XCB_0_O unit=b n=512 nop=4 rep=5 art=25/25/26 pit=199/199/203 ctl_art=11/12/12 ctl_pit=86/87/90 shell=8666 bshell=8666 if1=25
+R MISAL2 XCB_0_O unit=b n=512 nop=8 rep=5 art=32/32/33 pit=254/255/260 ctl_art=18/18/19 ctl_pit=143/143/146 shell=6A49 bshell=6A49 if1=32
+R MISAL2 XCB_0_O unit=b n=512 nop=16 rep=5 art=46/46/47 pit=366/367/372 ctl_art=32/33/33 ctl_pit=254/255/258 shell=6398 bshell=6398 if1=46
+R MISAL2 XCB_0_O unit=b n=512 nop=32 rep=5 art=74/74/75 pit=590/590/596 ctl_art=60/60/61 ctl_pit=478/479/483 shell=3F45 bshell=3F45 if1=74
+R MISAL2 XCR_0_O unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/323/326 ctl_art=4/4/5 ctl_pit=30/31/34 shell=5B3A bshell=5B3A if1=41
+R MISAL2 XCR_1_O unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/323/326 ctl_art=4/5/5 ctl_pit=31/31/33 shell=7E0F bshell=7E0F if1=41
+R MISAL2 XCR_3_O unit=w n=512 nop=0 rep=5 art=74/74/75 pit=588/588/592 ctl_art=4/4/5 ctl_pit=31/31/33 shell=3465 bshell=3465 if1=74
+R MISAL2 XAW_0_O unit=w n=512 nop=0 rep=5 art=18/18/19 pit=140/141/145 ctl_art=4/5/5 ctl_pit=31/31/34 shell=1EE6 bshell=1EE6 if1=18
+R MISAL2 XAW_0_O unit=w n=512 nop=2 rep=5 art=20/20/21 pit=156/157/160 ctl_art=8/8/8 ctl_pit=58/59/62 shell=F28E bshell=F28E if1=20
+R MISAL2 XAW_0_O unit=w n=512 nop=4 rep=5 art=25/25/26 pit=199/199/203 ctl_art=11/11/12 ctl_pit=87/87/90 shell=713E bshell=713E if1=25
+R MISAL2 XAW_0_O unit=w n=512 nop=8 rep=5 art=32/32/33 pit=254/255/259 ctl_art=18/18/19 ctl_pit=142/143/146 shell=0058 bshell=0058 if1=32
+R MISAL2 XAW_0_O unit=w n=512 nop=16 rep=5 art=46/46/47 pit=366/366/372 ctl_art=32/32/33 ctl_pit=254/255/258 shell=DA78 bshell=DA78 if1=46
+R MISAL2 XAW_0_O unit=w n=512 nop=32 rep=5 art=74/74/75 pit=590/590/597 ctl_art=60/60/61 ctl_pit=478/478/483 shell=2B8A bshell=2B8A if1=74
+R MISAL2 XAW_1_O unit=w n=512 nop=0 rep=5 art=18/18/19 pit=141/141/145 ctl_art=4/5/5 ctl_pit=30/31/33 shell=3BD3 bshell=3BD3 if1=18
+R MISAL2 XAW_1_O unit=w n=512 nop=2 rep=5 art=20/20/21 pit=156/156/161 ctl_art=8/8/8 ctl_pit=59/59/62 shell=7ABC bshell=7ABC if1=20
+R MISAL2 XAW_1_O unit=w n=512 nop=4 rep=5 art=25/25/26 pit=198/199/203 ctl_art=11/11/12 ctl_pit=87/87/89 shell=F68D bshell=F68D if1=25
+R MISAL2 XAW_1_O unit=w n=512 nop=8 rep=5 art=32/32/33 pit=254/255/259 ctl_art=18/18/19 ctl_pit=142/143/146 shell=D214 bshell=D214 if1=32
+R MISAL2 XAW_1_O unit=w n=512 nop=16 rep=5 art=46/46/47 pit=366/367/372 ctl_art=32/32/33 ctl_pit=254/255/258 shell=4B99 bshell=4B99 if1=46
+R MISAL2 XAW_1_O unit=w n=512 nop=32 rep=5 art=74/74/75 pit=590/590/596 ctl_art=60/60/61 ctl_pit=478/478/484 shell=BD7E bshell=BD7E if1=74
+R MISAL2 XAW_3_O unit=w n=512 nop=0 rep=5 art=34/34/35 pit=270/270/273 ctl_art=5/5/5 ctl_pit=30/30/33 shell=71B9 bshell=71B9 if1=34
+R MISAL2 XAW_3_O unit=w n=512 nop=2 rep=5 art=34/34/35 pit=270/270/274 ctl_art=8/8/8 ctl_pit=59/59/61 shell=7AF9 bshell=7AF9 if1=34
+R MISAL2 XAW_3_O unit=w n=512 nop=4 rep=5 art=34/34/35 pit=270/271/275 ctl_art=11/12/12 ctl_pit=86/87/90 shell=E9CA bshell=E9CA if1=34
+R MISAL2 XAW_3_O unit=w n=512 nop=8 rep=5 art=40/40/40 pit=312/312/318 ctl_art=18/18/19 ctl_pit=142/143/145 shell=66AD bshell=66AD if1=40
+R MISAL2 XAW_3_O unit=w n=512 nop=16 rep=5 art=52/52/53 pit=408/409/415 ctl_art=32/32/33 ctl_pit=254/255/258 shell=787A bshell=787A if1=52
+R MISAL2 XAW_3_O unit=w n=512 nop=32 rep=5 art=80/80/81 pit=631/632/640 ctl_art=60/60/61 ctl_pit=478/478/483 shell=80B7 bshell=80B7 if1=80
+R MISAL2 XAR_0_O unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/323/326 ctl_art=4/4/5 ctl_pit=31/31/34 shell=1EE6 bshell=1EE6 if1=41
+R MISAL2 XAR_1_O unit=w n=512 nop=0 rep=5 art=41/41/41 pit=323/323/326 ctl_art=4/5/5 ctl_pit=31/31/33 shell=3BD3 bshell=3BD3 if1=41
+R MISAL2 XAR_3_O unit=w n=512 nop=0 rep=5 art=74/74/75 pit=588/589/592 ctl_art=5/5/5 ctl_pit=30/31/33 shell=71B9 bshell=71B9 if1=74
+STATE MISAL2 pegc=256 packed bank0=0 phase=_O
+R MISAL2 PKW_0_O unit=w n=512 nop=0 rep=5 art=8/9/9 pit=59/68/70 ctl_art=4/5/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=9
+R MISAL2 PKW_0_O unit=w n=512 nop=2 rep=5 art=12/12/13 pit=92/92/97 ctl_art=8/8/9 ctl_pit=60/61/62 shell=70B0 bshell=70B0 if1=12
+R MISAL2 PKW_0_O unit=w n=512 nop=4 rep=5 art=15/16/16 pit=115/118/121 ctl_art=11/11/12 ctl_pit=87/87/90 shell=1B96 bshell=1B96 if1=15
+R MISAL2 PKW_0_O unit=w n=512 nop=8 rep=5 art=22/22/23 pit=170/171/177 ctl_art=19/19/19 ctl_pit=142/145/148 shell=3825 bshell=3825 if1=22
+R MISAL2 PKW_0_O unit=w n=512 nop=16 rep=5 art=36/37/37 pit=283/285/288 ctl_art=32/32/33 ctl_pit=254/255/258 shell=19F2 bshell=19F2 if1=38
+R MISAL2 PKW_0_O unit=w n=512 nop=32 rep=5 art=64/64/65 pit=506/507/513 ctl_art=60/60/62 ctl_pit=478/479/485 shell=D40C bshell=D40C if1=64
+R MISAL2 PKW_1_O unit=w n=512 nop=0 rep=5 art=8/9/9 pit=59/66/70 ctl_art=4/5/5 ctl_pit=31/31/33 shell=EFCC bshell=EFCC if1=9
+R MISAL2 PKW_1_O unit=w n=512 nop=2 rep=5 art=12/12/13 pit=89/94/98 ctl_art=8/8/9 ctl_pit=58/60/62 shell=4C65 bshell=4C65 if1=12
+R MISAL2 PKW_1_O unit=w n=512 nop=4 rep=5 art=15/16/16 pit=118/118/123 ctl_art=11/12/12 ctl_pit=87/88/90 shell=EA00 bshell=EA00 if1=15
+R MISAL2 PKW_1_O unit=w n=512 nop=8 rep=5 art=22/22/23 pit=171/172/178 ctl_art=18/19/19 ctl_pit=143/143/146 shell=023A bshell=023A if1=22
+R MISAL2 PKW_1_O unit=w n=512 nop=16 rep=5 art=36/36/37 pit=282/284/289 ctl_art=32/32/33 ctl_pit=254/255/259 shell=B143 bshell=B143 if1=36
+R MISAL2 PKW_1_O unit=w n=512 nop=32 rep=5 art=64/64/66 pit=506/507/516 ctl_art=60/60/62 ctl_pit=478/479/487 shell=E065 bshell=E065 if1=64
+R MISAL2 PKW_3_O unit=w n=512 nop=0 rep=5 art=16/16/17 pit=122/123/127 ctl_art=5/5/5 ctl_pit=32/32/33 shell=A5A6 bshell=A5A6 if1=16
+R MISAL2 PKW_3_O unit=w n=512 nop=2 rep=5 art=19/20/20 pit=146/151/154 ctl_art=8/8/9 ctl_pit=58/59/67 shell=4C20 bshell=4C20 if1=20
+R MISAL2 PKW_3_O unit=w n=512 nop=4 rep=5 art=22/22/23 pit=172/172/178 ctl_art=11/11/13 ctl_pit=87/87/97 shell=F547 bshell=F547 if1=22
+R MISAL2 PKW_3_O unit=w n=512 nop=8 rep=5 art=29/29/30 pit=226/227/232 ctl_art=18/18/19 ctl_pit=142/143/146 shell=B683 bshell=B683 if1=29
+R MISAL2 PKW_3_O unit=w n=512 nop=16 rep=5 art=43/43/45 pit=338/339/355 ctl_art=32/32/34 ctl_pit=254/255/259 shell=82A0 bshell=82A0 if1=46
+R MISAL2 PKW_3_O unit=w n=512 nop=32 rep=5 art=71/72/72 pit=565/565/569 ctl_art=60/60/61 ctl_pit=478/478/484 shell=DDAC bshell=DDAC if1=71
+R MISAL2 PKD_0_O unit=d n=512 nop=0 rep=5 art=10/11/11 pit=76/84/84 ctl_art=4/4/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=11
+R MISAL2 PKD_0_O unit=d n=512 nop=2 rep=5 art=14/14/15 pit=109/110/114 ctl_art=8/8/8 ctl_pit=59/61/62 shell=70B0 bshell=70B0 if1=14
+R MISAL2 PKD_0_O unit=d n=512 nop=4 rep=5 art=18/18/19 pit=135/137/148 ctl_art=11/11/12 ctl_pit=87/87/90 shell=1B96 bshell=1B96 if1=18
+R MISAL2 PKD_0_O unit=d n=512 nop=8 rep=5 art=24/25/25 pit=190/191/194 ctl_art=18/19/19 ctl_pit=142/143/147 shell=3825 bshell=3825 if1=25
+R MISAL2 PKD_0_O unit=d n=512 nop=16 rep=5 art=38/38/40 pit=296/297/314 ctl_art=32/33/34 ctl_pit=255/256/260 shell=19F2 bshell=19F2 if1=38
+R MISAL2 PKD_0_O unit=d n=512 nop=32 rep=5 art=66/66/67 pit=520/522/528 ctl_art=60/60/61 ctl_pit=478/478/483 shell=D40C bshell=D40C if1=66
+R MISAL2 PKD_1_O unit=d n=512 nop=0 rep=5 art=16/17/17 pit=122/123/134 ctl_art=4/4/5 ctl_pit=31/31/33 shell=EFCC bshell=EFCC if1=16
+R MISAL2 PKD_1_O unit=d n=512 nop=2 rep=5 art=21/21/22 pit=158/162/169 ctl_art=8/8/10 ctl_pit=59/60/71 shell=4C65 bshell=4C65 if1=21
+R MISAL2 PKD_1_O unit=d n=512 nop=4 rep=5 art=24/24/26 pit=185/185/193 ctl_art=11/11/12 ctl_pit=87/87/91 shell=EA00 bshell=EA00 if1=24
+R MISAL2 PKD_1_O unit=d n=512 nop=8 rep=5 art=31/32/32 pit=240/246/249 ctl_art=18/18/19 ctl_pit=142/143/149 shell=023A bshell=023A if1=31
+R MISAL2 PKD_1_O unit=d n=512 nop=16 rep=5 art=45/45/46 pit=352/352/366 ctl_art=32/33/34 ctl_pit=255/255/259 shell=B143 bshell=B143 if1=45
+R MISAL2 PKD_1_O unit=d n=512 nop=32 rep=5 art=73/73/73 pit=576/576/583 ctl_art=60/60/62 ctl_pit=478/478/492 shell=E065 bshell=E065 if1=73
+R MISAL2 PKR_0_O unit=w n=512 nop=0 rep=5 art=35/36/36 pit=279/279/283 ctl_art=4/5/6 ctl_pit=30/31/39 shell=BDFC bshell=BDFC if1=35
+R MISAL2 PKR_1_O unit=w n=512 nop=0 rep=5 art=36/36/36 pit=278/279/279 ctl_art=4/4/5 ctl_pit=31/31/35 shell=EFCC bshell=EFCC if1=36
+R MISAL2 PKR_3_O unit=w n=512 nop=0 rep=5 art=63/63/63 pit=498/499/502 ctl_art=4/4/5 ctl_pit=31/31/35 shell=A5A6 bshell=A5A6 if1=63
+STATE MISAL2 gfx=on ah42=C0 bda054C=CF bda054D=50
+P MISAL2 RASTER_G frames=8 art=43556 hi=792 to=0
+STATE MISAL2 grcg=00 gvram reads phase=_A
+R MISAL2 GRW_0_A unit=w n=512 nop=0 rep=5 art=76/77/77 pit=607/607/609 ctl_art=4/4/5 ctl_pit=31/31/34 shell=BDFC bshell=BDFC if1=77
+R MISAL2 GRW_1_A unit=w n=512 nop=0 rep=5 art=76/77/77 pit=607/607/609 ctl_art=4/4/5 ctl_pit=31/31/33 shell=EFCC bshell=EFCC if1=76
+R MISAL2 GRW_3_A unit=w n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1211 ctl_art=4/4/5 ctl_pit=31/31/34 shell=A5A6 bshell=A5A6 if1=152
+R MISAL2 GRD_0_A unit=d n=512 nop=0 rep=5 art=76/77/77 pit=606/607/610 ctl_art=4/5/5 ctl_pit=30/31/34 shell=BDFC bshell=BDFC if1=76
+R MISAL2 GRD_1_A unit=d n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1210 ctl_art=4/4/5 ctl_pit=30/31/33 shell=EFCC bshell=EFCC if1=152
+R MISAL2 GRD_2_A unit=d n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1211 ctl_art=4/5/5 ctl_pit=30/31/34 shell=8093 bshell=8093 if1=152
+R MISAL2 GRB_0_A unit=b n=512 nop=0 rep=5 art=76/76/77 pit=607/607/609 ctl_art=4/5/5 ctl_pit=30/31/34 shell=BDFC bshell=BDFC if1=77
+R MISAL2 GLSW_0_A unit=w n=512 nop=0 rep=5 art=77/77/77 pit=607/607/610 ctl_art=1/2/2 ctl_pit=6/7/9 shell=D39C bshell=D39C if1=77
+R MISAL2 GLSW_1_A unit=w n=512 nop=0 rep=5 art=114/114/114 pit=907/908/910 ctl_art=1/1/2 ctl_pit=6/7/8 shell=020C bshell=020C if1=114
+R MISAL2 GLSD_0_A unit=d n=256 nop=0 rep=5 art=39/39/39 pit=307/307/309 ctl_art=1/1/2 ctl_pit=7/7/9 shell=BE20 bshell=BE20 if1=39
+R MISAL2 GLSD_1_A unit=d n=256 nop=0 rep=5 art=76/77/77 pit=607/607/609 ctl_art=1/2/2 ctl_pit=6/7/8 shell=3DA6 bshell=3DA6 if1=76
+R MISAL2 GMVR_0_A unit=w n=512 nop=0 rep=5 art=76/77/77 pit=607/607/609 ctl_art=1/1/2 ctl_pit=6/7/8 shell=717D bshell=717D if1=77
+R MISAL2 GMVR_1_A unit=w n=512 nop=0 rep=5 art=114/114/114 pit=908/908/910 ctl_art=1/1/2 ctl_pit=6/7/8 shell=6AEE bshell=6AEE if1=114
+R MISAL2 GMVV_0_A unit=w n=512 nop=0 rep=5 art=99/99/99 pit=788/789/791 ctl_art=1/2/2 ctl_pit=7/7/8 shell=AB9F bshell=AB9F if1=99
+R MISAL2 GMVV_1_A unit=w n=512 nop=0 rep=5 art=148/148/148 pit=1180/1180/1183 ctl_art=1/1/2 ctl_pit=6/7/8 shell=B29F bshell=B29F if1=148
+R MISAL2 TCRW_0_A unit=w n=512 nop=0 rep=5 art=76/77/77 pit=606/607/609 ctl_art=4/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=76
+R MISAL2 TCRW_1_A unit=w n=512 nop=0 rep=5 art=76/76/77 pit=607/607/610 ctl_art=4/4/5 ctl_pit=31/31/33 shell=EFCC bshell=EFCC if1=76
+R MISAL2 TCRW_3_A unit=w n=512 nop=0 rep=5 art=152/152/152 pit=1208/1208/1211 ctl_art=4/4/5 ctl_pit=30/31/33 shell=A5A6 bshell=A5A6 if1=152
+R MISAL2 TCRB_0_A unit=b n=512 nop=0 rep=5 art=76/77/77 pit=606/607/609 ctl_art=4/4/5 ctl_pit=31/31/34 shell=BDFC bshell=BDFC if1=76
+R MISAL2 BLSS_0_A unit=row n=50 nop=0 rep=5 art=34/34/34 pit=265/265/269 ctl_art=2/2/3 ctl_pit=12/12/15 shell=21B9 bshell=21B9 if1=34
+R MISAL2 BLSS_1_A unit=row n=50 nop=0 rep=5 art=49/49/49 pit=383/384/387 ctl_art=2/2/3 ctl_pit=11/12/15 shell=AF1E bshell=AF1E if1=49
+R MISAL2 BLSS_9_A unit=row n=50 nop=0 rep=5 art=48/48/49 pit=380/380/383 ctl_art=2/2/2 ctl_pit=11/11/15 shell=EB11 bshell=EB11 if1=48
+R MISAL2 XCW_0_A unit=w n=512 nop=0 rep=5 art=20/20/21 pit=154/155/158 ctl_art=5/5/5 ctl_pit=30/31/33 shell=5B3A bshell=5B3A if1=20
+R MISAL2 XCW_0_A unit=w n=512 nop=2 rep=5 art=22/22/22 pit=171/171/175 ctl_art=8/8/8 ctl_pit=59/59/62 shell=DA36 bshell=DA36 if1=22
+R MISAL2 XCW_0_A unit=w n=512 nop=4 rep=5 art=27/27/28 pit=212/213/217 ctl_art=11/12/12 ctl_pit=86/87/90 shell=8666 bshell=8666 if1=27
+R MISAL2 XCW_0_A unit=w n=512 nop=8 rep=5 art=34/34/35 pit=269/269/273 ctl_art=18/18/19 ctl_pit=143/143/147 shell=6A49 bshell=6A49 if1=34
+R MISAL2 XCW_0_A unit=w n=512 nop=16 rep=5 art=48/48/49 pit=380/380/386 ctl_art=32/32/33 ctl_pit=254/255/258 shell=6398 bshell=6398 if1=48
+R MISAL2 XCW_0_A unit=w n=512 nop=32 rep=5 art=76/76/77 pit=604/604/611 ctl_art=60/60/61 ctl_pit=478/478/483 shell=3F45 bshell=3F45 if1=76
+R MISAL2 XCW_1_A unit=w n=512 nop=0 rep=5 art=20/20/20 pit=155/155/159 ctl_art=4/4/5 ctl_pit=30/31/34 shell=7E0F bshell=7E0F if1=20
+R MISAL2 XCW_1_A unit=w n=512 nop=2 rep=5 art=22/22/22 pit=171/171/175 ctl_art=8/8/8 ctl_pit=59/59/61 shell=5204 bshell=5204 if1=22
+R MISAL2 XCW_1_A unit=w n=512 nop=4 rep=5 art=27/27/28 pit=212/213/217 ctl_art=11/11/12 ctl_pit=86/87/90 shell=01D5 bshell=01D5 if1=27
+R MISAL2 XCW_1_A unit=w n=512 nop=8 rep=5 art=34/34/35 pit=268/269/273 ctl_art=18/18/19 ctl_pit=142/143/146 shell=B805 bshell=B805 if1=34
+R MISAL2 XCW_1_A unit=w n=512 nop=16 rep=5 art=48/48/49 pit=380/381/385 ctl_art=32/32/33 ctl_pit=254/255/258 shell=F279 bshell=F279 if1=48
+R MISAL2 XCW_1_A unit=w n=512 nop=32 rep=5 art=76/76/77 pit=603/604/610 ctl_art=60/60/61 ctl_pit=478/478/483 shell=A9B1 bshell=A9B1 if1=76
+R MISAL2 XCW_3_A unit=w n=512 nop=0 rep=5 art=36/36/37 pit=284/284/288 ctl_art=4/5/5 ctl_pit=30/31/34 shell=3465 bshell=3465 if1=36
+R MISAL2 XCW_3_A unit=w n=512 nop=2 rep=5 art=36/36/37 pit=284/284/288 ctl_art=8/8/8 ctl_pit=58/59/61 shell=5241 bshell=5241 if1=36
+R MISAL2 XCW_3_A unit=w n=512 nop=4 rep=5 art=36/36/37 pit=284/284/289 ctl_art=11/11/12 ctl_pit=87/87/90 shell=1E92 bshell=1E92 if1=36
+R MISAL2 XCW_3_A unit=w n=512 nop=8 rep=5 art=41/41/42 pit=326/326/331 ctl_art=18/19/19 ctl_pit=143/143/146 shell=0CBC bshell=0CBC if1=41
+R MISAL2 XCW_3_A unit=w n=512 nop=16 rep=5 art=53/53/54 pit=422/423/429 ctl_art=32/32/33 ctl_pit=254/255/258 shell=C19A bshell=C19A if1=53
+R MISAL2 XCW_3_A unit=w n=512 nop=32 rep=5 art=81/81/82 pit=645/646/653 ctl_art=60/60/61 ctl_pit=478/478/483 shell=9478 bshell=9478 if1=81
+R MISAL2 XCB_0_A unit=b n=512 nop=0 rep=5 art=18/18/19 pit=141/141/144 ctl_art=4/5/5 ctl_pit=30/31/33 shell=5B3A bshell=5B3A if1=18
+R MISAL2 XCB_0_A unit=b n=512 nop=2 rep=5 art=20/20/21 pit=156/157/161 ctl_art=8/8/8 ctl_pit=58/59/61 shell=DA36 bshell=DA36 if1=20
+R MISAL2 XCB_0_A unit=b n=512 nop=4 rep=5 art=25/25/26 pit=199/199/203 ctl_art=11/11/12 ctl_pit=87/87/90 shell=8666 bshell=8666 if1=25
+R MISAL2 XCB_0_A unit=b n=512 nop=8 rep=5 art=32/32/33 pit=255/255/259 ctl_art=18/18/19 ctl_pit=143/143/146 shell=6A49 bshell=6A49 if1=33
+R MISAL2 XCB_0_A unit=b n=512 nop=16 rep=5 art=46/46/47 pit=366/367/372 ctl_art=32/32/33 ctl_pit=254/255/259 shell=6398 bshell=6398 if1=46
+R MISAL2 XCB_0_A unit=b n=512 nop=32 rep=5 art=74/74/75 pit=590/590/596 ctl_art=60/60/61 ctl_pit=478/478/484 shell=3F45 bshell=3F45 if1=74
+R MISAL2 XCR_0_A unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/323/326 ctl_art=4/4/5 ctl_pit=31/31/33 shell=5B3A bshell=5B3A if1=41
+R MISAL2 XCR_1_A unit=w n=512 nop=0 rep=5 art=41/41/41 pit=323/323/327 ctl_art=4/4/5 ctl_pit=31/31/33 shell=7E0F bshell=7E0F if1=41
+R MISAL2 XCR_3_A unit=w n=512 nop=0 rep=5 art=74/74/75 pit=588/589/592 ctl_art=4/5/5 ctl_pit=30/31/33 shell=3465 bshell=3465 if1=74
+R MISAL2 XAW_0_A unit=w n=512 nop=0 rep=5 art=18/18/19 pit=141/141/144 ctl_art=4/4/5 ctl_pit=31/31/33 shell=1EE6 bshell=1EE6 if1=18
+R MISAL2 XAW_0_A unit=w n=512 nop=2 rep=5 art=20/20/21 pit=157/157/161 ctl_art=8/8/8 ctl_pit=59/59/61 shell=F28E bshell=F28E if1=20
+R MISAL2 XAW_0_A unit=w n=512 nop=4 rep=5 art=25/25/26 pit=198/199/203 ctl_art=11/11/12 ctl_pit=87/87/90 shell=713E bshell=713E if1=25
+R MISAL2 XAW_0_A unit=w n=512 nop=8 rep=5 art=32/32/33 pit=254/255/259 ctl_art=18/18/19 ctl_pit=143/143/146 shell=0058 bshell=0058 if1=32
+R MISAL2 XAW_0_A unit=w n=512 nop=16 rep=5 art=46/46/47 pit=366/366/371 ctl_art=32/32/33 ctl_pit=254/255/258 shell=DA78 bshell=DA78 if1=46
+R MISAL2 XAW_0_A unit=w n=512 nop=32 rep=5 art=74/74/75 pit=590/590/596 ctl_art=60/60/61 ctl_pit=478/478/484 shell=2B8A bshell=2B8A if1=74
+R MISAL2 XAW_1_A unit=w n=512 nop=0 rep=5 art=18/18/19 pit=140/141/144 ctl_art=4/5/5 ctl_pit=31/31/33 shell=3BD3 bshell=3BD3 if1=18
+R MISAL2 XAW_1_A unit=w n=512 nop=2 rep=5 art=20/20/21 pit=156/157/160 ctl_art=8/8/8 ctl_pit=58/59/62 shell=7ABC bshell=7ABC if1=20
+R MISAL2 XAW_1_A unit=w n=512 nop=4 rep=5 art=25/25/26 pit=199/199/203 ctl_art=11/11/12 ctl_pit=87/87/90 shell=F68D bshell=F68D if1=25
+R MISAL2 XAW_1_A unit=w n=512 nop=8 rep=5 art=32/32/33 pit=255/255/260 ctl_art=18/18/19 ctl_pit=143/143/146 shell=D214 bshell=D214 if1=32
+R MISAL2 XAW_1_A unit=w n=512 nop=16 rep=5 art=46/46/47 pit=366/366/371 ctl_art=32/32/33 ctl_pit=254/255/258 shell=4B99 bshell=4B99 if1=46
+R MISAL2 XAW_1_A unit=w n=512 nop=32 rep=5 art=74/74/75 pit=590/590/597 ctl_art=60/60/61 ctl_pit=478/478/483 shell=BD7E bshell=BD7E if1=74
+R MISAL2 XAW_3_A unit=w n=512 nop=0 rep=5 art=34/34/35 pit=270/270/274 ctl_art=4/5/5 ctl_pit=31/31/33 shell=71B9 bshell=71B9 if1=34
+R MISAL2 XAW_3_A unit=w n=512 nop=2 rep=5 art=34/34/35 pit=270/270/274 ctl_art=8/8/8 ctl_pit=58/59/62 shell=7AF9 bshell=7AF9 if1=34
+R MISAL2 XAW_3_A unit=w n=512 nop=4 rep=5 art=34/34/35 pit=270/270/275 ctl_art=11/12/12 ctl_pit=86/87/90 shell=E9CA bshell=E9CA if1=34
+R MISAL2 XAW_3_A unit=w n=512 nop=8 rep=5 art=40/40/40 pit=312/312/317 ctl_art=18/18/19 ctl_pit=142/143/145 shell=66AD bshell=66AD if1=40
+R MISAL2 XAW_3_A unit=w n=512 nop=16 rep=5 art=52/52/52 pit=408/408/414 ctl_art=32/32/33 ctl_pit=254/255/258 shell=787A bshell=787A if1=52
+R MISAL2 XAW_3_A unit=w n=512 nop=32 rep=5 art=80/80/81 pit=632/632/640 ctl_art=60/60/61 ctl_pit=478/478/483 shell=80B7 bshell=80B7 if1=80
+R MISAL2 XAR_0_A unit=w n=512 nop=0 rep=5 art=41/41/41 pit=323/323/326 ctl_art=4/4/5 ctl_pit=31/31/33 shell=1EE6 bshell=1EE6 if1=41
+R MISAL2 XAR_1_A unit=w n=512 nop=0 rep=5 art=41/41/41 pit=323/323/325 ctl_art=4/4/5 ctl_pit=31/31/33 shell=3BD3 bshell=3BD3 if1=41
+R MISAL2 XAR_3_A unit=w n=512 nop=0 rep=5 art=74/74/75 pit=588/589/592 ctl_art=4/5/5 ctl_pit=30/31/33 shell=71B9 bshell=71B9 if1=74
+STATE MISAL2 pegc=256 packed bank0=0 phase=_A
+R MISAL2 PKW_0_A unit=w n=512 nop=0 rep=5 art=9/9/10 pit=67/67/72 ctl_art=5/5/5 ctl_pit=30/33/34 shell=BDFC bshell=BDFC if1=9
+R MISAL2 PKW_0_A unit=w n=512 nop=2 rep=5 art=12/12/13 pit=91/92/95 ctl_art=8/8/8 ctl_pit=59/59/61 shell=70B0 bshell=70B0 if1=12
+R MISAL2 PKW_0_A unit=w n=512 nop=4 rep=5 art=15/15/16 pit=116/116/120 ctl_art=11/11/12 ctl_pit=86/87/90 shell=1B96 bshell=1B96 if1=15
+R MISAL2 PKW_0_A unit=w n=512 nop=8 rep=5 art=22/22/23 pit=170/171/175 ctl_art=18/19/19 ctl_pit=142/143/146 shell=3825 bshell=3825 if1=22
+R MISAL2 PKW_0_A unit=w n=512 nop=16 rep=5 art=36/36/37 pit=282/283/288 ctl_art=32/32/33 ctl_pit=254/254/259 shell=19F2 bshell=19F2 if1=36
+R MISAL2 PKW_0_A unit=w n=512 nop=32 rep=5 art=64/64/65 pit=506/507/513 ctl_art=60/60/61 ctl_pit=478/478/484 shell=D40C bshell=D40C if1=64
+R MISAL2 PKW_1_A unit=w n=512 nop=0 rep=5 art=9/9/10 pit=69/70/75 ctl_art=5/5/5 ctl_pit=32/33/35 shell=EFCC bshell=EFCC if1=9
+R MISAL2 PKW_1_A unit=w n=512 nop=2 rep=5 art=12/12/13 pit=93/94/99 ctl_art=8/8/8 ctl_pit=59/59/62 shell=4C65 bshell=4C65 if1=12
+R MISAL2 PKW_1_A unit=w n=512 nop=4 rep=5 art=15/16/16 pit=117/118/122 ctl_art=11/11/12 ctl_pit=87/87/90 shell=EA00 bshell=EA00 if1=15
+R MISAL2 PKW_1_A unit=w n=512 nop=8 rep=5 art=22/22/23 pit=170/171/175 ctl_art=18/18/19 ctl_pit=142/143/146 shell=023A bshell=023A if1=22
+R MISAL2 PKW_1_A unit=w n=512 nop=16 rep=5 art=36/36/37 pit=282/283/289 ctl_art=32/32/33 ctl_pit=254/255/259 shell=B143 bshell=B143 if1=36
+R MISAL2 PKW_1_A unit=w n=512 nop=32 rep=5 art=64/64/65 pit=506/506/513 ctl_art=60/60/61 ctl_pit=478/478/483 shell=E065 bshell=E065 if1=64
+R MISAL2 PKW_3_A unit=w n=512 nop=0 rep=5 art=16/17/17 pit=122/125/130 ctl_art=5/5/5 ctl_pit=32/33/34 shell=A5A6 bshell=A5A6 if1=16
+R MISAL2 PKW_3_A unit=w n=512 nop=2 rep=5 art=19/19/20 pit=149/149/154 ctl_art=8/8/8 ctl_pit=59/59/61 shell=4C20 bshell=4C20 if1=19
+R MISAL2 PKW_3_A unit=w n=512 nop=4 rep=5 art=22/22/23 pit=171/173/176 ctl_art=11/11/12 ctl_pit=87/87/89 shell=F547 bshell=F547 if1=22
+R MISAL2 PKW_3_A unit=w n=512 nop=8 rep=5 art=30/30/30 pit=228/230/234 ctl_art=18/18/19 ctl_pit=142/143/146 shell=B683 bshell=B683 if1=30
+R MISAL2 PKW_3_A unit=w n=512 nop=16 rep=5 art=43/43/44 pit=338/339/344 ctl_art=32/32/33 ctl_pit=255/255/259 shell=82A0 bshell=82A0 if1=43
+R MISAL2 PKW_3_A unit=w n=512 nop=32 rep=5 art=71/71/72 pit=562/563/569 ctl_art=60/60/61 ctl_pit=478/479/483 shell=DDAC bshell=DDAC if1=71
+R MISAL2 PKD_0_A unit=d n=512 nop=0 rep=5 art=11/11/12 pit=84/84/89 ctl_art=5/5/5 ctl_pit=30/33/36 shell=BDFC bshell=BDFC if1=11
+R MISAL2 PKD_0_A unit=d n=512 nop=2 rep=5 art=14/14/15 pit=109/109/115 ctl_art=8/8/8 ctl_pit=59/59/61 shell=70B0 bshell=70B0 if1=14
+R MISAL2 PKD_0_A unit=d n=512 nop=4 rep=5 art=18/18/19 pit=142/143/147 ctl_art=11/11/12 ctl_pit=87/87/89 shell=1B96 bshell=1B96 if1=18
+R MISAL2 PKD_0_A unit=d n=512 nop=8 rep=5 art=24/24/25 pit=189/190/195 ctl_art=18/18/19 ctl_pit=142/143/147 shell=3825 bshell=3825 if1=24
+R MISAL2 PKD_0_A unit=d n=512 nop=16 rep=5 art=38/38/38 pit=296/297/303 ctl_art=32/32/33 ctl_pit=254/254/258 shell=19F2 bshell=19F2 if1=38
+R MISAL2 PKD_0_A unit=d n=512 nop=32 rep=5 art=66/66/67 pit=521/522/529 ctl_art=60/60/61 ctl_pit=478/479/483 shell=D40C bshell=D40C if1=66
+R MISAL2 PKD_1_A unit=d n=512 nop=0 rep=5 art=16/16/17 pit=120/121/129 ctl_art=4/5/5 ctl_pit=31/33/35 shell=EFCC bshell=EFCC if1=16
+R MISAL2 PKD_1_A unit=d n=512 nop=2 rep=5 art=21/21/21 pit=161/161/167 ctl_art=8/8/8 ctl_pit=58/59/62 shell=4C65 bshell=4C65 if1=21
+R MISAL2 PKD_1_A unit=d n=512 nop=4 rep=5 art=24/24/24 pit=185/185/190 ctl_art=11/11/12 ctl_pit=87/87/90 shell=EA00 bshell=EA00 if1=24
+R MISAL2 PKD_1_A unit=d n=512 nop=8 rep=5 art=31/31/31 pit=240/240/245 ctl_art=18/18/19 ctl_pit=142/143/146 shell=023A bshell=023A if1=31
+R MISAL2 PKD_1_A unit=d n=512 nop=16 rep=5 art=45/45/45 pit=352/352/358 ctl_art=32/32/33 ctl_pit=254/254/259 shell=B143 bshell=B143 if1=45
+R MISAL2 PKD_1_A unit=d n=512 nop=32 rep=5 art=73/73/73 pit=576/576/583 ctl_art=60/60/61 ctl_pit=478/479/483 shell=E065 bshell=E065 if1=73
+R MISAL2 PKR_0_A unit=w n=512 nop=0 rep=5 art=36/36/36 pit=279/280/283 ctl_art=5/5/5 ctl_pit=32/33/34 shell=BDFC bshell=BDFC if1=36
+R MISAL2 PKR_1_A unit=w n=512 nop=0 rep=5 art=36/36/36 pit=279/280/282 ctl_art=5/5/5 ctl_pit=32/33/33 shell=EFCC bshell=EFCC if1=36
+R MISAL2 PKR_3_A unit=w n=512 nop=0 rep=5 art=63/63/63 pit=497/498/502 ctl_art=5/5/5 ctl_pit=33/33/35 shell=A5A6 bshell=A5A6 if1=63
+STATE MISAL2 grcg=00 gvram reads phase=_V
+R MISAL2 GRW_0_V unit=w n=512 nop=0 rep=5 art=76/76/77 pit=607/607/609 ctl_art=4/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=77
+R MISAL2 GRW_1_V unit=w n=512 nop=0 rep=5 art=76/77/77 pit=606/607/609 ctl_art=4/4/5 ctl_pit=30/31/33 shell=EFCC bshell=EFCC if1=77
+R MISAL2 GRW_3_V unit=w n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1210 ctl_art=4/5/5 ctl_pit=30/31/33 shell=A5A6 bshell=A5A6 if1=152
+R MISAL2 GRD_0_V unit=d n=512 nop=0 rep=5 art=76/77/77 pit=606/607/610 ctl_art=4/4/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=76
+R MISAL2 GRD_1_V unit=d n=512 nop=0 rep=5 art=152/152/152 pit=1208/1208/1210 ctl_art=4/4/5 ctl_pit=31/31/34 shell=EFCC bshell=EFCC if1=152
+R MISAL2 GRD_2_V unit=d n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1211 ctl_art=4/4/5 ctl_pit=30/31/33 shell=8093 bshell=8093 if1=152
+R MISAL2 GRB_0_V unit=b n=512 nop=0 rep=5 art=76/76/77 pit=607/607/609 ctl_art=4/4/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=77
+R MISAL2 GLSW_0_V unit=w n=512 nop=0 rep=5 art=76/77/77 pit=607/607/609 ctl_art=1/2/2 ctl_pit=7/7/8 shell=D39C bshell=D39C if1=77
+R MISAL2 GLSW_1_V unit=w n=512 nop=0 rep=5 art=114/114/114 pit=907/908/910 ctl_art=1/2/2 ctl_pit=7/7/9 shell=020C bshell=020C if1=114
+R MISAL2 GLSD_0_V unit=d n=256 nop=0 rep=5 art=39/39/39 pit=306/307/309 ctl_art=1/2/2 ctl_pit=6/7/8 shell=BE20 bshell=BE20 if1=39
+R MISAL2 GLSD_1_V unit=d n=256 nop=0 rep=5 art=77/77/77 pit=607/607/610 ctl_art=1/1/2 ctl_pit=7/7/8 shell=3DA6 bshell=3DA6 if1=77
+R MISAL2 GMVR_0_V unit=w n=512 nop=0 rep=5 art=77/77/77 pit=607/607/610 ctl_art=1/1/2 ctl_pit=7/7/8 shell=717D bshell=717D if1=77
+R MISAL2 GMVR_1_V unit=w n=512 nop=0 rep=5 art=114/114/114 pit=907/908/909 ctl_art=1/1/2 ctl_pit=7/7/9 shell=6AEE bshell=6AEE if1=114
+R MISAL2 GMVV_0_V unit=w n=512 nop=0 rep=5 art=99/99/99 pit=788/789/791 ctl_art=1/1/2 ctl_pit=6/6/9 shell=AB9F bshell=AB9F if1=99
+R MISAL2 GMVV_1_V unit=w n=512 nop=0 rep=5 art=148/148/148 pit=1180/1181/1183 ctl_art=1/1/2 ctl_pit=7/7/8 shell=B29F bshell=B29F if1=148
+R MISAL2 TCRW_0_V unit=w n=512 nop=0 rep=5 art=76/76/77 pit=607/607/609 ctl_art=4/5/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=77
+R MISAL2 TCRW_1_V unit=w n=512 nop=0 rep=5 art=76/76/77 pit=607/607/609 ctl_art=4/5/5 ctl_pit=30/31/33 shell=EFCC bshell=EFCC if1=76
+R MISAL2 TCRW_3_V unit=w n=512 nop=0 rep=5 art=152/152/152 pit=1207/1208/1211 ctl_art=4/4/5 ctl_pit=31/31/33 shell=A5A6 bshell=A5A6 if1=152
+R MISAL2 TCRB_0_V unit=b n=512 nop=0 rep=5 art=76/77/77 pit=606/607/610 ctl_art=4/4/5 ctl_pit=31/31/33 shell=BDFC bshell=BDFC if1=77
+R MISAL2 BLSS_0_V unit=row n=50 nop=0 rep=5 art=34/34/34 pit=265/265/269 ctl_art=2/2/3 ctl_pit=11/12/15 shell=21B9 bshell=21B9 if1=34
+R MISAL2 BLSS_1_V unit=row n=50 nop=0 rep=5 art=49/49/49 pit=384/384/387 ctl_art=2/2/2 ctl_pit=11/12/15 shell=AF1E bshell=AF1E if1=49
+R MISAL2 BLSS_9_V unit=row n=50 nop=0 rep=5 art=48/48/48 pit=379/380/383 ctl_art=2/2/2 ctl_pit=10/11/14 shell=EB11 bshell=EB11 if1=48
+R MISAL2 XCW_0_V unit=w n=512 nop=0 rep=5 art=20/20/20 pit=154/155/159 ctl_art=4/4/5 ctl_pit=31/31/33 shell=5B3A bshell=5B3A if1=20
+R MISAL2 XCW_0_V unit=w n=512 nop=2 rep=5 art=22/22/23 pit=170/171/174 ctl_art=8/8/8 ctl_pit=58/59/62 shell=DA36 bshell=DA36 if1=22
+R MISAL2 XCW_0_V unit=w n=512 nop=4 rep=5 art=27/27/28 pit=213/213/216 ctl_art=11/11/12 ctl_pit=87/87/90 shell=8666 bshell=8666 if1=27
+R MISAL2 XCW_0_V unit=w n=512 nop=8 rep=5 art=34/34/35 pit=268/269/274 ctl_art=18/18/19 ctl_pit=143/143/146 shell=6A49 bshell=6A49 if1=34
+R MISAL2 XCW_0_V unit=w n=512 nop=16 rep=5 art=48/48/49 pit=380/381/386 ctl_art=32/32/33 ctl_pit=254/255/259 shell=6398 bshell=6398 if1=48
+R MISAL2 XCW_0_V unit=w n=512 nop=32 rep=5 art=76/76/77 pit=604/604/611 ctl_art=60/60/61 ctl_pit=479/479/483 shell=3F45 bshell=3F45 if1=76
+R MISAL2 XCW_1_V unit=w n=512 nop=0 rep=5 art=20/20/20 pit=155/155/159 ctl_art=4/4/5 ctl_pit=31/31/33 shell=7E0F bshell=7E0F if1=20
+R MISAL2 XCW_1_V unit=w n=512 nop=2 rep=5 art=22/22/22 pit=170/171/175 ctl_art=8/8/8 ctl_pit=59/59/62 shell=5204 bshell=5204 if1=22
+R MISAL2 XCW_1_V unit=w n=512 nop=4 rep=5 art=27/27/28 pit=212/213/216 ctl_art=11/12/12 ctl_pit=86/87/90 shell=01D5 bshell=01D5 if1=27
+R MISAL2 XCW_1_V unit=w n=512 nop=8 rep=5 art=34/34/35 pit=268/269/273 ctl_art=18/19/19 ctl_pit=142/143/146 shell=B805 bshell=B805 if1=34
+R MISAL2 XCW_1_V unit=w n=512 nop=16 rep=5 art=48/48/49 pit=380/381/385 ctl_art=32/32/33 ctl_pit=254/255/258 shell=F279 bshell=F279 if1=48
+R MISAL2 XCW_1_V unit=w n=512 nop=32 rep=5 art=76/76/77 pit=604/604/610 ctl_art=60/60/61 ctl_pit=478/479/483 shell=A9B1 bshell=A9B1 if1=76
+R MISAL2 XCW_3_V unit=w n=512 nop=0 rep=5 art=36/36/37 pit=284/284/288 ctl_art=4/5/5 ctl_pit=30/31/33 shell=3465 bshell=3465 if1=36
+R MISAL2 XCW_3_V unit=w n=512 nop=2 rep=5 art=36/36/37 pit=284/284/289 ctl_art=8/8/8 ctl_pit=59/59/62 shell=5241 bshell=5241 if1=36
+R MISAL2 XCW_3_V unit=w n=512 nop=4 rep=5 art=36/36/37 pit=284/284/289 ctl_art=11/11/12 ctl_pit=86/87/90 shell=1E92 bshell=1E92 if1=36
+R MISAL2 XCW_3_V unit=w n=512 nop=8 rep=5 art=41/41/42 pit=326/326/331 ctl_art=18/18/19 ctl_pit=143/143/145 shell=0CBC bshell=0CBC if1=41
+R MISAL2 XCW_3_V unit=w n=512 nop=16 rep=5 art=53/53/54 pit=422/423/429 ctl_art=32/32/33 ctl_pit=255/255/258 shell=C19A bshell=C19A if1=53
+R MISAL2 XCW_3_V unit=w n=512 nop=32 rep=5 art=81/81/82 pit=645/646/654 ctl_art=60/60/61 ctl_pit=478/479/483 shell=9478 bshell=9478 if1=81
+R MISAL2 XCB_0_V unit=b n=512 nop=0 rep=5 art=18/18/19 pit=141/141/145 ctl_art=4/5/5 ctl_pit=30/31/33 shell=5B3A bshell=5B3A if1=18
+R MISAL2 XCB_0_V unit=b n=512 nop=2 rep=5 art=20/20/21 pit=156/157/161 ctl_art=8/8/8 ctl_pit=58/59/62 shell=DA36 bshell=DA36 if1=20
+R MISAL2 XCB_0_V unit=b n=512 nop=4 rep=5 art=25/25/26 pit=199/199/203 ctl_art=11/11/12 ctl_pit=87/87/90 shell=8666 bshell=8666 if1=25
+R MISAL2 XCB_0_V unit=b n=512 nop=8 rep=5 art=32/32/33 pit=254/255/260 ctl_art=18/18/19 ctl_pit=142/143/146 shell=6A49 bshell=6A49 if1=32
+R MISAL2 XCB_0_V unit=b n=512 nop=16 rep=5 art=46/46/47 pit=366/367/372 ctl_art=32/32/33 ctl_pit=254/255/258 shell=6398 bshell=6398 if1=46
+R MISAL2 XCB_0_V unit=b n=512 nop=32 rep=5 art=74/74/75 pit=590/591/597 ctl_art=60/60/61 ctl_pit=478/478/484 shell=3F45 bshell=3F45 if1=74
+R MISAL2 XCR_0_V unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/323/327 ctl_art=4/5/5 ctl_pit=30/31/34 shell=5B3A bshell=5B3A if1=41
+R MISAL2 XCR_1_V unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/323/327 ctl_art=4/5/5 ctl_pit=31/31/33 shell=7E0F bshell=7E0F if1=41
+R MISAL2 XCR_3_V unit=w n=512 nop=0 rep=5 art=74/74/75 pit=588/589/593 ctl_art=4/5/5 ctl_pit=30/31/34 shell=3465 bshell=3465 if1=74
+R MISAL2 XAW_0_V unit=w n=512 nop=0 rep=5 art=18/18/19 pit=141/141/145 ctl_art=5/5/5 ctl_pit=30/31/33 shell=1EE6 bshell=1EE6 if1=18
+R MISAL2 XAW_0_V unit=w n=512 nop=2 rep=5 art=20/20/21 pit=156/157/161 ctl_art=8/8/8 ctl_pit=58/59/61 shell=F28E bshell=F28E if1=20
+R MISAL2 XAW_0_V unit=w n=512 nop=4 rep=5 art=25/26/26 pit=199/199/203 ctl_art=11/12/12 ctl_pit=87/87/89 shell=713E bshell=713E if1=25
+R MISAL2 XAW_0_V unit=w n=512 nop=8 rep=5 art=32/32/33 pit=254/255/259 ctl_art=18/19/19 ctl_pit=142/143/146 shell=0058 bshell=0058 if1=33
+R MISAL2 XAW_0_V unit=w n=512 nop=16 rep=5 art=46/46/47 pit=366/367/372 ctl_art=32/33/33 ctl_pit=254/254/259 shell=DA78 bshell=DA78 if1=46
+R MISAL2 XAW_0_V unit=w n=512 nop=32 rep=5 art=74/74/75 pit=590/590/597 ctl_art=60/60/61 ctl_pit=478/479/484 shell=2B8A bshell=2B8A if1=74
+R MISAL2 XAW_1_V unit=w n=512 nop=0 rep=5 art=18/18/19 pit=140/141/144 ctl_art=4/5/5 ctl_pit=30/31/34 shell=3BD3 bshell=3BD3 if1=18
+R MISAL2 XAW_1_V unit=w n=512 nop=2 rep=5 art=20/20/21 pit=157/157/161 ctl_art=8/8/8 ctl_pit=58/59/62 shell=7ABC bshell=7ABC if1=20
+R MISAL2 XAW_1_V unit=w n=512 nop=4 rep=5 art=25/25/26 pit=199/199/203 ctl_art=11/12/12 ctl_pit=86/87/91 shell=F68D bshell=F68D if1=25
+R MISAL2 XAW_1_V unit=w n=512 nop=8 rep=5 art=32/32/33 pit=254/255/259 ctl_art=18/18/19 ctl_pit=142/142/146 shell=D214 bshell=D214 if1=32
+R MISAL2 XAW_1_V unit=w n=512 nop=16 rep=5 art=46/46/47 pit=366/367/372 ctl_art=32/32/33 ctl_pit=254/255/259 shell=4B99 bshell=4B99 if1=46
+R MISAL2 XAW_1_V unit=w n=512 nop=32 rep=5 art=74/74/75 pit=590/590/597 ctl_art=60/60/61 ctl_pit=478/478/483 shell=BD7E bshell=BD7E if1=74
+R MISAL2 XAW_3_V unit=w n=512 nop=0 rep=5 art=34/34/35 pit=270/270/274 ctl_art=4/4/5 ctl_pit=31/31/34 shell=71B9 bshell=71B9 if1=34
+R MISAL2 XAW_3_V unit=w n=512 nop=2 rep=5 art=34/34/35 pit=270/270/274 ctl_art=8/8/8 ctl_pit=58/59/62 shell=7AF9 bshell=7AF9 if1=34
+R MISAL2 XAW_3_V unit=w n=512 nop=4 rep=5 art=34/34/35 pit=270/270/275 ctl_art=11/11/12 ctl_pit=87/87/90 shell=E9CA bshell=E9CA if1=34
+R MISAL2 XAW_3_V unit=w n=512 nop=8 rep=5 art=40/40/40 pit=312/312/318 ctl_art=18/18/19 ctl_pit=143/143/146 shell=66AD bshell=66AD if1=40
+R MISAL2 XAW_3_V unit=w n=512 nop=16 rep=5 art=52/52/53 pit=408/409/414 ctl_art=32/32/33 ctl_pit=255/255/259 shell=787A bshell=787A if1=52
+R MISAL2 XAW_3_V unit=w n=512 nop=32 rep=5 art=80/80/81 pit=632/632/640 ctl_art=60/60/61 ctl_pit=478/479/483 shell=80B7 bshell=80B7 if1=80
+R MISAL2 XAR_0_V unit=w n=512 nop=0 rep=5 art=41/41/41 pit=322/322/326 ctl_art=4/5/5 ctl_pit=31/31/33 shell=1EE6 bshell=1EE6 if1=41
+R MISAL2 XAR_1_V unit=w n=512 nop=0 rep=5 art=41/41/41 pit=323/323/326 ctl_art=4/4/5 ctl_pit=30/31/33 shell=3BD3 bshell=3BD3 if1=41
+R MISAL2 XAR_3_V unit=w n=512 nop=0 rep=5 art=74/74/75 pit=588/588/591 ctl_art=4/4/5 ctl_pit=31/31/34 shell=71B9 bshell=71B9 if1=74
+STATE MISAL2 pegc=256 packed bank0=0 phase=_V
+R MISAL2 PKW_0_V unit=w n=512 nop=0 rep=5 art=8/8/9 pit=58/59/63 ctl_art=5/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=8
+R MISAL2 PKW_0_V unit=w n=512 nop=2 rep=5 art=12/12/13 pit=89/89/96 ctl_art=8/8/9 ctl_pit=58/59/61 shell=70B0 bshell=70B0 if1=12
+R MISAL2 PKW_0_V unit=w n=512 nop=4 rep=5 art=15/16/16 pit=116/116/120 ctl_art=12/12/12 ctl_pit=88/89/92 shell=1B96 bshell=1B96 if1=16
+R MISAL2 PKW_0_V unit=w n=512 nop=8 rep=5 art=22/22/23 pit=170/170/175 ctl_art=19/19/19 ctl_pit=142/143/146 shell=3825 bshell=3825 if1=22
+R MISAL2 PKW_0_V unit=w n=512 nop=16 rep=5 art=36/37/38 pit=283/284/290 ctl_art=33/33/33 ctl_pit=254/255/258 shell=19F2 bshell=19F2 if1=37
+R MISAL2 PKW_0_V unit=w n=512 nop=32 rep=5 art=64/64/65 pit=506/506/513 ctl_art=61/61/61 ctl_pit=478/478/485 shell=D40C bshell=D40C if1=64
+R MISAL2 PKW_1_V unit=w n=512 nop=0 rep=5 art=8/8/9 pit=58/59/63 ctl_art=5/5/5 ctl_pit=30/31/33 shell=EFCC bshell=EFCC if1=8
+R MISAL2 PKW_1_V unit=w n=512 nop=2 rep=5 art=12/12/13 pit=86/90/95 ctl_art=8/8/9 ctl_pit=58/59/62 shell=4C65 bshell=4C65 if1=12
+R MISAL2 PKW_1_V unit=w n=512 nop=4 rep=5 art=16/16/17 pit=118/118/123 ctl_art=12/12/13 ctl_pit=88/89/92 shell=EA00 bshell=EA00 if1=16
+R MISAL2 PKW_1_V unit=w n=512 nop=8 rep=5 art=22/22/23 pit=171/171/176 ctl_art=19/19/19 ctl_pit=142/143/146 shell=023A bshell=023A if1=22
+R MISAL2 PKW_1_V unit=w n=512 nop=16 rep=5 art=36/37/37 pit=282/282/290 ctl_art=33/33/33 ctl_pit=254/254/258 shell=B143 bshell=B143 if1=36
+R MISAL2 PKW_1_V unit=w n=512 nop=32 rep=5 art=64/64/65 pit=507/507/513 ctl_art=61/61/62 ctl_pit=478/478/486 shell=E065 bshell=E065 if1=64
+R MISAL2 PKW_3_V unit=w n=512 nop=0 rep=5 art=16/16/17 pit=122/122/127 ctl_art=5/5/5 ctl_pit=31/31/33 shell=A5A6 bshell=A5A6 if1=16
+R MISAL2 PKW_3_V unit=w n=512 nop=2 rep=5 art=19/19/20 pit=146/146/151 ctl_art=8/8/9 ctl_pit=58/59/61 shell=4C20 bshell=4C20 if1=19
+R MISAL2 PKW_3_V unit=w n=512 nop=4 rep=5 art=22/22/23 pit=171/171/176 ctl_art=12/12/12 ctl_pit=88/89/92 shell=F547 bshell=F547 if1=22
+R MISAL2 PKW_3_V unit=w n=512 nop=8 rep=5 art=29/29/30 pit=226/226/232 ctl_art=19/19/19 ctl_pit=142/143/146 shell=B683 bshell=B683 if1=29
+R MISAL2 PKW_3_V unit=w n=512 nop=16 rep=5 art=43/43/44 pit=338/338/345 ctl_art=33/33/33 ctl_pit=254/255/259 shell=82A0 bshell=82A0 if1=43
+R MISAL2 PKW_3_V unit=w n=512 nop=32 rep=5 art=71/71/72 pit=562/562/568 ctl_art=61/61/62 ctl_pit=478/478/485 shell=DDAC bshell=DDAC if1=71
+R MISAL2 PKD_0_V unit=d n=512 nop=0 rep=5 art=10/10/10 pit=73/73/77 ctl_art=5/5/5 ctl_pit=30/31/34 shell=BDFC bshell=BDFC if1=10
+R MISAL2 PKD_0_V unit=d n=512 nop=2 rep=5 art=14/15/15 pit=109/110/114 ctl_art=8/8/9 ctl_pit=58/59/62 shell=70B0 bshell=70B0 if1=15
+R MISAL2 PKD_0_V unit=d n=512 nop=4 rep=5 art=18/18/19 pit=135/136/140 ctl_art=12/12/12 ctl_pit=88/88/92 shell=1B96 bshell=1B96 if1=18
+R MISAL2 PKD_0_V unit=d n=512 nop=8 rep=5 art=25/25/26 pit=189/189/196 ctl_art=19/19/19 ctl_pit=143/143/146 shell=3825 bshell=3825 if1=25
+R MISAL2 PKD_0_V unit=d n=512 nop=16 rep=5 art=38/38/39 pit=297/298/301 ctl_art=33/33/34 ctl_pit=254/255/258 shell=19F2 bshell=19F2 if1=38
+R MISAL2 PKD_0_V unit=d n=512 nop=32 rep=5 art=66/66/67 pit=520/520/527 ctl_art=61/61/62 ctl_pit=478/478/485 shell=D40C bshell=D40C if1=66
+R MISAL2 PKD_1_V unit=d n=512 nop=0 rep=5 art=16/16/17 pit=121/121/126 ctl_art=5/5/5 ctl_pit=30/31/33 shell=EFCC bshell=EFCC if1=16
+R MISAL2 PKD_1_V unit=d n=512 nop=2 rep=5 art=21/21/22 pit=159/159/163 ctl_art=8/8/9 ctl_pit=58/59/61 shell=4C65 bshell=4C65 if1=21
+R MISAL2 PKD_1_V unit=d n=512 nop=4 rep=5 art=24/25/25 pit=186/187/193 ctl_art=12/12/13 ctl_pit=86/89/91 shell=EA00 bshell=EA00 if1=24
+R MISAL2 PKD_1_V unit=d n=512 nop=8 rep=5 art=31/31/32 pit=240/241/246 ctl_art=19/19/19 ctl_pit=142/142/146 shell=023A bshell=023A if1=31
+R MISAL2 PKD_1_V unit=d n=512 nop=16 rep=5 art=45/45/46 pit=352/352/358 ctl_art=33/33/33 ctl_pit=254/254/258 shell=B143 bshell=B143 if1=45
+R MISAL2 PKD_1_V unit=d n=512 nop=32 rep=5 art=73/73/75 pit=576/576/586 ctl_art=61/61/62 ctl_pit=478/478/486 shell=E065 bshell=E065 if1=73
+R MISAL2 PKR_0_V unit=w n=512 nop=0 rep=5 art=35/35/35 pit=272/272/274 ctl_art=5/5/5 ctl_pit=30/31/33 shell=BDFC bshell=BDFC if1=35
+R MISAL2 PKR_1_V unit=w n=512 nop=0 rep=5 art=35/35/35 pit=271/272/275 ctl_art=5/5/5 ctl_pit=30/31/33 shell=EFCC bshell=EFCC if1=35
+R MISAL2 PKR_3_V unit=w n=512 nop=0 rep=5 art=63/63/64 pit=497/498/502 ctl_art=5/5/5 ctl_pit=30/31/33 shell=A5A6 bshell=A5A6 if1=63
+RESTORE MISAL2 Q9A0A_256 was=00 now=00 kind=readback OK
+RESTORE MISAL2 Q9A04_16C was=00 now=00 kind=readback OK
+RESTORE MISAL2 E0004_BANK was=- now=00 kind=default OK
+RESTORE MISAL2 P7E_TILE was=- now=00 kind=default OK
+RESTORE MISAL2 PA3A4A5A6_00 was=- now=00 kind=default OK
+RESTORE MISAL2 TRAM_1000_1FFF was=0000 now=0000 kind=self OK
+RESTORE MISAL2 BDA054C_BIT7 was=00 now=00 kind=readback OK
+RESTORE MISAL2 BDA054D_BIT2 was=00 now=00 kind=readback OK
+I MISAL2 sync_to=0
+RESTORE MISAL2 P7C_GRCG was=- now=00 kind=default OK
+RESTORE MISAL2 PA6_PAGE was=- now=00 kind=default OK
+RESTORE MISAL2 Q9A07_EGC was=00 now=00 kind=readback OK
+END:MISAL2 rows=428 sum=9E07
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD802369 now=FD802369 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=3E7D
+XE10T DONE sections=4 sum=4EF2C8A8

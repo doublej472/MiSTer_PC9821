@@ -347,6 +347,13 @@ module tb_pc9821_mpu;
         chk(b0 == 8'hFD, "the repeated H.CLK byte is not 0xFD");
         chk((t0 > 200_000) && (t0 < 300_000),
             "the H.CLK period is not the reference's stepclock (250_000 cycles)");
+        // The queue is empty again (the next tick is 5 ms away): a data read now answers the
+        // LAST byte read, 0xFD, not the reset 0xFE - NP2kai cbus/mpu98ii.c:1084-1110 returns
+        // mpu98.data, which only a pop (or an intreq) moves.
+        bus_rd(16'hE0D2, b0);
+        chk(b0[7] == 1'b1, "the response queue is not empty after the H.CLK byte was read");
+        bus_rd(16'hE0D0, b0);
+        chk(b0 == 8'hFD, "an empty-queue data read after the 0xFD pop does not return the latch 0xFD");
 
         // ---- 8. 0x94 turns it off again ----------------------------------------------
         bus_wr(16'hE0D2, 8'h94);

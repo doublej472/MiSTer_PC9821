@@ -92,6 +92,11 @@ def strip_comments(text):
 
 
 def git_show(rev, path):
+    if subprocess.run(["git", "rev-parse", "--verify", "-q", "%s^{commit}" % rev], cwd=REPO,
+                      capture_output=True).returncode:
+        print("SKIP: revision %s is not in this clone (a squashed release carries no history); "
+              "this proof compares against it" % rev)
+        sys.exit(2)
     out = subprocess.run(
         ["git", "show", "%s:%s" % (rev, path)],
         cwd=REPO, capture_output=True, text=True,

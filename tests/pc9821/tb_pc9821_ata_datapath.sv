@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_DATAPATH:
-// The IDE sector data path end to end through the real block adapter: a full 512-byte PIO sector read and write are byte-exact against a synthetic disk image, the CHS and LBA28 forms translate to the reference's LBA and the read-ahead presents each sector once, the 16-bit data port assembles the sector word little-endian across 0x640/0x641 while the DRQ/data-phase handshake and the task-file advance follow NP2kai, and the measured per-sector cost is reported in clk_sys and MB/s at the CURRENT class table (IO_MIN_HOLD = 4, a 16-bit data word = 6 clk_sys, so the data phase is 1,536 clk_sys = 16.7 MB/s and a fetch-bound sector is 4,937 = 5.2 MB/s).
+// The IDE sector data path end to end through the real block adapter: a full 512-byte PIO sector read and write are byte-exact against a synthetic disk image, the CHS and LBA28 forms translate to the reference's LBA and the read-ahead presents each sector once, the 16-bit data port assembles the sector word little-endian across 0x640/0x641 while the DRQ/data-phase handshake and the task-file advance follow NP2kai, and the per-sector cost is reported (not asserted, beyond a 2.5 MB/s floor on the 16-sector read-ahead run) in clk_sys and MB/s with the data-port word priced at the 9 clk_sys tb_pc9821_ata_iowait measures through the real pc9821_iobus, so the data phase is 2,304 clk_sys (11.1 MB/s) and the sector stays fetch-bound behind the measured 4600-clk HPS round trip.
 
 // The DUT is the shipped pair: pc9821_ata wired to pc9821_block_io exactly as
 // pc9821_system wires them, driven on the guest side through the task-file ports
@@ -137,6 +137,11 @@ module tb_pc9821_ata_datapath;
       @(posedge clk);
       @(negedge clk);
       io_wr = 0;
+      // One idle cycle: separate I/O accesses on the real bus are at least five clk_sys apart
+      // (pc9821_iobus S_BYTE -> S_REPLY -> S_HOLD -> S_IDLE -> S_IOWAIT -> S_BYTE), and the ATA's
+      // CHS range check is two stages behind the task file (pc9821_ata u_chs, u_lba_room), so a
+      // command two cycles after a task-file write is a spacing the bus never produces.
+      @(negedge clk);
     end
   endtask
 
@@ -169,12 +174,13 @@ module tb_pc9821_ata_datapath;
     end
   endtask
 
-  // The same word access with the CURRENT I/O class: iobus charges 0x0640/0x0641
-  // IO_MIN_HOLD = 4 per access (pc9821_iobus.sv), and a 16-bit word is ONE
-  // access that walks two lanes, so the word costs 6 clk_sys -- measured through the real
-  // bus by tb_pc9821_ata_iowait (6 delivered, 5 of them stalled). 28 here was an earlier
-  // superseded class 30 and made every throughput figure 5x pessimistic.
-  localparam PIO_GAP = 2;
+  // The same word access priced at the cost tb_pc9821_ata_iowait MEASURES through the real
+  // pc9821_iobus: 0x0640/0x0641 sit at the class floor (IO_MIN_HOLD = 4) and a 16-bit word
+  // is ONE access that walks two lanes, each paying its class, so the word is delivered in
+  // 9 clk_sys (8 of them stalled). read_byte is 2 cycles, so PIO_GAP completes the word.
+  // Earlier values here (28, then 2 = a 6-clk word) were superseded class models.
+  localparam WORD_CYCLES = 9;                // tb_pc9821_ata_iowait: delivered = 9
+  localparam PIO_GAP = WORD_CYCLES - 4;
   task automatic read_word_class(output [15:0] data);
     reg [7:0] l, h;
     begin
@@ -228,6 +234,21 @@ module tb_pc9821_ata_datapath;
         n = n + 1;
       end
       if (ata.xfer_state !== 3'd0) fail("transfer did not return to X_IDLE");
+    end
+  endtask
+
+  // The command's first status, once it has dispatched: poll (bounded) for the bit the
+  // command enters, then the caller pins the whole byte. The dispatch latency itself (a media
+  // command is held MEDIA_WAIT clk, pc9821_ata.sv) is not guest-visible -- the guest's next
+  // access is at least five clk_sys after the write -- so a sample at a fixed clk would pin it.
+  task automatic wait_status_bit(input integer bitn);
+    integer k;
+    begin
+      k = 0;
+      while (!ata.status_reg[bitn] && k < 64) begin
+        @(negedge clk);
+        k = k + 1;
+      end
     end
   endtask
 
@@ -352,6 +373,7 @@ module tb_pc9821_ata_datapath;
     // task file names; ideio_r16 hands back buf[0..511] two bytes at a time.
     set_lba28(32'h00001234, 8'h01);
     write_byte(16'h064E, 8'h20);
+    wait_status_bit(7);
     check("read_command_status_bsy", ata.status_reg, 8'h80);
     read_one_sector(32'h00001234);
     check("read_sector_byte_exact", data_bad, 0);
@@ -367,6 +389,7 @@ module tb_pc9821_ata_datapath;
     write_bad = 0;
     set_lba28(32'h00002000, 8'h01);
     write_byte(16'h064E, 8'h30);
+    wait_status_bit(3);
     check("write_command_status_drq", ata.status_reg, 8'h58);
     wait_drq;
     for (i = 0; i < 256; i = i + 1) write_word(image_word(32'h00002000, i[7:0]));
@@ -508,6 +531,7 @@ module tb_pc9821_ata_datapath;
     read_byte(16'h064E, value);
     set_lba28(32'h00005000, 8'h01);
     write_byte(16'h064E, 8'h30);
+    wait_status_bit(3);
     check("write_drq_at_command", ata.status_reg, 8'h58);
     check("write_no_irq_at_command", {31'b0, irq}, 32'd0);
     wait_drq;
@@ -576,15 +600,16 @@ module tb_pc9821_ata_datapath;
     sd_abort_next = 1;
     set_lba28(32'h00007000, 8'h01);
     write_byte(16'h064E, 8'h20);
+    wait_status_bit(7);                    // dispatched (BSY), then wait for the abort
     wait_idle;
     check("block_error_abort_status", ata.status_reg, 8'h41);
     check("block_error_abort_error", ata.error_reg, 8'h04);
     settle;
 
     // ---- (d) THROUGHPUT ----
-    // The machine's own budget: a 16-bit word costs the current class table's 6 clk_sys on
-    // the data port (1,536 clk_sys per sector), and the HPS round trip costs the measured
-    // ~4600 cycles before the burst.
+    // The core's own budget: a 16-bit word costs the 9 clk_sys tb_pc9821_ata_iowait measures
+    // on the data port (2,304 clk_sys per sector), and the HPS round trip costs the measured
+    // ~4600 cycles before the burst. Reported, not asserted, beyond the 2.5 MB/s floor.
     // The measured figure is the sector cost at 50 MHz, so MB/s is 512*50/cycles.
     begin : throughput
       integer t0, t1, elapsed, per_sector_x100, mbps_x100;
@@ -631,7 +656,7 @@ module tb_pc9821_ata_datapath;
       mbps_x100 = (16 * 512 * 50 * 100) / elapsed;
       $display("THROUGHPUT readahead sectors=16 cycles=%0d per_sector=%0.2f MB/s=%0.2f",
                elapsed, per_sector_x100 / 100.0, mbps_x100 / 100.0);
-      $display("THROUGHPUT model word_cycles=6 HPS_latency=%0d", SD_LAT);
+      $display("THROUGHPUT model word_cycles=%0d HPS_latency=%0d", WORD_CYCLES, SD_LAT);
       check("readahead_byte_exact", data_bad, 0);
       if (mbps_x100 < 250)
         fail("16-sector throughput below 2.5 MB/s: the read-ahead is not hiding the fetch");

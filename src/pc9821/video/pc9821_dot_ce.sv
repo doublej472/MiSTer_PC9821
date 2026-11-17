@@ -1,29 +1,29 @@
-// The PC-98 dot enable on clk_sys: one cycle per dot at EXACTLY 400/19 MHz (21.052 631 6 MHz), the
-// 24 kHz mode's dot rate, at any clk_sys - or, while 0x09A8 bit 0 is set (`c31`), at the 31 kHz
-// mode's measured 25.168 MHz (pc9821_vclk_pkg has the capture and the exact ratio).
+// The PC-98 dot enable on clk_sys: one cycle per dot at the 24 kHz mode's dot rate, 400/19 MHz
+// (21.052 631 6 MHz) within 0.04 ppm, at any clk_sys - or, while 0x09A8 bit 0 is set (`c31`), at the
+// 31 kHz mode's measured 25.168 MHz (pc9821_vclk_pkg has the capture and both exact ratios).
 //
-// THE RATE. 400/19 MHz = 50 MHz x 8/19: the board's 50 MHz reference times 8/19, which is also what
-// the video PLL makes its own clock from (2 x 400/19 MHz = 800 MHz / 19, tools/profile/vpll_template.v).
-// The rate is a MODELLING ASSUMPTION, not a measurement of the machine's dot clock: the in-tree
-// corroboration is the raster (the probed horizontal blank is 208/848 = 24.53 % of a line, an 848-dot
-// line at the ~24.8 kHz the machine runs; docs/pc9821-port-status.md "Pixel clock and the video
-// pipeline" has the derivation). It is an exact ratio, not the carry of a fixed-width accumulator
-// (a 24-bit one stepping round(21_052_600 x 2^24 / SYS_FREQ) lands 1.5 ppm below this rate).
+// THE RATE. 400/19 MHz = 50 MHz x 8/19 is the MODELLING ASSUMPTION, not a measurement of the
+// machine's dot clock: the in-tree corroboration is the raster (the probed horizontal blank is
+// 208/848 = 24.53 % of a line, an 848-dot line at the ~24.8 kHz the machine runs;
+// docs/pc9821-port-status.md "Pixel clock and the video pipeline" has the derivation). The enable
+// runs at exactly the video PLL's 24 kHz setting over two, 25 MHz x (20 + 13797/65536) / 24 =
+// 21 052 630.74 Hz: the closest a legal fractional-N setting comes to 400/19 MHz (pc9821_vclk_pkg
+// says why 800/19 MHz itself is not legal).
 //
 // WHY EXACT. The analog output reads the core's picture through a small FIFO into the video clock
-// domain (pc9821_video_out). The video clock is 2 x 400/19 MHz from the same 50 MHz reference and clk_sys
-// is an integer-N PLL output of it (build_profile.py verifies both read back exactly), so the two
-// sides' dot rates are the same rational number and the FIFO's fill can never drift: no frame is
-// dropped or repeated, and the output needs no slip correction.
+// domain (pc9821_video_out). The video clock is the video PLL's output from the same 50 MHz
+// reference and clk_sys is an integer-N PLL output of it (build_profile.py verifies both read back
+// exactly), so this enable at exactly the PLL's rational over two keeps the two sides' dot rates
+// the same rational number and the FIFO's fill can never drift: no frame is dropped or repeated,
+// and the output needs no slip correction.
 //
 // THE ACCUMULATOR. ce fires NUM times every DEN clocks, NUM/DEN = dot rate / SYS_FREQ. Both rates are
-// 25 MHz x (M + K/2^32) / 19 (the video PLL's output over two, pc9821_vclk_pkg), so they share one
-// denominator and only NUM moves with `c31`: at the shipped 90 MHz the 24 kHz rate is 40/171
-// (scaled by the common factor to 327680/1400832, which leaves its enable pattern bit-identical
-// to the 40/171 accumulator's) and the 31 kHz rate 391735/1400832 (21 bits). Each dot is floor or
-// ceil of DEN/NUM clocks (4 or 5 at 90 MHz for the 24 kHz dot, 3 or 4 for the 31 kHz one); only
-// the average matters on this side. A change of `c31` takes effect on the next clock
-// (the machine switches oscillators with the port write; the raster just runs on at the new rate).
+// 25 MHz x (M + K/2^32) / 24 (the video PLL's output over two, pc9821_vclk_pkg), so they share one
+// denominator and only NUM moves with `c31`: at the shipped 90 MHz the 24 kHz rate is
+// 6622585/28311552 and the 31 kHz rate 7917180/28311552 (26 bits). Each dot is floor or ceil of
+// DEN/NUM clocks (4 or 5 at 90 MHz for the 24 kHz dot, 3 or 4 for the 31 kHz one); only the
+// average matters on this side. A change of `c31` takes effect on the next clock (the machine
+// switches oscillators with the port write; the raster just runs on at the new rate).
 //
 // GUEST-VISIBLE: every raster event the guest can see (pc9821_crtc's vsync IRQ, the GDC status bits,
 // the line timing) counts these enables, so the guest's time base is this rate at every clk_sys
@@ -53,7 +53,7 @@ function automatic longint gcd(input longint a, input longint b);
 	return x;
 endfunction
 
-// rate / SYS_FREQ = 25e6 x (M x 2^F + K >> (32 - F)) / (19 x 2^F x SYS_FREQ), F = FRAC_BITS.
+// rate / SYS_FREQ = 25e6 x (M x 2^F + K >> (32 - F)) / (C0 x 2^F x SYS_FREQ), F = FRAC_BITS.
 localparam longint SCALE     = 64'd1 << FRAC_BITS;
 localparam longint KSH       = 64'd32 - longint'(FRAC_BITS);
 localparam longint MK24      = longint'(VPLL_M24) * SCALE + (longint'(VPLL_K24) >> KSH);
@@ -78,7 +78,11 @@ generate if (NUM31 >= DEN || NUM24 >= DEN) begin : g_too_slow
 	pc9821_dot_ce_needs_clk_sys_above_25_17_MHz too_slow ();
 end endgenerate
 
-reg  [W-1:0] acc;
+// A power-up value: the accumulator's reset is a one-clock re-seed (pc9821_raster_reseed), not a
+// level held from power-up.
+/* verilator lint_off PROCASSINIT */
+reg  [W-1:0] acc = '0;
+/* verilator lint_on PROCASSINIT */
 wire [W-1:0] sum = acc + (c31 ? W'(NUM31) : W'(NUM24));
 assign ce = (sum >= W'(DEN));
 always @(posedge clk) begin

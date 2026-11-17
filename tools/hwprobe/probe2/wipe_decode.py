@@ -92,9 +92,10 @@ CORE_FRAME_NS = CORE_FRAME_TICKS * NS_PER_TICK
 CORE_LINES = 440                             # FLIP.TXT, same capture
 # DERIVED, not measured by the replay: the row body and the ALU body are the
 # z486's instruction cost from the measured per-instruction rates applied to the
-# row's instruction mix (wipe-step-probe-REPORT.md section 5.2). They are CPU
+# row's instruction mix (unsourced: the derivation was in a report that is no longer
+# kept in the tree; re-derive before quoting these). They are CPU
 # numbers, so a GVRAM-side change (like the fix above) does not move them.
-CORE_ROW_CLK = 890                           # per row body, report section 5.2
+CORE_ROW_CLK = 890                           # per row body (derived; see above)
 CORE_ALU_CLK_PER_ITER = 9.0                  # 6 instr at the measured 1-2 clk
 CORE_RUN_LOGO_EDGES = 281.0                  # 151 + 65 + 65 frame units
 

@@ -4,9 +4,10 @@
 // 24 kHz raster, the text GDC1 model and the text-cell render; the text MEMORY and the
 // memory-switch policy are not its job, so they own themselves here.
 //
-// One clk (clk_sys; clk_vid is the same net at the top level). Port A is the CPU (the
-// iobus bridge's TRAM window, gated and seeded by the switches below); port B is the
-// text scanout / row-cache walker's read.
+// One clk, clk_sys (the scanout walker runs on clk_sys under the dot enable; clk_vid is a
+// separate clock, reached only through pc9821_video_out's FIFO, docs/clock-domains.md V1/V2).
+// Port A is the CPU (the iobus bridge's TRAM window, gated and seeded by the switches below);
+// port B is the text scanout / row-cache walker's read.
 //
 // THE HARDWARE MEMORY SWITCHES live in this memory's own tail: eight cells at
 // 0xA3FE2 + i*4 (NP2kai bios/biosmem.h MEMB_MSW1..8), battery-backed configuration the

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_COHERENCE: the write-combining buffer (8 word slots) holds every coherence the GVRAM's single datapath promises, against the REAL src/memory/sdram.v storage shape and a golden byte image: a read of a just-written word returns the buffer's copy and not stale SDRAM, a store to a word updates every write path (the plain lane store, the full-word GRCG/EGC store, the partial-store fill and the EGC two-word burst), every dirty word is written back before the scanout's SDRAM fetch reads it (flush/drain, including a display-page change), a dirty victim is written back and a clean one dropped (eviction), a one-lane store preserves the other three planes (partial-byte RMW), and a read fill never overwrites a word the buffer still holds dirty (the over-fetched beat). It drives interleaved reads and writes to the same and adjacent words, both pages, and the posted-write-then-read-own-word shape, then compares the WHOLE SDRAM image to the golden model, so a lost write-back cannot hide behind a buffer hit.
+// TB_PC9821_GVRAM_COHERENCE: every reader of the GVRAM's block-RAM array (pc9821_gvram_mem, the only copy: the write-combining buffer this bench was written for is gone) sees every writer's bytes, against a golden byte image: a read of a just-written byte returns it through the plane window, a store through each write path (the plain lane store, the GRCG TDW store with a partial plane mask and its RMW, the EGC byte, word and dword stores) updates exactly the planes and columns it names and no neighbour or other-page byte, a one-lane store preserves the other three planes, the EGC reader and the plain reader agree, and the scanout's line fetch returns the golden bytes. It drives interleaved reads and writes to the same and adjacent words, both pages, the plane end and a fixed pseudo-random mix of every client and width, then compares the WHOLE array to the golden image after each phase.
 //
 // WHY THIS EXISTS. The WCB was built first; later changes then changed the fill width and the
 // invalidation scope. Every one of those
@@ -345,15 +345,15 @@ module tb_pc9821_gvram_coherence;
     end
   endtask
 
-  // A GRCG store with a PARTIAL plane mask (active-high enable): only the enabled planes take
-  // the tile, which is the partial-byte - and full-word-hit - store shape.
+  // A GRCG TDW store with a PARTIAL plane mask (`pmask` is active-high here; the mode byte's
+  // bits 0-3 are its complement, bit clear = enabled): only the enabled planes take the tile.
   task automatic grcg_put_mask(input integer pg, input [14:0] off, input [7:0] tile,
                                input [3:0] pmask);
     reg [31:0] d;
     integer k;
     begin
       @(negedge clk);
-      grcg_we = 1'b1; grcg_addr = 8'h7C; grcg_din = 8'h80 | (~pmask);
+      grcg_we = 1'b1; grcg_addr = 8'h7C; grcg_din = {4'h8, ~pmask};   // TDW (bit 6 clear), bit CLEAR = plane enabled
       @(negedge clk); grcg_we = 1'b0;
       grcg_we = 1'b1; grcg_addr = 8'h7E; grcg_din = tile;
       @(negedge clk); grcg_addr = 8'h7E; grcg_din = tile;
@@ -419,7 +419,7 @@ module tb_pc9821_gvram_coherence;
     reg [14:0] w;
     begin
       @(negedge clk);
-      grcg_we = 1'b1; grcg_addr = 8'h7C; grcg_din = 8'hC0 | (~pmask);
+      grcg_we = 1'b1; grcg_addr = 8'h7C; grcg_din = {4'hC, ~pmask};
       @(negedge clk); grcg_we = 1'b0;
       grcg_we = 1'b1; grcg_addr = 8'h7E; grcg_din = tile;
       @(negedge clk); grcg_addr = 8'h7E; grcg_din = tile;
@@ -439,14 +439,12 @@ module tb_pc9821_gvram_coherence;
     end
   endtask
 
-  // Drain the write-combining buffer: one line tick sets the flush debt, and the scanout's own
-  // fetch gate holds until every dirty word is back.
+  // One line tick and a few clocks of settle between phases. (The write-combining buffer this
+  // once drained is gone: the block-RAM array is the only copy, so there is nothing to flush.)
   task automatic flush_wcb;
     begin
       @(negedge clk); scan_line_tick = 1'b1; @(negedge clk); scan_line_tick = 1'b0;
-      @(posedge clk);
-      while (1'b0) @(posedge clk);
-      repeat (4) @(posedge clk);
+      repeat (5) @(posedge clk);
     end
   endtask
 
@@ -515,14 +513,6 @@ module tb_pc9821_gvram_coherence;
             errors = errors + 1;
           end
         end
-    end
-  endtask
-
-  // The write-combining buffer is gone: the array IS the read-after-write view, so there
-  // is no held-word state left to check - the whole-image comparison in sdram_chk is the check.
-  task automatic wcb_chk(input [8*90-1:0] tag);
-    begin
-      checks = checks + 0;
     end
   endtask
 
@@ -694,7 +684,6 @@ module tb_pc9821_gvram_coherence;
       get_byte(1, 2'd0, 15'h20E0 + k[14:0], "5 evicting store");
     end
     line_read(0, 2'd3, 15'h20C0, "5 clean victim dropped");
-    wcb_chk("5 held words match golden");
     section_end("5 eviction");
     flush_wcb;
     sdram_chk("5 SDRAM after eviction");
@@ -961,7 +950,6 @@ module tb_pc9821_gvram_coherence;
 
     // Final: the buffer holds nothing dirty, every held word is golden, and the whole SDRAM image
     // is golden.
-    wcb_chk("final held words");
 
     // ==== VERDICT ====
     $display("NOTE gvram_coherence: backend stores: %0d full-word (burst 1, be F), %0d two-word burst(s) (burst 2)",

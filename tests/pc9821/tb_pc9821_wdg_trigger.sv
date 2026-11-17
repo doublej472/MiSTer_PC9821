@@ -4,7 +4,7 @@
 // TB_PC9821_WDG_TRIGGER: The stall watchdog's trigger decision distinguishes the three states it must report, and the one it exists for is reachable: a request held outstanding and never completed for the window reports 'W', no request at all reports 'S', and an unbroken stream of completions reports the 'P' heartbeat, so the wedge the old `!z_valid` condition could never fire on is now the case a test drives.
 //
 // WHY THIS EXISTS AND tb_pc9821_watchdog.sv DOES NOT COVER IT. That bench compares the
-// formatter's 280 bytes against a golden capture: it tests the MESSAGE, never drives z_valid or
+// formatter's 351 bytes against a golden capture: it tests the MESSAGE, never drives z_valid or
 // z_ready, and so cannot see the trigger at all. The decision therefore had no test, and it was
 // wrong in the one place that mattered - the stall arm required `!z_valid`, and a wedged CPU
 // HOLDS z_valid high (it is a level, held until z_ready answers), so the arm was gated out
@@ -76,6 +76,18 @@ module tb_pc9821_wdg_trigger;
     end
   endtask
 
+  // One clock: the edge, then 1 ns so every DUT register has taken its new value. The bench
+  // samples `start`/`path` and drives every DUT input (with <=, docs/testing.md "Bench rules")
+  // only at that point, never on the edge itself, so no read or write races the DUT's own
+  // edge (IEEE 1800-2017 4.7). A count of N ticks is therefore N edges the DUT saw the
+  // condition on.
+  task automatic tick();
+    begin
+      @(posedge clk);
+      #1;
+    end
+  endtask
+
   // Run the DUT until the trigger asserts, bounded so a trigger that never comes fails here
   // rather than hanging the runner. `start` is combinational and holds for exactly the cycle
   // whose condition is true, so it is sampled right after each edge; the extra edge lets the
@@ -86,24 +98,24 @@ module tb_pc9821_wdg_trigger;
     begin
       guard = 0;
       while (!start && guard < 500) begin
-        @(posedge clk);
+        tick();
         guard = guard + 1;
       end
-      @(posedge clk);
+      tick();
       got_path = path;
       cycles = guard;
-      hold = 1'b1;          // the system would now be emitting the message
-      @(posedge clk);
-      hold = 1'b0;
+      hold <= 1'b1;          // the system would now be emitting the message
+      tick();
+      hold <= 1'b0;
     end
   endtask
 
   task automatic idle_reset();
     begin
-      reset = 1'b1; cpu_run = 1'b0; hold = 1'b0; z_valid = 1'b0; z_ready = 1'b0;
-      repeat (3) @(posedge clk);
-      reset = 1'b0;
-      @(posedge clk);
+      reset <= 1'b1; cpu_run <= 1'b0; hold <= 1'b0; z_valid <= 1'b0; z_ready <= 1'b0;
+      repeat (3) tick();
+      reset <= 1'b0;
+      tick();
     end
   endtask
 
@@ -111,6 +123,7 @@ module tb_pc9821_wdg_trigger;
   reg [7:0] got;
   integer   cyc;
   integer   early;
+  reg       pend6;
 
   initial begin
     idle_reset();
@@ -120,9 +133,9 @@ module tb_pc9821_wdg_trigger;
     // excluded. The trigger must fire and must say W. Before the fix this bench could not be
     // written, because the condition it drives could not produce a trigger at all.
     $display("check 1: a request held outstanding and never completed reports the wedge");
-    cpu_run = 1'b1;
-    z_valid = 1'b1;
-    z_ready = 1'b0;
+    cpu_run <= 1'b1;
+    z_valid <= 1'b1;
+    z_ready <= 1'b0;
     until_trigger(got, cyc);
     check_byte("wedged path byte W", got, W);
     check_int("the wedge fired at the window", cyc, STALL);
@@ -133,12 +146,12 @@ module tb_pc9821_wdg_trigger;
     // The count is asserted to be ZERO, so this can fail; comparing a variable against itself
     // would be a check that cannot.
     $display("check 2: nothing fires before the window expires");
-    cpu_run = 1'b1;
-    z_valid = 1'b1;
-    z_ready = 1'b0;
+    cpu_run <= 1'b1;
+    z_valid <= 1'b1;
+    z_ready <= 1'b0;
     early = 0;
     repeat (STALL - 1) begin
-      @(posedge clk);
+      tick();
       if (start) early = early + 1;
     end
     check_int("triggers before the window expired", early, 0);
@@ -148,8 +161,8 @@ module tb_pc9821_wdg_trigger;
     // healthy: a guest that is thinking looks like this. It must be reported as S, not W, or
     // the two states are not distinguished and the byte says nothing.
     $display("check 3: no request at all for the window reports idle");
-    cpu_run = 1'b1;
-    z_valid = 1'b0;
+    cpu_run <= 1'b1;
+    z_valid <= 1'b0;
     until_trigger(got, cyc);
     check_byte("idle path byte S", got, S);
     idle_reset();
@@ -158,9 +171,9 @@ module tb_pc9821_wdg_trigger;
     // out; the period still elapses and the message is still emitted, saying nothing about
     // progress. This is the reading that was mistaken for health.
     $display("check 4: an unbroken stream of completions reports the heartbeat");
-    cpu_run = 1'b1;
-    z_valid = 1'b1;
-    z_ready = 1'b1;
+    cpu_run <= 1'b1;
+    z_valid <= 1'b1;
+    z_ready <= 1'b1;
     until_trigger(got, cyc);
     check_byte("heartbeat path byte P", got, P);
     check_int("the heartbeat fired at the period", cyc, PERIOD);
@@ -172,11 +185,11 @@ module tb_pc9821_wdg_trigger;
     // HEALTHY machine, so if it won here it would mask a wedge behind a normal reading - which
     // is exactly how the card's stall stayed hidden.
     $display("check 5: a stall coinciding with the heartbeat wins");
-    cpu_run = 1'b1;
-    z_valid = 1'b1;
-    z_ready = 1'b1;                          // accepted, so the stall counter is held at 0
-    repeat (PERIOD - STALL) @(posedge clk);  // the heartbeat clock runs up toward its window
-    z_ready = 1'b0;                          // now the completion stops and both age together
+    cpu_run <= 1'b1;
+    z_valid <= 1'b1;
+    z_ready <= 1'b1;                          // accepted, so the stall counter is held at 0
+    repeat (PERIOD - STALL) tick();  // the heartbeat clock runs up toward its window
+    z_ready <= 1'b0;                          // now the completion stops and both age together
     until_trigger(got, cyc);
     check_byte("coincident path byte W", got, W);
     // The timing matters too: the stall window is what expired, not the longer heartbeat. A
@@ -190,31 +203,42 @@ module tb_pc9821_wdg_trigger;
     // this is the counter resetting on COMPLETION and not on arrival, which is what makes
     // check 1 possible at all.
     $display("check 6: completions inside the window never report a wedge");
-    cpu_run = 1'b1;
-    for (i = 0; i < STALL * 4; i = i + 1) begin
-      @(posedge clk);
-      z_valid  = 1'b1;
-      z_ready  = ((i % 2) == 0);      // accepted every other cycle, well inside the window
-      if (start && path == W) begin
+    // `path` is registered by the trigger, so a trigger is judged by the byte it leaves one
+    // edge later (on a first false wedge `path` still holds the previous P on the start cycle
+    // itself); any trigger in this window that leaves W fails, the first one included.
+    cpu_run <= 1'b1;
+    pend6 = 0;
+    for (i = 0; i < STALL * 4 + 1; i = i + 1) begin
+      tick();
+      if (pend6 && path == W) begin
         $display("  FAIL a wedge was reported while requests were completing");
         errors = errors + 1;
       end
+      pend6 = start;
+      z_valid  <= 1'b1;
+      z_ready  <= ((i % 2) == 0);      // accepted every other cycle, well inside the window
     end
     idle_reset();
 
     // CHECK 7 - NO GUEST, NO WATCHDOG. With cpu_run low the counters must not advance, or a
     // reset machine reports a stall on a CPU that is not running.
     $display("check 7: no trigger while the guest is not running");
-    cpu_run = 1'b0;
-    z_valid = 1'b1;
-    z_ready = 1'b0;
+    cpu_run <= 1'b0;
+    z_valid <= 1'b1;
+    z_ready <= 1'b0;
     repeat (PERIOD * 2) begin
-      @(posedge clk);
+      tick();
       if (start) begin
         $display("  FAIL the trigger fired with cpu_run low");
         errors = errors + 1;
       end
     end
+    // ...and the counters did not advance underneath: once the guest runs, the held request
+    // takes the WHOLE stall window to report, as from a reset.
+    cpu_run <= 1'b1;
+    until_trigger(got, cyc);
+    check_byte("wedge after the guest starts W", got, W);
+    check_int("the wedge after the guest starts fired at the full window", cyc, STALL);
     idle_reset();
 
     // ==== VERDICT ====

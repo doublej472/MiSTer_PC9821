@@ -3,7 +3,7 @@
 (tools/check_iobus_lane_inv.py, tools/check_win0_moved_inv.py).
 
 It turns the module's text into something yosys reads, never editing the tree: the package import
-moves to file scope, the `// translate_off` blocks and the power-up `initial` blocks are dropped
+moves to file scope, the `// synthesis translate_off` blocks and the power-up `initial` blocks are dropped
 (the proofs start from a reset), a property is pasted before `endmodule`, and every module
 pc9821_iobus instantiates is replaced by a stub built from its own port list, so the submodules'
 outputs are FREE (any value, any cycle) - a superset of the real behaviour.
@@ -156,9 +156,9 @@ def prep(io, modname="pc9821_iobus"):
     if io.count(imp) != 1:
         sys.exit("pc9821_iobus: expected exactly one %r" % imp.strip())
     io = io.replace(imp, "")
-    while "// translate_off" in io:
-        a = io.index("// translate_off")
-        io = io[:a] + io[io.index("// translate_on", a) + len("// translate_on"):]
+    while "// synthesis translate_off" in io:
+        a = io.index("// synthesis translate_off")
+        io = io[:a] + io[io.index("// synthesis translate_on", a) + len("// synthesis translate_on"):]
     io = strip_initial(io)
     return io.replace("module pc9821_iobus", "module " + modname, 1)
 

@@ -214,7 +214,7 @@ module pc9821_system (
     input         sdph_fault,
     /* verilator lint_on UNUSEDSIGNAL */
 
-    input   [2:0] ram_size,       // OSD guest RAM size, log2(MiB): 0..6 = 1..64 MiB
+    input   [2:0] ram_size,       // OSD guest RAM size: codes 0..7 = 1/2/4/8/16/32/64/96 MiB (log2(MiB) for 0..6; 7 is not)
     // The installed SDRAM module's guest-size CEILING (z486_mister's ram_size_max: code 4/5/7
     // for the 32/64/128 MB module classes). `ram_size` arrives already clamped to it; this port
     // exists because the pack's base is the ceiling rather than the selected size.
@@ -287,6 +287,8 @@ module pc9821_system (
 	// 0x09A8 bit 0 (pc9821_iobus's latch): the raster runs on the 31 kHz dot clock. A level on
 	// clk_sys; the top moves the video PLL to the matching clock (pc9821_vpll_ctl).
 	output wire        video_31k,
+	// pc9821_crtc's o_frame_end: the raster is on the last dot of its frame (pc9821_reset_align).
+	output wire        video_frame_end,
 	output wire        video_blank_n,
 	output wire        video_hsync,
 	output wire        video_vsync,
@@ -297,10 +299,10 @@ module pc9821_system (
 	// The PC-9801-86 card: the OPNA YM2608 and the 86-PCM, summed WIDE and
 	// delivered UNCLAMPED here (the chain's LAST saturation is at the final DAC,
 	// pc9821_audio_mix's mix_dry - NP2kai's _saturation_s16).
-	// 20 bits: the FM+ADPCM sum is clamped to +-32,767 at the jt08_acc junction
-	// (ymfm's clamp16, ymfm_opn.cpp:1410-1414), the AC-COUPLED (zero-mean) SSG is
-	// added after that clamp (up to +-12,276 at the <<2 join), and a full-scale
-	// PCM86 joins at [+255,996, -239,616].
+	// 20 bits, with room: the FM+ADPCM sum is clamped to [-32,768, +32,767] at the jt08_acc
+	// junction (ymfm's clamp16, ymfm_opn.cpp:1410-1414), the AC-COUPLED (zero-mean) SSG is added
+	// after that clamp (pc9821_opna's ssg_ac, the high-pass of a 0..6,329 join term: about +-6.3k),
+	// and a full-scale PCM86 adds [-32,768, +32,767]: the bus stays within about +-72k.
 	output [19:0] sample_86_l,
 	output [19:0] sample_86_r,
 
@@ -347,7 +349,7 @@ module pc9821_system (
 
 parameter SYS_FREQ = 50_000_000;
 // L1 caches: 4 KiB data + 4 KiB instruction (SET_BITS=6 = 64 sets x 4 ways x 16 B).
-// The size is set ONCE at z486_mister.sv:297-298 (`DCACHE_SET_BITS`), which overrides this default; this
+// The size is set ONCE at z486_mister.sv:294-295 (`DCACHE_SET_BITS`), which overrides this default; this
 // parameter exists only as pc9821_system's interface to the vendored z486. Kept small to
 // free M10K blocks (the GVRAM owns 256 and the Kanji font needs room) - the 486's 8 KiB
 // unified cache is not needed by DOS/Touhou; the smaller cache is a deliberate choice.
@@ -444,6 +446,51 @@ wire z_intr;
 // taps, so the telemetry records carry no fields for them. Its observation ports are the
 // crash-recorder taps, which are this module's own output ports (declared in the header),
 // driven by the z486 instance and passed up unchanged.
+// THE RESET TREE (pc9821_reset_tree): every block in this module gets its own registered copy of
+// the platform reset, loaded from `reset` on the same clk_sys edge, so the whole machine leaves
+// reset on one edge, one clk_sys after `reset` falls, and each block's release is a local net
+// the fitter can time (the single reset register used to drive about 9,700 endpoints). A term a
+// consumer adds - `|| !cpu_run`, `|| soft_reboot`, `|| !mpu_present_r` - is ORed in AFTER its
+// copy, so that level keeps the timing it always had. The memory subsystem takes `reset` itself
+// and has its own tree. tb_pc9821_reset_tree holds every copy to $past(reset).
+localparam int R_GATE   = 0;    // pc9821_cpu_reset_gate (the CPU's release)
+localparam int R_IOBUS  = 1;    // pc9821_iobus, and the FDC, DMA and mouse inside it
+localparam int R_GLUE   = 2;    // this module's own registers: INTA count, RAM size, IDE bank 1
+/* verilator lint_off UNUSEDPARAM */   // read only inside the SDRAM_PHASE_DYN / MPU_EN generates
+localparam int R_SDPH   = 3;    // pc9821_sdram_phase_ctl (SDRAM_PHASE_DYN only)
+localparam int R_MPU    = 4;    // pc9821_mpu (MPU_EN only)
+/* verilator lint_on UNUSEDPARAM */
+localparam int R_CAL    = 5;    // pc9821_calendar and its rtc_loaded
+localparam int R_RHY    = 6;    // pc9821_rhythm_loader
+localparam int R_OPNA   = 7;    // pc9821_opna (jt12 behind its op_rst)
+localparam int R_GAME   = 8;    // pc9821_gameport
+localparam int R_PCM    = 9;    // pc9821_pcm86
+localparam int R_INT5   = 10;   // pc9821_irq_share
+localparam int R_INTR   = 11;   // pc9821_interrupts (PIC, PIT)
+localparam int R_KBD    = 12;   // pc9821_kbd
+localparam int R_ATA    = 13;   // pc9821_ata
+localparam int R_ATAPI  = 14;   // pc9821_atapi (CDROM_EN only), and the cdda flush it drives
+localparam int R_HDDI   = 15;   // pc9821_hdd_image
+localparam int R_LED    = 16;   // pc9821_disk_led
+localparam int R_BSH    = 17;   // pc9821_block_share
+localparam int R_FDD    = 18;   // pc9821_fdd_media
+localparam int R_EGCG   = 19;   // pc9821_egc_mem_gate
+localparam int R_CRTC   = 20;   // pc9821_crtc: rst_n_sys, and the raster's rst_n_vid
+localparam int R_GDC2   = 21;   // pc9821_gdc2
+localparam int R_CG     = 22;   // pc9821_cg
+localparam int R_DOT    = 23;   // pc9821_raster_reseed (the restarts of pc9821_dot_ce and the raster counter)
+localparam int R_GVLINE = 24;   // the GVRAM scanout's line counter (gvram_h_count)
+localparam int R_DBG    = 25;   // the telemetry, watchdog and debug-log blocks
+localparam int R_N      = 26;
+/* verilator lint_off UNUSEDSIGNAL */   // R_SDPH/R_MPU/R_ATAPI copies are unread when compiled out
+wire [R_N-1:0] rst_q;
+/* verilator lint_on UNUSEDSIGNAL */
+pc9821_reset_tree #(.N(R_N)) u_reset_tree (.clk(clk_sys), .reset(reset), .q(rst_q));
+wire rst_glue = rst_q[R_GLUE];
+/* verilator lint_off UNUSEDSIGNAL */   // PERF_LOG_EN=0: the telemetry it resets is compiled out
+wire rst_dbg  = rst_q[R_DBG];
+/* verilator lint_on UNUSEDSIGNAL */
+
 reg  [7:0] inta_count;
 reg        z_inta_d;
 
@@ -454,7 +501,7 @@ reg        z_inta_d;
 // starts at 0/0 - unreset it would X-lock in 4-state sim (the `!=` is X, the arm
 // never fires) and run across warm resets, so no run's count would be readable.
 always @(posedge clk_sys) begin
-    if (reset) begin
+    if (rst_glue) begin
         z_inta_d  <= 1'b0;
         inta_count <= 8'd0;
     end else begin
@@ -467,7 +514,9 @@ wire inta_ready;
 wire triple_fault_reset;
 
 wire mem_cpu_ready, mem_cpu_resp_valid;
-wire rom_ready, load_error, cpu_run;
+// cpu_run_ld is the loader's (pc9821_memory_subsystem); cpu_run, which everything here reads, is it
+// with its rise held to the raster's last dot (pc9821_raster_reseed, below).
+wire rom_ready, load_error, cpu_run_ld, cpu_run;
 wire [31:0] mem_cpu_dout;
 wire cpu_mem_valid = z_valid && !z_io && !z_inta;
 
@@ -538,7 +587,7 @@ wire bios_ram_gate;
 wire top_shadow_en;
 // pc9821_iobus's one-cycle reboot strobe (the 0x534 soft reset, a software reboot). It is a
 // reset class like `reset`: it clears pc9821_memory_subsystem's top-window shadow-dirty flag and
-// resets the IDE devices' task files (ide_dev_rst_n, below).
+// resets the IDE devices' task files (ata_rst_n and atapi_rst_n, below).
 wire soft_reboot;
 // 0x043B bit 2, the 15-16 MiB system-space window. pc9821_iobus latches it and the memory
 // subsystem needs it BEFORE its route selects, so it is wired straight across.
@@ -591,12 +640,12 @@ wire [31:0] dma_snoop_addr;
 // the address mux and the first write's line would never be invalidated - silently on
 // hardware (the bridge's check is simulation-only). While a snoop waits (dma_snoop_busy),
 // the next DMA WRITE byte is therefore neither PRESENTED (dma_mem_req_pres drives the
-// memory subsystem's mem_valid DMA arm, pc9821_memory_subsystem.sv:1723 `assign mem_valid`) nor ACCEPTED
-// (dma_mem_ack is the dma_ready the DMAC sees, :1500). Both terms are needed: the
-// subsystem's owner lock releases on mem_ready (:1477 `else if (mem_ready || !mem_valid)`),
+// memory subsystem's mem_valid DMA arm, pc9821_memory_subsystem.sv:1792 `assign mem_valid`) nor ACCEPTED
+// (dma_mem_ack is the dma_ready the DMAC sees, pc9821_memory_subsystem.sv:1598 `assign dma_ready`). Both terms are needed: the
+// subsystem's owner lock releases on mem_ready (pc9821_memory_subsystem.sv:1575 `else if (mem_ready || !mem_valid)`),
 // so gating the accept alone would let it re-present the same byte and the backend
 // re-accept it every cycle. The uPD71071 holds mem_req as a LEVEL through S_MEM until
-// mem_ready (pc9821_dmac.sv:486 `S_MEM: if (mem_ready) begin`), so the byte waits for the
+// mem_ready (pc9821_dmac.sv:506 `S_MEM: if (mem_ready) begin`), so the byte waits for the
 // CPU edge; reads are never snooped and are not gated. The cost is at most one CPU clock
 // period per written byte - the pacing a real 486's EADS# imposes (one invalidate per CPU
 // clock), and still 8x the FDC's 62.5 kB/s at the slowest 0.5 MHz setting on an 80 MHz
@@ -657,7 +706,7 @@ always @(posedge clk_sys) begin
     // platform reset), and also during the pre-load window so a core reload picks
     // up the config file's value. After the reset the latch freezes again while
     // rom_ready is high, exactly as before.
-    if (reset || !rom_ready) ram_size_sel <= ram_size;
+    if (rst_glue || !rom_ready) ram_size_sel <= ram_size;
 end
 always @(posedge clk_sys) begin
     // The pack base is the module ceiling and is NOT re-sampled on a warm reset:
@@ -668,14 +717,14 @@ wire [31:0] guest_ram_bytes = size_code_bytes(ram_size_sel);
 wire [31:0] pack_base       = size_code_bytes(pack_size_sel);
 
 // The configuration image's size input, in MiB, read back out of the one table above: both
-// consumers (the CG store's seed in pc9821_gdc_text and the memory-switch pair's strap cell in
+// consumers (the CG store's seed in pc9821_cg and the memory-switch pair's strap cell in
 // pc9821_iobus) want a MiB count, and the ITF's own image is written in MiB.
 wire [6:0] cfg_ram_mib = guest_ram_bytes[26:20];
 
 // The one-byte POST/watchdog telemetry (port 0x0EE0, and the watchdog's "ST="):
 // bit0 rom_ready, bit1 ioctl_download, bit2 cpu_run, bit3 ext_mem_busy, bit4
-// load_error, bits 7:5 the RAM-size code. The size needs three bits (1..64 MiB =
-// log2 0..6). `triple_fault_reset` is not mirrored here: the telemetry line
+// load_error, bits 7:5 the RAM-size code. The size needs three bits (codes 0..7 =
+// 1/2/4/8/16/32/64/96 MiB; 7 is not log2). `triple_fault_reset` is not mirrored here: the telemetry line
 // carries it as its own TF= field.
 wire [7:0] io_debug_status = {
     ram_size_sel, load_error, ext_mem_busy, cpu_run,
@@ -686,7 +735,7 @@ wire [7:0] io_debug_status = {
 // which live in their own module so they can be driven directly (tb_pc9821_cpu_reset_gate).
 wire cpu_reset_n;
 pc9821_cpu_reset_gate cpu_reset_gate (
-    .clk(clk_sys), .reset(reset),
+    .clk(clk_sys), .reset(rst_q[R_GATE]),
     .cpu_run(cpu_run), .hps_apply_reset(hps_apply_reset),
     .cpu_reset_req(cpu_reset_req), .mem_busy(ext_mem_busy),
     .cpu_reset_n(cpu_reset_n)
@@ -732,7 +781,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ),
                .MPU_EN(MPU_EN), .SDRAM_PHASE_DYN(SDRAM_PHASE_DYN),
                .GAMEPORT_118(GAMEPORT_118), .DBG_STATUS_PORT(DBG_STATUS_PORT)) iobus (
       .ide_unit0_present(ide_unit0_present), .ide_unit2_present(ide_unit2_present),
-    .clk(clk_sys), .reset(reset || !cpu_run),
+    .clk(clk_sys), .reset(rst_q[R_IOBUS] || !cpu_run),
     // The OSD's Machine field: which port-0xF0 machine-ID strap to answer. See the port
     // comment at pc9821_system's declaration and
     // This instance's reset IS the field's reset/reload strobe (bios_set_eff inside): the
@@ -765,7 +814,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ),
     .mpu_cs(mpu_cs), .sdph_cs(sdph_cs), .gdc_cs(gdc_cs),
     .cal_cdat(cal_cdat),
     // The memory-switch pair's strap cell is seeded from the same size the CG seed uses (see
-    // pc9821_gdc_text's configuration-image block and).
+    // pc9821_cg's configuration-record block).
     .cfg_ram_mib(cfg_ram_mib), .cfg_seed_en(1'b1),
     // The machine-reset seed's one-shot: the CG record is restored by the same event (below).
     .sdip_seed_pulse(sdip_seed_pulse),
@@ -787,7 +836,7 @@ pc9821_iobus #(.SYS_CLOCK_HZ(SYS_FREQ),
     .fdd_ready(fdd_ready), .fdd_rdy(fdd_rdy), .fdd_hdrv(fdd_hdrv), .fdd_err(fdd_err),
     .fdd_dout(fdd_dout), .fdd_hr(fdd_hr), .fdd_hn(fdd_hn), .fdd_hs(fdd_hs),
     .fdd_adv(fdd_adv), .fdd_req_wr(fdd_req_wr), .fdd_din(fdd_din), .fdd_abort(fdd_abort),
-    .dma_mem_addr(dma_mem_addr), .dma_mem_addr_nx(dma_mem_addr_nx), .dma_mem_load(dma_mem_load), .dma_mem_din(dma_mem_din), .dma_mem_be(dma_mem_be),
+    .dma_mem_addr(dma_mem_addr), .dma_mem_addr_nx(dma_mem_addr_nx), .dma_mem_load(dma_mem_load), .dma_mem_load_we(dma_mem_load_we), .dma_mem_din(dma_mem_din), .dma_mem_be(dma_mem_be),
     .dma_mem_req(dma_mem_req), .dma_mem_we(dma_mem_we),
     .dma_mem_ready(dma_mem_ack), .dma_mem_dout(dma_mem_dout),
     .dma_mem_resp_valid(dma_mem_resp_valid),
@@ -1015,7 +1064,7 @@ wire grcg_port_we = device_io_wr && (device_io_addr == 16'h007C ||
 // raster supplies only the line origin and the line tick, and reads the assembled
 // columns back.
 //
-// The line origin is GDC2 SCROLL's display address counter, which pc9821_gdc_text
+// The line origin is GDC2 SCROLL's display address counter, which pc9821_gdc2
 // already maintains (bit 15 is the 0xA4 display page, bits 14:0 the offset inside
 // that page) -- the line-addressable fetch is exactly that shape, and it is what
 // lets the 2.5 MHz strap's doubled pitch and the 480-/200-line modes work without
@@ -1044,7 +1093,7 @@ reg [9:0] gvram_h_count;
 reg       gvram_h_last;
 wire      gvram_at_last = (gvram_h_count == (crtc_o_htotal - 10'd1));
 always @(posedge clk_sys) begin
-  if (reset || !cpu_run) begin
+  if (rst_q[R_GVLINE] || !cpu_run) begin
     gvram_h_count <= 10'd0;
     gvram_h_last  <= 1'b0;
   end else begin
@@ -1074,7 +1123,7 @@ wire         gvram_walk_start, gvram_walk_cycle;
 wire         gvram_egc_txn, gvram_egc_unit, gvram_grcg_store;
 // The GRCG's, the EGC's and the PLAIN client's per-cycle ownership pulses, the raw half of the
 // perf record's visible-region counters (GV/EV): pc9821_perf_msg gates them with the video
-// domain's v_active, which lives in pc9821_gdc_text and is declared further down.
+// domain's v_active, which lives in pc9821_crtc (pix_v_active) and is declared further down.
 wire         gvram_gr_owned, gvram_eg_owned, gvram_pw_owned;
 // The page-coincidence probe's two raw page bits (PC/SP/AP): the access page the
 // CPU/GRCG/EGC writes and the page the scanout's line fetch is latched on. pc9821_perf_msg
@@ -1103,6 +1152,9 @@ wire        gdc_gfx_grph_on;
 wire  [7:0]  peg_packed_idx;
 wire         peg_line_sel, peg_line_ready;
 
+// The memory subsystem takes the UNREGISTERED reset: it is a hierarchy of its own (the loader,
+// the GVRAM arbiter, the EGC, the GRCG, the PEGC, the store buffer, ...) and gives each of those
+// blocks its own copy from its own pc9821_reset_tree, one register stage like every copy here.
 pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     .clk(clk_sys), .reset(reset), .hps_apply_reset(hps_apply_reset), .top_bank(top_bank),
     .ems_state(ems_state),
@@ -1129,7 +1181,7 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     // subsystem's port comment). dma_valid is
     // the back-pressured presentation: a WRITE byte is withdrawn from the
     // subsystem while the bridge still holds a snoop for the CPU.
-    .dma_addr(dma_mem_addr), .dma_addr_nx(dma_mem_addr_nx), .dma_load(dma_mem_load), .dma_din(dma_mem_din), .dma_be(dma_mem_be),
+    .dma_addr(dma_mem_addr), .dma_addr_nx(dma_mem_addr_nx), .dma_load(dma_mem_load), .dma_load_write(dma_mem_load_we), .dma_din(dma_mem_din), .dma_be(dma_mem_be),
     .dma_valid(dma_mem_req_pres), .dma_write(dma_mem_we),
     .dma_ready(dma_mem_ready), .dma_dout(dma_mem_dout),
     .dma_resp_valid(dma_mem_resp_valid), .dma_snoop_addr(dma_snoop_addr),
@@ -1163,6 +1215,7 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     // level the iobus reads, and the graphics GDC's fetch window that table's RMW row keys on.
     .gvram_timing_xe10(io_timing_xe10),
     .gvram_gfx_scan_on(gdc_gfx_grph_on),
+    .gvram_crt31k(crt31k),
     .scan_line_tick(gvram_scan_line_tick),
     .scan_page(gdc_gfx_line_addr[15]),
     .scan_line_base(gdc_gfx_line_addr[14:0]),
@@ -1176,7 +1229,7 @@ pc9821_memory_subsystem #(.SYS_CLOCK_HZ(SYS_FREQ), .GATHER_K(GATHER_K)) memory (
     .ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
     .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
     .ioctl_wait(ioctl_wait), .rom_ready(rom_ready), .load_error(load_error),
-    .cpu_run(cpu_run), .pack_load_hold(pack_load_hold),
+    .cpu_run(cpu_run_ld), .pack_load_hold(pack_load_hold),
     .font_addr(font_addr), .font_data(font_data),
     .font_we(font_we),
     .cpu_addr({z_addr, 2'b00}), .cpu_din(z_dout),
@@ -1237,7 +1290,7 @@ assign sub_mem_ready           = ext_mem0_ready;
 // pc9821_memory_subsystem splits every line fill into four word beats at its own
 // boundary and the z486 builds only its beat fill path.
 
-// The video domain is clk_sys gated by pixel_ce: one dot per enable, at exactly 400/19 MHz
+// The video domain is clk_sys gated by pixel_ce: one dot per enable, at 400/19 MHz within 0.04 ppm
 // (pc9821_dot_ce, below, carries the rate's provenance). video_ce carries that enable to the top
 // level, where pc9821_video_out moves each dot into the video clock domain.
 
@@ -1264,12 +1317,13 @@ wire opna_rd_wait, opna_irq, pcm86_irq;
 assign device_rd_wait = gdc_cs || opna_rd_wait;   // declared above the iobus instance
 // The write back-pressure: the OPNA register queue and the 86-PCM 0xA46C FIFO say
 // "not now" through these, and pc9821_iobus stalls the guest's I/O write instead
-// of letting either buffer silently drop it. The OPNA's own term is
-// op_sel-wide (most of the address space), so it takes the opna_cs qualifier
-// here; the pcm86 term is already window-decoded to 0xA468-0xA46F inside
-// pc9821_pcm86 (so a word/dword OUT straddling 0xA46C stalls before its first
-// lane), and re-qualifying it with pcm_cs would exclude exactly those odd first
-// lanes -- its window is the bound.
+// of letting either buffer silently drop it. The iobus holds EVERY lane of a write in S_BYTE
+// on that lane's own port's wait, the first lane included (pc9821_iobus
+// `lane_wr_wait = device_port && request_write && device_wr_wait`). The OPNA's term is
+// op_sel-wide (most of the address space), so it takes the opna_cs qualifier here; the pcm86 term is decoded inside
+// pc9821_pcm86 to the dword 0xA46C-0xA46F, a bound built for the first-lane check the
+// per-lane hold replaced, and needs no qualifier. While the FIFO is full it also holds a
+// write lane at 0xA46D-0xA46F, which touches no FIFO state (latency only, no data effect).
 wire opna_wr_wait, pcm86_wr_wait;
 assign device_wr_wait = (opna_cs && opna_wr_wait) || pcm86_wr_wait;
 // A device that needs MORE than the one extra cycle holds the bus. Two do:
@@ -1335,7 +1389,7 @@ assign device_io_dout = interrupt_cs ? interrupt_io_dout :
 generate
 if (SDRAM_PHASE_DYN) begin : g_sdph
     pc9821_sdram_phase_ctl #(.CLOCK_RATE_HZ(SYS_FREQ)) u_sdph (
-        .clk(clk_sys), .reset(reset),
+        .clk(clk_sys), .reset(rst_q[R_SDPH]),
         .cs(sdph_cs), .addr(device_io_addr), .wr(device_io_wr),
         .din(device_io_din), .dout(sdph_io_dout),
         .step_req(sdph_step_req), .step_up(sdph_step_up),
@@ -1379,7 +1433,7 @@ if (MPU_EN) begin : g_mpu
     always @(posedge clk_sys) mpu_present_r <= mpu_present;
     wire [7:0] mpu_card_dout;
     pc9821_mpu #(.SYS_CLOCK_HZ(SYS_FREQ)) u_mpu (
-        .clk(clk_sys), .reset(reset || !mpu_present_r),
+        .clk(clk_sys), .reset(rst_q[R_MPU] || !mpu_present_r),
         .cs(mpu_cs), .addr(device_io_addr),
         .wr(device_io_wr), .rd(device_io_rd),
         .din(device_io_din), .dout(mpu_card_dout),
@@ -1402,12 +1456,13 @@ endgenerate
 // copy: the guest's own INT 1Ch builds its representation from this.
 reg rtc_loaded;
 always @(posedge clk_sys)
-  if (reset || !cpu_run) rtc_loaded <= 1'b0;
+  if (rst_q[R_CAL] || !cpu_run) rtc_loaded <= 1'b0;
   else rtc_loaded <= 1'b1;
 
 pc9821_calendar #(.SYS_CLOCK_HZ(SYS_FREQ)) calendar (
-    .clk(clk_sys), .rst_n(!(reset || !cpu_run)),
-    .rtc_bcd(rtc), .rtc_load(cpu_run && !rtc_loaded),
+    .clk(clk_sys), .rst_n(!(rst_q[R_CAL] || !cpu_run)),
+    // A one-shot: the first cycle out of the calendar's reset (its copy, or cpu_run).
+    .rtc_bcd(rtc), .rtc_load(!(rst_q[R_CAL] || !cpu_run) && !rtc_loaded),
     .cmd_we (device_io_wr && cal_cs && (device_io_addr == 16'h0020)),
     .cmd_din(device_io_din),
     .mode_we (device_io_wr && cal_cs && (device_io_addr == 16'h0022)),
@@ -1437,7 +1492,7 @@ pc9821_calendar #(.SYS_CLOCK_HZ(SYS_FREQ)) calendar (
 // alone, not gated by `!cpu_run` as the chip instances are: the load happens while the CPU is
 // held.
 pc9821_rhythm_loader rhythm_loader (
-    .clk(clk_sys), .reset(reset),
+    .clk(clk_sys), .reset(rst_q[R_RHY]),
     .ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
     .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
     .we(rhythm_we), .waddr(rhythm_waddr), .wdata(rhythm_wdata)
@@ -1448,7 +1503,7 @@ pc9821_rhythm_loader rhythm_loader (
 wire [5:0] gameport_switch_lines;
 
 pc9821_opna #(.SYS_CLOCK_HZ(SYS_FREQ)) sound (
-    .clk(clk_sys), .reset(reset || !cpu_run),
+    .clk(clk_sys), .reset(rst_q[R_OPNA] || !cpu_run),
     .io_addr(device_io_addr),
     .io_wr(device_io_wr && opna_cs),
     .io_rd(device_io_rd && opna_cs),
@@ -1476,7 +1531,7 @@ pc9821_opna #(.SYS_CLOCK_HZ(SYS_FREQ)) sound (
 // analog words onto them). It is the card's only device that reads the guest's inputs.
 
 pc9821_gameport #(.SYS_CLOCK_HZ(SYS_FREQ)) gameport (
-    .clk(clk_sys), .reset(reset || !cpu_run),
+    .clk(clk_sys), .reset(rst_q[R_GAME] || !cpu_run),
     .io_wr(device_io_wr && gameport_cs),
     .io_rd(device_io_rd && gameport_cs),
     .io_dout(gameport_io_dout),
@@ -1497,7 +1552,7 @@ pc9821_gameport #(.SYS_CLOCK_HZ(SYS_FREQ)) gameport (
 // straps them differently is wrong. The line itself is IRQ12 and is shared by
 // this block; moving the strap moves both.
 pc9821_pcm86 #(.SYS_CLOCK_HZ(SYS_FREQ)) pcm86 (
-    .clk(clk_sys), .reset(reset || !cpu_run),
+    .clk(clk_sys), .reset(rst_q[R_PCM] || !cpu_run),
     .io_addr(device_io_addr),
     .io_wr(device_io_wr && pcm_cs),
     .io_rd(device_io_rd && pcm_cs),
@@ -1529,7 +1584,7 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(SYS_FREQ)) pcm86 (
 // event is its own request even while the other source holds the line (see the module).
 wire int5_irq;
 pc9821_irq_share int5_share (
-    .clk(clk_sys), .reset(reset || !cpu_run),
+    .clk(clk_sys), .reset(rst_q[R_INT5] || !cpu_run),
     .irq_a(opna_irq), .irq_b(pcm86_irq),
     .irq(int5_irq)
 );
@@ -1545,7 +1600,7 @@ wire [7:0] irq_dbg_s_imr, irq_dbg_s_isr;
 /* verilator lint_on UNUSEDSIGNAL */
 
 pc9821_interrupts #(.SYS_CLOCK_HZ(SYS_FREQ)) interrupts (
-    .clk(clk_sys), .reset_n(!(reset || !cpu_run)),
+    .clk(clk_sys), .reset_n(!(rst_q[R_INTR] || !cpu_run)),
     .io_wr(device_io_wr), .io_rd(device_io_rd),
     .io_addr(device_io_addr), .io_din(device_io_din),
     .master_cs(pic_master_cs), .slave_cs(pic_slave_cs), .pit_cs(pit_cs),
@@ -1579,7 +1634,7 @@ pc9821_interrupts #(.SYS_CLOCK_HZ(SYS_FREQ)) interrupts (
 );
 
 pc9821_kbd #(.SYS_CLOCK_HZ(SYS_FREQ)) keyboard (
-    .clk(clk_sys), .rst_n(!(reset || !cpu_run)), .cs(kbd_cs),
+    .clk(clk_sys), .rst_n(!(rst_q[R_KBD] || !cpu_run)), .cs(kbd_cs),
     .a0(device_io_addr[1]), .wr(device_io_wr), .rd(device_io_rd),
     .din(device_io_din), .dout(kbd_io_dout), .irq(kbd_irq),
     .ps2_key(ps2_key),
@@ -1646,7 +1701,7 @@ wire [15:0] ata_dbg_sec;
 /* verilator lint_off PROCASSINIT */   // the initialiser is the register's power-up value
 reg ide_bank1_hdd_eff = 1'b0;           // power-on default: the CD-ROM, the stock layout
 /* verilator lint_on PROCASSINIT */
-always @(posedge clk_sys) if (reset || !cpu_run) ide_bank1_hdd_eff <= ide_bank1_hdd;
+always @(posedge clk_sys) if (rst_glue || !cpu_run) ide_bank1_hdd_eff <= ide_bank1_hdd;
 wire hdd2_mounted, hdd2_readonly;
 wire [31:0] hdd2_capacity;
 wire ata_block_unit, hdd_a_req_unit;
@@ -1665,12 +1720,17 @@ assign ide_unit2_present = ide_bank1_hdd_eff ? hdd2_mounted : CDROM_EN;
 // sets `drv->error = IDEERR_AMNF`), and QEMU's armed 0x534 is a machine reset. Only the reboot
 // does it here, not out 0xF0: that reset is the protected-mode return's, which the machine's
 // drives never see. The hdd images and their host transfers survive, as they do a platform reset.
-wire ide_dev_rst_n = !(reset || !cpu_run || soft_reboot);
+// The two IDE devices are separate blocks, so each has its own reset copy; the expression is the
+// same one for both.
+wire ata_rst_n   = !(rst_q[R_ATA]   || !cpu_run || soft_reboot);
+/* verilator lint_off UNUSEDSIGNAL */   // CDROM_EN=0: no ATAPI device to reset
+wire atapi_rst_n = !(rst_q[R_ATAPI] || !cpu_run || soft_reboot);
+/* verilator lint_on UNUSEDSIGNAL */
 // The IDE devices' "command in progress" (BSY|DRQ) views, for the HDD access lamp below.
 wire ata_xfer, cd_xfer;
 
 pc9821_ata ata (
-    .clk(clk_sys), .rst_n(ide_dev_rst_n),
+    .clk(clk_sys), .rst_n(ata_rst_n),
     .io_rd(device_io_rd && ata_cs), .io_wr(device_io_wr && ata_cs),
     .io_addr(device_io_addr), .io_din(device_io_din), .io_dout(ata_io_dout),
     .mounted(hdd_mounted), .readonly(hdd_readonly), .capacity(hdd_capacity),
@@ -1696,7 +1756,7 @@ pc9821_ata ata (
 // own size, which is the behaviour this core had before HDI existed. The module's header
 // states the format, the validation and why the offset survives a platform reset.
 pc9821_hdd_image hdd_image (
-    .clk(clk_sys), .rst_n(!reset),
+    .clk(clk_sys), .rst_n(!rst_q[R_HDDI]),
     // Both disks' slots: the size is the pulsing slot's (one hps_io register at the top level).
     .img_mounted(img_mounted), .img_mounted1(hdd1_mounted), .img_readonly(img_readonly),
     .img_size(hdd1_mounted ? hdd1_size : img_size),
@@ -1733,7 +1793,7 @@ pc9821_hps_slot_demux hps_demux (
 generate if (CDROM_EN) begin : g_cdrom
 pc9821_atapi #(.AUDIO_EN(CDROM_AUDIO_EN), .LOG_EN(CDROM_LOG_EN && !PERF_LOG_EN),
                .LOG_CLK_HZ(SYS_FREQ)) atapi (
-    .clk(clk_sys), .rst_n(ide_dev_rst_n),
+    .clk(clk_sys), .rst_n(atapi_rst_n),
     // ABSENT FROM THE BUS while bank 1 holds the second hard disk (ide_bank1_hdd_eff): no write
     // reaches it, so its own bank latch stays at its reset value 0 (the field changes only across
     // a platform reset, which resets this drive's task file too). Every read side effect, its
@@ -1774,7 +1834,7 @@ end endgenerate
 // the CD's `xfer`, the FDC's media data path (x_st of its dbg_state tap {IRQ, DRQ, st, x_st}) -
 // each held on for 50 ms so a microsecond transfer is visible.
 pc9821_disk_led #(.CLK_HZ(SYS_FREQ), .HOLD_MS(50)) disk_led (
-    .clk(clk_sys), .reset(reset),
+    .clk(clk_sys), .reset(rst_q[R_LED]),
     .ata_xfer(ata_xfer), .cd_xfer(cd_xfer),
     .fdc_x_st(dbg_fdc_state[2:0]),
     .led_disk(led_disk), .led_fdd(led_fdd)
@@ -1788,7 +1848,7 @@ pc9821_block_share block_share (
     // disk on hardware while the benches - which mount after debug_bios_loaded
     // - still found it. The ATA stays held until cpu_run, so no request can be
     // issued before the CPU starts.
-    .clk(clk_sys), .rst_n(!reset),
+    .clk(clk_sys), .rst_n(!rst_q[R_BSH]),
 
     // ---- slot 0: the hard disk (pc9821_ata) ----
     // The ATA reaches the engine through pc9821_hdd_image above (the HDI header detector):
@@ -1899,7 +1959,7 @@ wire [ 7:0] fdd_blk_rd_addr;
 wire [15:0] fdd_blk_rd_data;
 
 pc9821_fdd_media fdd_media (
-    .clk(clk_sys), .reset(reset || !cpu_run),
+    .clk(clk_sys), .reset(rst_q[R_FDD] || !cpu_run),
     .img_mounted(fdd_mounted), .img_size(fdd_size),
     .img1_mounted(fdd1_mounted), .img1_size(fdd1_size),
     // The mount's read-only flag, the SAME one-bit register the block adapter takes (hps_io
@@ -1922,39 +1982,45 @@ pc9821_fdd_media fdd_media (
 wire [31:0] dma_mem_addr, dma_mem_din;
 wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and the cycle it loads (pc9821_dmac)
 wire        dma_mem_load;
+wire        dma_mem_load_we;   // the loading byte is a store (pc9821_dmac mem_load_we)
 wire [3:0]  dma_mem_be;
 wire        dma_mem_req, dma_mem_we, dma_mem_ready, dma_mem_resp_valid;
 wire [31:0] dma_mem_dout;
 
 // Both GDC domains are held in reset until the firmware pack has loaded (cpu_run);
-// `rst_n_sys` names that strobe. `rst_n_vid` is the RASTER POSITION COUNTER's own reset
-// and is DIFFERENT (see below): it is freed from `cpu_run` so the machine emits its
+// `rst_n_sys` names that strobe (one reset copy per consumer: the rst_n_sys_* wires below).
+// `rst_n_vid` is the RASTER POSITION COUNTER's own reset and is DIFFERENT (see below): it is freed from `cpu_run` so the machine emits its
 // power-on defsyncm24 raster with no firmware pack - the analog OSD is drawn in the core's
 // own timing, so without a raster the analog picture and its OSD cannot exist and a ROM
 // cannot be loaded from that OSD.
-wire rst_n_sys = !(reset || !cpu_run);
-// The raster position counter runs from `!reset` (rst_n_vid, below), so with no ROM it
-// still emits the power-on defsyncm24 raster even though cpu_run never rises - the analog
-// OSD is drawn in the core's own timing and cannot be placed without a raster.
-//
-// When a pack DOES load, cpu_run rises while the counter is mid-frame. The counter is
-// RE-SEEDED to 0 on that one cycle (cpu_run_rise), so the raster phase the guest then sees
-// is the phase it was held at before (rst_n_sys == !cpu_run until then). This is what keeps
-// every guest-visible raster time - the boot's VSYNC-locked cycle count above all -
-// unchanged; without it the free-running counter's phase at cpu_run would move them.
-//
-// Single-cycle-event discipline: the re-seed is a synchronous reset with exactly one
-// consumer (the CRTC's hdot/vline always block); it collides with no other writer of those
-// registers. The delayed cpu_run is its own register (the telemetry disk-mount latch's
-// cpu_run_d is compiled out with PERF_LOG_EN), reset by `reset`, so the pulse is
-// deterministic (no X in 4-state).
-reg raster_cpu_run_d;
-always @(posedge clk_sys) begin
-  if (reset) raster_cpu_run_d <= 1'b0;
-  else       raster_cpu_run_d <= cpu_run;
-end
-wire cpu_run_rise = cpu_run & ~raster_cpu_run_d;
-wire rst_n_vid = !(reset || cpu_run_rise);
+// One expression, one copy per consumer block (pc9821_reset_tree): the EGC memory gate, the CRTC,
+// the GDC, the CG and the video telemetry each get their own.
+wire rst_n_sys_egcg = !(rst_q[R_EGCG] || !cpu_run);
+wire cpu_run_crtc;   // cpu_run, its FALL held to the next frame end (pc9821_raster_reseed): the CRTC's
+wire rst_n_sys_crtc = !(rst_q[R_CRTC] || !cpu_run_crtc);
+wire rst_n_sys_gdc2 = !(rst_q[R_GDC2] || !cpu_run);
+wire rst_n_sys_cg   = !(rst_q[R_CG]   || !cpu_run);
+/* verilator lint_off UNUSEDSIGNAL */   // PERF_LOG_EN=0: the video telemetry is compiled out
+wire rst_n_sys_dbg  = !(rst_q[R_DBG]  || !cpu_run);
+/* verilator lint_on UNUSEDSIGNAL */
+// THE RASTER RUNS THROUGH THE RESET (pc9821_raster_reseed says why and how). The position counter
+// and the dot enable are not held by the machine reset: with no ROM the machine still emits the
+// power-on defsyncm24 raster (cpu_run never rises; the analog OSD is drawn in the core's own timing
+// and cannot be placed without a raster), and through a held reset - the core load, the keyboard
+// reset combo - the framework keeps a raster. They are RE-SEEDED instead, on the machine reset's last
+// clock and the first clock out of it, and on cpu_run's rise, so the raster phase the guest sees is
+// the one the held reset and the old cpu_run re-seed gave it: every guest-visible raster time - the
+// boot's VSYNC-locked cycle count above all - unchanged. cpu_run itself is the loader's, its rise held
+// to the raster's last dot, so that re-seed cuts no frame; the machine reset's own alignment is
+// pc9821_reset_align's at the top.
+wire cpu_run_reseed, dot_reseed;
+wire crtc_o_frame_end;   // pc9821_crtc's o_frame_end: the raster is on its frame's last dot
+pc9821_raster_reseed u_raster_reseed (
+    .clk(clk_sys), .reset(reset), .rst_q(rst_q[R_DOT]), .cpu_run_ld(cpu_run_ld),
+    .frame_end(crtc_o_frame_end), .cpu_run(cpu_run), .cpu_run_crtc(cpu_run_crtc),
+    .reseed_cnt(cpu_run_reseed), .reseed_dot(dot_reseed)
+);
+wire rst_n_vid = !cpu_run_reseed;
 
 // The EGC x GRCG memory-dispatch gate: `gdc_egc_gate` (pc9821_crtc's
 // FF2 num-2 latch) is ANDed with `mem_grcg_expand` (pc9821_grcg's 0x7C bit 7) and the AND is
@@ -1962,7 +2028,7 @@ wire rst_n_vid = !(reset || cpu_run_rise);
 // bit-identical to the combinational gate in every cycle - and it is placed here, near the
 // memory subsystem, so the crtc-launched GVRAM-M10K cone is cut (docs/timing.md).
 pc9821_egc_mem_gate u_egc_mem_gate (
-    .clk(clk_sys), .reset(!rst_n_sys),
+    .clk(clk_sys), .reset(!rst_n_sys_egcg),
     .egc_gate(gdc_egc_gate), .egc_gate_nx(gdc_egc_gate_nx),
     .grcg_expand(mem_grcg_expand), .grcg_expand_nx(mem_grcg_expand_nx),
     .gate(gdc_egc_mem_gate)
@@ -1980,7 +2046,7 @@ wire        gdc_pix_h_active, gdc_pix_v_active;
 wire        gdc_gfx_odd_line;
 wire        gdc_mode16;
 wire [31:0] gdc_dig;
-// The analogue palette table's CPU write port, from pc9821_gdc_text to pc9821_gfx_palette
+// The analogue palette table's CPU write port, from pc9821_crtc to pc9821_gfx_palette
 // inside the mixer (#2).
 wire        gdc_pal_wr_en;
 wire [3:0]  gdc_pal_wr_idx;
@@ -2012,7 +2078,7 @@ wire        gdc_vsync_edge;
 //
 // The configuration image the ITF reads out of the battery-backed CG store is seeded here
 // from the size the OSD actually selected, and RE-ESTABLISHED at every ITF POST pass.
-// cpu_reset_req is the `out 0xF0` CPU-mode reset (pc9821_iobus:1337), the same event the
+// cpu_reset_req is the `out 0xF0` CPU-mode reset (pc9821_iobus.sv:3140 `hit[HX_00F0]: begin`), the same event the
 // ITF uses to retry POST, and it is what clears the seeded cells' written mask so the
 // KANJI test's own writes and the ITF's configuration reads both work.
 // Both consumers are fed from pc9821_system's own code-to-bytes table, which is the one
@@ -2038,12 +2104,12 @@ wire [9:0]  crtc_o_vline;
 wire [9:0]  crtc_o_vtotal;
 wire [5:0]  crtc_o_vbp;
 wire [9:0]  crtc_o_hdot;
-wire        crtc_o_frame_end, crtc_o_cfg_snap, crtc_o_cfg_pending, crtc_o_display_page;
+wire        crtc_o_cfg_snap, crtc_o_cfg_pending, crtc_o_display_page;
 wire        crtc_o_stat_blank, crtc_o_stat_vsync;
 wire [7:0]  crtc_io_dout, cg_io_dout, gdc2_io_dout;
 
 pc9821_crtc u_crtc (
-    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .rst_n_vid(rst_n_vid), .pixel_ce(pixel_ce),
+    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys_crtc), .rst_n_vid(rst_n_vid), .pixel_ce(pixel_ce),
     // The slave's graphics window extends the displayed lines (NP2kai's MAX(grphymax, textymax)).
     .gfx_win_on(gdc_gfx_grph_on),
     .crt31k(crt31k),
@@ -2103,7 +2169,7 @@ pc9821_gdc2 #(
     .WRITE_PACE_NS(GDC_WRITE_PACE_NS),
     .FIG_PACE_NS(GDC_FIG_PACE_NS)
 ) u_gdc2 (
-    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce),
+    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys_gdc2), .pixel_ce(pixel_ce),
     .io_wr(device_io_wr && gdc_cs), .io_rd(device_io_rd && gdc_cs),
     .io_addr(device_io_addr[7:0]),
     .io_din(device_io_din), .io_dout(gdc2_io_dout),
@@ -2136,7 +2202,7 @@ pc9821_gdc2 #(
 );
 
 pc9821_cg u_cg (
-    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys), .pixel_ce(pixel_ce),
+    .clk_sys(clk_sys), .rst_n_sys(rst_n_sys_cg), .pixel_ce(pixel_ce),
     .io_wr(device_io_wr && gdc_cs), .io_rd(device_io_rd && gdc_cs),
     .io_addr(device_io_addr[7:0]), .io_din(device_io_din), .io_dout(cg_io_dout),
     .cg_win_byte_sel(cg_win_byte_sel), .cg_win_rd(cg_win_rd),
@@ -2218,16 +2284,17 @@ pc9821_video_mixer video_mixer (
 // The mixer is pc9821_gvram's scanout read-port reader; pc9821_gvram owns the line fetch,
 // the ping-pong line buffer and the pacing behind it.
 //
-// Pixel enable at the PC-98 dot rate, exactly 400/19 MHz (21.0526 MHz) at every SYS_FREQ, or the
+// Pixel enable at the PC-98 dot rate, 400/19 MHz (21.0526 MHz) within 0.04 ppm at every SYS_FREQ, or the
 // 31 kHz mode's 25.168 MHz while 0x09A8 bit 0 is set (pc9821_vclk_pkg): the raster
 // and everything guest-visible stay on clk_sys, gated by it. The OUTPUT leaves on its own dot-locked
 // video clock (z486_mister.sv: pc9821_video_out, the video PLL), which is what CLK_VIDEO must be for
 // a jitter-free analog picture; the two dot rates are the same exact ratio of the 50 MHz reference.
 pc9821_dot_ce #(.SYS_FREQ(SYS_FREQ)) dot_ce (
-    .clk(clk_sys), .reset(reset), .c31(crt31k), .ce(pixel_ce)
+    .clk(clk_sys), .reset(dot_reseed), .c31(crt31k), .ce(pixel_ce)
 );
 assign video_ce = pixel_ce;   // the framework's CE_PIXEL (see pixel_ce above)
 assign video_31k = crt31k;
+assign video_frame_end = crtc_o_frame_end;
 assign video_blank_n = gdc_de;
 
 // The keyboard's PS/2 response pins are idle (the guest is driven through ps2_key).
@@ -2243,7 +2310,7 @@ generate
 if (PERF_LOG_EN) begin : g_telemetry
 assign cd_log_accept = dbg_uart_accept;   // the CD log is compiled out with the telemetry on
 // Telemetry: the stall record, 351 characters on ONE line (~31 ms at 115200 8N1) so it must not
-// restart mid-record, followed by the 232-byte PRF record and then the 100-byte GFX record. The
+// restart mid-record, followed by the 256-byte PRF record and then the 100-byte GFX record. The
 // field map is NOT repeated here - it is a contract with tools/decode_telemetry.py and
 // tools/check_telemetry_contract.py. The three formatters below produce the bytes and
 // pc9821_dbg_record sequences them; those say what the bytes mean. The formatters are pure
@@ -2274,7 +2341,7 @@ pc9821_wdg_trigger #(
     .WDG_STALL (WDG_STALL),
     .WDG_PERIOD(WDG_PERIOD)
 ) u_wdg_trigger (
-    .clk(clk_sys), .reset(reset), .cpu_run(cpu_run),
+    .clk(clk_sys), .reset(rst_dbg), .cpu_run(cpu_run),
     // The hold covers the PRF and GFX records too: the halves of one report must not be separated
     // by a new trigger, or a counter delta would straddle two reports. dbg_report_active is a
     // level over all three of them, and it also holds the trigger while the emission is PACED on
@@ -2344,7 +2411,7 @@ pc9821_watchdog_msg u_wdg_msg (
 
 reg cpu_run_d;
 always @(posedge clk_sys) begin
-    if (reset) begin
+    if (rst_dbg) begin
         mounted_at_run <= 1'b0;
         cpu_run_d     <= 1'b0;
     end else begin
@@ -2353,7 +2420,7 @@ always @(posedge clk_sys) begin
     end
 end
 always @(posedge clk_sys) begin
-    if (reset) begin
+    if (rst_dbg) begin
         hdd_req_cnt  <= 8'd0;
         hdd_err_cnt  <= 8'd0;
     end else begin
@@ -2370,7 +2437,7 @@ reg       vid_vs_d_v;
 reg [7:0] vid_lit_cnt_v;
 reg       vid_lit_seen_v;
 always @(posedge clk_sys) begin
-    if (!rst_n_sys) begin
+    if (!rst_n_sys_dbg) begin
         vid_frame_cnt_v <= 8'd0;
         vid_vs_d_v      <= 1'b0;
         vid_lit_cnt_v   <= 8'd0;
@@ -2395,7 +2462,7 @@ reg [7:0] vid_frame_cnt_s1, vid_lit_cnt_s1;
 reg       vid_lit_seen_s1;
 // Pipe stages are reset so the watchdog never formats X.
 always @(posedge clk_sys) begin
-    if (reset) begin
+    if (rst_dbg) begin
         vid_frame_cnt_s1 <= 8'd0;
         vid_frame_cnt    <= 8'd0;
         vid_lit_cnt_s1   <= 8'd0;
@@ -2419,7 +2486,7 @@ end
 // fetch and the font fetch have their own SDRAM ports besides. The graphics record
 // reports the GVRAM path counters, and this record reports the EGC/GRCG operation counts too.
 pc9821_perf_msg u_perf_msg (
-    .clk(clk_sys), .reset(reset),
+    .clk(clk_sys), .reset(rst_dbg),
     .cpu_req(z_valid), .cpu_ack(z_ready),
     .sd_valid(ext_mem0_valid), .sd_ready(ext_mem0_ready), .sd_write(ext_mem0_write),
     // The other three SDRAM requester ports' accepts and the scanout's waiting cycles, so the
@@ -2457,7 +2524,7 @@ pc9821_perf_msg u_perf_msg (
 wire gfx_vsync_pulse = pixel_ce && video_vsync && !vid_vs_d_v;   // the edge vid_frame_cnt_v counts
 wire gfx_irq_pulse   = z_inta && !z_inta_d;                      // the edge inta_count counts
 pc9821_gfx_msg u_gfx_msg (
-    .clk(clk_sys), .reset(reset),
+    .clk(clk_sys), .reset(rst_dbg),
     .gvram_gr(gfx_stats[127:96]), .gvram_gt(gfx_stats[95:64]),
     .gvram_eg(gfx_stats[63:32]),  .gvram_pw(gfx_stats[31:0]),
     .cpu_req(z_valid), .cpu_ack(z_ready), .cpu_io(z_io),
@@ -2468,80 +2535,23 @@ pc9821_gfx_msg u_gfx_msg (
     .idx(gfx_idx), .ch(gfx_char)
 );
 
-// THE TRACE'S SECOND TRIGGER: the end of a GRCG drawing burst - the event a game's dialog redraws
-// ARE, and the one the OOM trigger cannot see. WHY THE BURST'S END AND NOT ITS START: the trace ring
-// holds the PAST (8192 transitions), so a trigger at the burst's START dumps the idle loop the guest
-// was waiting in, while a trigger at its END dumps the drawing that just happened, which is the
-// whole point of having it.
-// WHY A ONE-SECOND QUIET: a game draws a dialog and then sits in a keyboard wait with the GVRAM
-// idle - measured on the running core, a dialog screen is quiet and an advance bursts to
-// 145k-254k stores - so "a GVRAM store after >= 1 s with none" is exactly "an interaction just
-// redrew the screen". That is rare enough that the trace's ~16 s dump is not swamped, and it is what
-// makes pc9821_trace's per-pulse re-arm safe: one interaction, one dump.
-// WHICH STORES COUNT: the WRITE owners only - the GRCG's store pulse and the plain client's
-// ownership level. The plain arm is there because the GRCG's alone does not see Farland
-// Story's drawing: its heartbeats move GW/GC/PW while GS/GR/GT stay flat, so its page-to-page
-// copies are plain window stores and a GRCG-only trigger never fires on them (its copy loop
-// is at 1459:05C7). READS are deliberately excluded - a client that polls a GVRAM byte every frame
-// would reset the quiet timer forever and the trigger would never fire. THE EGC IS ALSO
-// EXCLUDED, not overlooked: an EGC-driven game (Flame Zapper) may never go quiet, so it needs
-// its own trigger shape rather than being folded in here untested.
-// THE QUIET WINDOW IS ONE SECOND OF REAL TIME ON HARDWARE, which is what makes it free here - it is
-// not a simulation budget.
-// IT LIVES IN THIS BRANCH, so it exists only with PERF_LOG_EN = 1, exactly like the records it
-// shares a port with; with the telemetry compiled out, trace_trig is the constant below and the
-// trace keeps its stall trigger alone.
-localparam [31:0] TRACE_BURST_QUIET = 32'd50_000_000;   // 1 s at SYS_FREQ
-reg [31:0] trace_burst_quiet;
-reg        trace_burst_active;
-reg        trace_disp_prev, trace_acc_prev;
-wire       trace_burst_end = trace_burst_active && (trace_burst_quiet >= TRACE_BURST_QUIET);
-wire       trace_store_evt = gvram_grcg_store || gvram_pw_owned;
-// THE SECOND TRIGGER IS THE FLIP. Waiting for the game to STOP drawing alone never fires on
-// Farland: it makes ~1000 GVRAM accesses per frame at 56.4 fps, so `trace_burst_quiet` never
-// reaches its limit, even on a static map screen, the quietest state a running game has. A frame-buffer flip is the event that MARKS a
-// redraw, and the ring holds the PAST, so triggering on the flip dumps the drawing that just
-// happened. Both `0xA4` (the display page) and `0xA6` (the access page) count, because a game may
-// double-buffer with either; each is a one-cycle pulse (the register differs from its own
-// previous value) and neither needs a new port - pc9821_crtc already exports the first and
-// pc9821_system already carries the second.
-//
-// THE SAME TIMER ALSO RATE-LIMITS: a flip may fire a dump only when
-// TRACE_BURST_QUIET has elapsed since the last one, or a 56 fps flipper would emit a 114 KB dump
-// every frame. The quiet arm is KEPT as a fallback for a game that does go idle (between
-// dialog advances, for example).
-wire       trace_flip_evt = (crtc_o_display_page != trace_disp_prev) ||
-                            (gdc_access_page     != trace_acc_prev);
-wire       trace_rate_ok  = (trace_burst_quiet >= TRACE_BURST_QUIET);
-always @(posedge clk_sys) begin
-    if (reset) begin
-        trace_burst_quiet  <= 32'd0;
-        trace_burst_active <= 1'b0;
-        trace_disp_prev    <= 1'b0;
-        trace_acc_prev     <= 1'b0;
-    end else begin
-        trace_disp_prev <= crtc_o_display_page;
-        trace_acc_prev  <= gdc_access_page;
-        if (trace_store_evt) begin
-            trace_burst_quiet  <= 32'd0;
-            trace_burst_active <= 1'b1;
-        end else if (trace_burst_quiet != TRACE_BURST_QUIET) begin
-            trace_burst_quiet <= trace_burst_quiet + 32'd1;
-        end
-        // One pulse per burst: the next store re-arms it.
-        if (trace_burst_end) trace_burst_active <= 1'b0;
-        // A flip that passes the rate limit becomes an event and restarts the window.
-        if (trace_flip_evt && trace_rate_ok) trace_burst_quiet <= 32'd0;
-    end
-end
-wire trace_flip_trig = trace_flip_evt && trace_rate_ok;
-assign trace_trig = trace_burst_end | trace_flip_trig;
+// THE TRACE'S SECOND TRIGGER - a GRCG/plain drawing burst's end, or a page flip, each limited to
+// one a second - is pc9821_trace_trig, which says why each arm is shaped as it is. IT LIVES IN
+// THIS BRANCH, so it exists only with PERF_LOG_EN = 1, exactly like the records it shares a port
+// with; with the telemetry compiled out, trace_trig is the constant below and the trace keeps its
+// stall trigger alone. The window is one second of real time on hardware: SYS_FREQ clocks.
+pc9821_trace_trig #(.QUIET(32'(SYS_FREQ))) u_trace_trig (
+    .clk(clk_sys), .reset(rst_dbg),
+    .grcg_store(gvram_grcg_store), .pw_owned(gvram_pw_owned),
+    .display_page(crtc_o_display_page), .access_page(gdc_access_page),
+    .trig(trace_trig)
+);
 // The report's byte order, and the pacing that keeps it from outrunning the FIFO, live in
 // pc9821_dbg_record: the three formatters above are pure functions of their index over the
 // report's counter snapshot, and the sequencing between them is the part with a handshake and
 // its own bench.
 pc9821_dbg_record u_dbg_record (
-    .clk_sys(clk_sys), .reset(reset),
+    .clk_sys(clk_sys), .reset(rst_dbg),
     .dbg_uart_accept(dbg_uart_accept),
     .wdg_start(wdg_start), .wdg_path(wdg_path), .wdg_char(wdg_char),
     .prf_char(prf_char), .gfx_char(gfx_char),
@@ -2563,7 +2573,7 @@ end else begin : g_no_telemetry
     wire       fdc_log_we, fdc_log_accept;
     if (DBG_GDC_EN) begin : g_gdc_log
     pc9821_gdc_log #(.LOG_CLK_HZ(SYS_FREQ)) u_gdc_log (
-        .clk(clk_sys), .rst_n(!reset),
+        .clk(clk_sys), .rst_n(!rst_dbg),
         .io_wr(device_io_wr), .io_addr(device_io_addr), .io_din(device_io_din),
         .vline(crtc_o_vline),
         .tram_we(tram_we), .tram_addr(tram_addr), .tram_din(tram_din),
@@ -2578,7 +2588,7 @@ end else begin : g_no_telemetry
     // with the byte the CPU received for a read), the controller's interrupt line on either
     // window, and its state byte (pc9821_fdc dbg_state).
     pc9821_fdc_log #(.LOG_CLK_HZ(SYS_FREQ)) u_fdc_log (
-        .clk(clk_sys), .rst_n(!reset),
+        .clk(clk_sys), .rst_n(!rst_dbg),
         .io_stb(dbg_last_io_stb), .io_wr(dbg_last_io_wr), .io_addr(dbg_last_io_addr),
         .io_data(dbg_last_io_data),
         .fdc_irq(fdc_irq | fdc_irq10), .fdc_state(dbg_fdc_state),
@@ -2651,13 +2661,18 @@ assign software_reset = triple_fault_reset;
 // An intermediate 16-bit saturation here would flat-top the join whenever FM+SSG
 // passed 16 bits, even with a cancelling negative PCM86 sample still to come. The FM+ADPCM sum is clamped once at the jt08_acc junction (ymfm's clamp16
 // point, ymfm_opn.cpp:1410-1414); this join carries that clamped junction, the
-// AC-coupled (zero-mean) SSG added after it, and PCM86. 20 bits holds the exact range: [+255,996, -239,616].
-wire signed [19:0] snd86_l = $signed(opna_snd_l)
-                           + $signed({{4{pcm86_snd_l[15]}}, pcm86_snd_l});
-wire signed [19:0] snd86_r = $signed(opna_snd_r)
-                           + $signed({{4{pcm86_snd_r[15]}}, pcm86_snd_r});
-assign sample_86_l = snd86_l;
-assign sample_86_r = snd86_r;
+// AC-coupled (zero-mean) SSG added after it, and PCM86. The sum stays within about +-72k
+// (clamped FM+ADPCM [-32,768, +32,767], the SSG's AC term within about +-6.3k, PCM86
+// [-32,768, +32,767]), which 20 bits hold with room.
+// The join registers both terms first (pc9821_snd86_join: the handshake's holding register
+// loads this bus on an edge unrelated to the sources, so the 86-PCM volume multiply must not sit
+// on that single-cycle path).
+pc9821_snd86_join u_snd86_join (
+    .clk(clk_sys),
+    .opna_l(opna_snd_l), .opna_r(opna_snd_r),
+    .pcm_l(pcm86_snd_l), .pcm_r(pcm86_snd_r),
+    .sum_l(sample_86_l), .sum_r(sample_86_r)
+);
 // ---------------------------------------------------------------
 // The system beeper (the PC speaker)
 // ---------------------------------------------------------------

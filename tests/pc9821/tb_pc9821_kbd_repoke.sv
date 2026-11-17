@@ -76,7 +76,7 @@ module tb_pc9821_kbd_repoke;
   integer low_clks;
   reg [7:0] value;
   reg toggle = 0;
-  // 16 distinct MAPPED Set-2 makes for the overflow fill (the table maps every
+  // Distinct MAPPED Set-2 keys for the overflow fill (the table maps every
   // one of them), in enqueue order; the first queued byte is therefore NEC 0x01.
   reg [7:0] fill_set2 [0:15];
   initial begin
@@ -222,15 +222,24 @@ module tb_pc9821_kbd_repoke;
     // ---- 4. The status fold: a same-clk read + overflow cannot resurrect RXRDY. ----
     // Fill the receive side: one byte in flight (unread) and 16 queued behind
     // it, then one more event that can only overflow. The pacing timer is drained
-    // first so Q's own delivery is the immediate first-after-idle case.
+    // first so Q's own delivery is the immediate first-after-idle case. The 16 are
+    // seven taps, Q's break and a CAPS press: a held key's break keeps a slot of its
+    // own (A FULL QUEUE NEVER LOSES A BREAK in pc9821_kbd), so sixteen held makes
+    // could not fill the queue, and a lock press owes no break.
     repeat (XFER + 4) @(posedge clk);
     send_key(1'b1, 1'b0, 8'h15);           // Q make -> 0x10, delivered
     repeat (4) @(posedge clk);
     if (!dut.status_reg[1]) fail("the in-flight byte for the overflow collision never set RXRDY");
-    for (i = 0; i < 16; i = i + 1) begin
-      send_key(1'b1, 1'b0, fill_set2[i]);  // 16 distinct makes, all queued
+    for (i = 0; i < 7; i = i + 1) begin
+      send_key(1'b1, 1'b0, fill_set2[i]);  // seven taps, all queued
+      repeat (2) @(posedge clk);
+      send_key(1'b0, 1'b0, fill_set2[i]);
       repeat (2) @(posedge clk);
     end
+    send_key(1'b0, 1'b0, 8'h15);           // Q's break
+    repeat (2) @(posedge clk);
+    send_key(1'b1, 1'b0, 8'h58);           // CAPS: the sixteenth byte
+    repeat (2) @(posedge clk);
     #1;   // let the last enqueue's NBA land before counting
     if (dut.fifo_cnt !== 5'd16) begin
       $display("FAIL: expected 16 queued bytes before the overflow, found %0d", dut.fifo_cnt);

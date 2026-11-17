@@ -575,7 +575,7 @@ module tb_pc9821_sdram;
     // Bit 10 is the sharp one: it is the column MSB at 64MB and a ROW bit at 32MB, and the
     // 32MB column expression {1'b0, req_addr[9:2]} discards it - so if the two branches
     // were ever crossed, this is the bit that would alias.
-    // [source: sdram.v:1418-1421, `col0 = req_large_buf ? addr_buf[10:2] : {1'b0, addr_buf[9:2]};`]
+    // [source: sdram.v:1443-1446, `col0 = req_large_buf ? addr_buf[10:2] : {1'b0, addr_buf[9:2]};`]
     //
     // NOT tested, and why: addr[26], the 128MB chip select. The chip model decides what to
     // do from nCS alone (`wire cmd = nCS ? CMD_NOP : ...`), so it treats the second chip as

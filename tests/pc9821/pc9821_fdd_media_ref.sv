@@ -1,8 +1,10 @@
 // TEST REFERENCE: pc9821_fdd_media as of ad9ed84c (before the FD-a accept-time raw offset), renamed. The lockstep bench tb_pc9821_fdd_media_equiv proves the shipped module against it.
-// ONE BEHAVIOURAL SYNC SINCE, marked `SYNC`: `writeprotect` left the reset domain in the shipped
+// BEHAVIOURAL SYNCS SINCE, marked `SYNC`: `writeprotect` left the reset domain in the shipped
 // module (it survives an OSD Reset / Load BIOS ROM with the medium, NP2kai fdd_d88.c:306;
 // tb_pc9821_fdd_mount_reset R1X/R5/R6). It is applied here too so the lockstep keeps comparing
 // writeprotect on every cycle; the FD-a restructure this reference proves does not touch it.
+// A SECOND SYNC: the sector size's N >= 8 clamp (rq_sec_bytes) starts at bit 3, so N = 9..15 is
+// 32768 bytes as in NP2kai fdd_d88.c, not 0 (tb_pc9821_fdd_media_d88 D21).
 // Floppy MEDIA for pc9821_fdc: a D88 or raw sector image served over a byte seam.
 //
 // The controller half (pc9821_fdc) owns the 765 command engine, this module owns the
@@ -710,7 +712,8 @@ module pc9821_fdd_media_ref (
   reg        ahdrv;        // the READ ID answer is standing
 
   // 128 << N, clamped at N >= 8 exactly as NP2kai does (`if (fdc.N < 8) ... else 128<<8`).
-  wire [15:0] rq_sec_bytes = (rq_n[7:4] != 4'd0) ? 16'd32768 : (16'd128 << rq_n[3:0]);
+  // SYNC: the N >= 8 clamp starts at bit 3, as in the shipped module (NP2kai fdd_d88.c 128 << 8).
+  wire [15:0] rq_sec_bytes = (rq_n[7:3] != 5'd0) ? 16'd32768 : (16'd128 << rq_n[2:0]);
 
   // ---------------------------------------------------------------- the write byte
   // A write request's `adv` with a FILE byte left (file_left: the bytes a read would take from

@@ -191,6 +191,7 @@ module tb_pc9821_readback_sysports;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -476,14 +477,15 @@ module tb_pc9821_readback_sysports;
     //   * bank: NP2kai `((port >> 1) + 1) & 3` (io/dmac.c:236-237) => 0x21 is
     //     channel 1 and 0x27 is channel 0; qemu the same formula, stated as a
     //     contract in its header (`hw/dma/pc98-dma.c:6,269-272`); our own
-    //     pc9821_dmac.sv:204 `cpu_bank_ch = idx[1:0] + 2'd1`. Each port reads its own channel, so the
+    //     pc9821_dmac.sv:213 `cpu_bank_ch = idx[1:0] + 2'd1`. Each port reads its own channel, so the
     //     rotation is invisible here and is checked in tb_pc9821_dma_regs at the array.
     //   * bound: NP2kai stores per channel (`dmach = dmac.dmach + (dat & 3);
     //     dmach->bound = (dat >> 2) & 3`, io/dmac.c:260-263) and so does qemu
-    //     (`regs[data & 3].bank_wrap`), NOT one global latch; the read exposes
-    //     CHANNEL 0 alone (pc9821_dmac.sv:545 `ch_bound[0]`, and 0x29 has no read handler in
-    //     either reference). Both models return the same bytes for the capture's
-    //     three writes (all channel 0) - the rows below are what separates them.
+    //     (`regs[data & 3].bank_wrap`), NOT one global latch; the read is the four
+    //     bounds packed, channel n in bits 2n+1:2n (the Xe10's XE10Z D29 row,
+    //     docs/probes/XE10Z-XE10.TXT:205; 0x29 has no read handler in either reference).
+    //     The packed read and one latch return the same bytes for RDBACK's three
+    //     writes (all channel 0) - the rows below are what separates them.
     // The bytes below are now THE ENGINE'S (pc9821_dmac) at reset, which is what the
     // register file answers once the stub is gone. The 0x25 = 0x0E row was the DOS PROMPT's
     // as-found byte (one sample, RDBACK + PORTS.TXT:170) and the stub seeded it because it
@@ -510,22 +512,21 @@ module tb_pc9821_readback_sysports;
     wr(16'h0021, 8'hFF); rd_is(16'h0021, 8'h0F, "P14 write FF reads 0F");
     wr(16'h0021, 8'h0B); rd_is(16'h0021, 8'h0B, "P14 write 0B reads 0B (low nibble kept)");
     // 0x29 is the BOUND selector, `(dat >> 2) & 3` stored in the channel `dat & 3`
-    // selects, with CHANNEL 0 ALONE on the read: the capture's 04/08/0C -> 01/02/03
+    // selects, the read packing all four (channel 0 in bits 1:0): the capture's 04/08/0C -> 01/02/03
     // (all three select channel 0, which is why the capture cannot separate the
     // per-channel store from one global latch - see the block above).
     wr(16'h0029, 8'h04); rd_is(16'h0029, 8'h01, "P14 0x29 write 04 reads 01 (the machine's row)");
     wr(16'h0029, 8'h08); rd_is(16'h0029, 8'h02, "P14 0x29 write 08 reads 02 (the machine's row)");
     wr(16'h0029, 8'h0C); rd_is(16'h0029, 8'h03, "P14 0x29 write 0C reads 03 (the machine's row)");
-    // A selector that is not 0 lands on ANOTHER channel and cannot move the byte
-    // 0x29 returns. FAIL-FIRST against the one-latch model: it read the LAST write's
-    // value, so write 03 read 00 and write 7F read 03 where both rows below want 03
-    // and 00.
+    // A selector that is not 0 lands on ANOTHER channel's two bits. FAIL-FIRST against the
+    // one-latch model: it read the LAST write's value, so write 03 read 00 and write 7F read 03
+    // where the rows below want 03 and C0.
     wr(16'h0029, 8'h03); rd_is(16'h0029, 8'h03, "P14 0x29 write 03 selects ch3: ch0 still reads 03");
     wr(16'h0029, 8'h00); rd_is(16'h0029, 8'h00, "P14 0x29 write 00 selects ch0: the field is cleared");
-    wr(16'h0029, 8'h7F); rd_is(16'h0029, 8'h00, "P14 0x29 write 7F selects ch3: ch0 stays 00 (a global latch reads 03)");
+    wr(16'h0029, 8'h7F); rd_is(16'h0029, 8'hC0, "P14 0x29 write 7F is ch3 bound 3: bits 7:6 (a global latch reads 03)");
     // A channel-0 write stores `(dat >> 2) & 3` and only that: 0xFC stores 3, not 0x3F,
     // so bits 7:4 are not part of the field.
-    wr(16'h0029, 8'hFC); rd_is(16'h0029, 8'h03, "P14 0x29 write FC reads 03 (bits 7:4 are not stored)");
+    wr(16'h0029, 8'hFC); rd_is(16'h0029, 8'hC3, "P14 0x29 write FC is ch0 bound 3: C3 (bits 7:4 of a write are not stored)");
     // The neighbours stay open bus: the new arms must not widen the decode.
     // probes/PORTS.TXT:169-172 `0024$FF`, `0026&FF`, `0028(FF`, `002A*FF`.
     rd_is(16'h0024, 8'hFF, "P14 0x24 stays open bus");

@@ -103,10 +103,6 @@ def load_matrix(path: Path) -> dict:
     return {"cells": cells, "retries": int(data.get("retries", 0))}
 
 
-def seed_done(root: Path, cell: str, seed: int) -> bool:
-    return (root / cell / f"seed{seed:03d}" / "summary.txt").exists()
-
-
 def seed_started(root: Path, cell: str, seed: int) -> bool:
     """A seed directory exists: the seed is done, or a seed_sweep (perhaps another driver's,
     before a restart) is fitting it. A restarted driver must not start a second copy; a seed
@@ -132,7 +128,7 @@ def host_has_room(limit: int, mine: str = "") -> bool:
     host's - other runs' fits are theirs to budget); without it, every running container."""
     if limit <= 0:
         return True
-    runtime = __import__("os").environ.get("CONTAINER_RUNTIME", "podman")
+    runtime = os.environ.get("CONTAINER_RUNTIME", "podman")
     try:
         ids = subprocess.run([runtime, "ps", "-q", "--filter", "status=running"],
                              capture_output=True, text=True, timeout=60).stdout.split()
@@ -141,9 +137,27 @@ def host_has_room(limit: int, mine: str = "") -> bool:
                                   "{{range .Mounts}}{{.Source}} {{end}}", *ids],
                                  capture_output=True, text=True, timeout=60).stdout
             ids = [line for line in out.splitlines() if mine in line]
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # no room is the safe answer, but said once: a driver waiting on an unreachable runtime
+        # would otherwise look hung
+        if not _RUNTIME_PROBE_FAILED:
+            _RUNTIME_PROBE_FAILED.append(exc)
+            log(f"the container runtime ({runtime}) does not answer ({exc}); "
+                f"not starting fits until it does")
         return False
     return len(ids) < limit
+
+
+_RUNTIME_PROBE_FAILED: list = []
+
+
+def prepared_config(stdout: str) -> dict:
+    """The configuration a `seed_sweep.py --prepare` run reports on its `prepared: {...}` line
+    (the last such line, wherever it sits in the output)."""
+    lines = [ln for ln in stdout.splitlines() if "prepared: " in ln]
+    if not lines:
+        raise ValueError("no 'prepared: ' line in the --prepare output")
+    return json.loads(lines[-1].split("prepared: ", 1)[1])
 
 
 def cmd_run(args) -> int:
@@ -161,10 +175,13 @@ def cmd_run(args) -> int:
         if r.returncode != 0:
             raise SystemExit(f"cell {c['name']}: {' '.join(c['args'])} does not prepare:\n"
                              f"{r.stdout}{r.stderr}")
-        config = r.stdout.strip().splitlines()[-1].split("prepared: ", 1)[-1]
+        try:
+            config = prepared_config(r.stdout)
+        except ValueError as exc:
+            raise SystemExit(f"cell {c['name']}: {exc}:\n{r.stdout}{r.stderr}")
         (cdir / "cell.json").write_text(json.dumps({
             "name": c["name"], "args": c["args"], "env": c["env"], "tree": str(c["tree"]),
-            "source": tree_source(c["tree"]), "config": json.loads(config)}, indent=1) + "\n")
+            "source": tree_source(c["tree"]), "config": config}, indent=1) + "\n")
         log(f"cell {c['name']}: prepared ({' '.join(c['args'])})")
     jobs = []
     depth = max(len(c["seeds"]) for c in matrix["cells"])
@@ -209,7 +226,7 @@ def cmd_run(args) -> int:
                     "--seeds", str(seed), "--jobs", "1", "--retries", str(matrix["retries"]),
                     "--dir", str(root / c["name"])]
             proc = subprocess.Popen(argv, cwd=c["tree"], stdout=out, stderr=subprocess.STDOUT,
-                                    env={**__import__("os").environ, **c["env"]},
+                                    env={**os.environ, **c["env"]},
                                     stdin=subprocess.DEVNULL, start_new_session=True)
             if slot:
                 host_slots.set_pid(slot, proc.pid)
@@ -399,6 +416,28 @@ def selftest() -> int:
     assert bad and any("floor" in p for p in bad), bad
     # A cell with no samples is not a pass.
     assert noninferiority({"cell": "empty", "other_setup_n": 0}, base)
+    # The report row: a cell with LABs but no STA summary prints its other deltas, no TypeError.
+    keys = ("labs_med", "map_alms_med", "clk_sys_setup_med", "clk_sdram_setup_med",
+            "other_setup_mean")
+    full = dict(zip(keys, (4000, 30000, 0.5, 1.0, -0.1)))
+    nosta = dict(zip(keys, (3990, None, None, None, None)))
+    assert delta_suffix(nosta, full) == "  dLAB -10", delta_suffix(nosta, full)
+    assert delta_suffix(full, nosta) == "  dLAB +10"
+    assert delta_suffix(dict(full, labs_med=None), full) == ""
+    assert delta_suffix(dict(full, clk_sys_setup_med=0.25), full) == \
+        "  dLAB +0 dmap +0 dsys -0.250 dsdram +0.000 doth +0.000"
+    # A median of exactly 0.0 sorts as 0.0, between +0.1 and missing, not as the best.
+    rows = [{"cell": n, "clk_sys_setup_med": v} for n, v in
+            (("zero", 0.0), ("none", None), ("pos", 0.1), ("neg", -0.1))]
+    rows.sort(key=slack_key("clk_sys_setup_med"))
+    assert [r["cell"] for r in rows] == ["pos", "zero", "neg", "none"], rows
+    # The --prepare reply is found wherever its line sits.
+    assert prepared_config('x\nprepared: {"a": 1}\ntrailing note\n') == {"a": 1}
+    try:
+        prepared_config("nothing here\n")
+        raise AssertionError("an output without a prepared: line must be refused")
+    except ValueError:
+        pass
     print("fit_matrix selftest: PASS")
     return 0
 
@@ -407,13 +446,36 @@ def fmt(v, spec: str) -> str:
     return "-" if v is None else format(v, spec)
 
 
+def diff(c: dict, base: dict, key: str):
+    """c[key] - base[key], or None when either side has no value (a cell whose fits carry no
+    STA summary, say)."""
+    a, b = c.get(key), base.get(key)
+    return None if a is None or b is None else a - b
+
+
+def delta_suffix(c: dict, base: dict) -> str:
+    """The report row's deltas against the baseline; a delta either side lacks is left out."""
+    if diff(c, base, "labs_med") is None:
+        return ""
+    parts = [("dLAB", "labs_med", "+.0f"), ("dmap", "map_alms_med", "+.0f"),
+             ("dsys", "clk_sys_setup_med", "+.3f"), ("dsdram", "clk_sdram_setup_med", "+.3f"),
+             ("doth", "other_setup_mean", "+.3f")]
+    return "  " + " ".join(f"{label} {format(d, spec)}" for label, key, spec in parts
+                           if (d := diff(c, base, key)) is not None)
+
+
+def slack_key(key: str):
+    """Sort best slack first, a missing value last; 0.0 is a value, not a missing one."""
+    return lambda c: -(c[key] if c[key] is not None else -99)
+
+
 def cmd_report(args) -> int:
     fits = load_fits([r.resolve() for r in args.root])
     floor = args.min_other_setup
     cells = cell_rows(fits, floor)
     order = {"labs": lambda c: (c["labs_med"] is None, c["labs_med"] or 0),
-             "clk_sys": lambda c: -(c["clk_sys_setup_med"] or -99),
-             "worst": lambda c: -(c["worst_setup_med"] or -99),
+             "clk_sys": slack_key("clk_sys_setup_med"),
+             "worst": slack_key("worst_setup_med"),
              "name": lambda c: c["cell"]}[args.sort]
     cells.sort(key=order)
     base = next((c for c in cells if c["cell"] == args.baseline), None)
@@ -430,19 +492,7 @@ def cmd_report(args) -> int:
            f"{'hold':>7}{'fit min':>8}")
     print(hdr)
     for c in cells:
-        delta = ""
-        if base and c is not base and c["labs_med"] is not None and base["labs_med"] is not None:
-            delta = (f"  dLAB {c['labs_med'] - base['labs_med']:+.0f} "
-                     + (f"dmap {c['map_alms_med'] - base['map_alms_med']:+.0f} "
-                        if c['map_alms_med'] is not None and base['map_alms_med'] is not None else "")
-                     + 
-                     f"dsys {c['clk_sys_setup_med'] - base['clk_sys_setup_med']:+.3f} "
-                     + (f"dsdram {c['clk_sdram_setup_med'] - base['clk_sdram_setup_med']:+.3f}"
-                        if c['clk_sdram_setup_med'] is not None
-                        and base['clk_sdram_setup_med'] is not None else "")
-                     + (f" doth {c['other_setup_mean'] - base['other_setup_mean']:+.3f}"
-                        if c.get("other_setup_mean") is not None
-                        and base.get("other_setup_mean") is not None else ""))
+        delta = delta_suffix(c, base) if base and c is not base else ""
         labs = f"{fmt(c['labs_med'], ',.0f')} [{fmt(c['labs_min'], ',')}..{fmt(c['labs_max'], ',')}]"
         csys = (f"{fmt(c['clk_sys_setup_med'], '+.3f')} [{fmt(c['clk_sys_setup_max'], '+.3f')}.."
                 f"{fmt(c['clk_sys_setup_min'], '+.3f')}]")
@@ -482,12 +532,8 @@ def cmd_report(args) -> int:
         if c is base:
             continue
         problems = noninferiority(c, base, NI_BAND, floor)
-        dmean = fmt((c["other_setup_mean"] - base["other_setup_mean"])
-                    if c.get("other_setup_mean") is not None
-                    and base.get("other_setup_mean") is not None else None, "+.3f")
-        dmin = fmt((c["other_setup_min"] - base["other_setup_min"])
-                   if c.get("other_setup_min") is not None
-                   and base.get("other_setup_min") is not None else None, "+.3f")
+        dmean = fmt(diff(c, base, "other_setup_mean"), "+.3f")
+        dmin = fmt(diff(c, base, "other_setup_min"), "+.3f")
         print(f"  {'FAIL' if problems else 'PASS'}  {c['cell']:<30} "
               f"n={c['other_setup_n']:>2} mean {fmt(c['other_setup_mean'], '+.3f')} "
               f"(d {dmean})  worst {fmt(c['other_setup_min'], '+.3f')} (d {dmin})  "

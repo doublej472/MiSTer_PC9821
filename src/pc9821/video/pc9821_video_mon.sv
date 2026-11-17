@@ -9,10 +9,12 @@
 //   H  hsync width, clocks
 //   F  lines per frame (hsync leading edges between vsync leading edges)
 //   V  vsync width, lines (hsync leading edges while vsync is low)
-//   O  the vsync leading edge's offset from the last hsync leading edge, clocks
+//   O  the vsync leading edge's offset from the last hsync leading edge, clocks (0 when both fall in
+//      the same clock; pc9821_crtc moves its VSYNC pin on the HSYNC leading edge, vline_hs, and
+//      pc9821_video_out starts the doubled VSYNC on one, so the core's raster should read 0)
 // and the counts of N frames, E crossing-FIFO events (pc9821_video_out flush/re-centre/underflow)
 // and D samples with DE high inside hsync or vsync. All values hex:
-//   "VM L0350-0350 H040-040 F370-370 V10-10 O001-001 N38 E0000 D0000\r\n"
+//   "VM L0350-0350 H040-040 F370-370 V03-03 O000-000 N38 E0000 D0000\r\n"
 // The record is latched on clk_vid at the window's end and crosses as a toggle; its fields then
 // stay still for a second, so the clk_sys serializer reads them as quasi-static values.
 `timescale 1ns / 1ps
@@ -56,6 +58,9 @@ wire hs_rise = ce & ~hs_q & hs;
 wire vs_fall = ce & vs_q & ~vs;
 wire vs_rise = ce & ~vs_q & vs;
 wire win_end = (win == 32'(VCLK_HZ - 1));
+// The offset a vsync fall in THIS clock records: ocnt is the count up to the previous clock, so an
+// hsync fall in the same clock makes the offset 0, not the length of the line it ends.
+wire [15:0] o_now = hs_fall ? 16'd0 : ocnt;
 
 always @(posedge clk_vid) begin
 	if (ce) begin
@@ -83,8 +88,8 @@ always @(posedge clk_vid) begin
 			if (hcnt > h_hi) h_hi <= hcnt;
 		end
 		if (vs_fall) begin
-			if (ocnt < o_lo) o_lo <= ocnt;
-			if (ocnt > o_hi) o_hi <= ocnt;
+			if (o_now < o_lo) o_lo <= o_now;
+			if (o_now > o_hi) o_hi <= o_now;
 			if (have_f) begin
 				if (fl < f_lo) f_lo <= fl;
 				if (fl > f_hi) f_hi <= fl;

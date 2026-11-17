@@ -523,8 +523,7 @@ module tb_pc9821_cg_read_path;
     if (value !== 8'h78) fail("cfg_seed_reload disturbed the size cell 0x1C6D");
 
     // ---------------------------------------------------------------
-    // 0c. the record cells echo the wipe too (answer-cell-059A-REPORT.md + lane
-    //     kanji-test-writethrough). The stage-1A KANJI CG-RAM test writes 0xFF then 0x00
+    // 0c. the record cells echo the wipe too. The stage-1A KANJI CG-RAM test writes 0xFF then 0x00
     //     over the whole store - including the 14 record cells 0x810..0x81D - and never
     //     restores them; the ITF then re-POSTs (`out 0xF0` = cfg_seed_reload) and re-runs
     //     the drive probe at BANK4@0x1BB6, which reads record byte 5 (0x815) and stores

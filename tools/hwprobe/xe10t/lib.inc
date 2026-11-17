@@ -103,6 +103,10 @@ out_flush:
     jbe     1f
     mov     ah, 0x68
     int     0x21
+    .ifdef XE10Y
+    mov     ah, 0x0D                    /* and every DOS buffer: the FAT and the directory */
+    int     0x21
+    .endif
 1:  pop     bx
     pop     ax
     ret
@@ -876,6 +880,18 @@ time_call:
     push    fs
     push    gs
     cld
+    .ifdef XE10V
+    cmp     byte ptr [win_ph], 0        /* /MISAL: start the window at a raster place */
+    je      1f
+    call    ms_sync
+1:
+    .endif
+    .ifdef XE10Y
+    cmp     byte ptr [k3_drain], 0      /* /PKAB's drain pass: an uncached VRAM read first */
+    je      2f
+    call    k3_drain_rd
+2:
+    .endif
     call    artic_sync
     mov     esi, eax                    /* a0 */
     call    pit_read
@@ -939,7 +955,21 @@ run_case:
     mov     si, word ptr [si+CD_TAG]
     call    row_mark
     pop     si
-11: mov     word ptr [k_ptr], offset sweep_ks
+11:
+    .ifdef XE10Y
+    cmp     byte ptr [k3_rowst], 0      /* /PKAB: the state and the destination before every row */
+    je      14f
+    call    k3_rowstate
+    jmp     13f
+14: call    k3_rowmark                  /* elsewhere a committed ROW line names the case */
+13:
+    .endif
+    .ifdef XE10X
+    mov     ax, word ptr [ks_ptr0]      /* /RDLAT's sweep adds nop 64 (sec_rdlat.inc rd_ks) */
+    mov     word ptr [k_ptr], ax
+    .else
+    mov     word ptr [k_ptr], offset sweep_ks
+    .endif
 rc_k:
     mov     bx, word ptr [k_ptr]
     movzx   ax, byte ptr [bx]
@@ -1115,6 +1145,9 @@ print_row:
     mov     si, offset k_to
     call    out_kd
 2:  call    out_nl
+    .ifdef XE10Y
+    call    k3_commit                   /* every row reaches the card as it is measured */
+    .endif
     popad
     ret
 

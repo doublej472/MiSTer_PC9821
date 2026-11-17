@@ -69,7 +69,7 @@ module tb_pc9821_io_class;
   wire        fdc_irq10;   // IRQ10: the same FDC interrupt at its 2DD port window
 
 // ==== WHAT THIS PROVES ====
-// The min-profile I/O class table, measured end to end through the real pc9821_iobus: a full sweep of the 16-bit port space recovers exactly two values - an 8253 WRITE 0x0071/0x0073/0x0075/0x0077/0x3FD9-0x3FDF = 21 (one 2.4576 MHz PIT tick, the write-side floor the ITF's POST timer self-test needs), and EVERY other access = 4, the FSM floor - in place of the machine's measured ladder (WAIT 30 > 8253 21 > default 15 = IDE task file 15 > graphics GDC 13 > text GDC 8 = IDE data 8 > EGC 7). An 8253 READ is the FSM floor and not 21, because that floor is a WRITE-side requirement and the capture reads the 8253 at the default class (its PITD0/PITD1 rows in docs/probes/IO.TXT): measured here in both directions. The IDE data ports 0x0640/0x0641, the IDE task-file/interface registers 0x0642-0x064E/0x074C/0x074E/0x0430/0x0432/0x1E8E, the text GDC 0x0060/0x0062, the graphics GDC 0x00A0/0x00A2, the EGC ports 0x04A0-0x04AF/0x006A/0x007C/0x007E/0x00A6 (including the GRCG pair) and the default are all at the FSM floor, and so is 0x005F (its read is the machine's default read class, XE10T R8_005F 788.4 ns; its write is posted, which tb_pc9821_io_5f measures); the 46 named ports keep their arms so the inventory stays exact, and the bench prints the floor and the survivor. And a MULTI-BYTE access is priced LANE BY LANE: on the machine each byte of an access is its own bus cycle and therefore carries its own class, so a two-lane read of 0x5E/0x5F costs 4 + 4 = 8 clk_sys (that ARTIC word read is the one the firmware does 20 times across BANK3/BANK6/BANK7/BIOS.ROM), two same-class lanes cost 4 + 4 = 8 where one class plus one cycle used to be charged, and the terminated high lane of a word read at 0x7C - which the machine never fetches - keeps its one cycle and pays no class.
+// The min-profile I/O class table, measured end to end through the real pc9821_iobus: a full READ sweep of the 16-bit port space, with WRITES measured at the eight 8253 ports and 0x005F (no other port's write direction is swept), recovers exactly two values - an 8253 WRITE 0x0071/0x0073/0x0075/0x0077/0x3FD9-0x3FDF = 21 (one 2.4576 MHz PIT tick, the write-side floor the ITF's POST timer self-test needs), and EVERY other access = 4, the FSM floor - in place of the machine's measured ladder (WAIT 30 > 8253 21 > default 15 = IDE task file 15 > graphics GDC 13 > text GDC 8 = IDE data 8 > EGC 7). An 8253 READ is the FSM floor and not 21, because that floor is a WRITE-side requirement and the capture reads the 8253 at the default class (its PITD0/PITD1 rows in docs/probes/IO.TXT): measured here in both directions. The IDE data ports 0x0640/0x0641, the IDE task-file/interface registers 0x0642-0x064E/0x074C/0x074E/0x0430/0x0432/0x1E8E, the text GDC 0x0060/0x0062, the graphics GDC 0x00A0/0x00A2, the EGC ports 0x04A0-0x04AF/0x006A/0x007C/0x007E/0x00A6 (including the GRCG pair) and the default are all at the FSM floor, and so is 0x005F, measured here as a named arm in both directions (its read is the machine's default read class, XE10T R8_005F 788.4 ns; its write is posted, so its own access releases the CPU at the floor and its bus time, which tb_pc9821_io_5f measures, lands behind it); the 46 named ports keep their arms so the inventory stays exact, and the bench prints the floor and the survivor. And a MULTI-BYTE access is priced LANE BY LANE: on the machine each byte of an access is its own bus cycle and therefore carries its own class, so a two-lane read of 0x5E/0x5F costs 4 + 4 = 8 clk_sys (that ARTIC word read is the one the firmware does 20 times across BANK3/BANK6/BANK7/BIOS.ROM), two same-class lanes cost 4 + 4 = 8 where one class plus one cycle used to be charged, and the terminated high lane of a word read at 0x7C - which the machine never fetches - keeps its one cycle and pays no class.
 //
 // The table is the `io_access_cycles` function in pc9821_iobus.sv. This bench
 // exists because a measurement showed that every EGC port was charged its `default`
@@ -117,6 +117,7 @@ module tb_pc9821_io_class;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -160,7 +161,6 @@ module tb_pc9821_io_class;
   localparam integer CLASS_EGC  = 4;      // 0x04A0-0x04AF, 0x006A, 0x007C, 0x007E, 0x00A6
   localparam integer CLASS_DEF  = 4;      // every other port
   localparam real    NP2_FLAT   = 20.34;  // NP2kai: one 2.4576 MHz base clock
-  localparam integer PIT_TICK   = 21;     // 2.4576 MHz against 50 MHz = 20.34
 
   function automatic integer class_of(input [15:0] p, input wr);
     begin
@@ -208,7 +208,7 @@ module tb_pc9821_io_class;
   reg [15:0] probe_port = 16'h0000;
 
   // One I/O read of `port`, counting clk_sys from the request to cpu_ready, the
-  // same idiom tb_pc9821_io_wait uses: cpu_addr carries the BASE (the port with
+  // same idiom tb_pc9821_io_5f uses: cpu_addr carries the BASE (the port with
   // its low two bits zero) and the LANE rides in cpu_be. The count is the class
   // hold plus one, because the request is presented on the negedge it is counted
   // from; `measured_cycles - 1` is the table value.
@@ -293,6 +293,7 @@ module tb_pc9821_io_class;
   integer    audit_n = 0;
   integer    i = 0;
   integer    default_ports = 0, named_ports = 0;
+  integer    pitw_meas_min = -1;   // the shortest measured 8253 write
   integer    egc_fast = 0;
   integer    m = 0;
 
@@ -342,6 +343,7 @@ module tb_pc9821_io_class;
     for (i = 40; i < audit_n; i = i + 1) begin
       probe_port = audit[i];
       measure_lanes({16'd0, probe_port[15:2], 2'b00}, 4'b0001 << probe_port[1:0], 1'b1);
+      if (pitw_meas_min < 0 || measured_cycles - 1 < pitw_meas_min) pitw_meas_min = measured_cycles - 1;
       if (measured_cycles - 1 != CLASS_PITW) begin
         $display("FAIL 8253 port %04x WRITE modelled %0d clk_sys, expected %0d (one 2.4576 MHz tick)",
                  probe_port, measured_cycles - 1, CLASS_PITW);
@@ -351,6 +353,27 @@ module tb_pc9821_io_class;
                  probe_port, CLASS_PITW);
       end
     end
+
+    // ---- 0x005F, named: the floor in BOTH directions ----
+    // The sweep reaches 0x5F as a default-class read; it is named here because the firmware's
+    // delay loops spin on it. Its read is the machine's default read class (docs/probes/
+    // XE10T-XE10.TXT /IO R8_005F, 788.4 ns) and its write is POSTED (the W8_005F rows: the
+    // write's period overlaps the work behind it), so the write's own access releases the CPU
+    // at the floor too; the posted bus time is tb_pc9821_io_5f's subject.
+    probe_port = 16'h005F;
+    measure_port;
+    if (measured_cycles - 1 != CLASS_MIN) begin
+      $display("FAIL port 005F READ modelled %0d clk_sys, expected the floor %0d", measured_cycles - 1, CLASS_MIN);
+      errors = errors + 1;
+    end else $display("  port 005F  READ  modelled %4d clk_sys  (the default read class)", CLASS_MIN);
+    measure_lanes(16'h005C, 4'b1000, 1'b1);
+    if (measured_cycles - 1 != CLASS_MIN) begin
+      $display("FAIL port 005F WRITE released the CPU after %0d clk_sys, expected the floor %0d (the write is posted)", measured_cycles - 1, CLASS_MIN);
+      errors = errors + 1;
+    end else $display("  port 005F  WRITE modelled %4d clk_sys  (posted: the bus time lands behind it)", CLASS_MIN);
+    // Let the posted write's bus time (the W8_005F period, ~87 clk_sys at 50 MHz) run out, so it
+    // does not land on the next port measured here.
+    repeat (400) @(negedge clk);
 
     $display("  --- audit ---");
     $display("  0x005F       the default class (a read is the machine's default read class, XE10T R8_005F); its write is posted (tb_pc9821_io_5f)");
@@ -422,7 +445,9 @@ module tb_pc9821_io_class;
     // still spent, so the access is one class plus one cycle.
     check_lanes(16'h007C, 4'b0011, 1'b0, CLASS_DEF + 1, "word read at 0x7C: the 0x7D lane is terminated and pays no class");
 
-    // What the table must be for the firmware and the captures to mean anything.
+    // The bench's own table inventory (is_named counts the bench's class_of arms, not the DUT's):
+    // a check that this table still names the 46 ports the DUT's arms do, so the sweep's
+    // per-port comparison above compares against the intended table.
     if (default_ports != 65490 || named_ports != 46) begin
       $display("FAIL the table covers %0d default + %0d named ports, expected 65490 + 46",
                default_ports, named_ports);
@@ -432,41 +457,15 @@ module tb_pc9821_io_class;
       $display("FAIL only %0d of 20 EGC ports carry the EGC class", egc_fast);
       errors = errors + 1;
     end
-    // The 8253 floor survives and keeps its value: the ITF's POST timer self-test
-    // (BANK4@0x038F) needs the 8253 WRITE to outlast one 2.4576 MHz PIT tick (20.34). The
-    // firmware's other floor, the 0x005F I/O wait, is a posted write's bus time now
-    // (tb_pc9821_io_5f, tb_pc9821_io_wait).
-    if (CLASS_PITW < PIT_TICK) begin
-      $display("FAIL the POST self-test needs the 8253 WRITE to outlast one PIT tick: pitw=%0d",
-               CLASS_PITW);
-      errors = errors + 1;
-    end
-    if (real'(CLASS_PITW) < NP2_FLAT) begin
-      $display("FAIL the 8253 write arm %0d is inside NP2kai's flat per-access cost %.2f: it no longer clears the ITF floor",
-               CLASS_PITW, NP2_FLAT);
-      errors = errors + 1;
-    end
-    // The READ side of the 8253 is the floor (F7): the floor is the WRITE's requirement, and
-    // the capture prices an 8253 read at the default class. A read arm at the PIT floor would
-    // be the old defect back again.
-    if (CLASS_PITR != CLASS_MIN) begin
-      $display("FAIL the 8253 READ arm is %0d clk_sys, not the default class (%0d): the capture prices PITD0/PITD1 at the default class",
-               CLASS_PITR, CLASS_MIN);
-      errors = errors + 1;
-    end
-    // The contract: EVERY class but the 8253 write floor is the FSM
-    // minimum. The machine's measured ladder (default 15 = IDE task file
-    // 15 > graphics GDC 13 > text GDC 8 = IDE data 8 > EGC 7) is deliberately not matched.
-    if (!(CLASS_PITW > CLASS_MIN)) begin
-      $display("FAIL the surviving floor ranking is broken: pitw=%0d min=%0d",
-               CLASS_PITW, CLASS_MIN);
-      errors = errors + 1;
-    end
-    if (!(CLASS_IDE == CLASS_MIN && CLASS_ATA == CLASS_MIN &&
-          CLASS_GDC1 == CLASS_MIN && CLASS_GDC2 == CLASS_MIN &&
-          CLASS_EGC == CLASS_MIN && CLASS_DEF == CLASS_MIN)) begin
-      $display("FAIL a non-floor class is not the FSM minimum %0d: ide=%0d ata=%0d gdc1=%0d gdc2=%0d egc=%0d default=%0d",
-               CLASS_MIN, CLASS_IDE, CLASS_ATA, CLASS_GDC1, CLASS_GDC2, CLASS_EGC, CLASS_DEF);
+    // The 8253 floor, against the DUT: the ITF's POST timer self-test (BANK4@0x038F) needs the
+    // 8253 WRITE to outlast one 2.4576 MHz PIT tick, so the SHORTEST measured 8253 write, at the
+    // iobus's 50 MHz SYS_CLOCK_HZ, must cover 50 MHz / 2.4576 MHz = 20.34 clk_sys. (The class
+    // constants above are this bench's own table; comparing them with each other proved nothing,
+    // so the requirement is judged on the measured count. The "every other class is the floor"
+    // contract is the sweep's measured-vs-class_of comparison above.)
+    if (pitw_meas_min < 0 || real'(pitw_meas_min) * 2_457_600.0 < 50_000_000.0) begin
+      $display("FAIL the POST self-test needs the 8253 WRITE to outlast one PIT tick: the shortest measured write is %0d clk_sys at 50 MHz, under %.2f",
+               pitw_meas_min, NP2_FLAT);
       errors = errors + 1;
     end
 

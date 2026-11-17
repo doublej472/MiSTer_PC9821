@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_EGC:
-// The EGC engine (pc9821_egc.sv) on the sequences the target software actually issues, driven through pc9821_memory_subsystem against a behavioural GVRAM: TH01's 0x3100 four-plane page copy where the read latches the pattern register from the source address and the following write stores it, the main BIOS's own 0x1400 colour fill (BANK7.BIN@0x35A1) and its 0x28F0 row shift at sft = 0 (BANK7.BIN@0x356B), TH05's 0x29F0 rect copy for an aligned source and destination, and the plane-enable and mask registers. Section 1b pins the two read kinds' pattern-register captures, which is the whole data path of the games' own copy: a compare read (OPE bit 13, set by the 0x3100 egc_setup_copy the games use) captures ALL FOUR planes from ONE read (EGCREAD.CSV RD17_P_*, `compare-plus-pload-captured-source`), so TH01's egc_copy_rect_1_to_0_16 (rec98/th01/hardware/egcrect.cpp:23 (tmp = egc_chunk(vo))) and TH04/TH05's tiles_render_all (rec98/th04/main/tile/render_a.asm:21 (ax, es:[si])) - one read, one WS_PATREG write per word, the write's datum coming from the pattern register - land the source on all four planes, while a normal read (bit 13 clear) still updates the SELECTED PAT plane only (RD02_PAT_S0..S3, the README.TXT rule that separates a normal PLOAD_R from Compare+PLOAD_R). The backend is a real store, so the resulting four planes and the CPU read-back are the assertions. Section 8 adds sft bit 12, the descending direction master.lib's egc_shift_down sets: at the same 0x28F0 mode and the same 2-bit sub-byte shift, dir=0 and dir=1 must produce DIFFERENT streams, which is the relation NP2kai's egcshift() fixes by inverting the shift arithmetic and starting its pointers at the end of the unit. Section 9 pins the shifter re-arm: NP2kai's 0x4AC/0x4AD/0x4AE/0x4AF handlers each run egcshift() and then set srcmask to 0xFFFF (io/egc.c cases 0x0c-0x0f), and memegc.c's egc_opew ANDs srcmask into the write mask in all three of its mode cases including the non-producing default, so the first write after a re-arm must be masked with 0xFFFF and not with the partial value the previous shift sequence left behind. Section 10 is the SHAKE's own shape - dstbit 0 with a non-zero srcbit, master.lib's DI = SI - 2 row shift - asserted BY VALUE in both directions against a port of NP2kai's lagging per-plane byte queue (egc_readword + egcsftb_{upl,dnl}_sub), which carries the cross-unit carry-in byte the shifter used to read as 0 and is exactly what section 8's relation check cannot see. Section 11 drives the same word feed with sft[3:0] in 8..15, where NP2kai's shiftinput_incw adds 16 - srcbit and CLEARS srcbit instead of taking the byte feed's `subtract 8, add nothing` branch - the suspected defect this bench settles - and asserts BOTH the stack, srcbit, dstbit and whether the produce ran after every unit AND the destination row by value against that same reference queue, which also models the word feed's `if (srcbit >= 8) outptr++`: a persistent one-byte source-window offset (an open defect, modelled by the egc.buf pointer window). Section 23 sweeps the ROP table: all 256 values of the OPE low byte, with the shifter loaded from a source read and the pattern operand taken from the pattern register, the source itself (OPE 0x0100), the foreground colour and the background colour (FGBG 14:13), each compared byte by byte against a transcription of NP2kai's opefn[] dispatch (mem/memegc.c:709-997), plus the same codes through the byte ROP path and through the RL_MEMWRITE (OPE 0x0200) and SHIFT_CPU (OPE 0x0400) operand updates.
+// The EGC engine (pc9821_egc.sv) on the sequences the target software actually issues, driven through pc9821_memory_subsystem against a behavioural GVRAM: TH01's 0x3100 four-plane page copy where the read latches the pattern register from the source address and the following write stores it, the main BIOS's own 0x1400 colour fill (BANK7.BIN@0x35A1) and its 0x28F0 row shift at sft = 0 (BANK7.BIN@0x356B), TH05's 0x29F0 rect copy for an aligned source and destination (both copies seeded and compared on all four planes), and the plane-enable and mask registers. Section 1b pins the two read kinds' pattern-register captures, which is the whole data path of the games' own copy: a compare read (OPE bit 13, set by the 0x3100 egc_setup_copy the games use) captures ALL FOUR planes from ONE read (EGCREAD.CSV RD17_P_*, `compare-plus-pload-captured-source`), so TH01's egc_copy_rect_1_to_0_16 (rec98/th01/hardware/egcrect.cpp:23 (tmp = egc_chunk(vo))) and TH04/TH05's tiles_render_all (rec98/th04/main/tile/render_a.asm:21 (ax, es:[si])) - one read, one WS_PATREG write per word, the write's datum coming from the pattern register - land the source on all four planes, while a normal read (bit 13 clear) still updates the SELECTED PAT plane only (RD02_PAT_S0..S3, the README.TXT rule that separates a normal PLOAD_R from Compare+PLOAD_R). The backend is a real store, so the resulting four planes and the CPU read-back are the assertions. Section 8 adds sft bit 12, the descending direction master.lib's egc_shift_down sets: at the same 0x28F0 mode and the same 2-bit sub-byte shift, dir=0 and dir=1 must produce DIFFERENT streams, which is the relation NP2kai's egcshift() fixes by inverting the shift arithmetic and starting its pointers at the end of the unit. Section 9 pins the shifter re-arm: NP2kai's 0x4AC/0x4AD/0x4AE/0x4AF handlers each run egcshift() and then set srcmask to 0xFFFF (io/egc.c cases 0x0c-0x0f), and memegc.c's egc_opew ANDs srcmask into the write mask in all three of its mode cases including the non-producing default, so the first write after a re-arm must be masked with 0xFFFF and not with the partial value the previous shift sequence left behind. Section 10 is the SHAKE's own shape - dstbit 0 with a non-zero srcbit, master.lib's DI = SI - 2 row shift - asserted BY VALUE in both directions against a port of NP2kai's lagging per-plane byte queue (egc_readword + egcsftb_{upl,dnl}_sub), which carries the cross-unit carry-in byte the shifter used to read as 0 and is exactly what section 8's relation check cannot see. Section 11 drives the same word feed with sft[3:0] in 8..15, where NP2kai's shiftinput_incw adds 16 - srcbit and CLEARS srcbit instead of taking the byte feed's `subtract 8, add nothing` branch - the suspected defect this bench settles - and asserts BOTH the stack, srcbit, dstbit and whether the produce ran after every unit AND the destination row by value against that same reference queue, which also models the word feed's `if (srcbit >= 8) outptr++`: a persistent one-byte source-window offset (an open defect, modelled by the egc.buf pointer window). Section 23 sweeps the ROP table: all 256 values of the OPE low byte, with the shifter loaded from a source read and the pattern operand taken from the pattern register, the source itself (OPE 0x0100), the foreground colour and the background colour (FGBG 14:13), each compared byte by byte against a transcription of NP2kai's opefn[] dispatch (mem/memegc.c:709-997), plus the same codes through the byte ROP path and through the RL_MEMWRITE (OPE 0x0200) and SHIFT_CPU (OPE 0x0400) operand updates.
 //
 // Sections 18-22 pin the BYTE path (memegc.c egc_opeb), which every word-path section above
 // bypasses: the per-byte SHIFT_CPU feed gate, the fgbg-switch DEFAULT that 0x6000 falls into,
@@ -131,7 +131,7 @@ module tb_pc9821_egc;
   reg  [7:0] grcg_addr = 0;
   reg  [7:0] grcg_din = 0;
   reg        scan_enable = 0;
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -174,6 +174,7 @@ module tb_pc9821_egc;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -195,10 +196,10 @@ module tb_pc9821_egc;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -259,6 +260,10 @@ module tb_pc9821_egc;
   // The GVRAM is SDRAM storage again: a CPU plane store becomes one transaction on the
   // mem_* requester, so the backend[] mirror observes it exactly as it observes guest RAM. Plane p
   // of the column word is byte lane p, which is what plane_addr already encodes.
+  function automatic [31:0] win_of(input integer pl);
+    win_of = (pl == 0) ? WIN_P0 : (pl == 1) ? WIN_P1 : (pl == 2) ? WIN_P2 : WIN_P3;
+  endfunction
+
   function automatic [7:0] gv_byte(input page, input [1:0] plane, input [14:0] off);
     begin
       // The GVRAM is M10K inside pc9821_gvram_dut now: read the array directly. The word
@@ -376,7 +381,7 @@ module tb_pc9821_egc;
   // coalescer's fills.
   integer egc_d1_reads = 0;
   integer egc_d1_writes = 0;
-  // Section 15 counts the cycles the EGC spends in the state that evaluates a READ unit and
+  // Section 16 counts the cycles the EGC spends in the state that evaluates a READ unit and
   // commits its produce (S_EVAL; since the pipelined produce, the response piece
   // assembles one state later and the read completes one cycle later). A write unit must never
   // be in it: the write pass presents
@@ -996,19 +1001,25 @@ module tb_pc9821_egc;
     egc_set_fgbg(16'h00FF);
     egc_set_ope(16'h28F0);
     egc_set_shift(16'h0000, 16'h027F);      // 639 dots, as the BIOS writes it
+    // All four planes are seeded, each with its own ramp, and all four are compared: the EGC
+    // read loads the source quad from every plane (NP2kai egc_readword) and ROP 0xF0 stores
+    // each plane's own source (opefn), so a copy that drops or crosses a plane shows here.
     egc_enable = 1'b0;
-    for (integer off = 0; off < 16; off = off + 2)
-      cpu_word_write(WIN_P0 + 15'h4000 + off, 16'h9100 + off);
+    for (integer pl = 0; pl < 4; pl = pl + 1)
+      for (integer off = 0; off < 16; off = off + 2)
+        cpu_word_write(win_of(pl) + 15'h4000 + off, (16'h9100 ^ 16'(pl * 16'h1357)) + 16'(off));
     egc_enable = 1'b1;
     for (integer off = 0; off < 16; off = off + 2) begin
       cpu_word_read(WIN_P0 + 15'h4000 + off, w);
       cpu_word_write(WIN_P0 + 15'h4200 + off, w);
     end
-    for (integer off = 0; off < 16; off = off + 1) begin
-      if (gv_byte(0, 2'd0, 15'h4200 + off[14:0]) !==
-          gv_byte(0, 2'd0, 15'h4000 + off[14:0]))
-        fail("0x28F0: the row copy did not land byte-for-byte");
-    end
+    for (integer pl = 0; pl < 4; pl = pl + 1)
+      for (integer off = 0; off < 16; off = off + 1) begin
+        if (gv_byte(0, pl[1:0], 15'h4200 + off[14:0]) !==
+            ((off[0] ? 8'(((16'h9100 ^ 16'(pl * 16'h1357)) + 16'(off & ~1)) >> 8)
+                     : 8'((16'h9100 ^ 16'(pl * 16'h1357)) + 16'(off)))))
+          fail("0x28F0: the row copy did not land byte-for-byte on every plane");
+      end
 
     // ============================================================
     // 4. TH05's 0x29F0 rect copy with a 16-dot-aligned source and destination:
@@ -1018,18 +1029,21 @@ module tb_pc9821_egc;
     egc_set_ope(16'h29F0);
     egc_set_shift(16'h0000, 16'h000F);
     egc_enable = 1'b0;
-    for (integer off = 0; off < 16; off = off + 2)
-      cpu_word_write(WIN_P0 + 15'h5000 + off, 16'h3C00 + off);
+    for (integer pl = 0; pl < 4; pl = pl + 1)
+      for (integer off = 0; off < 16; off = off + 2)
+        cpu_word_write(win_of(pl) + 15'h5000 + off, (16'h3C00 ^ 16'(pl * 16'h2468)) + 16'(off));
     egc_enable = 1'b1;
     for (integer off = 0; off < 16; off = off + 2) begin
       cpu_word_read(WIN_P0 + 15'h5000 + off, w);
       cpu_word_write(WIN_P0 + 15'h5200 + off, w);
     end
-    for (integer off = 0; off < 16; off = off + 1) begin
-      if (gv_byte(0, 2'd0, 15'h5200 + off[14:0]) !==
-          gv_byte(0, 2'd0, 15'h5000 + off[14:0]))
-        fail("0x29F0: the rect copy did not land byte-for-byte");
-    end
+    for (integer pl = 0; pl < 4; pl = pl + 1)
+      for (integer off = 0; off < 16; off = off + 1) begin
+        if (gv_byte(0, pl[1:0], 15'h5200 + off[14:0]) !==
+            ((off[0] ? 8'(((16'h3C00 ^ 16'(pl * 16'h2468)) + 16'(off & ~1)) >> 8)
+                     : 8'((16'h3C00 ^ 16'(pl * 16'h2468)) + 16'(off)))))
+          fail("0x29F0: the rect copy did not land byte-for-byte on every plane");
+      end
 
     // ============================================================
     // 5. The plane-enable register (0x4A0, active low) is a per-plane gate.
@@ -1039,8 +1053,9 @@ module tb_pc9821_egc;
     egc_set_fg(16'h000F);
     egc_set_access(16'hFFF1);      // plane 0 DISABLED
     egc_enable = 1'b0;
-    for (integer off = 0; off < 4; off = off + 2)
-      cpu_word_write(WIN_P0 + 15'h6000 + off, 16'h0000);
+    for (integer pl = 0; pl < 4; pl = pl + 1)
+      for (integer off = 0; off < 4; off = off + 2)
+        cpu_word_write(win_of(pl) + 15'h6000 + off, 16'h0000);
     egc_enable = 1'b1;
     for (integer off = 0; off < 4; off = off + 2)
       cpu_word_write(WIN_P0 + 15'h6000 + off, 16'hFFFF);
@@ -1048,6 +1063,10 @@ module tb_pc9821_egc;
       fail("plane enable: a disabled plane 0 was written");
     if (gv_byte(0, 2'd1, 15'h6000) !== 8'hFF)
       fail("plane enable: an enabled plane 1 was not written");
+    if (gv_byte(0, 2'd2, 15'h6000) !== 8'hFF)
+      fail("plane enable: an enabled plane 2 was not written");
+    if (gv_byte(0, 2'd3, 15'h6000) !== 8'hFF)
+      fail("plane enable: an enabled plane 3 was not written");
     egc_set_access(16'hFFF0);
 
     // ============================================================
@@ -1174,15 +1193,6 @@ module tb_pc9821_egc;
     // The redundant per-direction-vs-source counter that used to sit here is
     // gone: the assertion below compares the two DIRECTIONS, which is the
     // relation the specification actually fixes.
-
-    // TEMPORARY INSTRUMENT: dump both directions so the expectation can be
-    // derived from NP2kai's formula rather than assumed.
-    $display("SHIFTDIR src dir0:");
-    for (integer off = 0; off < 16; off = off + 1)
-      $display("  SHIFTDIR src[%0d]=%02x dir0[%0d]=%02x dir1[%0d]=%02x", off,
-               gv_byte(0, 2'd0, 15'h6000 + off[14:0]), off,
-               gv_byte(0, 2'd0, 15'h6200 + off[14:0]), off,
-               gv_byte(0, 2'd0, 15'h6600 + off[14:0]));
 
     // THE ASSERTION, and it is the one this subsystem can justify without
     // guessing at the bit layout: NP2kai's egcshift() sets `egc.func = (sft >>
@@ -1564,13 +1574,8 @@ module tb_pc9821_egc;
       $display("NOTE egc: posted write - a read presented while the write drains returns the source address's colour-key mask");
     end
 
-    // ============================================================
-    // 15. THE READ HOLD IS ADDRESS-SCOPED TO THE BURST'S RUN. The EGC's read burst
-    //     streams straight from SDRAM and bypasses the write-combining buffer, so a DIRTY word the
-    //     run covers must be written back first -- the buffer's copy is newer than SDRAM. A dirty
-    //     word OUTSIDE the run is never read by the burst and must NOT hold it: the EGC reads page 1
-    //     and writes page 0, so on a blit the hold never fires. Tested in BOTH directions, because
-    //     narrowing the window to the run is correct only if the inside case still drains.
+    // (Section 15, the write-combining buffer's address-scoped read hold, went with the
+    //  buffer: the plane store is on-chip block RAM and there is no hold left to scope.)
     // ============================================================
     // 16. THE WRITE UNIT NO LONGER WALKS THE READ'S EVALUATE STATE. A write that needs
     //     no source read -- the 0x3100 / 0x29F0 copy's own write, and any other full-mask write --
@@ -1600,7 +1605,7 @@ module tb_pc9821_egc;
       cpu_word_read(WIN_P0 + 15'h1C00, fw);
       r_b = egc_d1_reads;
       if (egc_eval_cycles - eval_rd < 1)
-        fail("EGC read did not evaluate: the S_EVAL probe is dead and section 15 asserts nothing");
+        fail("EGC read did not evaluate: the S_EVAL probe is dead and section 16 asserts nothing");
       if ((r_b - r_a) != 2)
         fail("EGC fast-path read fetched the wrong column count");
       if (fw !== cmp_mask_at(1'b1, 15'h1C00))

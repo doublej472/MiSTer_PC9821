@@ -239,9 +239,11 @@ always @(posedge clk, negedge rst_n) begin
         // LOCAL PATCH (PC-9821 core): the power-on state NP2kai's opna_reset
         // gives the SSG - reg[0x07] = 0xbf (the active-low tone/noise mixer: all
         // sources disconnected = silent, psggeng.c:25) and reg[0x0f] = 0xff
-        // (sound/opna.c:137-139), matching the board shadow in pc9821_opna.sv.
+        // (sound/opna.c:137-139). The guest-visible READ shadow in pc9821_opna.sv
+        // deliberately differs (reg 7 reads 0x00, docs/probes/OPNA.TXT); chip and
+        // shadow disagree until the guest writes reg 7 (tb_pc9821_opna_ssg_powon).
         // All-zero here routed EVERY tone and noise source into every channel on
-        // the first SSG use that never wrote register 7 (review r2-resets F4).
+        // the first SSG use that never wrote register 7.
         regarray[3]<=8'd0; regarray[7]<=8'hBF; regarray[11]<=8'd0; regarray[15]<=8'hFF;
     end else begin
         last_write  <= write;

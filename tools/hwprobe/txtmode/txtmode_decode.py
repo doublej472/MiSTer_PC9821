@@ -146,7 +146,15 @@ def compare(a: str, b: str) -> list:
     _, _, sa = decode(a)
     _, _, sb = decode(b)
     out = ['== compare (first vs second)']
-    for x, y in zip(sa, sb):
+    # paired by step number, not by position: a step missing from one log (a hang resumed, a
+    # torn file) must not shift every later pair
+    da, db = {x["n"]: x for x in sa}, {y["n"]: y for y in sb}
+    for n in sorted(set(da) | set(db)):
+        x, y = da.get(n), db.get(n)
+        if x is None or y is None:
+            have = x or y
+            out.append(f'STEP {n:02d} {have["name"]}: only in the {"first" if x else "second"} log')
+            continue
         out.append(f'STEP {x["n"]:02d} {x["name"]}: {frame(x)}  |  {frame(y)}')
         for k in ('out', 'crtc', 'bda', 'csrr'):
             if x.get(k) != y.get(k):
@@ -187,6 +195,16 @@ def selftest() -> int:
         print(t)
         print('SELFTEST FAIL:', ', '.join(bad))
         return 1
+    full = '\r\n'.join(lines) + '\r\n'
+    i = full.index('STEP 05 ')
+    gap = full[:i] + full[full.index('STEP 06 '):]          # step 5 missing from the second log
+    cmp_ = compare(full, gap)
+    if not (any('STEP 05' in c and 'only in the first log' in c for c in cmp_)
+            and any(c.startswith('STEP 06 P6') for c in cmp_)
+            and not any('differs' in c for c in cmp_)):
+        print('\n'.join(cmp_))
+        print('SELFTEST FAIL: a step missing from one log misaligned the comparison')
+        return 1
     print('SELFTEST PASS')
     return 0
 
@@ -194,7 +212,7 @@ def selftest() -> int:
 def main(argv: list) -> int:
     if argv[1:2] == ['--selftest']:
         return selftest()
-    if len(argv) < 2:
+    if len(argv) not in (2, 3):
         print(__doc__)
         return 2
     texts = [open(p, 'rb').read().decode('ascii', 'replace') for p in argv[1:3]]

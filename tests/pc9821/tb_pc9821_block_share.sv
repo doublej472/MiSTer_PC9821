@@ -1,8 +1,7 @@
 // tb_pc9821_block_share — ONE block adapter, two devices: the queueing contract.
 //
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_BLOCK_SHARE: The hard disk and the floppy share ONE pc9821_block_io engine instead of owning one each, and this bench pins what that changes: a request presented while the engine is serving the other device is QUEUED and completed rather than dropped (the disk asks with a one-cycle pulse, the floppy with a level held until b_busy takes it, both modelled from their own sources), each device receives exactly its own image's 256 words per block in order and nothing else or extra (also while hps_io streams ANOTHER slot's transfer as the request waits for its own acknowledge), only one slot's request ever reaches the host, and neither device can hold the engine for more than a few consecutive transfers. Both images deliberately overlap in LBA space (both devices read blocks 0..7 contended) and the window phase makes each device read blocks the other just cached into the read-ahead window, so a wrong-slot fetch or a stale window hit is a byte mismatch named by block and word - while the DISK's own window must SURVIVE the floppy's hand-over, so a disk block inside the burst it just fetched is replayed from the window with no host handshake at all (the bench FAILS at one handshake there while a hand-over still flushed the window). FAIL-FIRST: with the queue removed (the named noqueue variant) the request presented while the other device owns the engine is dropped and the phase reports sent/received counts.
-// The hard disk and the floppy share ONE pc9821_block_io engine instead of owning one each, and this bench pins what that changes: a request presented while the engine is serving the other device is QUEUED and completed rather than dropped (the disk asks with a one-cycle pulse, the floppy with a level held until b_busy takes it, both modelled from their own sources), each device receives exactly its own image's 256 words per block in order and nothing else or extra (also while hps_io streams ANOTHER slot's transfer as the request waits for its own acknowledge), only one slot's request ever reaches the host, and neither device can hold the engine for more than a few consecutive transfers. Both images deliberately overlap in LBA space (both devices read blocks 0..7 contended) and the window phase has each one read a block the other just cached into the read-ahead window, so a wrong-slot fetch or a stale window hit is a byte mismatch named by block and word. FAIL-FIRST: with the queue removed (the named noqueue variant) the request presented while the other device owns the engine is dropped and the phase reports sent/received counts.
+// TB_PC9821_BLOCK_SHARE: The hard disk and the floppy share ONE pc9821_block_io engine instead of owning one each, and this bench pins what that changes: a request presented while the engine is serving the other device is QUEUED and completed rather than dropped (the disk asks with a one-cycle pulse, the floppy with a level held until b_busy takes it, both modelled from their own sources), each device receives exactly its own image's 256 words per block in order and nothing else or extra (also while hps_io streams ANOTHER slot's transfer as the request waits for its own acknowledge), only one slot's request ever reaches the host, and neither device can hold the engine for more than a few consecutive transfers. Both images deliberately overlap in LBA space (both devices read blocks 0..7 contended) and the window phase has the floppy read blocks the disk just cached into its read-ahead window (only the disk has one: the floppy is served one block per handshake and caches nothing), so a wrong-slot fetch or a stale window hit is a byte mismatch named by block and word - while the DISK's own window must SURVIVE the floppy's hand-over, so a disk block inside the burst it just fetched is replayed from the window with no host handshake at all (the bench FAILS at one handshake there while a hand-over still flushed the window). FAIL-FIRST: with the queue removed (the named noqueue variant) the request presented while the other device owns the engine is dropped and the phase reports sent/received counts. A disk request presented while the floppy's transfer holds the engine is queued and served next, four times in a row, not dropped.
 
 `timescale 1ns / 1ps
 
@@ -229,8 +228,13 @@ module tb_pc9821_block_share;
   // handshake, and the burst this engine fetches is what bounds that wait (BURST_SECTORS
   // blocks of 256 words one cycle apart).
   integer a_worst_wait = 0, b_worst_wait = 0;
-  always @(posedge clk) if (!reset && a_sd_rd) a_host_reqs <= a_host_reqs + 1;
+  reg a_sd_rd_q = 1'b0;
+  always @(posedge clk) begin
+    a_sd_rd_q <= a_sd_rd;
+    if (!reset && a_sd_rd && !a_sd_rd_q) a_host_reqs <= a_host_reqs + 1;   // one per handshake
+  end
 
+  integer k7;
   // ==== the sequences ====
   task automatic a_issue(input [31:0] lba);
     begin
@@ -385,6 +389,34 @@ module tb_pc9821_block_share;
                a_max_run, b_max_run);
       fails = fails + 1;
     end
+
+    // ---- S7: a disk request that arrives while the FLOPPY holds the engine is queued ----
+    // The disk's request is a one-cycle pulse (pc9821_ata's block_read), so the adapter must
+    // latch it even when the engine is mid-transfer for the other device and serve it next;
+    // dropping it would hang the drive in its fetch wait. B first, A once B owns the engine.
+    a_sent = 0; a_got = 0; b_sent = 0; b_got = 0;
+    for (i = 0; i < 4; i = i + 1) begin
+      b_issue(16'd20 + i[15:0]);
+      k7 = 0;
+      while (!b_busy && k7 < 20000) begin @(negedge clk); k7 = k7 + 1; end
+      b_req_read = 0;          // released on blk_busy, as pc9821_fdd_media releases it
+      repeat (3) @(negedge clk);
+      if (!b_busy) begin
+        $display("  FAIL: S7: the floppy's request never took the engine");
+        fails = fails + 1;
+      end
+      a_issue(32'd40 + i[31:0]);
+      // Completions are counted (a_got / b_got), not waited for as pulses: a disk read the
+      // read-ahead window serves can complete while the floppy's is still in flight.
+      k7 = 0;
+      while ((a_got < a_sent || b_got < b_sent) && k7 < 200000) begin @(negedge clk); k7 = k7 + 1; end
+      if (a_got < a_sent) begin
+        $display("  FAIL: S7: the disk's request for block %0d, presented while the floppy held the engine, was never served", 40 + i);
+        fails = fails + 1;
+      end
+      @(negedge clk);
+    end
+    check_counts("disk request behind a floppy transfer");
 
     // ---- S6: ANOTHER slot's transfer while a request waits for its own acknowledge ----
     // The request is presented (sd_rd up) while hps_io is still streaming a slot outside this

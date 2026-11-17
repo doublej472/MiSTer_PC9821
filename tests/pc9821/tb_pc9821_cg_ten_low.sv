@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_CG_TEN_LOW: a CPU read of a two-byte CG code whose column byte (0xA1) is 0x01-0x1F answers the glyph of column 0x20 in the same row, as the real Xe10 does (docs/probes/KIT1-XE10-CG0-USERCG.TXT:533-724, the CGX table: for 0xA3 = 0x01, 0x10 and 0x22 every 0xA1 from 0x01 to 0x20 reads 16 zero bytes in both halves, CRC 6A0A, and for 0xA3 = 0x5C every 0xA1 from 0x01 to 0x20 reads 16 0xFF bytes, CRC 6A4B, which is FONT.ROM's column-0x20 slot of each row: all 188 two-byte rows of that table match the column-0x20 address and 119 do not match the wrapped address the core used, docs/probes/core/KIT1-CORE-rc-e6db0f05-s3-CG0.TXT), through port 0xA9 (both halves by 0xA5 bit 5, all 16 rows) and through the 0xA4000 window (the odd bytes, and for the plain JIS rows the even bytes too), for 0xA1 = 0x01, 0x10, 0x1A, 0x1B and 0x1F in rows 0xA3 = 0x01, 0x10, 0x22 and 0x5C, against a font whose every byte is tagged by its own offset; column 0x21 keeps its own slot and the user-CG class 0x56 at 0xA1 = 0x10 (the record code 0x1056) keeps reading the CG RAM, not the font. The window's EVEN page is keyed on the class: it reads 0xFF for a one-byte code (docs/probes/KIT1-XE10-CG0-USERCG.TXT:533 `CGX 0001 P20=A97D P00=A97D W20E=6A4B`; codes 0x0001, 0x0010, 0x0022 and 0x005C, every row, both 0xA5 halves) and for a row 0x5C code (:710 `CGX 215C P20=AB09 P00=4386 W20E=6A4B`), and stays 0x8F for the user-CG code 0x1056 (:518 `CGW 1056 00 8FFF8F02`); and kit 2's rows (docs/probes/KIT2-XE10-CG2-USERCG.TXT, 0xA1 = 0x01, 0x21 and 0x2F, both 0xA5 halves): the even page reads 0xFF in row 0x09 (:758 `CGX 2109 ... W20E=6A4B ... W00O=6A0A`) and row 0x0C (:806 `CGX 210C ... W20E=6A4B`) and 0x8F in row 0x58 (:822 `CGX 0158 ... W20E=A0DD`), not row 0x5C's 0xFF, and row 0x09's odd page with bit 5 clear reads 0x00. FAIL-FIRST: before the kit-2 change rows 0x09 and 0x0C read 0x8F on the even page, row 0x58 0xFF and row 0x09's odd page with bit 5 clear 0x8F (336 mismatching bytes).
+// TB_PC9821_CG_TEN_LOW: a CPU read of a two-byte CG code whose column byte (0xA1) is 0x01-0x1F answers the glyph of column 0x20 in the same row, as the real Xe10 does (docs/probes/KIT1-XE10-CG0-USERCG.TXT:533-724, the CGX table: for 0xA3 = 0x01, 0x10 and 0x22 every 0xA1 from 0x01 to 0x20 reads 16 zero bytes in both halves, CRC 6A0A, and for 0xA3 = 0x5C every 0xA1 from 0x01 to 0x20 reads 16 0xFF bytes, CRC 6A4B, which is FONT.ROM's column-0x20 slot of each row: all 188 two-byte rows of that table match the column-0x20 address and 119 do not match the wrapped address the core used, docs/probes/core/KIT1-CORE-rc-e6db0f05-s3-CG0.TXT), through port 0xA9 (both halves by 0xA5 bit 5, all 16 rows) and through the 0xA4000 window (the odd bytes, and for the plain JIS rows the even bytes too), for 0xA1 = 0x01, 0x10, 0x1A, 0x1B and 0x1F in rows 0xA3 = 0x01, 0x10, 0x22 and 0x5C, against a font whose every byte is tagged by its own offset; column 0x21 keeps its own slot and the user-CG class 0x56 at 0xA1 = 0x10 (the record code 0x1056) keeps reading the CG RAM, not the font. The window's EVEN page is keyed on the class: it reads 0xFF for a one-byte code (docs/probes/KIT1-XE10-CG0-USERCG.TXT:533 `CGX 0001 P20=A97D P00=A97D W20E=6A4B`; codes 0x0001, 0x0010, 0x0022 and 0x005C, every row, both 0xA5 halves) and for a row 0x5C code (:710 `CGX 215C P20=AB09 P00=4386 W20E=6A4B`), and stays 0x8F for the user-CG code 0x1056 (:518 `CGW 1056 00 8FFF8F02`); and kit 2's rows (docs/probes/KIT2-XE10-CG2-USERCG.TXT, 0xA1 = 0x01, 0x21 and 0x2F, both 0xA5 halves): the even page reads 0xFF in row 0x09 (:758 `CGX 2109 ... W20E=6A4B ... W00O=6A0A`) and row 0x0C (:806 `CGX 210C ... W20E=6A4B`) and 0x8F in row 0x58 (:822 `CGX 0158 ... W20E=A0DD`), not row 0x5C's 0xFF, and row 0x09's odd page with bit 5 clear reads 0x00. FAIL-FIRST: before the kit-2 change rows 0x09 and 0x0C read 0x8F on the even page, row 0x58 0xFF and row 0x09's odd page with bit 5 clear 0x8F (336 mismatching bytes). Kit 3's rows (docs/probes/XE10CG3-XE10-CG.TXT, 0xA1 = 0x00, 0x01, 0x21 and 0x2F, both 0xA5 halves): the even page reads 0xFF in rows 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x59, 0x5A and 0x5B (:908 `CGX 210A ... W20E=6A4B`, :1004 `CGX 210D ... W20E=6A4B`, :1148 `CGX 2159 ... W20E=6A4B`) and 0x8F in rows 0x5D, 0x5E and 0x5F as in row 0x58 (:1292 `CGX 215D ... W20E=A0DD`), 0xFF for 0xA1 = 0x00 in every row (:1259 `CGX 005D ... W20E=6A4B`), and rows 0x0A/0x0B's odd page with bit 5 clear reads 0x00 (:908 `W00O=6A0A`); before the kit-3 change rows 0x0A, 0x0B and 0x0D-0x0F read 0x8F there, rows 0x0A/0x0B's odd page 0x8F and rows 0x5D-0x5F 0xFF.
 //
 // ---- the bench's own account of where each expectation comes from ----
 // THE CAPTURE. XE10CFG `/CG` on the real Xe10 read 32-byte glyphs for 0xA1 = 0x00..0x2F in four
@@ -20,9 +20,12 @@
 // pages that read a CONSTANT are asserted (the even page in both 0xA5 halves, row 0x09's odd page
 // with bit 5 clear); row 0x58's odd page and port reads are unstable on the machine (the window
 // and the port disagree on 20 of 48 codes) and are not.
-// NOT asserted: the ver0.78 rows 0x0A-0x0B, the wide rows 0x0D-0x0F and rows 0x59-0x5B/0x5D-0x5F
-// (not in either capture; todo item 189), and 0xA1 with bit 7 set (not in the capture; the core
-// keeps ignoring that bit as it always has).
+// KIT 3 read the remaining rows (docs/probes/XE10CG3-XE10-CG.TXT): the even page of the ver0.78
+// rows 0x0A/0x0B, the wide rows 0x0D-0x0F and 0x59-0x5B, rows 0x5D-0x5F and 0xA1 = 0x00 of each,
+// and rows 0x0A/0x0B's odd page with bit 5 clear, are asserted; rows 0x5D-0x5F's odd page is
+// unstable on the machine, like row 0x58's, and is not.
+// NOT asserted: 0xA1 with bit 7 set (not in the capture; the core keeps ignoring that bit as it
+// always has).
 
 
 `default_nettype none
@@ -437,6 +440,55 @@ module tb_pc9821_cg_ten_low;
                 if (errors < 32)
                   $display("FAIL: window odd byte code A1=%02x A3=09 A5=00 row %0d read %02x, the Xe10 reads 00 (KIT2-XE10-CG2-USERCG.TXT CGX %02x09 W00O=6A0A)",
                            a1, r, value, a1);
+                errors = errors + 1;
+              end
+            end
+          end
+        end
+      end
+    end
+
+    // Kit 3's rows (docs/probes/XE10CG3-XE10-CG.TXT, CGX for 0xA1 = 0x00..0x2F, both 0xA5 halves):
+    // the even page reads 0xFF in the ver0.78 rows 0x0A/0x0B, the wide rows 0x0D-0x0F and rows
+    // 0x59-0x5B, and 0x8F (A0DD) in rows 0x5D-0x5F, like row 0x58; 0xA1 = 0x00 is a one-byte code
+    // and reads 0xFF in every row; rows 0x0A/0x0B's odd page with bit 5 clear reads 0x00:
+    //   docs/probes/XE10CG3-XE10-CG.TXT:908 `CGX 210A P20=2957 P00=6A0A W20E=6A4B W20O=2957 W00E=6A4B W00O=6A0A`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:970 `CGX 2F0B P20=D43F P00=6A0A W20E=6A4B W20O=D43F W00E=6A4B W00O=6A0A`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1004 `CGX 210D P20=4F50 P00=8AE2 W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1066 `CGX 2F0E P20=6A0A P00=6A0A W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1068 `CGX 010F P20=6A0A P00=6A0A W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1148 `CGX 2159 P20=17CB P00=A7E0 W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1164 `CGX 015A P20=6A4B P00=6A4B W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1258 `CGX 2F5B P20=6428 P00=FA53 W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1259 `CGX 005D P20=EBC1 P00=EBC1 W20E=6A4B`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1292 `CGX 215D P20=C780 P00=6868 W20E=A0DD`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1308 `CGX 015E P20=6A0A P00=2349 W20E=A0DD`
+    //   docs/probes/XE10CG3-XE10-CG.TXT:1402 `CGX 2F5F P20=6A0A P00=6A0A W20E=A0DD`
+    // (every 0xA1 of each row alike). Row 0x58's 0xA1 = 0x00 is the one-byte 0xFF too (:827).
+    for (ri = 0; ri < 12; ri = ri + 1) begin
+      a3 = (ri == 0) ? 8'h0A : (ri == 1) ? 8'h0B : (ri == 2) ? 8'h0D : (ri == 3) ? 8'h0E :
+           (ri == 4) ? 8'h0F : (ri == 5) ? 8'h59 : (ri == 6) ? 8'h5A : (ri == 7) ? 8'h5B :
+           (ri == 8) ? 8'h5D : (ri == 9) ? 8'h5E : (ri == 10) ? 8'h5F : 8'h58;
+      for (ai = 0; ai < 4; ai = ai + 1) begin
+        a1 = (ai == 0) ? 8'h00 : (ai == 1) ? 8'h01 : (ai == 2) ? 8'h21 : 8'h2F;
+        select_glyph(a1, a3);
+        for (half = 0; half < 2; half = half + 1) begin
+          write_io(8'hA5, half == 0 ? 8'h20 : 8'h00);
+          for (r = 0; r < 16; r = r + 1) begin
+            mem_read_byte(32'h000A_4000 + (r * 2), value);
+            want = (a1 != 8'h00 && (a3 == 8'h58 || a3 >= 8'h5D)) ? 8'h8F : 8'hFF;
+            if (value !== want) begin
+              if (errors < 48)
+                $display("FAIL: window even byte code A1=%02x A3=%02x A5=%02x row %0d read %02x, the Xe10 reads %02x (XE10CG3-XE10-CG.TXT CGX %02x%02x)",
+                         a1, a3, half == 0 ? 8'h20 : 8'h00, r, value, want, a1, a3);
+              errors = errors + 1;
+            end
+            if (a1 != 8'h00 && (a3 == 8'h0A || a3 == 8'h0B) && half == 1) begin
+              mem_read_byte(32'h000A_4000 + (r * 2 + 1), value);
+              if (value !== 8'h00) begin
+                if (errors < 48)
+                  $display("FAIL: window odd byte code A1=%02x A3=%02x A5=00 row %0d read %02x, the Xe10 reads 00 (XE10CG3-XE10-CG.TXT CGX %02x%02x W00O=6A0A)",
+                           a1, a3, r, value, a1, a3);
                 errors = errors + 1;
               end
             end

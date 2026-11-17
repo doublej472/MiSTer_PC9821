@@ -14,7 +14,7 @@ files.
 | **IDE bank 1** | `CD-ROM`, `HDD2` | what the second IDE connector holds ([A second hard disk](images.md#a-second-hard-disk)) |
 | **RAM Size** | `16M`, `32M`, `64M`, `96M`, `1M`, `2M`, `4M`, `8M` | guest memory, capped by the SDRAM board (16 MB on 32 MB, 32 MB on 64 MB, 96 MB on 128 MB); applies at reset |
 | **CPU Speed** | `Full`, `33 MHz` ... `0.5 MHz` | slows the CPU for software that runs too fast (approximate speeds; device timers keep real time) |
-| **I/O timing** | `Fast`, `Xe10` | how long an I/O port access and a graphics-memory store take: `Fast` is the shortest wait the core allows; `Xe10` is the measured PC-9821Xe10's time per port and its graphics-memory store rate (GRCG drawing, 32-bit stores), for software that times itself by its port accesses or its drawing; applies at once |
+| **I/O timing** | `Fast`, `Xe10` | how long an I/O port access and a graphics-memory store take: `Fast` is the shortest wait the core allows; `Xe10` is the measured PC-9821Xe10's time per port and its graphics and text memory timing (GRCG drawing, 32-bit stores, the 256-colour mode, reads that wait as on the machine, 24 and 31 kHz modes), for software that times itself by its port accesses or its drawing; applies at once |
 | **Keyboard** | `US`, `JIS` | your keyboard's layout ([Keyboard](input.md#keyboard)) |
 | **DIP Switch** | | the [DIP Switch page](#dip-switch-page) |
 | **Audio** | | the [Audio page](#audio-page) |

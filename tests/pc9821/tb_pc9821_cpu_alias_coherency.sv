@@ -91,7 +91,7 @@ module tb_pc9821_cpu_alias_coherency;
       // L1 on, FPU present: z486 drives these from cache_off_req/x87_off_req, which pc9821_system ties low
       .cache_enable(1'b1), .x87_off(1'b0),
       .device_mmio_enable(1'b1), .device_mmio_base(32'h0200_0000),
-      // The fill-exclusion bound and window-0 verdict (aliases.md A1/A5). This
+      // The fill-exclusion bound and window-0 verdict. This
       // bench's synthetic alias_map treats every address outside the alias
       // windows as cacheable RAM, its controls at 0xFFF80000/0xFFF7FFFC
       // included, so the NO_ALLOC class is left off here (RAM_BOUND_ENABLE
@@ -297,7 +297,7 @@ module tb_pc9821_cpu_alias_coherency;
     end
   endtask
 
-  // The cross-alias round trip (cpu-int F1 mechanism 1): read the ALIAS (caching it, if the
+  // The cross-alias round trip: read the ALIAS (caching it, if the
   // classification is wrong), store the CANONICAL address, read the alias again. One storage,
   // two addresses: the second read must carry the store.
   task automatic cross_alias(input [31:0] canon, input [31:0] alias_a,
@@ -371,7 +371,7 @@ module tb_pc9821_cpu_alias_coherency;
     decode_alias_is(32'hFFFF_FFFF, 1'b1, "(a) decode 0xFFFFFFFF");
 
     // ------------------------------------------------------------------
-    // (b) Cross-alias staleness (cpu-int F1 mechanism 1): a canonical store
+    // (b) Cross-alias staleness: a canonical store
     //     must be visible through the alias with no flush in between. Seed
     //     both words of each pair through their CANONICAL storage first.
     // ------------------------------------------------------------------
@@ -382,7 +382,7 @@ module tb_pc9821_cpu_alias_coherency;
     cross_alias(32'h00F0_2000, 32'hFFF0_2000, "(b) peg_high: store 0xF02000, read 0xFFF02000");
 
     // ------------------------------------------------------------------
-    // (c) The sys16m_en flip (memmap F1 outcome): the 0xF00000-0xFFFFFF
+    // (c) The sys16m_en flip: the 0xF00000-0xFFFFFF
     //     range is RAM until the guest asks for the hole, then PEGC VRAM /
     //     hole / mirror. The flip replaces the content behind the address;
     //     no cached line may survive it.
@@ -399,7 +399,7 @@ module tb_pc9821_cpu_alias_coherency;
     sys16m_en = 1'b0;
 
     // ------------------------------------------------------------------
-    // (d) The fw_high bank flip (memmap F2 outcome): 0xFFFF8E90 and 0xF8E90
+    // (d) The fw_high bank flip: 0xFFFF8E90 and 0xF8E90
     //     are one byte of the banked ROM window. Flip the bank (rewrite the
     //     window) and run the sweep the iobus runs for it; the alias read
     //     must show the new bank.
@@ -417,7 +417,7 @@ module tb_pc9821_cpu_alias_coherency;
     chk_dword(rd, 32'h0DB7_0DB7, "(d) 0xF8E90 canonical twin");
 
     // ------------------------------------------------------------------
-    // (e) The A20-wrap aliases (cpu-int F4): with the gate closed, linear
+    // (e) The A20-wrap aliases: with the gate closed, linear
     //     0x1A0000 wraps onto 0xA0000 - the same TRAM/CG/planes byte. The
     //     wrap alias must classify as VGA device memory, exactly as the
     //     address it wraps onto does.

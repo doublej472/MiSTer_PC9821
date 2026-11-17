@@ -17,9 +17,10 @@
 // skipped line: the buffer still holds a complete (stale) line and the mixer's gate is
 // what hides it.
 //
-// The fetch reads the M10K array DIRECTLY on port B: ONE column per clk_sys, 80 clk_sys per line
-// of the 2014-clk_sys budget. There is no SDRAM burst to pace and no write-combining buffer to
-// flush behind, so stripe (the fetch reading SDRAM behind a pending write-back) cannot arise.
+// The fetch reads the M10K array DIRECTLY on port B: ONE column per clk_sys, 80 clk_sys of a
+// raster line that lasts f(clk_sys) / 24.83 kHz (about 3,600 clk_sys at 90 MHz; the line rate is
+// pc9821_video_out's header). There is no SDRAM burst to pace and no write-combining buffer to
+// flush behind, so the fetch cannot read a stale column behind a pending write-back.
 `default_nettype none
 
 module pc9821_gvram_scan (
@@ -86,8 +87,7 @@ module pc9821_gvram_scan (
   // Port B: one column per clk_sys. The column's plane offset wraps inside the plane (the LOW15
   // fold), which is what lets a line run past the end of a plane. The page and the base are
   // latched at the line tick, so a later tick cannot redirect a beat still in flight - the
-  // in-flight read is one clk_sys deep and belongs to the line that issued it (stripe
-  // which was the SDRAM burst moving with the live page).
+  // in-flight read is one clk_sys deep and belongs to the line that issued it.
   wire [14:0] fetch_off = line_base_q + {8'd0, fetch_col};
   wire fetch_req = fetch_active && (fetch_col < LINE_COLS) && !scan_tick;
   assign gmb_addr = {scan_page_q_r, fetch_off};
@@ -97,7 +97,8 @@ module pc9821_gvram_scan (
   // display swap below waits on it.
   wire fill_complete = !fetch_active && !fetch_req_d;
 
-  // The other piece of block RAM: 2 lines x 80 words x 32 bits = 1 M10K. A simple dual-port
+  // The other piece of block RAM: 2 lines x 80 words x 32 bits = 1 M10K (the array is declared
+  // 256 deep: its address is the 8-bit {line, column}). A simple dual-port
   // shape -- one synchronous write port and one registered read port -- so synthesis maps it to
   // a single M10K block. Its output port is what the pixel pipeline reads every dot; the array
   // itself is consulted once per column. Declared here, before the fill

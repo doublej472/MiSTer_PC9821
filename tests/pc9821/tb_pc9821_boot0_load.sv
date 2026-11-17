@@ -1,7 +1,7 @@
 // tb_pc9821_boot0_load - the firmware pack sent as a boot ROM at core start, under the OSD Reset level.
 //
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_BOOT0_LOAD: the firmware pack sent as games/PC9821/boot0.rom at core start lands with Main_MiSTer's own sequence (release 20261010, commit 738cb7a): status[0] set before the transfer (user_io.cpp:1613) and held across the whole ioctl download (index 0, user_io.cpp:1684), released only after it (user_io.cpp:1774). Through the real pc9821_system (its pc9821_memory_subsystem, pc9821_rom_loader and pc9821_cpu_reset_gate; the CPU is tests/pc9821/z486_stub.sv) with the top level's reset synchroniser and the SDRAM backend's reset as z486_mister.sv wires them, and a backend that is busy for its initialisation after every reset, every word of the pack reaches SDRAM, the pack is accepted (rom_ready high, load_error low) before status[0] falls, the CPU stays in reset until status[0] falls and leaves it after, and the backend is reset exactly once (at status[0]'s rise, before the download) so its initialisation is not re-run when status[0] falls. Regressions: a later OSD Reset (a status[0] pulse with no download) resets the backend once, keeps the pack (rom_ready stays high, no re-load needed) and releases the CPU after the controller's initialisation; an OSD load of a second pack (status[0] low, menu.cpp:2752) takes the CPU into reset, rewrites the pack without resetting the backend and releases the CPU at its end. FAIL-FIRST: on the tree before the change (bench built with -DPRE_BOOT0_LOAD, the backend on the plain platform reset) the loader is held in the platform reset for the whole boot-ROM download, no word lands and rom_ready never rises.
+// TB_PC9821_BOOT0_LOAD: the firmware pack sent as games/PC9821/boot0.rom at core start lands with Main_MiSTer's own sequence (release 20261010, commit 738cb7a): status[0] set before the transfer (user_io.cpp:1613) and held across the whole ioctl download (index 0, user_io.cpp:1684), released only after it (user_io.cpp:1774). Through the real pc9821_system (its pc9821_memory_subsystem, pc9821_rom_loader and pc9821_cpu_reset_gate; the CPU is tests/pc9821/z486_stub.sv) with the top level's reset synchroniser and the SDRAM backend's reset as z486_mister.sv wires them, and a backend that is busy for its initialisation after every reset, every word of the pack reaches SDRAM, the pack is accepted (rom_ready high, load_error low) before status[0] falls, the CPU stays in reset until status[0] falls and leaves it after (within one frame of the power-on raster: cpu_run's rise waits for the raster's frame end, pc9821_raster_reseed), and the backend is reset exactly once (at status[0]'s rise, before the download) so its initialisation is not re-run when status[0] falls. Regressions: a later OSD Reset (a status[0] pulse with no download) resets the backend once, keeps the pack (rom_ready stays high, no re-load needed) and releases the CPU after the controller's initialisation; an OSD load of a second pack (status[0] low, menu.cpp:2752) takes the CPU into reset, rewrites the pack without resetting the backend and releases the CPU at its end (again within a frame). FAIL-FIRST: on the tree before the change (bench built with -DPRE_BOOT0_LOAD, the backend on the plain platform reset) the loader is held in the platform reset for the whole boot-ROM download, no word lands and rom_ready never rises.
 //
 // THE SEQUENCE IS MAIN_MISTER'S, not this core's. In user_io.cpp at 738cb7a:
 //   * :1613 `user_io_status_set("[0]", 1);` after the config load ("send a reset"; :1516 does the
@@ -24,8 +24,11 @@
 //
 // THE TOP LEVEL IS MODELLED, because z486_mister.sv is in no bench's file list: its
 // `reset_req = buttons[1] | status[0] | disk_change_reset` (status[0] alone here), the reset_sync_r
-// synchroniser (set by the request, released by a three-stage shift), and the backend's
-// `.reset(reset_sync_r[2] && !pack_load_hold)`. tools/check_wiring.py pins those texts in the top.
+// synchroniser (set by the request, released by a three-stage shift), its reset tree (the real
+// pc9821_reset_tree: the backend's own registered copy of reset_sync_r[2]), and the backend's
+// `.reset(rst_top[T_SDRAM] && !pack_load_hold)`. tools/check_wiring.py pins those texts in the
+// top. The backend's copy and the memory subsystem's (which clears the hold) fall on the same
+// edge, so "reset exactly once" below is also the hold-ordering invariant the top relies on.
 // The backend is tests/pc9821/sdram_backend_model.sv behind an initialisation window: after every
 // reset it is busy and accepts nothing for INIT_CYCLES, as src/memory/sdram.v is busy through its
 // JEDEC initialisation (the contract pc9821_cpu_reset_gate's sdram_ready term reads).
@@ -58,10 +61,12 @@ module tb_pc9821_boot0_load;
   end
   wire reset = reset_sync_r[2];
   wire pack_load_hold;
+  wire [0:0] rst_top;
+  pc9821_reset_tree #(.N(1)) u_reset_tree (.clk(clk_sys), .reset(reset), .q(rst_top));
 `ifdef PRE_BOOT0_LOAD
-  wire backend_reset = reset;
+  wire backend_reset = rst_top[0];
 `else
-  wire backend_reset = reset && !pack_load_hold;
+  wire backend_reset = rst_top[0] && !pack_load_hold;
 `endif
 
   // ==== THE HPS DOWNLOAD STREAM ====
@@ -74,6 +79,9 @@ module tb_pc9821_boot0_load;
 
   // ==== THE BACKEND: the model behind an initialisation window ====
   localparam integer INIT_CYCLES = 300;
+  // One frame of the power-on raster at this bench's 50 MHz (848 x 440 dots at 400/19 MHz): the
+  // longest a pack's cpu_run waits for the raster's frame end (pc9821_raster_reseed, T93).
+  localparam integer FRAME_CLK = 886_200;
   integer init_left = INIT_CYCLES;
   integer backend_resets = 0;      // rising edges of the backend's reset
   reg     backend_reset_d = 1'b1;
@@ -264,7 +272,7 @@ module tb_pc9821_boot0_load;
     check_pack("boot ROM", 1);
     if (dut.cpu_reset_n !== 1'b0) fail("boot ROM: the CPU left reset before status[0] fell");
     status0 = 1'b0;
-    expect_cpu_start("boot ROM", 200);
+    expect_cpu_start("boot ROM", FRAME_CLK + 200);
     expect_accepted("boot ROM, after release");
     if (backend_resets != resets_before)
       fail("boot ROM: the SDRAM backend was reset again after the download began");
@@ -287,7 +295,7 @@ module tb_pc9821_boot0_load;
     resets_before = backend_resets;
     accepts_before = model_accepts;
     download(2);
-    expect_cpu_start("OSD load", 200);
+    expect_cpu_start("OSD load", FRAME_CLK + 200);
     expect_accepted("OSD load");
     check_pack("OSD load", 2);
     if (backend_resets != resets_before) fail("OSD load: the SDRAM backend was reset");
@@ -301,7 +309,7 @@ module tb_pc9821_boot0_load;
   end
 
   initial begin
-    #2_000_000;
+    #60_000_000;   // two frame-end waits (FRAME_CLK) and the rest
     $fatal(1, "TB_PC9821_BOOT0_LOAD: TIMEOUT");
   end
 

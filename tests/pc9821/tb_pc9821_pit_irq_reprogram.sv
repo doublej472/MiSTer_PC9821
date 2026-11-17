@@ -99,9 +99,15 @@ module tb_pc9821_pit_irq_reprogram;
 
   // One x86 acknowledge is two INTA assertions, as the bridge's state machine needs.
   task automatic one_inta;
+    integer inta_guard;
     begin
       @(negedge clk); cpu_inta = 1;
-      while (!cpu_inta_ready) @(negedge clk);
+      inta_guard = 0;
+      while (!cpu_inta_ready) begin
+        @(negedge clk);
+        inta_guard = inta_guard + 1;
+        if (inta_guard > 1000) $fatal(1, "TB_PC9821_PIT_IRQ_REPROGRAM: FAIL (INTA never answered cpu_inta_ready)");
+      end
       @(negedge clk); cpu_inta = 0;
       repeat (2) @(negedge clk);
     end
@@ -194,6 +200,14 @@ module tb_pc9821_pit_irq_reprogram;
       $finish;
     end
     else $fatal(1, "TB_PC9821_PIT_IRQ_REPROGRAM: FAIL (%0d errors)", errors);
+  end
+
+  // In-bench watchdog: the run takes well under 1 ms of simulated time, so a stalled
+  // INTA bridge or a frozen OUT0 ends here with a named failure, not at the runner's
+  // wall-clock timeout.
+  initial begin
+    #20_000_000;
+    $fatal(1, "TB_PC9821_PIT_IRQ_REPROGRAM: FAIL (watchdog)");
   end
 
 endmodule

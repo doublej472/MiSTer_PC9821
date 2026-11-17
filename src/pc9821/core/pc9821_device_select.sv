@@ -36,7 +36,8 @@ module pc9821_device_select #(
       // because the card answers at both.
     output wire opna_cs,         // 0x0188/0x018A/0x018C/0x018E
       // The same board's OTHER device, the 86-PCM block: sparse, with nothing between its registers,
-      // so it decodes as exact addresses rather than a range.
+      // so it decodes as exact addresses rather than a range. 0xA460 is not one of them: it is
+      // card-level glue shared with the OPNA and stays a system port (pc9821_iobus's HX_A460).
     output wire pcm_cs,          // 0x0A462/64/66/68/6A/6C/6E, the even ports
       // The PC-9801-118's game port, 0x1480-0x1487. The card answers all eight addresses and
       // does not distinguish them (NP2kai cbus/board118.c:816-822), so the claim is one range.

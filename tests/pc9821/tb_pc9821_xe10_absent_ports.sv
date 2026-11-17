@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_XE10_ABSENT_PORTS: on the Xe10 build (pc9821_iobus at its default parameters) three ports answer as the machine and the references do: 0x043B reads 0xFB out of reset with the 15-16 MiB system space enabled (bit 2 clear: NP2kai's zeroed necio latch, QEMU's power-up sys16m = 1 reading 0x00, on the machine's measured 0xFB base byte), the eight PC-9801-118 game-port addresses 0x1480-0x1487 read open bus 0xFF and reach no device in either direction (the Xe10 has no -118; NP2kai attaches the port only with that board), and 0x0EE0 reads 0xFF (PORTS.TXT 0EE0=FF) even after a POST-code write, the debug-status read-back existing only with DBG_STATUS_PORT.
+// TB_PC9821_XE10_ABSENT_PORTS: on the Xe10 build (pc9821_iobus at its default parameters) three ports answer as the machine and the references do: 0x043B reads 0xFB out of reset with the 15-16 MiB system space enabled (bit 2 clear: NP2kai's zeroed necio latch, QEMU's power-up sys16m = 1 reading 0x00, on the machine's measured 0xFB base byte), the eight PC-9801-118 game-port addresses 0x1480-0x1487 read open bus 0xFF and reach no device in either direction (the machine reads each FF twice, docs/probes/XE10T-XE10-AUDIT.TXT B1480-B1487; the Xe10 has no -118, and NP2kai attaches the port only with that board), and 0x0EE0 reads 0xFF (PORTS.TXT 0EE0=FF) even after a POST-code write, which itself still lands as one POST code, the debug-status read-back existing only with DBG_STATUS_PORT.
 //
 // Expected values: docs/probes/PORTS.TXT (0EE0=FF, the 0x043B base byte 0xFB), NP2kai io/necio.c
 // and cbus/board118.c, qemu-pc98 hw/i386/pc98-mem.c (mem_sys16m_read, the power-up sys16m = 1).
@@ -139,6 +139,7 @@ module tb_pc9821_xe10_absent_ports;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -422,6 +423,8 @@ module tb_pc9821_xe10_absent_ports;
     read_byte(16'h043B, 8'hFB);
 
     // ---- 0x1480-0x1487: no PC-9801-118 on the Xe10 ---------------------------------------
+    // The machine: docs/probes/XE10T-XE10-AUDIT.TXT reads every one of them FF twice
+    // (`X AUDIT B1480 v=FF v2=FF` .. B1487).
     // NP2kai attaches the game port only with a -118 board (cbus/board118.c
     // `iocore_attachinp(0x1480+i, gameport_i1480);`); the Xe10's -86-class sound has none, so
     // the eight ports are unattached and read 0xFF, and no device answers them.
@@ -435,7 +438,10 @@ module tb_pc9821_xe10_absent_ports;
 
     // ---- 0x0EE0: open bus on the machine (PORTS.TXT `0EE0=FF`) --------------------------
     read_byte(16'h0EE0, 8'hFF);
+    n0 = post_writes;
     write_byte(16'h0EE0, 8'h5A);   // the POST-code write still lands (post_write)...
+    chk(post_writes == n0 + 1 && last_post_code == 8'h5A,
+        "the 0x0EE0 write did not land as one POST code 0x5A");
     read_byte(16'h0EE0, 8'hFF);    // ...but nothing reads back
 
     // ==== VERDICT ====

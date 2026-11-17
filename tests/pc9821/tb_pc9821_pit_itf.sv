@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The ITF's own PIT self-test sequence, from the firmware dump: for each of its three (control, data, latch) triples the channel must still be counting when the latch is read, so the data port answers with a live count rather than the 0xFF the test just wrote into it. A PIT whose data port echoes the last written byte halts the authentic POST with TIMER ERROR before the option ROM, and a PIT whose latch is never consumed freezes the channel for the rest of the session.
+// The ITF's own PIT self-test sequence, from the firmware dump: for each of its three (control, data, latch) triples the channel must still be counting when the latch is read, so the data port answers with a live count rather than the 0xFF the test just wrote into it. A PIT whose data port echoes the last written byte halts the authentic POST with TIMER ERROR before the option ROM. (Each read here follows a fresh latch, so latch CONSUMPTION is not proven here: tb_pc9821_pit owns it.)
 //
 // ---- where the expectation comes from ----
 //
@@ -43,8 +43,8 @@
 // because they are the whole content of the test:
 //
 //  1. THE SECOND CONTROL WORD IS A LATCH AND THE FIRST IS NOT. A_n = 0x10/0x50/
-//     0x90 has RL = 01 and mode 0 (channel 0), mode 2 (channel 1) and mode 0
-//     (channel 2); B_n = 0x00/0x40/0x80 has RL = 00, the latch command. So the
+//     0x90 has RL = 01 and mode 0 on channels 0, 1 and 2 (0x50 = 01 01 000 0:
+//     SC = 1, RL = 01, M = 000); B_n = 0x00/0x40/0x80 has RL = 00, the latch command. So the
 //     ITF relies on a mode-set NOT stopping a channel it had already given a
 //     count to, and on a latch command not disturbing one either.
 //

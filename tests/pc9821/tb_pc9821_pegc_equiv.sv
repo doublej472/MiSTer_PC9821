@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PEGC register file's area rewrite (mio2's 32 read-back bytes held in one block RAM behind per-dword dirty flops, with plane_mode and vram_en in their own flops) is cycle-for-cycle identical to the pre-rewrite module (pc9821_pegc_ref.sv, the module as of d8f166a6): over random dword-aligned reads, line reads and byte-enabled writes across the mio1 and mio2 windows and their neighbours, with random gaps between requests and random resets mid-run (so the lazy zero of a clean dword is exercised after dirty data), cpu_dout, cpu_ready, the word response pulse, bank_a, bank_b, plane_mode and vram_en match on every cycle, and a line read's four word beats (the post-P3 form - the ref answers one 128-bit line) are the ref's four line words, in order, four times the dword.
+// The PEGC register file's area rewrite (mio2's 32 read-back bytes held in one block RAM behind per-dword dirty flops, with plane_mode and vram_en in their own flops) is cycle-for-cycle identical to the pre-rewrite module (pc9821_pegc_ref.sv, the module as of d8f166a6): over random dword-aligned reads, line reads and byte-enabled writes across the mio1 and mio2 windows and their neighbours, with random gaps between requests and random resets mid-run (so the lazy zero of a clean dword is exercised after dirty data), cpu_dout, cpu_ready, the word response pulse, bank_a, bank_b, plane_mode and vram_en match on every cycle, and a line read's four word beats (the post-P3 form - the ref answers one 128-bit line) are the ref's four line words, in order, four times the dword; the run must also cover what it claims - at least one reset, ten mio2 reads of a dword last written before the latest reset (the lazy zero) and ten line reads whose four beats landed - or it fails.
 
 // ==== DUT ====
 // pc9821_pegc vs pc9821_pegc_ref, same inputs. The reference is the pre-change text, not a
@@ -43,6 +43,13 @@ module tb_pc9821_pegc_equiv;
   reg        req_line = 1'b0;
   reg        wait_beats = 1'b0;   // a line read's fills must land before the next request (z486's pending counter)
   reg  [2:0] line_beats = 3'd0;
+  // Coverage the verdict requires, so a stimulus change cannot leave the rewrite's two
+  // interesting paths unexercised: a mio2 dword READ whose last write came before the latest
+  // reset (the lazy zero of a clean dword over stale RAM data), and a line read whose four
+  // beats all landed. mio2_wr_since_reset / mio2_stale are the bench's own per-dword shadow.
+  reg  [7:0] mio2_wr_since_reset = 8'd0;
+  reg  [7:0] mio2_stale = 8'd0;
+  integer    n_lazy = 0, n_lines = 0;
 
 
   function automatic [31:0] rr(input integer dummy);
@@ -84,6 +91,9 @@ module tb_pc9821_pegc_equiv;
     end
     // stimulus
     if (reset) begin
+      // Everything written before this reset is stale until written again.
+      mio2_stale <= mio2_stale | mio2_wr_since_reset;
+      mio2_wr_since_reset <= 8'd0;
       cpu_valid <= 1'b0;
       req_line <= 1'b0;
       wait_beats <= 1'b0;
@@ -91,13 +101,22 @@ module tb_pc9821_pegc_equiv;
     end else if (cpu_valid) begin
       if (d_rdy) begin
         cpu_valid <= 1'b0;
+        if (cpu_addr[14:5] == 10'd8) begin
+          if (cpu_write) begin
+            mio2_wr_since_reset[cpu_addr[4:2]] <= 1'b1;
+            mio2_stale[cpu_addr[4:2]] <= 1'b0;
+          end else if (mio2_stale[cpu_addr[4:2]]) n_lazy <= n_lazy + 1;
+        end
         // A line read's four beats are outstanding at the accept; the CPU cannot launch its
         // next request until the L1's pending counter drains (one beat each).
         wait_beats <= req_line;
         gap <= rr(0) & 3;
       end
     end else if (wait_beats) begin
-      if (line_beats == 3'd4) wait_beats <= 1'b0;
+      if (line_beats == 3'd4) begin
+        wait_beats <= 1'b0;
+        n_lines <= n_lines + 1;
+      end
     end else if (gap != 0) begin
       gap <= gap - 1;
     end else begin
@@ -135,10 +154,11 @@ module tb_pc9821_pegc_equiv;
   // ==== VERDICT ====
   initial begin
     #40_000_000;
-    if (errors == 0 && cycles > 1_000_000 && nreset >= 0)
-      $display("TB_PC9821_PEGC_EQUIV: PASS");
-    else
-      $fatal(1, "TB_PC9821_PEGC_EQUIV: FAIL errors=%0d cycles=%0d", errors, cycles);
+    if (!(errors == 0 && cycles > 1_000_000 && nreset > 0 && n_lazy >= 10 && n_lines >= 10))
+      $fatal(1, "TB_PC9821_PEGC_EQUIV: FAIL errors=%0d cycles=%0d resets=%0d lazy=%0d lines=%0d (each coverage count must be met)",
+             errors, cycles, nreset, n_lazy, n_lines);
+    $display("NOTE pegc_equiv: cycles=%0d resets=%0d lazy-zero reads=%0d line reads=%0d", cycles, nreset, n_lazy, n_lines);
+    $display("TB_PC9821_PEGC_EQUIV: PASS");
     $finish;
   end
 endmodule

@@ -8,7 +8,7 @@ was judged only where a row says so. A title that was never run is not listed.
 
 - **Firmware:** all results are for the NEC Xe10 firmware set. The Xe set does not run yet.
 - **Build:** the list was last checked against the core builds of 2026-10-31, 2026-11-03,
-  2026-11-05 and 2026-11-09. Most titles were run in the 2026-10-20 to 2026-10-28 sweeps on
+  2026-11-05, 2026-11-09 and 2026-11-11. Most titles were run in the 2026-10-20 to 2026-10-28 sweeps on
   earlier builds; the release run on the 2026-10-31 build, on a DE10-Nano card and a MiSTer Pi
   card, re-ran a sample of the titles and added a further set, and each later build re-ran a
   smaller sample. Titles outside a sample were not re-run on that build. A "fixed" note gives
@@ -46,17 +46,19 @@ was judged only where a row says so. A title that was never run is not listed.
 
 | Section | Entries | works | works with notes | partial | fails | missing feature | not a core bug |
 |---|---|---|---|---|---|---|---|
-| HDD-installed games | 129 | 113 | 13 | 2 | 0 | 0 | 1 |
-| CD-ROM titles | 47 | 37 | 8 | 1 | 0 | 0 | 1 |
-| Floppy titles | 166 | 149 | 2 | 0 | 2 | 1 | 12 |
+| HDD-installed games | 142 | 124 | 14 | 3 | 0 | 0 | 1 |
+| CD-ROM titles | 54 | 44 | 8 | 1 | 0 | 0 | 1 |
+| Floppy titles | 177 | 158 | 3 | 1 | 2 | 1 | 12 |
 
 ## Open, cause unknown
 
-- **Star Cruiser 2** (CD) stops on its first intro text with no CD audio and no response to keys, also on the 2026-11-09 build (after the YM2608 timer-interrupt and PC-9801-86 shared-interrupt fixes) and at CPU Speed `25 MHz`; unexplained, not established as a core bug.
+- **Star Cruiser 2** (CD) stops on its first intro text with no CD audio and no response to keys, also on the 2026-11-09 build (after the YM2608 timer-interrupt and PC-9801-86 shared-interrupt fixes) and on the 2026-11-11 build and at CPU Speed `25 MHz`; unexplained, not established as a core bug.
 - **Policenauts** (CD) skips the montage music after the opening song; NP2kai behaves the same, so not established as a core bug.
 - **Rusty** (HDD) cuts the C-Lab logo's PCM voice short at CPU Speed `Full` (it plays complete at `16 MHz`). The next program stops the voice after searching every drive letter, and how long that takes depends on how long the empty floppy drives take to answer; the real machine's time for that has not been measured.
-- **Olivia's Mystery** (HDD): its attract matches a real PC-9821Xe10, but no way from the attract into play was found (keys and clicks tried); not established as a core bug.
+- **Olivia's Mystery** (HDD): its attract matches a real PC-9821Xe10, but no way from the attract into play was found (keys and clicks tried, again on the 2026-11-11 build); not established as a core bug.
 - **Metajo SP** (HDD) booted from its own FreeDOS(98) image stops after the R-FORCE logo on a black screen with a text cursor, where NP2kai reaches the title menu with the same image; the vendor shell RUN.EXE sits in its own error loop. From an NEC MS-DOS boot the game runs.
+
+- **Solitaire Royale** (Floppy) stays black on the core, where NP2kai with the same firmware reaches the title; NP2kai boots floppies through its own boot code, so whether a real Xe10 boots this 15x512 2HD disk is not known.
 
 ## HDD-installed games
 
@@ -66,6 +68,7 @@ was judged only where a row says so. A title that was never run is not listed.
 | 46 Okunen Monogatari - The Shinkaron | HDD image | works |  |
 | A Ressha de Ikou IV | HDD image | works |  |
 | AD&D Eye of the Beholder II - The Legend of Darkmoon | HDD image | works |  |
+| Advanced Power Dolls 2 | HDD image | works | QMOUSE accelerates the pointer: move it slowly to click Game Start in the setup menu. The title menu (Start, Data Load, Opening, Quit) was reached; not taken further (2026-11-11) |
 | alchem | HDD image | works |  |
 | Alice no Yakata III | HDD image | works | 256 colours; the doubled, garbled picture seen before 2026-10-20 is fixed |
 | Battle Skin Panic 9821 | HDD image | works | The name entry takes mouse clicks only (a kana, then 終わり to finish); Enter does nothing there. Then the opening, title and a classroom scene with the entered name |
@@ -73,6 +76,7 @@ was judged only where a row says so. A title that was never run is not listed.
 | Brandish 3 - Spirit of Balcan | HDD image | works | Mouse-driven launcher: click to continue |
 | Brandish VT | HDD image | works |  |
 | Branmarker 2 | HDD image | works |  |
+| Call of Cthulhu - Shadow of the Comet | HDD image | works | Display and sound setup (256 colours, 86-type sound), the lighthouse intro, credits and the opening dialogue scenes (2026-11-11) |
 | Classic Road 4 | HDD image | works |  |
 | Crusher Joe - Kanraku Wakusei no Inbou | HDD image | works |  |
 | Cybernetic Hi-School IV | HDD image | works | Asks for the system disk in drive 1 |
@@ -95,6 +99,7 @@ was judged only where a row says so. A title that was never run is not listed.
 | Dungeon Master II - Skullkeep | HDD image | works | Asks for the Disk B key disk in drive 2 (key disk prompt is normal) |
 | Edge | HDD image | works | Title menu, intro narration and dialogue scenes with portraits |
 | Eisei Meijin II | HDD image | works |  |
+| Elm Knight - A Living Body Armor (FD version) | HDD image | works | The start menu moves with keypad 2 and confirms with Space (cursor keys and Return do nothing). From the beginning, it asks for Game Disk 1 in a floppy drive and then plays the opening (2026-11-11) |
 | Eve Burst Error | HDD image | works |  |
 | Farland Story - Juuou no Akashi | HDD image | works | Pick the sound source at its prompt (FM, 86, GS, CD or none). With GS the opening plays its music over the MPU-401 interface (UART mode `MIDI` on MiSTer's system page, MidiLink to an external module; checked with a recording on an SC-88 Pro, 2026-11-05), then the title and its menu. Without a key the opening runs about two and a half minutes before the title (a key or click skips to the title); a new game reached the first story scene |
 | Farland Story - Kamigami no Isan | HDD image | works | The floppy set only installs (Disk A holds the installer and an archive), so it runs from a hard-disk install. Pick the sound source at its prompt (FM, 86, GS, CD or none); the title waits for a choice; a new game reached the first battle |
@@ -118,6 +123,8 @@ was judged only where a row says so. A title that was never run is not listed.
 | Kizuato | HDD image | works |  |
 | Kono Yo no Hate de Koi o Utau Shoujo YU-NO | HDD image | works |  |
 | Konpeki no Kantai | HDD image | not a core bug | The installed image stops at "hardware was changed, reinstall": the game compares a checksum of the BIOS ROM area (F800:0000-7FFE) with the one the installer stored in KONPEKI\PRACTICE.DBF, so any machine other than the install machine stops the same way. Reinstalling on this machine (or rewriting that stored checksum) gets past it to the title and menus |
+| Kyrandia II - The Hand of Fate | HDD image | works | Intro with Japanese subtitles, then play in Zanthia's laboratory: clicks walk her around and she speaks (2026-11-11) |
+| Lands of Lore | HDD image | works | Logo, title and the king's throne room with the animated character select; not taken further (2026-11-11) |
 | Lemmings | HDD image | works | Title, level info and levels play. The view can scroll past the edge of a level into an all-black area while the timer runs on; the minimap shows where the view is |
 | Lunatic Dawn | HDD image | works | Title and intro, New Game, the character make (by mouse; the extra points must be spent before it closes) and the first town with its shop, training hall and town information |
 | Madou Monogatari A.R.S | HDD image | works |  |
@@ -125,18 +132,20 @@ was judged only where a row says so. A title that was never run is not listed.
 | Mahjong Fantasia the 3rd Stage (Mahjong Gensoukyoku III) | HDD image | works |  |
 | Makyouden | HDD image | works | Asks for Disk B in drive 2 |
 | Martial Age | HDD image | works | The installed hard-disk version: the Tenshindo logo, the NEW GAME / LOAD GAME / EXTRA MODE menu and the opening story scenes (2026-11-03) |
+| Mega lo Mania | HDD image | partial | Logo, intro, title art, credits and the Player Select screen. The pointer moves and changes over the names, but no pick registered (left, long and right clicks, Space, Enter, a click on a portrait); not established as a core bug (2026-11-11) |
 | Metajo SP | HDD image | works with notes | Run its files from an NEC MS-DOS 6.20 boot with HIMEM: the intro (ANJIN logo, starfield, the game's logo, battle demos, R-FORCE logo) plays to the title menu, also after another program left the PC-9801-86's PCM interrupt enabled (Riql before it, as on a real PC-9821Xe10). Fixed 2026-11-08: it went black after the ANJIN logo there, because the board's shared interrupt line lost the FM timer's interrupts while the PCM line was held. The image's own FreeDOS(98) boot still stops after the R-FORCE logo (open, see above) |
 | Microsoft Flight Simulator Version 5.0a | HDD image | works |  |
 | Microsoft Space Simulator - 42-oku Kounen no Fantasy | HDD image | works |  |
 | Might and Magic - World of Xeen | HDD image | works |  |
 | Might and Magic III | HDD image | works | Black screen fixed 2026-10-28 (interrupt fix); intro and title now play. Before that it stayed black on every build |
 | Might and Magic IV - Clouds of Xeen | HDD image | works |  |
+| Might and Magic V - Darkside of Xeen (256-color version) | HDD image | partial | Intro with Japanese subtitles and the title menu. S did not start a game, and the pointer jumps across the screen under QMOUSE, so Start was not clicked; not established as a core bug (2026-11-11) |
 | Mouryou Senki Madara | HDD image | works | Launch from the DOS prompt; asks for Game disk 1 |
 | Necronomicon | HDD image | works | Runs from the hard disk with no CD driver loaded (tested with its CD mounted; enabling the image's CD driver lines gives the same result). Sound select, credits and a story scene with text |
 | New 3D Golf Simulation | HDD image | works |  |
 | Nobunaga no Yabou - Haouden | HDD image | works |  |
 | Nobunaga no Yabou - Tenshouki | HDD image | works with notes | Needs EMS: VEM486 + VEMEMM.SYS enabled in CONFIG.SYS; reaches its menu. Without EMS: "not enough free memory" |
-| Olivia's Mystery | HDD image | partial | VEM486 /U and QMOUSE. The title's sliding-tile attract (black empty slots, displaced tiles that slowly assemble the picture) runs as on a real PC-9821Xe10 (2026-11-08), but no way into play was found: the splash and attract loop, and no key (Enter, Space, Esc, F1, digits, arrows) or click (left, right, double, held) starts a game |
+| Olivia's Mystery | HDD image | partial | VEM486 /U and QMOUSE. The title's sliding-tile attract (black empty slots, displaced tiles that slowly assemble the picture) runs as on a real PC-9821Xe10 (2026-11-08), but no way into play was found: the splash and attract loop, and no key (Enter, Space, Esc, F1, digits, arrows) or click (left, right, double, held) starts a game. Unchanged on the 2026-11-11 build. The floppy set's Program disk is not a boot disk ("No system files") and holds the same program |
 | Otome Senki | HDD image | works |  |
 | Phantasie IV | HDD image | works |  |
 | Pia Carrot e Youkoso!! | HDD image | works | Title, then the name-entry panel, where typed text appears; a name was not completed in testing, so not played further |
@@ -144,10 +153,12 @@ was judged only where a row says so. A title that was never run is not listed.
 | Popful Mail | HDD image | works |  |
 | Possessioner | HDD image | works | Start menu, city intro with narration and story scenes |
 | Power Dolls 2 | HDD image | works | Launch from the DOS prompt; asks for the Briefing disk |
+| Powermonger | HDD image | works | Its launcher asks for the language (2 = Japanese); name prompt, main menu and the new-conquest map of islands (2026-11-11) |
 | Prince of Persia 2 | HDD image | works |  |
 | Princess Maker 2 | HDD image | works | Display selector: click Colour with the mouse |
 | Puyo Puyo 2 | HDD image | works |  |
 | Ragnarokkr | HDD image | works |  |
+| Railroad Tycoon Deluxe | HDD image | works | Intro, title, map and level choice, world generation and the first game screen (2026-11-11) |
 | Rance 4.1 | HDD image | works | 256 colours; the doubled, garbled picture seen before 2026-10-20 is fixed |
 | Rance II | HDD image | works |  |
 | Rance III | HDD image | works |  |
@@ -157,17 +168,20 @@ was judged only where a row says so. A title that was never run is not listed.
 | Rusty | HDD image | works with notes | Intro art and text sequence. At CPU Speed `Full` the C-Lab logo's PCM voice is cut short (about 1.8 s of its 2.7 s); at `16 MHz` it plays complete, as reported on a real PC-9821Xe10. With **I/O timing** `Xe10` the logo's sine wipe takes 0.35 s, within 6 % of the real machine's 0.33 s (`docs/probes/RWIPE-XE10.TXT`); with `Fast` it takes about 0.22 s. The voice is still cut with either setting: the next program (OP.COM) stops it after searching every drive letter, and the empty floppy drives answer that search quickly soon after a boot; the real machine's time for it has not been measured (open, see above) |
 | Sangokushi IV | HDD image | works | Settings dialog, then asks for the game disk in a floppy drive |
 | Sangokushi V | HDD image | works with notes | Needs EMS: VEM486 + VEMEMM.SYS enabled in CONFIG.SYS (without it: "not enough free memory"). Opening, title, New Game, scenario and ruler selection, game settings and the strategic map with its first events (retested 2026-11-09). The menus move the pointer 2 px per mouse step; a click outside the menu box quits to DOS through the "set the startup disk" prompt, as on NP2kai |
+| ShadowCaster | HDD image | works | Boot from the title's HD Boot disk with the hard-disk image mounted (the image itself has no autostart). Story intro with Japanese text, the menu, and a new game in the 3D view (2026-11-11) |
 | Shizuku | HDD image | works |  |
 | Sichuan | HDD image | works |  |
+| Sid Meier's Civilization | HDD image | works | Intro, title menu, new-game choices and play on the map at 4000 BC (2026-11-11) |
+| SimAnt | HDD image | works with notes | The program asks for drive B (the first floppy drive under a hard-disk boot): mount the Data disk in FDD1 once DOS is up and answer R; then the title (2026-11-11) |
 | SimCity 2000 DX | HDD image | works with notes | The vendor's boot floppy loads no memory manager and no mouse driver, so it was run from the hard disk with VEM486 removed from CONFIG.SYS and AUTOEXEC starting it (QMOUSE loaded). Mouse-driven, 640x480: a new city, its newspaper, and the simulation date advancing |
 | SimEarth | HDD image | works | Opens on the world map with its windows and Japanese menus. A hint strip in the text layer stays drawn over windows (the text layer overlays graphics on a PC-98); not compared with a real machine. No new planet was started |
 | Slayers | HDD image | works |  |
 | Space Hulk | HDD image | works |  |
 | Space Quest IV | HDD image | works |  |
 | Strike Commander | HDD image | works with notes | Tested without VEM486 (32-bit DOS extender, 256 colours); reaches the main menu |
-| Strike Commander Plus | HDD image | partial | The launcher returns to DOS; the tactical and option programs report that no graphics driver is found. The installer was not rerun (retested 2026-11-03) |
 | Super Real Mahjong PII & PIII | HDD image | works | Title, mode menu and a hand in play |
 | Sword World PC | HDD image | works |  |
+| Syndicate (256-color version) | HDD image | works | Boot from the title's HD Boot disk with the hard-disk image mounted (the image itself has no autostart). Intro, main menu (f-keys) and the mission world map (2026-11-11) |
 | Taikou Risshiden II | HDD image | works | Display selector and settings box need mouse clicks (Analog Display, then Standard and Decide); then the opening date card and story text |
 | Teitoku no Ketsudan III | HDD image | works with notes | Needs EMS: VEM486 + VEMEMM.SYS enabled in CONFIG.SYS. Then asks for the Powerup Kit disk. Without EMS: "not enough free memory" |
 | Tenbu - Mankan Zenseki | HDD image | works | Answer n to the "MIDI sound?" question |
@@ -177,6 +191,7 @@ was judged only where a row says so. A title that was never run is not listed.
 | The Legend of Heroes (Eiyuu Densetsu) III - Shiroki Majo | HDD image | works |  |
 | The Magic Candle | HDD image | works |  |
 | The Story of King Aress (Aress Ou no Monogatari) | HDD image | works |  |
+| Tokyo Twilight Busters | HDD image | works | Logo, opening credits, the start menu and the load list (2026-11-11) |
 | Touhou 1 Reiiden | HDD image | works |  |
 | Touhou 2 Fuumaroku | HDD image | works |  |
 | Touhou 3 Yumejikuu | HDD image | works |  |
@@ -207,17 +222,21 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Brandish Renewal | CD + HDD image | works |  |
 | Brandish VT | CD + HDD image | works |  |
 | Cyber War | CD + HDD image | works |  |
+| Disc Station Vol. 11 | CD + HDD image | works | The set has no boot disk: boot any DOS hard-disk image with the CD driver and MSCDEX, then run DS from the CD. Title art and the menu with descriptions; the games on it were not started (2026-11-11) |
 | Doom | CD + HDD image | works with notes | HIMEM only, no EMM386 or VEM486: the DX386 extender refuses to start in V86 mode. 256-colour 3D view and episode menu run |
 | Dragon Lore | CD + HDD image | works |  |
 | Eimmy to Yobanaide | CD + HDD image | works | Uses CDXNP.SYS as its CD driver |
 | El-Hazard - The Magnificent World | CD + HDD image | works |  |
 | Emit Vol. 1 - Toki no Maigo | CD + boot floppy | works | Boots from the title's CD boot disk (VEM486 + VEMEMM.SYS). Logo, animation and the main menu. CD audio from the disc plays at the correct pitch and speed (checked with a recording) |
+| Emit Vol. 3 - Watashi ni Sayonara o | CD + boot floppy | works | Boots from the title's CD boot disk (VEM486 + VEMEMM.SYS). Loading screen and the main menu (2026-11-11) |
 | F-117A Nighthawk Stealth Fighter 2.0 (256-color version) | CD + HDD image | works | Answer its setup questions with n (joystick), 2 (sound) and 1 (256 colours); it then reaches the squadron bulletin board in 256 colours |
 | Gakuen King | CD + HDD image | works |  |
 | Giten Megami Tensei - Tokyo Mokushiroku | CD + HDD image | works |  |
 | Golf Links 386 Pro | CD + HDD image | works with notes | Run without VEM486: under it, its extender stops with "the 386 is in virtual 8086 mode". Logo and main menu |
 | Inherit the Earth - Quest for the Orb | CD + HDD image | works |  |
 | Macross - Skull Leader Complete Pack | CD + HDD image | works | Asks which drive to save to (buttons A-Z, mouse): pick the hard disk's letter. Then the intro, the title menu, scenario select and Episode 1's story scenes (battles not reached; retested 2026-11-09) |
+| Magical Squadron | CD + HDD image | works | First start opens the setup menu (a right click leaves it); title menu and the campaign map menu (2026-11-11) |
+| Ms. Detective #1 - Iwami Ginzan Satsujin Jiken | CD + boot floppy | works | Boots from the title's installed CD boot disk with the CanBe-compatible CD (the only CD image in the set). Logo, opening photos and the first scene (2026-11-11) |
 | Mugen Houyou | CD + HDD image | works | 256-colour picture was doubled and garbled before the 2026-10-20 PEGC fixes; clean since |
 | My Home Dream 2 | CD + HDD image | works |  |
 | Only You - Seikimatsu no Juliet-tachi | CD + HDD image | works |  |
@@ -233,13 +252,16 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Revival Xanadu II Remix | CD + HDD image | works |  |
 | Sangokushi V | CD + HDD image | works with notes | Needs EMS: VEM486 + VEMEMM.SYS enabled in CONFIG.SYS. Oak CD driver + MSCDEX; the settings box, file copy from the CD, the opening and the main menu. New Game reaches the scenario list in NP2kai with the same images; on the core it was not driven past the menu |
 | Schwarzschild GX - Sabita Sousei | CD + HDD image | works |  |
-| Star Cruiser 2 | CD + boot floppy | partial | Boots from the game disk (EMM386, NECCD.SYS + MSCDEX; the NECCD.SYS on the disk is the Oak OTI-011 driver). FM balance select, the Arsys logo, then the first intro text stays static: FM sound for about 20 s, then silence, and no CD audio starts; Enter, Space, Esc and clicks do nothing. Cause open. The picture behind the frozen text is caught partway through a fade-in, and how far the fade gets varies from run to run. Retested on the 2026-11-09 build, after the YM2608 timer-interrupt and shared-interrupt fixes: the same stop at CPU Speed `Full` and at `25 MHz` (sound not judged in these runs). With EMM386 removed from the disk's CONFIG.SYS the game stops at once with its own "invalid interrupt 67H" message, so it needs the EMS the disk sets up |
+| Shamhat - The Holy Circlet | CD + boot floppy | works | Boots from the title's installed CD boot disk. Logo, the prologue and the first museum scenes (2026-11-11) |
+| Star Cruiser 2 | CD + boot floppy | partial | Boots from the game disk (EMM386, NECCD.SYS + MSCDEX; the NECCD.SYS on the disk is the Oak OTI-011 driver). FM balance select, the Arsys logo, then the first intro text stays static: FM sound for about 20 s, then silence, and no CD audio starts; Enter, Space, Esc and clicks do nothing. Cause open. The picture behind the frozen text is caught partway through a fade-in, and how far the fade gets varies from run to run. Retested on the 2026-11-09 build, after the YM2608 timer-interrupt and shared-interrupt fixes: the same stop at CPU Speed `Full` and at `25 MHz` (sound not judged in these runs). The same stop again on the 2026-11-11 build. With EMM386 removed from the disk's CONFIG.SYS the game stops at once with its own "invalid interrupt 67H" message, so it needs the EMS the disk sets up |
+| Strike Commander Plus | CD + HDD image | works | Needs its CD mounted: without it the launcher returns to DOS and the option program reports that no graphics driver is found (the earlier runs had no CD). With the CD, the 256-colour intro and the main menu (2026-11-11) |
 | Super Real Mahjong PIV Final | CD + HDD image | works | Mode menu, title and a hand in play |
 | TFX | CD + HDD image | not a core bug | Hangs at "DOS/4GW Protected Mode Run-time 1.97 ... Loading..." under VEM486; NP2kai stops at the same point. Without VEM486 the DOS/16M extender reports an 8042 keyboard-controller timeout (it probes an AT controller) |
 | The Legend of Heroes III - Shiroki Majo Renewal | CD + HDD image | works | Menu, logo, title and the prologue with scrolling text |
 | The Legend of Heroes (Eiyuu Densetsu) IV - Akai Shizuku | CD + HDD image | works |  |
 | The Legend of Kyrandia | CD + boot floppy | works | Boots from the title's CD boot disk (EMM386). Intro, a cutscene with Japanese text and the game screen |
 | Theme Park | CD + HDD image | works with notes | HIMEM only, no VEM486: its DX386 extender refuses V86 mode. Intro and title run |
+| Tokio 2 - Kaitaku Imin Boshuuchuu! | CD + HDD image | works | Asks for an ID number from the manual's code table; then sound select, player data and play on the city map (2026-11-11) |
 | Touhou Project CD (with Touhou 5 HDD install) | CD + HDD image | works | The CD compilation of Touhou 1-5, run with Touhou 5 from its hard-disk install: sound select and title. The Touhou 1-5 rows under HDD-installed games are the separately installed releases |
 | Toushin Toshi II - Soshite, Sorekara | CD + HDD image | works | A separate release from Toushin Toshi II: a 1995 CD side story (the disc's volume label and `VERSION.ALS` read 闘神都市２外伝, with its own scenario files and its own install directory), read as text pages. Title box, menu, story text pages, the character profiles with their pictures and the glossary. CD audio from the disc plays at the correct pitch and speed (checked with a recording) |
 | Viper CTR - Asuka | CD + HDD image | works | Fixed 2026-10-28 (GRCG tile ordering). Before the fix it showed garbled vertical stripes on 80 MHz and faster builds. Sogna logo, logo zoom and menu now draw correctly |
@@ -274,6 +296,7 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Brandish | Floppy | works |  |
 | Bubblegum Crisis | Floppy | works | Asks 1 (start from the beginning) or 2 (load data): type the number, then Return (Enter alone is not an answer). With 1 it reaches the first scene and its command choice |
 | Burai Part 1 (Joukan) | Floppy | works |  |
+| Burai Part 2 (Gekan) - Kanketsuhen | Floppy | works with notes | The first chapter asks for Disk 3 in drive 2: mount it within about 10 s of the prompt, no key needed (or mount Disk 1 in drive 1 and Disk 3 in drive 2 before power-on). A later mount is not seen: by then the BIOS has stopped the floppy motor and the drive raises no ready change, as NP2kai's drive model does under the same BIOS setting; whether a real Xe10 behaves the same is item 194. Then play on the field map with dialogue (2026-11-11) |
 | Cluju | Floppy | works |  |
 | Creastar - Planets in Legend | Floppy | works |  |
 | Crimson III | Floppy | not a core bug | Install master disk: "boot from an MS-DOS opening disk"; no game on it |
@@ -309,9 +332,9 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Farland Story - Tenshi no Namida | Floppy | works | Disk A boots, Disk B in drive 2: the opening plays by itself after the sound prompt, then the title menu. A new game then asks for Disk C (not swapped in this run); play to the first battle was checked on a hard-disk install of the same release |
 | Farland Story - Hakugin no Tsubasa | Floppy | works | Disk A boots, Disk B in drive 2: the opening plays by itself after the sound prompt, then the title menu. A new game then asks for Disk C (not swapped in this run); play to the first battle was checked on a hard-disk install of the same release |
 | Farland Story Denki - Arc Ou no Ensei | Floppy | works | Disk A boots to its sound-source prompt and the title menu; Disk B in drive 2. The opening is a separate program on Disk D: boot that disk alone (it loops). A new game reached the first battle |
-| Fray | Floppy | works |  |
+| Fray | Floppy | works | Disk 1 and Disk 2: drive-mode menu, the opening, the title and play on the field map with dialogue (2026-11-11) |
 | Galaga | Floppy | works |  |
-| Galf Streem | Floppy | works with notes | Set CPU Speed lower than `Full` before booting (`25 MHz` played the intro on every test run). The game runs far too fast at `Full`, even on a real PC-9821Xe10 (its main menu cannot be used), and at `Full` its intro can also hang to a black screen: a race in the game itself that NP2kai shares (`docs/probes/GALF-SPEED.md`) |
+| Galf Streem | Floppy | works with notes | Set CPU Speed to `4 MHz` before booting: the game then runs at a usable pace, and its intro played through on every test run at that setting. The game runs far too fast at `Full`, even on a real PC-9821Xe10 (its main menu cannot be used), and at `Full` (and at some other settings, `8 MHz` among them) its intro can also hang to a black screen: a race in the game itself that NP2kai shares (`docs/probes/GALF-SPEED.md`) |
 | Gambler Jikochuushinha | Floppy | not a core bug | The game runs LOCK MOV, which is an invalid opcode on a 386/486; NP2kai ignores LOCK. Expected to fail on a real 486 too (not confirmed on a real Xe10). Screen stays black |
 | Gandhara | Floppy | works |  |
 | Ginga Eiyuu Densetsu | Floppy | works |  |
@@ -322,13 +345,14 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Hiouden | Floppy | works |  |
 | Hiouden II | Floppy | works |  |
 | Hokuto no Ken | Floppy | works |  |
+| Hozonban Lode Runner | Floppy | works | Title, attract demo, mode select and play (2026-11-11) |
 | Hydlide | Floppy | works |  |
 | Hydlide 3 SV | Floppy | works |  |
 | Illusion City | Floppy | works | Configuration menus |
 | Imperial Force | Floppy | works |  |
 | Janou Touryuumon | Floppy | works | Menu works; asks for the user disk in drive 2 |
 | Jesus II | Floppy | works |  |
-| Jotunn | Floppy | missing feature | Needs a PC-98 of the 8 MHz clock family (1.9968 MHz system clock): it reads the clock strap (port 0x42 bit 5) at boot and stops at "set to 8 MHz and press the reset button". The Xe10 is a 2.4576 MHz machine with no clock switch (its captures read 0x42 = 0x94), so a real Xe10 stops the same way; the CPU Speed setting does not change it. NP2kai runs it with its base clock at 1.9968 MHz |
+| Jotunn | Floppy | missing feature | Needs a PC-98 of the 8 MHz clock family (1.9968 MHz system clock): it reads the clock strap (port 0x42 bit 5) at boot and stops at "set to 8 MHz and press the reset button". The Xe10 is a 2.4576 MHz machine with no clock switch (its captures read 0x42 = 0x94), so a real Xe10 stops the same way; the CPU Speed setting does not change it. NP2kai runs it with its base clock at 1.9968 MHz. Unchanged on the 2026-11-11 build |
 | Klax | Floppy | works |  |
 | Last Armageddon | Floppy | works | Disk A + Disk B; story slides and animation |
 | Lode Runner | Floppy | works |  |
@@ -351,6 +375,7 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Nobunaga no Yabou | Floppy | works |  |
 | Nobunaga no Yabou - Zenkoku-ban | Floppy | works | Disk A + Disk B in drive 2 ("New game or Load data"). Disk A alone is a data disk |
 | Nobunaga no Yabou Haouden (floppy) | Floppy | works | Display select and logo, then asks for the Scenario disk in drive 1 (disk swap) |
+| Pirates! | Floppy | works | Disk 1 and Disk 2: title, new-career setup and the opening, including its manual question (2026-11-11) |
 | Popful Mail | Floppy | works |  |
 | Populous | Floppy | works | The title menu takes F1 (Tutorial), F2 (Conquest) or F3 (Custom); not played further |
 | Populous II Expert | Floppy | works | Disk 1 + Disk 2. Intro art, then the mode menu; the test's clicks missed its entries, so not played further |
@@ -367,15 +392,20 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Romancia | Floppy | works | Boots with the default Floppy mode `Auto (1M)`. Black screen fixed 2026-10-20 |
 | Royal Blood | Floppy | works | Asks for a blank user disk in drive 2 |
 | Rune Worth - Kokui no Kikoushi | Floppy | works | Player-register menu; asks for the user disk |
+| Rune Worth 3 - Shinseiki Kourin | Floppy | works | Disk A in drive 1 and the User disk in drive 2 (with Disk B there it asks for the User disk). Prologue and play in the first town (2026-11-11) |
 | Ryu - Naki no Ryu yori | Floppy | works |  |
 | Saisoku Densetsu Racer X | Floppy | works |  |
 | Salad no Kuni no Tomato-hime | Floppy | works | At the loader prompt type START then Return. Black screen fixed 2026-10-21 (its IPL uses the 640 KB interface, which the default Floppy mode `Auto (1M)` sets up) |
 | Sangokushi II | Floppy | works |  |
-| Savior | Floppy | fails | Stays black with Disk 1 and Disk 2 in either order (2DD 16x256 sectors, the IPL reads then retries forever). NP2kai also stays black, so likely a dump or protection issue; cause not established |
+| Savior | Floppy | fails | Stays black with Disk 1 and Disk 2 in either order (2DD 16x256 sectors, the IPL reads then retries forever). NP2kai also stays black, so likely a dump or protection issue; cause not established. Retested on the 2026-11-11 build, also from the set's NFD dumps converted to D88: still black |
+| Schwarzschild IV - The Cradle End | Floppy | works | Disk A and the User disk; Disk B into drive 1 when the opening asks for it. Opening and the main menu (2026-11-11) |
 | Seilane | Floppy | works |  |
+| Shanghai II | Floppy | works | Logo, title and the tile board (2026-11-11) |
 | Shin Kugyokuden | Floppy | works |  |
 | Shuten Douji | Floppy | works |  |
-| Solitaire Royale | Floppy | fails | 1.2 MB 15x512 (5-inch) disk format; stays black. A 3.5-inch Xe10 drive is not expected to read it (not confirmed on hardware) |
+| Silent Mobius | Floppy | works | Disk 1 and Disk 2: mouse-driven start menu, name entry and the opening (2026-11-11) |
+| SimAnt | Floppy | works | The installed Program disk with the Data disk in drive 2: game select and play in the nest (2026-11-11) |
+| Solitaire Royale | Floppy | fails | A 2HD disk of 77 cylinders with 15 sectors of 512 bytes per track (the 1.2 MB 5-inch layout); stays black, also on the 2026-11-11 build and from the set's NFD dump converted to D88. NP2kai with the same Xe10 firmware boots it to the Game Arts logo, the title and the tour name prompt; NP2kai boots floppies through its own boot code, so this does not settle what a real Xe10 does. Cause open |
 | Sorcerian | Floppy | works | Title and main menu; asks for the user disk in drive 2 to load. Character creation works up to the bonus-point sheet; a scenario load was not reached in testing |
 | Sorcerian System Scenario Vol. 3 - Pyramid Sorcerian | Floppy | not a core bug | Scenario data disk; needs the Sorcerian program disk |
 | Span of Dream | Floppy | works |  |
@@ -383,7 +413,9 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | Star Cruiser | Floppy | works | Reaches the cockpit and the in-game menu. Fixed 2026-10-28: the floppy controller now reports a missing sector after the disk's second index pulse, as the real chip does, instead of at once |
 | Star Trader | Floppy | works |  |
 | Suikoden - Tenmei no Chikai | Floppy | works |  |
+| Super Battle Skin Panic | Floppy | partial | Disk A and Disk B (also the 400-line Disk A): display prompt, logo and the title, which asks whether to play with the mouse or the keyboard; no choice registered (clicks, keypad, Return). NP2kai stops at the same screen with the same inputs; not established as a core bug (2026-11-11) |
 | Suzaku | Floppy | works |  |
+| Templo del Sol (Taiyou no Shinden) - Asteka II | Floppy | works | Space at the title, then play on the jungle map with the keypad (2026-11-11) |
 | Ten to Chi to | Floppy | works | Art, then asks for game Disk B in drive 2 |
 | Tenbu - Sangokushi Seishi | Floppy | works | Art, then asks for the scenario disk (disk swap) |
 | Tenka Touitsu | Floppy | works |  |
@@ -392,6 +424,7 @@ The boot hard-disk image of each, or the title's own CD boot floppy where the Me
 | The Legend of Heroes (Eiyuu Densetsu) IV - Akai Shizuku | Floppy | works |  |
 | Thexder | Floppy | works |  |
 | Thunder Force | Floppy | works |  |
+| Tir-nan-og - Descendants of Danaan | Floppy | works | Program disk and User disk. The menus take the keypad digits only (the main-row digits do nothing): scenario select and play on the overland map (2026-11-11) |
 | Tritorn II | Floppy | works | Its MENU box. Stray kanji drawn over the screen fixed 2026-11-06 (a text code outside the font's grid now draws blank, as in NP2kai) |
 | Ultima Underworld | Floppy | not a core bug | Disk 1 is not a boot disk ("No system files"); wants a hard-disk install |
 | Ultima V | Floppy | works |  |

@@ -74,7 +74,8 @@ def analyse(x, silence_db=-60.0, silence_min=1.0, dropout_ms=5.0, click_k=40.0):
     r["peak_dbfs"] = [round(float(db(v)), 2) for v in pk]
     r["rms_dbfs_all"] = round(float(db(np.sqrt((f ** 2).mean()))), 2)
     r["peak_dbfs_all"] = round(float(db(pk.max())), 2)
-    r["clipped_pct"] = round(100.0 * (np.abs(x) >= 32767).sum() / x.size, 4)
+    # on the float copy: np.abs of int16 -32768 wraps to -32768, which hid negative clipping
+    r["clipped_pct"] = round(100.0 * (np.abs(f) >= 32767).sum() / x.size, 4)
     r["dc_pct"] = [round(float(100.0 * m / 32768.0), 3) for m in f.mean(axis=0)]
     imb = db(rms[0]) - db(rms[1])
     r["lr_imbalance_db"] = round(float(imb), 2)
@@ -178,11 +179,12 @@ def selftest():
     tone = 8000 * np.sin(2 * np.pi * 1000 * t) + rng.normal(0, 200, t.size)
     x = np.stack([tone, tone * 0.9], axis=1)
     # plant: 2 s silence at 3..5 s, a 20 ms zero run at 6 s, a click at 7 s,
-    # DC on none, clipping on 50 samples
+    # DC on none, clipping on 50 samples positive and 30 negative (full scale -32768)
     x[3 * SR:5 * SR] = 0
     x[6 * SR:6 * SR + 960] = 0
     x[int(7.0 * SR)] += 20000
     x[100:150] = 32767
+    x[200:230] = -32768
     x = np.clip(x, -32768, 32767).astype(np.int16)
     r = analyse(x)
     ok = True
@@ -195,7 +197,8 @@ def selftest():
     chk(any(abs(s - 3.0) < 0.2 and abs(l - 2.0) < 0.3 for s, l in r["silence_stretches"]), "silence")
     chk(len(r["dropouts"]) == 1 and abs(r["dropouts"][0][0] - 6.0) < 0.01, "dropout %r" % r["dropouts"])
     chk(r["clicks"] >= 1, "click")
-    chk(r["clipped_pct"] > 0, "clip")
+    chk(r["clipped_pct"] == round(100.0 * 2 * (50 + 30) / x.size, 4),
+        "clip: both signs counted %r" % r["clipped_pct"])
     chk(abs(r["peak_hz"] - 1000) < 5, "peak hz %r" % r.get("peak_hz"))
     # missing channel
     y = x.copy()

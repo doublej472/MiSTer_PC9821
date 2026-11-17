@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PC-9821 serial port is NOT modelled: at NP2kai io/serial.c's RS-232C register addresses -- the uPD8251A data port 0x30, its status/control port 0x32, and the FIFO extension's 0x130/0x132/0x134/0x136/0x138/0x13A -- this core answers open bus 0xFF (0x30 and the FIFO ports are neither device ports nor system ports, so the I/O bus never strobes a device and the open bus reaches the CPU) or an unrelated fixed system strap (0x32 reads 0x45, 0x134 reads 0x0F), where NP2kai's 8251 answers its own reset register state (0x30 = 0xFF data register, 0x32 = 0x85 status) and the FIFO registers their reset values (0x132 = 0x83, 0x134 = 0xF0, 0x136 = 0x41, 0x138 = 0x00, 0x13A = 0x00). Every NP2kai case is recorded by value and printed as a WAIVED line: the RTL facts the core does answer are asserted, the absent serial registers are documented, and the bench stands as the conformance target for whenever the port is implemented. It is a GAP, not a correctness bug -- pc9821_system.sv:1182 already says "no serial port is modelled" and leaves the PIT channel-2 baud clock unconnected.
+// The PC-9821 serial port is NOT modelled, and at the RS-232C register addresses the real Xe10's port sweep captured the core answers what the machine answers: docs/probes/PORTS.TXT (transcribed in tb_pc9821_ports_sweep.sv) reads 0x30 = 0xFF, 0x32 = 0x45, 0x130 = 0xFF, 0x132 = 0xFF and 0x134 = 0x0F, and this core returns those bytes (0x30 and the FIFO ports are neither device ports nor system ports, so the I/O bus never strobes a device and the open bus 0xFF reaches the CPU; 0x32 and 0x134 read fixed system straps), with 0x136/0x138/0x13A, which the capture does not cover, reading open bus 0xFF too. NP2kai io/serial.c's 8251 answers its own reset register state instead (0x30 = 0xFF data register, 0x32 = 0x85 status) and the FIFO registers their reset values (0x132 = 0x83, 0x134 = 0xF0, 0x136 = 0x41, 0x138 = 0x00, 0x13A = 0x00): a recorded divergence, every case printed by value as a WAIVED line, because the capture outranks the software reference (the machine may have run the sweep with its port disabled, so NP2kai's values stay on record for whenever the port is implemented). It is a GAP, not a correctness bug -- pc9821_system.sv's PIT channel-2 comment already says "no serial port is modelled" and leaves the PIT channel-2 baud clock unconnected.
 
 module tb_pc9821_serial;
   // System port C bit 3: the beeper's MUTE (pc9821_iobus, ANDed with the PIT's
@@ -118,6 +118,7 @@ module tb_pc9821_serial;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -151,7 +152,10 @@ module tb_pc9821_serial;
   reg [15:0] probe_port;
   reg [7:0]  probe_data;
 
-  // The reference for every NP2kai value below is NP2kai io/serial.c (RS-232C):
+  // The machine's own bytes are docs/probes/PORTS.TXT BEGIN:PORTS (0030=FF, 0032=45,
+  // 0130=FF, 0132=FF, 0134=0F; tb_pc9821_ports_sweep.sv asserts the same rows), and the
+  // core matches them. NP2kai's values below are the recorded divergence, waived:
+  // NP2kai io/serial.c (RS-232C):
   // reset rs232c_reset() :800 sets result=0x05, data=0xFF, cmd=0x27, mul=160;
   // 0x30 rs232c_i30 :714, 0x32 rs232c_i32 :745, 0x130 rs232c_i30 FIFO arm :722,
   // 0x132 rs232c_i132 :772, 0x134 rs232c_i134 :797, 0x136 rs232c_i136 :830,

@@ -10,10 +10,9 @@ It supersedes the timing probes `gfxbench`, `gfxbenc2`, `egcplane`, `grcgpace` (
 is the `/GRCG` section here), `ioprobe`, `idelat` and the timing sections of `probe2`
 (`/WIPE` W1/W5/W6, `/TIMEREF`). They stay until a machine capture of XE10T exists and their
 citations have moved to its `.expect` file; their captures stay in `docs/probes/` as history.
-Two old-probe defects are recorded here rather than fixed: probe2 `/WIPE` W5's 57.115 Hz is a
+One old-probe defect is recorded here rather than fixed: probe2 `/WIPE` W5's 57.115 Hz is a
 fencepost (63.2 frames counted as 64; the machine runs 5445 ARTIC ticks per frame, as
-`CRT31K.TXT`), and `ioprobe_decode.py` crashes on the RTL's removed `IO_WAIT_5F` (todo items
-159 and 160).
+`CRT31K.TXT`; todo item 158).
 
 ## Building
 
@@ -52,6 +51,155 @@ compares only two captures of one binary).
 
 Reboot after each (both restore what they write; the kit reboots between steps anyway).
 
+### XE10V.COM: `/MISAL`
+
+```
+make -C tools/hwprobe xe10t/xe10v.com
+```
+
+`XE10V.COM` is XE10U assembled with `XE10V` defined as well (`--defsym XE10U=1 --defsym
+XE10V=1`): every XE10U section plus `/MISAL` (`sec_misal.inc`), so `xe10u.com` builds byte for
+byte as the binary of the kit-2 `/OPNA4` and `/AUDIT2` machine captures. The header reads
+`build=gas-xe10v`, the default output is `XE10V.TXT`, and only in this binary does `time_call`
+(lib.inc) call the section's raster sync before a window.
+
+| Command | What |
+|---|---|
+| `XE10V /MISAL /O MISAL1.TXT` | the GVRAM store cost by alignment (the core's Xe10 table charges a misaligned word one period inside a dword and two across one, unmeasured) and with the graphics display on (todo item 151); about 2 minutes, no keys; plain DOS |
+
+`/MISAL` runs the same rows in three store modes (`RMW`: 0x7C <- C0; `TDW`: 0x7C <- 80; `PLN`:
+the GRCG off) and three phases (the tag's last part): `_O` the graphics display stopped (INT 18h
+AH=41h, the prompt state of every `/GVRAM` and `/GRCG` row); `_A` with INT 18h AH=42h CH=C0
+(640x400) and AH=40h, each window started 614 ARTIC ticks (2 ms) after the VSYNC fall, on the
+active lines; `_V` the same display, each window started at the VSYNC rise, inside the 33-line
+vertical blank. Every window is at most about 0.7 ms. The rows (n = 1024 stores, 512 dwords,
+50 blit rows):
+
+| Shape | Store | Settles |
+|---|---|---|
+| `W0` `W1` `W2` `W3` | `mov word es:[di],ax`, DI = 0/1/2/3, DI += 4 (swept) | every store at one dword offset: W1 a misaligned word inside a dword, W3 one across a dword boundary, W2 the aligned upper-half control |
+| `WA` | the same, DI = 1, DI += 2 (swept) | offsets 1, 3, 1, 3: the `/GVRAM` W16ODD shape (the existing capture's link) |
+| `B0`, `D0` | byte, DI += 1; dword, DI += 4 (swept) | the byte control; the aligned dword (TDW, RMW and plain dword with graphics on: item 151) |
+| `SW0` `SW1` `SW3` | `rep stosw` of 1024 words from DI = 0/1/3 | a word string from an odd DI (offsets alternate 1, 3) |
+| `MW0` `MW1` `MW3` | `rep movsw` of 1024 words from RAM | the same as a copy from main memory |
+| `BL0` `BL1` (RMW, PLN) | 50 x `mov cx,20; rep movsw`, DI += 80 a row, from DI = 0 / 1 | Rusty's C-Lab logo wipe row (`docs/probes/RWIPE-XE10.TXT`) |
+
+Also `P MISAL RASTER_O` / `RASTER_G` (8 frames and the VSYNC pulse, before the `_O` rows and
+after the display is on), a STATE line with the as-found BDA 0x054C/0x054D and port 0x31, and
+`I MISAL sync_to=` (polls of the raster sync that expired; those windows started unsynced). The
+decoder prints per mode and phase each shape's ns per store (PIT median at nop=0), W1/W0 and
+W3/W0 beside the core table's 1 and 2 periods, the odd-DI string rows against the W1/W3 mean,
+Rusty's row per word, graphics on against off per shape, and flags a `_V` window longer than the
+blank (`PAST-BLANK`) or an `_A` one past the active lines (`PAST-ACTIVE`). `mkmisal.py --base
+<kit image> --out <image>` builds the one-boot CF kit (two `/MISAL` runs; the image holds NEC's
+DOS and is never committed).
+
+### XE10W.COM: `/MISAL2`
+
+```
+make -C tools/hwprobe xe10t/xe10w.com
+```
+
+`XE10W.COM` is XE10V with `XE10W` defined as well (`--defsym XE10U=1 --defsym XE10V=1 --defsym
+XE10W=1`): every XE10V section plus `/MISAL2` (`sec_misal2.inc`), so `xe10v.com` stays the binary
+of the `XE10V-XE10-MISAL*` machine captures. Header `build=gas-xe10w`, default output `XE10W.TXT`.
+
+`XE10W /MISAL2 /O MIS2RUN1.TXT` (about 2 minutes, no keys, plain DOS) times the other paths a
+misaligned access takes, each family at byte offsets 0, 1 and 3 (2 where it matters) with byte
+and dword controls; tags are `<FAMILY>_<K>[_<PHASE>]`:
+
+| Families | Accesses | Phases |
+|---|---|---|
+| `RLWH RLWM RLDH RLDM RSWH RSWM RSDH RSDM RLBH RSBH` | main-memory word/dword/byte loads and stores; `H` repeat over 1 KiB (L1-warm), `M` walk 64 KiB at a 16-byte stride (every access a new line); K = 15 and 13 cross a 16-byte line | none |
+| `RMSW RMSS RMSD` | `rep movsw` to dst +K, from src +K, `rep movsd` to dst +K, in main memory | none |
+| `GRW GRD GRB GLSW GLSD GMVR GMVV` | GVRAM plain loads, `rep lodsw/lodsd`, `rep movsw` GVRAM->RAM and GVRAM->GVRAM | `_O _A _V` |
+| `TCRW TCRB` | the GRCG TCR (0x7C = 80) word and byte compare reads | `_O _A _V` |
+| `BLSS` | the logo wipe's row under the GRCG RMW from a main-RAM source at SI = 1 to DI = 0 / 1; `BLSS_9` = SI 0 to DI 1 (`/MISAL` BL1) | `_O _A _V` |
+| `XCW XCB XCR XAW XAR` | text RAM code/attribute word stores (swept), byte store, word loads, in the saved off-screen 0x1000-0x1FFF | `_O _A _V` |
+| `PKW PKD PKR` | PEGC 256-colour packed bank 0 word/dword stores (swept), word loads | `_O _A _V` |
+| `IOIW IOIB IOOW IOOB` | `in ax` at 0x30-0x33 (0x33 reads 0x33/0x34, a word across a dword) and the two-byte control; `out ax` (AX = 0) at 0xA4, 0xA5 and 0xA3 (across a dword) and the two-byte control | none |
+
+The EGC is not included (its pace is an open owner decision, item 153, and its odd-address rows
+would need the copy shape's own setup). The decoder prints each family's ns per unit at every
+offset and its ratio to the base offset (K = 0; `IOOW`: K = 4); comparing a machine capture with a
+core capture of this binary prints both, so the core's current charge stands beside the machine's.
+`mkmisal.py --kit misal2` builds the one-boot CF kit (results in `A:\MISAL2`).
+
+### XE10X.COM: `/RDLAT`
+
+```
+make -C tools/hwprobe xe10t/xe10x.com
+```
+
+`XE10X.COM` is XE10W with `XE10X` defined as well (`--defsym XE10U=1 --defsym XE10V=1 --defsym
+XE10W=1 --defsym XE10X=1`): every XE10W section plus `/RDLAT` (`sec_rdlat.inc`), so `xe10w.com`
+stays the binary of the `XE10W-XE10-MIS2RUN*` machine captures. Header `build=gas-xe10x`, default
+output `XE10X.TXT`. Only in this binary does `run_case` (lib.inc) take its nop list from
+`ks_ptr0`, which `/RDLAT` points at `rd_ks` (0, 2, 4, 8, 16, 32, 64) and every other section
+leaves at the shared `sweep_ks`.
+
+`XE10X /RDLAT /O RDLAT1.TXT` (about 3 minutes, no keys, plain DOS) answers two questions:
+
+1. **Are GVRAM, GRCG-TCR and text-RAM reads a latency or a rate?** Every earlier read row was a
+   tight loop (nop 0), which reads the same under both. Here every read row is a nop sweep: if
+   the CPU waits for each read, the nops add to the time (latency); if the next read only waits
+   out a period, the nops hide in it until the knee (rate). The store rows of the same classes
+   are the rate-shaped control.
+2. **The raster penalty in other display modes**: the same rows in 640x400 at 24 kHz (the `/MISAL`
+   display), 640x400 at 31 kHz (INT 18h AH=30h AL=0C BH=2x, then AH=42h CH=C0) and the 640x480
+   256-colour mode (AH=30h AL=0C BH=31, the Windows 95 PC-9821 driver's call, with the PEGC's
+   packed mode on), and a text-RAM pass on the displayed cells (offset 0) beside the off-screen
+   0x1000 rows of `/MISAL2`.
+
+Tags are `<FAMILY>_<MODE><PHASE>`, MODE 24/31/48, PHASE as `/MISAL` (`O` display stopped, 24 only;
+`A` 2 ms after the VSYNC fall; `V` from the VSYNC rise). n = 512 per window, DI += 4:
+
+| Families | Accesses | Modes |
+|---|---|---|
+| `GRW GRD GW` | plain GVRAM word load, dword load, word store (plane B) | 24, 31 |
+| `GLSW GMVR` | `rep lodsw`, `rep movsw` GVRAM -> RAM (nop 0 only) | 24, 31 |
+| `TCRW TDW` | GRCG 0x7C = 80: the TCR word read, the TDW word store | 24, 31 |
+| `RMW` | GRCG 0x7C = C0 word store | 24, 31 |
+| `XCR XCW` | text code word load/store at 0xA1000 (off screen) | all |
+| `XCRS XCWS XARS XAWS` | text code / attribute word load/store at 0xA0000 / 0xA2000 (on screen) | all |
+| `PKR PKW` | PEGC packed bank 0 word load/store | all |
+
+Each mode is read back with AH=31h (AL bit 2 and BH bits 5:4 must be the ones asked, else
+`SKIP RDLAT reason=mode31|mode48`) and timed by `P RDLAT RASTER_<M>` (8 frames). The whole text
+RAM 0xA0000-0xA3FFF is saved to the buffer and compared after the copy back (`RESTORE RDLAT
+TRAM_0000_1FFF`); AH=30h with the as-found AL/BH and AH=0Ch put the display back, with readback
+RESTORE lines for AH=31h's AL and BH and port 0x09A8 bit 0. The decoder prints per family, mode
+and phase the ns per access at nop 0 and at the last nop, the work the nops added, the part of it
+the access hid (`hidden_ns`, its largest h(k) = (c(k) - c(0)) - (g(k) - g(0)), g the row's and c
+the control's ns per access) and that over the access's own cost (`hidden_frac`): LATENCY at or
+below 0.2, RATE at or above 0.5, MIXED between. It prints the active-over-blank ratio per mode,
+flags a raster row whose frame is not the mode's (`MODE-NOT-SET`), and `PAST-BLANK` /
+`PAST-ACTIVE` with each mode's own geometry (`RD_GEOM`). `mkmisal.py --kit rdlat` builds the
+one-boot CF kit (results in `A:\RDLAT`).
+
+### XE10Y.COM: the kit-3 sections and `/REP`
+
+```
+make -C tools/hwprobe xe10t/xe10y.com
+```
+
+`XE10Y.COM` is XE10X with `XE10Y` defined as well, WITHOUT `/OPNA2`, `/OPNA3`, `/AUDIT`, `/OPNA4` and
+`/AUDIT2` (their binaries keep them; this one needs the room) and WITH `sec_kit3.inc`. Header
+`build=gas-xe10y`, default output `XE10Y.TXT`. Only in this binary does `run_case` print a STATE
+line before every row while `/PKAB` asks for it, and `time_call` make a drain read before a window
+while `/PKAB`'s drain pass runs (lib.inc, `[k3_rowst]`, `[k3_drain]`).
+
+| Command | What |
+|---|---|
+| `XE10Y /PKAB /O PKAB.TXT` | the PEGC store A/B (the same store reads 182.8 ns in XE10X `/RDLAT` and 145.4 ns in XE10W `/MISAL2`): three rounds, each `/MISAL2`'s phase sequence (tags `_M<r>`), `/RDLAT`'s 24 kHz sequence (`_R<r>`), factor rows (`_FA<r>`, `_FV<r>`: PKW straight after the 256-colour mode is turned on, after a PKR row, 60 frames later, at DI = 1, at DI = 0x4000, the dword), the cache as found (`_C<r>`), the L1 cache off (`_N<r>`: CR0.CD/NW and WBINVD, put back) and a drain read before every window (`_D<r>`); a STATE line before every row (the 0x9A0 queries, BDA, 0x09A8, CR0, the PEGC registers, ticks since the 256-colour mode went on, the row's destination as its own setup leaves it); about 3 minutes |
+| `XE10Y /CELLS /O CELLS.TXT` | todo item 197's cells by the `/RDLAT` method: the 31 kHz two-word rows (TCRWM TCRD GWM GD TDWM TDD RMWM RMD XCRM XCWM), 24 kHz with the 256-colour mode on (`2P`: text, PEGC and the 0xB8000 rows), 31 kHz 640x400 with it on (`3P`), 640x480 (`48`), and the 0xF00000 aperture (PAW PAR PAD in `2P` and `48`, with `X APER` proving the window); about 4 minutes |
+| `XE10Y /K3M /O K3M.TXT` | PIT one-byte count writes, IDIV B0F8h/1Eh (item 168), 0xE0000 in the 16-colour mode (item 31), the GDC blank's place in the line (item 23), IDENTIFY DEVICE / PACKET task-file read-back (the review's IDE finding); a few seconds |
+| `XE10Y /MISAL2 /RDLAT /REP 2 /O REP.TXT` | `/REP n` (1-9): every selected section n times in one boot, in table order each pass. The decoder analyses the first pass as before and prints every R row's spread across the passes (`REP-SPREAD` past 3 %) |
+
+`xe10t_decode.py` decodes all three (`pkab`, `cells`, `k3m`, `rep_spread`); `/PKAB`'s VERDICT lines
+name the factor that moves the PKW figure. `tools/check_xe10_table.py` accepts `CELLS` and `PKAB`
+rows as citations (`2P` has no table column yet).
+
 ## Running
 
 Boot plain DOS (no EMM386, no sound driver: the probe refuses V86 mode unless `/FORCE`, and
@@ -74,7 +222,7 @@ Boot plain DOS (no EMM386, no sound driver: the probe refuses V86 mode unless `/
 | `XE10T /DRY` | the plan: every section, the ports it writes, every case; nothing runs |
 
 Flags: any section name (`/CPU /GVRAM /GRCG /EGC /PEGC /TEXT /IO /PAL /IRQ /OPNA /PCM86 /IDE
-/FDC /CD /OPNA2 /BIOS /RASTER /OPNA3 /AUDIT /FDC2`), `/M640` (`/FDC2`'s 640K rows), `/LISTEN` (`/OPNA3`'s audible phases), `/SWEEP` (`/OPNA3`'s gap sweep; it selects `/OPNA3`), `/STEP n` and `/TO n` (the sweep's first and last step, 1-20), `/REPS=n` (3-15, default 5), `/QUICK` (3 repeats, for the core), `/TAG=text`
+/FDC /CD /OPNA2 /BIOS /RASTER /OPNA3 /AUDIT /FDC2`; `/OPNA4 /AUDIT2` in XE10U to XE10X, `/MISAL`, `/MISAL2`, `/RDLAT` in the binaries above, `/PKAB /CELLS /K3M` and `/REP n` in XE10Y), `/M640` (`/FDC2`'s 640K rows), `/LISTEN` (`/OPNA3`'s audible phases), `/SWEEP` (`/OPNA3`'s gap sweep; it selects `/OPNA3`), `/STEP n` and `/TO n` (the sweep's first and last step, 1-20), `/REPS=n` (3-15, default 5), `/QUICK` (3 repeats, for the core), `/TAG=text`
 (the build ID of a core run, e.g. its OSD build string), `/O=file` (default `XE10T.TXT`),
 `DA=xx`, `/FORCE`, `/SKIP <SEC>` (leave a section out; repeatable) and `/FROM <SEC>` (leave
 out every section before it in table order, to resume past one that hung: `XE10T /ALL /FROM

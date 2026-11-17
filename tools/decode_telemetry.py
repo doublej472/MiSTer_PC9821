@@ -275,7 +275,13 @@ GFX_START = "GFX "
 ABORT_REASONS = {0x1: "block engine error", 0x2: "read-path validation",
                  0x3: "IDP (geometry mismatch)", 0x4: "READ MULTIPLE unsupported",
                  0x5: "SET MULTIPLE unsupported", 0x6: "SET FEATURES subcommand",
-                 0x7: "write-path validation", 0x8: "unsupported command"}
+                 0x7: "write-path validation",
+                 0x8: "unsupported command, or IDENTIFY PACKET DEVICE (0xA1) to the hard disk "
+                      "(a measured abort: error 0x04, status 0x51)",
+                 # pc9821_ata.sv `8'hF8: abort_measured(4'd9);`: architectural, not a fault.
+                 0x9: "READ NATIVE MAX ADDRESS (0xF8): the Host Protected Area feature set is "
+                      "not claimed, so the command is aborted as the Xe10's drive aborts it "
+                      "(error 0x04, status 0x51)"}
 
 ST_BITS = [("rom_ready", 0), ("ioctl_download", 1), ("cpu_run", 2),
            ("ext_mem_busy", 3), ("load_error", 4)]
@@ -382,6 +388,9 @@ def print_prf_derived(cur, prev, gfx, prev_gfx, clk_mhz):
     per-operation costs say what each GVRAM walk, EGC operation and GRCG store holds the CPU for.
     """
     cy = delta(cur, prev, "CY")
+    if cy is None:
+        print("    no CY field in this record or the previous one: no interval to divide by")
+        return
     print(f"  CY delta {cy:,} cycles ({cy / (clk_mhz * 1e6):.3f} s at {clk_mhz:.3f} MHz)")
     if not cy:
         print("    no interval: the ratios below are undefined over zero cycles")
@@ -413,7 +422,7 @@ def print_prf_derived(cur, prev, gfx, prev_gfx, clk_mhz):
         print("    GVRAM walk     no walks in the interval")
     # The EGC/GRCG operation counts: paired with the graphics record's EG/GR/GT they give
     # cycles-per-transaction and cycles-per-unit, the split between "many operations" and "long
-    # operations" that graphics-hold.md section 8 asks for before section 7.1 vs 7.2.
+    # operations" (the graphics-hold analysis that asked for it is no longer kept in the tree).
     et, eu, gs = (delta(cur, prev, n) or 0 for n in ("ET", "EU", "GS"))
     if et or eu or gs:
         eu_per = ("%.2f" % (eu / et)) if et else "n/a"
@@ -496,12 +505,15 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
         # width would still pass every width check in the contract. So the labels are required to
         # appear in the record in the table's order, and the first that does not is named.
         at = [(name, joined.find(" " + name + "=")) for name, _, _ in W_FIELDS]
-        seen = [p for _, p in at if p >= 0]
-        if seen != sorted(seen):
+        # Only the fields present are compared, table order against record order, so an absent
+        # field does not shift the names reported for the ones after it.
+        found = [(n, p) for n, p in at if p >= 0]
+        in_record = sorted(found, key=lambda np_: np_[1])
+        if found != in_record:
             print(f"WARNING: the record's fields are NOT in the emission order this decoder "
                   f"reads - the first to disagree is "
-                  f"{[n for (n, p), q in zip(at, seen) if p != q][:4]} - so a capture read by "
-                  f"index would be mis-mapped")
+                  f"{[n for (n, _), (m, _) in zip(found, in_record) if n != m][:4]} - so a "
+                  f"capture read by index would be mis-mapped")
         for name, _, meaning in W_FIELDS:
             if name in w:
                 print(f"  {name:<5} = {w[name]:>10}  {meaning}")
@@ -544,9 +556,11 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
             alb = w.get("ALB", 0)
             print(f"  >>> ATA transfer: LBA 0x{alb:07X}, {ase >> 8} sector(s) still owed, "
                   f"error_reg 0x{ase & 0xFF:02X}")
-            print("      ALB names the sector the transfer stopped on; error_reg 0x04 with a "
-                  "nonzero abort reason in the ATA word above is OUR engine failing (reason 1 "
-                  "the block engine, reason 2 the guest asking past the image)")
+            print("      ALB names the sector the transfer stopped on; error_reg 0x04 is an "
+                  "abort, and the abort reason in the ATA word above says whose: only reason 1 is OUR "
+                  "block engine failing; reasons 2 and 7 are the guest addressing past the image "
+                  "(7 also a write to a read-only one), and 3, 5, 8 and 9 are commands the "
+                  "device aborts by design (9 = READ NATIVE MAX, which an OS probe sends)")
         if "U" in w:
             u = w["U"]
             # PRINTED EVEN WHEN ZERO. The field this replaced skipped zero, on the reasoning that
@@ -588,12 +602,14 @@ def decode(text, clk_mhz=CLK_MHZ_DEFAULT):
         # The PRF record follows the stall record on its own line. The counters are free-running,
         # so the DELTA since the previous record is the interval's cost - which is the number a
         # reader is after - and it is printed beside the raw value when there is a previous record.
+        # The GFX record is parsed before the PRF block because the PRF derived block reports
+        # the DEVICE part of the wait (GFX's DW) when its record is present. Parsed in every
+        # message, so a GFX line without a PRF line (a capture cut short, an older build) is read,
+        # and a message without one never reuses the previous message's record.
+        g = (parse_line(" " + joined.split(GFX_START, 1)[1], GFX_FIELDS)
+             if GFX_START in joined else {})
         if PRF_START in joined:
             p = parse_line(" " + joined.split(PRF_START, 1)[1], PRF_FIELDS)
-            # The GFX record is parsed here rather than below because the PRF derived block
-            # reports the DEVICE part of the wait (GFX's DW) when its record is present.
-            g = (parse_line(" " + joined.split(GFX_START, 1)[1], GFX_FIELDS)
-                 if GFX_START in joined else {})
             if p:
                 print("  -- PRF line: subsystem performance, free-running counters --")
             for name, _, meaning in PRF_FIELDS:

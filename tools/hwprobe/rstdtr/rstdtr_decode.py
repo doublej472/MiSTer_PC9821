@@ -13,18 +13,18 @@ from __future__ import annotations
 import re
 import sys
 
-LINE = re.compile(r'RSTDTR pre idt=([0-9A-F]{4}):([0-9A-F]{8}) gdt=([0-9A-F]{4}):([0-9A-F]{8}) cr0=([0-9A-F]{8}) '
-                  r'\| reset idt=([0-9A-F]{4}):([0-9A-F]{8}) gdt=([0-9A-F]{4}):([0-9A-F]{8}) cr0=([0-9A-F]{8}) '
-                  r'edx=([0-9A-F]{8}) a20=([01])')
+LINE = re.compile(r'RSTDTR pre idt=(?P<pre_idt>[0-9A-F]{4}):(?P<pre_idt_base>[0-9A-F]{8}) '
+                  r'gdt=(?P<pre_gdt>[0-9A-F]{4}):(?P<pre_gdt_base>[0-9A-F]{8}) cr0=(?P<pre_cr0>[0-9A-F]{8}) '
+                  r'\| reset idt=(?P<idt>[0-9A-F]{4}):(?P<idt_base>[0-9A-F]{8}) '
+                  r'gdt=(?P<gdt>[0-9A-F]{4}):(?P<gdt_base>[0-9A-F]{8}) cr0=(?P<cr0>[0-9A-F]{8}) '
+                  r'edx=(?P<edx>[0-9A-F]{8}) a20=(?P<a20>[01])')
 
 
 def parse(text: str) -> dict | None:
     for ln in text.splitlines():
         m = LINE.match(ln.strip())
         if m:
-            g = m.groups()
-            return dict(pre_idt=g[0], pre_gdt=g[2], pre_cr0=g[4], idt=g[5], idt_base=g[6], gdt=g[7],
-                        gdt_base=g[8], cr0=g[9], edx=g[10], a20=g[11], done='END:RSTDTR' in text)
+            return dict(m.groupdict(), done='END:RSTDTR' in text)
     return None
 
 
@@ -32,14 +32,21 @@ def verdict(d: dict) -> str:
     def name(lim):
         return {'03FF': 'the manuals\' 03FF', 'FFFF': 'NP2kai\'s FFFF'}.get(lim, lim)
     return (f'after the reset: IDTR limit {d["idt"]} ({name(d["idt"])}), GDTR limit {d["gdt"]} ({name(d["gdt"])});'
-            f' DOS prompt: {d["pre_idt"]}/{d["pre_gdt"]}; reset EDX {d["edx"]}, CR0 {d["cr0"]}')
+            f' DOS prompt: {d["pre_idt"]}/{d["pre_gdt"]}; reset EDX {d["edx"]}, CR0 {d["cr0"]}'
+            + (f', A20 {d["a20"]}' if d["a20"] != '0' else ''))
 
 
 def selftest() -> int:
-    t = ('BEGIN:RSTDTR\r\nRSTDTR pre idt=FFFF:00000000 gdt=FFFF:00000000 cr0=00000032 | reset idt=FFFF:00000000 '
-         'gdt=FFFF:00000000 cr0=00000032 edx=00000435 a20=0\r\nEND:RSTDTR\r\n')
+    t = ('BEGIN:RSTDTR\r\nRSTDTR pre idt=FFFF:00000000 gdt=FFFF:00000011 cr0=00000032 | reset idt=03FF:00000022 '
+         'gdt=FFFF:00000033 cr0=00000030 edx=00000435 a20=1\r\nEND:RSTDTR\r\n')
     d = parse(t)
-    ok = d is not None and d['idt'] == 'FFFF' and d['done'] and 'NP2kai' in verdict(d)
+    # every field from its own group (a mis-indexed positional group would swap these)
+    ok = d is not None and d['done'] and (
+        d['pre_idt'], d['pre_gdt'], d['pre_gdt_base'], d['pre_cr0'], d['idt'], d['idt_base'],
+        d['gdt'], d['gdt_base'], d['cr0'], d['edx'], d['a20']) == (
+        'FFFF', 'FFFF', '00000011', '00000032', '03FF', '00000022', 'FFFF', '00000033',
+        '00000030', '00000435', '1')
+    ok &= "manuals' 03FF" in verdict(d) and "NP2kai's FFFF" in verdict(d) and 'A20 1' in verdict(d)
     ok &= parse('nothing') is None
     print('SELFTEST', 'PASS' if ok else 'FAIL')
     return 0 if ok else 1

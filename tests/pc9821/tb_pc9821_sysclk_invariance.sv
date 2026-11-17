@@ -1,10 +1,12 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Every guest-visible TIMEBASE and device-pacing TIME this core owns measures the same WALL-CLOCK rate at two clk_sys frequencies (the base profile's 50 MHz and mediumoc's 100 MHz): each device is instantiated twice in ONE simulation, on its own clock, and read at the same simulated nanosecond, so an equal count is an equal real time rather than an equal cycle count - a model counting clk_sys instead of a real time reads 2x at 100 MHz. THE VIDEO ENABLE IS THE PRODUCTION ONE, not a copy: the real pc9821_system runs at both clocks (its CPU is tests/pc9821/z486_stub.sv) and its exported video_ce - the production PIXEL_CE_INC = round(PIXEL_HZ * 2^24 / SYS_FREQ) accumulator - drives the standalone CRTC probes and is itself counted, so a divider that counted clk_sys fails here. Covered, each with the time it is derived from named in the bench: PIT channel 0 at BOTH programs a guest uses - the BIOS's 100 Hz (divisor 0x6000 at 2.4576 MHz) and the sound drivers' 9990.24 Hz (divisor 0x00F6, the Rusty intro's INT 08h music/PCM tick) - plus channel 1 (the beeper tone, the ITF's own 2000 Hz program: control 0x76, divisor 0x04CD) and channel 2 (the RS-232C baud clock), all three on the 8253's own 2.4576 MHz input clock; the uPD4993A's four guest-writable tick rates (1/64, 1/32, 1/16 s and off) and its 1 Hz divider; the keyboard's typematic delay and interval (NP2kai's 500 ms / 50 ms); the calendar's CDAT serial read, whose bit clock is the GUEST's (both clocks are driven with one wall-clock command schedule and the recovered 48-bit payload is compared); the bus mouse's IRQ13 at its default 120 Hz and at its guest-programmed 60 Hz and 30 Hz forms; the game port's 1.1 us tick and the axis one-shot it times (the right end stop's 1022 ticks); the ARTIC 307200 Hz counter the ITF's delay() spins on (qemu pc98-sys.c:64 TIMESTAMP_HZ); the two I/O-wait floors that are real times and therefore must be paid at both clocks (0x005F = a posted write's 1744 ns bus time, the machine's write period (XE10T-XE10.TXT /IO W8_005F), paid by the access behind it, an 8253 port >= one 2.4576 MHz tick); the GVRAM arbiter's captured per-access holds (478 ns read, 142 ns write, 104 ns GRCG store - the capture's times, converted per profile and asserted back as times); the FDC's 20 us recalibrate delay; the OPNA's 7.9872 MHz chip enable, the SSG's cen/16 sample enable and its guest-programmed Timer A/B IRQ period (144 and 2304 chip enables per count); PCM86's sample strobe at a guest-selected rate of NP2kai's pcm86rate8 table; and the Xe10 I/O class table (the OSD's I/O timing field at Xe10, pc9821_iobus io_timing_xe10), whose per-class times all come from docs/probes/XE10T-XE10.TXT /IO and whose WHOLE I/O instruction - the bus time plus the core CPU's own 8 clk_sys (docs/probes/core/KIT2-CORE-SPEED.TXT) - must be the same REAL TIME at 50 and 100 MHz and within one clk_sys of the capture: the default class (792 ns read / 823 ns write), the EGC named ports 0x006A/0x00A6 (350 read / 318 write), the text GDC 0x0060/0x0062 (414), the graphics GDC 0x00A0/0x00A2 (639), the GRCG tile write 0x007E (318), the 8253 write 0x0077 (823, the default write), the 0x005F read (792) and posted write (1744, the XE10T capture's write period) and the EGC register file 0x04A1 odd / 0x04A0 even (792 / 5990). The iobus's per-access class floor (IO_MIN_HOLD = 4 clk_sys, a deliberate stall reduction against the measured 840 ns machine class) is PRINTED at both clocks and asserted by nothing, because locking in either number would decide a stall-budget question this bench does not own. FAIL-FIRST history: the 0x60 status byte's data-ready bit 0 was a bare `stat_dr <= ~stat_dr` on every clk_sys, so its edge count read 2x at 100 MHz before the fix. The data-ready bit's RATE IS NOT A MACHINE FACT and is not claimed: the machine's 2^21-sample 0x60 histogram (docs/probes/GDC.TXT) measures only its ~50 % duty and no reference gives its period, so the bench asserts the DERIVATION (one toggle per two 21.0526 MHz dots) and the two clocks' agreement. The MPU-PC98II's MIDI-out serialiser is measured here too: its start bit is the same 32 us at both clocks, which is MIDI's own 31250 baud. The 31 kHz mode (0x09A8 bit 0 set) is covered at both clocks too: the production dot enable with its 31 kHz select high drives a CRTC programmed with the BIOS 31 kHz master SYNC block, and its frame and line periods must be the Xe10's measured 70.0669 Hz / 31.460 kHz (docs/probes/CRT31K.TXT, calibrated) within 3 ppm at 50 and 100 MHz alike.
+// Every guest-visible TIMEBASE and device-pacing TIME this core owns measures the same WALL-CLOCK rate at two clk_sys frequencies (50 MHz and mediumoc's 100 MHz, a 2x pair; the base profile's 90 MHz lies between them): each device is instantiated twice in ONE simulation, on its own clock, and read at the same simulated nanosecond, so an equal count is an equal real time rather than an equal cycle count - a model counting clk_sys instead of a real time reads 2x at 100 MHz. THE VIDEO ENABLE IS THE PRODUCTION ONE, not a copy: the real pc9821_system runs at both clocks (its CPU is tests/pc9821/z486_stub.sv) and its exported video_ce - the production PIXEL_CE_INC = round(PIXEL_HZ * 2^24 / SYS_FREQ) accumulator - drives the standalone CRTC probes and is itself counted, so a divider that counted clk_sys fails here. Covered, each with the time it is derived from named in the bench: PIT channel 0 at BOTH programs a guest uses - the BIOS's 100 Hz (divisor 0x6000 at 2.4576 MHz) and the sound drivers' 9990.24 Hz (divisor 0x00F6, the Rusty intro's INT 08h music/PCM tick) - plus channel 1 (the beeper tone, the ITF's own 2000 Hz program: control 0x76, divisor 0x04CD) and channel 2 (the RS-232C baud clock), all three on the 8253's own 2.4576 MHz input clock; the uPD4993A's four guest-writable tick rates (1/64, 1/32, 1/16 s and off) and its 1 Hz divider; the keyboard's typematic delay and interval (NP2kai's 500 ms / 50 ms); the calendar's CDAT serial read, whose bit clock is the GUEST's (both clocks are driven with one wall-clock command schedule and the recovered 48-bit payload is compared); the bus mouse's IRQ13 at its default 120 Hz and at its guest-programmed 60 Hz and 30 Hz forms; the game port's 1.1 us tick and the axis one-shot it times (the right end stop's 1022 ticks); the ARTIC 307200 Hz counter the ITF's delay() spins on (qemu pc98-sys.c:64 TIMESTAMP_HZ); the two I/O-wait floors that are real times and therefore must be paid at both clocks (0x005F = a posted write's 1744 ns bus time, the machine's write period (XE10T-XE10.TXT /IO W8_005F), paid by the access behind it, an 8253 port >= one 2.4576 MHz tick); the GVRAM arbiter's captured per-access holds (478 ns read, 142 ns write, 104 ns GRCG store - the capture's times, converted per profile and asserted back as times); the FDC's 20 us recalibrate delay; the OPNA's 7.9872 MHz chip enable, the SSG's cen/16 sample enable and its guest-programmed Timer A/B IRQ period (144 and 2304 chip enables per count); PCM86's sample strobe at a guest-selected rate of NP2kai's pcm86rate8 table; and the Xe10 I/O class table (the OSD's I/O timing field at Xe10, pc9821_iobus io_timing_xe10), whose per-class times all come from docs/probes/XE10T-XE10.TXT /IO and whose WHOLE I/O instruction - the bus time plus the core CPU's own 8 clk_sys (docs/probes/core/KIT2-CORE-SPEED.TXT) - must be the same REAL TIME at 50 and 100 MHz and within one clk_sys of the capture: the default class (792 ns read / 823 ns write), the EGC named ports 0x006A/0x00A6 (350 read / 318 write), the text GDC 0x0060/0x0062 (414), the graphics GDC 0x00A0/0x00A2 (639), the GRCG tile write 0x007E (318), the 8253 write 0x0077 (823, the default write), the 0x005F read (792) and posted write (1744, the XE10T capture's write period) and the EGC register file 0x04A1 odd / 0x04A0 even (792 / 5990). The iobus's per-access class floor (IO_MIN_HOLD = 4 clk_sys, a deliberate stall reduction against the measured 840 ns machine class) is PRINTED at both clocks and asserted by nothing, because locking in either number would decide a stall-budget question this bench does not own. FAIL-FIRST history: the 0x60 status byte's data-ready bit 0 was a bare `stat_dr <= ~stat_dr` on every clk_sys, so its edge count read 2x at 100 MHz before the fix. The data-ready bit's RATE IS NOT A MACHINE FACT and is not claimed: the machine's 2^21-sample 0x60 histogram (docs/probes/GDC.TXT) measures only its ~50 % duty and no reference gives its period, so the bench asserts the DERIVATION (one toggle per two 21.0526 MHz dots) and the two clocks' agreement. The MPU-PC98II's MIDI-out serialiser is measured here too: its start bit is the same 32 us at both clocks, which is MIDI's own 31250 baud. The 31 kHz mode (0x09A8 bit 0 set) is covered at both clocks too: the production dot enable with its 31 kHz select high drives a CRTC programmed with the BIOS 31 kHz master SYNC block, and its frame and line periods must be the Xe10's measured 70.0669 Hz / 31.460 kHz (docs/probes/CRT31K.TXT, calibrated) within 3 ppm at 50 and 100 MHz alike.
 //
 // Every guest-visible TIMEBASE this core owns measures the SAME WALL-CLOCK RATE at two
-// different clk_sys frequencies (50 MHz, the base profile, and 100 MHz, mediumoc). Each
+// different clk_sys frequencies (50 MHz and 100 MHz, mediumoc's; the base profile's 90 MHz
+// lies between them, and the Xe10 GVRAM and text RAM tables are also run at 90 MHz itself in
+// tb_pc9821_gvram_xe10_store and tb_pc9821_tram_xe10_pace). Each
 // pair of DUTs below runs in the SAME simulation, on its own clock, and is sampled at the
 // SAME simulated nanosecond, so an equal reading is an equal wall-clock rate, not an
 // equal cycle count. A model that counted clk_sys instead of a real time would read
@@ -32,8 +34,8 @@
 //   calendar 1/32 s tick          uPD4993A power-up tick rate (pc9821_calendar.sv reset
 //                                 value tick_rate = 1; NP2kai io/upd4990.c)
 //   calendar 1/64, 1/16 s ticks   the same register's guest-writable rates 0 and 3
-//                                 (pc9821_calendar.sv:150 (tick_rate == 2'd3); tick_rate 2 = off)
-//   1 Hz calendar second          uPD4993A calendar (pc9821_calendar.sv:148 (SYS_CLOCK_HZ))
+//                                 (pc9821_calendar.sv:172 (tick_rate_eff == 2'd3); tick_rate 2 = off)
+//   1 Hz calendar second          uPD4993A calendar (pc9821_calendar.sv:191 (SYS_CLOCK_HZ))
 //   calendar CDAT serial read     uPD4993A serial protocol, BANK7@0x5DA2 (NP2kai
 //                                 io/upd4990.c:24-49,81-90): the bit clock is the
 //                                 GUEST's, so the bench drives one wall-clock
@@ -51,7 +53,7 @@
 //                                 counter the ITF's delay() spins on (iobus 0x5C..0x5F)
 //   0x005F posted write 1744 ns      the firmware's own I/O-wait port: the next access waits (iobus IO_POST_5F)
 //   8253 port >= one PIT tick     the ITF timer self-test floor (iobus IO_PIT_HOLD)
-//   GVRAM holds 478/142/104 ns    the Xe10's own capture (pc9821_gvram_arb.sv:406 (GVRAM_RD_HOLD) and :295-336:
+//   GVRAM holds 478/142/104 ns    the Xe10's own capture (pc9821_gvram_arb.sv:413 (GVRAM_RD_HOLD) and :295-336:
 //                                 GFX2.TXT GRCG_RMW-CTRLGC = 103.9 ns store,
 //                                 GFXB.TXT GVRAM0 WRITE = 142.0 ns, and the
 //                                 PW4RW/PLANE_COPY pair's read half = 478.4 ns)
@@ -59,7 +61,7 @@
 //   OPNA chip enable 7.9872 MHz   the YM2608's own clock (pc9821_opna.sv:97 (CEN_STEP)
 //                                 CEN_STEP; NP2kai's OPNA_CLOCK doubled)
 //   OPNA SSG sample 499.2 kHz     cen/16, the SSG's own update rate
-//                                 (pc9821_opna.sv:1009 (ssg_div); jt49's /16 divider)
+//                                 (pc9821_opna.sv:1089 (ssg_div); jt49's /16 divider)
 //   OPNA Timer A/B                the chip clock divided by the guest's value:
 //                                 144*(1024-NA) and 2304*(256-NB) chip enables
 //                                 (jt12_timers.v header, the YM3438 datasheet
@@ -67,7 +69,7 @@
 //                                 same period in its own quantisation)
 //   PCM86 sample rate             NP2kai sound/pcm86c.c:35 pcm86rate8[] - 44100 Hz
 //                                 down to 4134.375 Hz, each 8x the entry
-//                                 (pc9821_pcm86.sv:154 (`STEP0`); 2^29 * rate step)
+//                                 (pc9821_pcm86.sv:161 (`STEP0`); 2^29 * rate step)
 //   kbd typematic 500 ms / 50 ms  NP2kai sound/keystat.c's repeat defaults
 //                                 (pc9821_kbd.sv:17 (SYS_CLOCK_HZ / 2))
 //   raster line 848 dots          the SYNC block's own geometry: 848 dots at the
@@ -307,7 +309,7 @@ module tb_pc9821_sysclk_invariance;
   cal_probe #(.HZ(CLK100_HZ)) cal100 (.clk(clk100), .reset(reset), .sample(sample),
                                        .ticks(cal_ticks_100), .hz_max(cal_hz_100), .tick_period(cal_tick_100));
   // The icky register's OTHER two rates: tick_rate 0 = 1/64 s, tick_rate 3 = 1/16 s
-  // (pc9821_calendar.sv:150 (tick_rate == 2'd3); 2 = off). Same device, same guest-writable register.
+  // (pc9821_calendar.sv:172 (tick_rate_eff == 2'd3); 2 = off). Same device, same guest-writable register.
   cal_probe #(.HZ(CLK50_HZ),  .TICK_RATE(2'd0)) cal64_50  (.clk(clk50),  .reset(reset), .sample(sample),
                                        .ticks(cal64_ticks_50), .hz_max(), .tick_period(cal64_tick_50));
   cal_probe #(.HZ(CLK100_HZ), .TICK_RATE(2'd0)) cal64_100 (.clk(clk100), .reset(reset), .sample(sample),
@@ -763,7 +765,7 @@ module tb_pc9821_sysclk_invariance;
     note($sformatf("PIT ch2 (RS-232C clock): %0d ticks / 99.5 ms at both clocks (2.4576 MHz / 0x0180 = 6400 Hz)", pit2_edges_50));
 
     // ---- calendar: the OTHER two guest-writable tick rates (1/64 s and 1/16 s) ----
-    // tick_rate is the guest's field at 0x128 (pc9821_calendar.sv:150 (tick_rate == 2'd3)): 0 = 1/64 s,
+    // tick_rate is the guest's field at 0x128 (pc9821_calendar.sv:172 (tick_rate_eff == 2'd3)): 0 = 1/64 s,
     // 1 = 1/32 s, 2 = off, 3 = 1/16 s. Each is a period, so the IRQ count is
     // window / period at BOTH clocks; the register's own clk count (tick_period) doubles
     // with SYS_CLOCK_HZ, which is what makes the TIME invariant.
@@ -859,7 +861,7 @@ module tb_pc9821_sysclk_invariance;
          gp_width_50, gp_width_100, GP_AXIS_NS));
 
     // ---- the GVRAM arbiter's holds: the capture's TIMES, never a cycle count ----
-    // pc9821_gvram_arb.sv:406 (GVRAM_RD_HOLD) converts the Xe10 capture's 478 ns read / 142 ns write /
+    // pc9821_gvram_arb.sv:413 (GVRAM_RD_HOLD) converts the Xe10 capture's 478 ns read / 142 ns write /
     // 104 ns GRCG store from SYS_CLOCK_HZ, so the CONSTANT is a clk count and the TIME it
     // encodes must be the same at both clocks (each rounds to whole cycles, hence one
     // clk_sys of tolerance on the capture's own value). These set the CPU's effective
@@ -971,8 +973,8 @@ module tb_pc9821_sysclk_invariance;
       fail($sformatf("the PRODUCTION video_ce (pc9821_system's pixel_ce) is not clock-invariant: %0d edges at 50 MHz, %0d at 100 MHz over 99.5 ms", ce_edges_50, ce_edges_100));
     if ((ce_edges_50 > 32'(CE_EXPECTED + 200)) || (ce_edges_50 < 32'(CE_EXPECTED - 200)))
       fail($sformatf("the PRODUCTION video_ce produced %0d dot enables over 99.5 ms, not the 21.0526 MHz dot rate (%0d)", ce_edges_50, CE_EXPECTED));
-    // The shipped CRTC is held in reset until cpu_run (pc9821_system.sv:1935 (rst_n_sys =)
-    // !(reset || !cpu_run), and cpu_run = rom_ready), and this bench loads no pack, so the
+    // The shipped CRTC is held in reset until cpu_run (pc9821_system.sv:1999 (rst_n_sys_crtc =)
+    // !(rst_q[R_CRTC] || !cpu_run), and cpu_run = rom_ready), and this bench loads no pack, so the
     // production RASTER runs no lines here - the raster numbers above are the standalone
     // crtc_probe's, driven by the same production enable. The two clocks' agreement is
     // still asserted; the count is printed with its reason.
@@ -1096,7 +1098,7 @@ endmodule
 
 // ------------------------------------------------------------------
 // pc9821_calendar: one guest-writable tick RATE (0 = 1/64 s, 1 = 1/32 s, 2 = off,
-// 3 = 1/16 s; pc9821_calendar.sv:150 (tick_rate == 2'd3)) written through the 0x128 register the guest
+// 3 = 1/16 s; pc9821_calendar.sv:172 (tick_rate_eff == 2'd3)) written through the 0x128 register the guest
 // uses, plus the 1 Hz divider. The tick IRQ is counted and cleared with the 0x128 read
 // the guest's own handler uses, so the count is of INTERRUPTS, not of a level that would
 // stay high forever, and the divider the module ARMED is read back as a clk count - it is
@@ -1140,7 +1142,10 @@ module cal_probe #(parameter integer HZ = 50_000_000,
     @(negedge clk);
     tick_we  = 1'b0;
     repeat (4) @(negedge clk);
-    tick_period = 32'(dut.tick_period);   // the divider the module ARMED, in clk
+    // The period the module ARMED, in clk: its free-running 1/64 s divider (TICK64_N) times
+    // the rate's tap (1, 2 or 4 steps), minus one, the form the checks below compare.
+    tick_period = 32'(dut.TICK64_N) * ((TICK_RATE == 2'd3) ? 32'd4 :
+                                       (TICK_RATE == 2'd1) ? 32'd2 : 32'd1) - 32'd1;
   end
 
   always @(posedge clk) begin
@@ -1484,6 +1489,7 @@ module iobus_probe #(parameter [31:0] HZ = 32'd50_000_000,
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -1702,7 +1708,7 @@ module sys_probe #(parameter integer HZ = 50_000_000) (
     gv_rd_hold = 16'd0; gv_wr_hold = 16'd0; gv_gr_hold = 16'd0;
     wait (!reset);
     repeat (4) @(negedge clk);
-    // The arbiter's captured per-access TIMES, converted per profile (pc9821_gvram_arb.sv:406 (GVRAM_RD_HOLD)):
+    // The arbiter's captured per-access TIMES, converted per profile (pc9821_gvram_arb.sv:413 (GVRAM_RD_HOLD)):
     // 478 ns read, 142 ns write, 104 ns GRCG store. They are a clk count in the module and a
     // TIME here, which is exactly the property this bench checks.
     gv_rd_hold = 16'(dut.memory.u_gvram_arb.GVRAM_RD_HOLD);

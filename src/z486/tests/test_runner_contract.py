@@ -44,6 +44,19 @@ class RunnerContract(unittest.TestCase):
                  patch.object(runner, 'run_simulation', return_value=(True, False, False, 'TEST PASSED')):
                 self.assertFalse(runner.run_test('fixture')[0])
 
+    def test_every_program_runs(self):
+        # The runner discovers programs by their .json; an .asm that no .json
+        # names (directly or through %include) never runs.
+        import json
+        import re
+        programs = Path(__file__).resolve().parent / 'programs'
+        named = {json.loads(p.read_text()).get('asm') for p in programs.glob('*.json')}
+        for src in list(programs.glob('*.asm')) + list(programs.glob('*.inc')):
+            named.update(Path(m).name for m in
+                         re.findall(r'%include\s+"([^"]+)"', src.read_text(errors='replace')))
+        orphans = sorted(p.name for p in programs.glob('*.asm') if p.name not in named)
+        self.assertEqual(orphans, [], 'programs no .json runs')
+
 
 if __name__ == '__main__':
     unittest.main()

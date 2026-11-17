@@ -14,8 +14,9 @@ mutants each named bench kills; `--plan tests/pc9821/mutations.json` re-runs it 
 bench plus one per mutant), and an entry whose `from` text no longer matches is re-pointed, not
 deleted. A bench `tools/bench.py` passes also prints no line opening with `FAIL` or `MISMATCH`.
 
-`tools/check_tests.py` and `tools/check_tool_citations.py` carry visible, shrink-only ledgers: an
-entry that stops being true fails the check, so a ledger can only get shorter.
+`tools/check_tool_citations.py` and `tools/check_doc_citations.py` carry visible, shrink-only
+ledgers: an entry that stops being true fails the check, so a ledger can only get shorter.
+`tools/check_tests.py` tolerates nothing: every bench meets every rule.
 
 ## Bench rules that keep a result independent of the simulator
 
@@ -58,6 +59,8 @@ python3 tools/check_egc_snapshot.py          # the EGC's narrowed accept image =
                                              # image (SAT + induction) (+ --selftest)
 python3 tools/check_tests.py                 # every bench's structure and verdict (+ --selftest)
 python3 tools/bench.py --selftest            # the runner's verdict rules on planted outputs
+python3 tools/gen_bench_sources.py --selftest  # every tb_pc9821_*.sv is a table entry or an
+                                             # integrated tier; one arm per bench per block
 python3 tools/gen_egc_compare_vectors.py --check   # the EGC capture vectors are the generator's output
 python3 tools/gen_gdc_compare_vectors.py --check   # and the GDC conformance clusters
 python3 tools/gen_gdc_draw_vectors.py --check      # and the GDC figure-drawing replay rows
@@ -71,23 +74,29 @@ python3 tools/check_osd_contract.py          # CONF_STR vs pc9821_osd.sv vs pc98
                                              # entry's image formats (MOUNT_EXTS) (+ --selftest)
 python3 tools/check_port_lists.py            # every instantiation against its module's ports, and every
                                              # parameter both sides declare passed in its #() (+ --selftest)
-python3 tools/check_route_pairs.py           # every memory-route pair named in the checks
+python3 tools/check_route_pairs.py           # every memory-route pair named in the checks (+ --selftest)
 python3 tools/check_shared_strobes.py        # every use of a shared strobe is qualified by its select (+ --selftest)
 python3 tools/check_cpu_domain.py            # every gated-CPU pulse input held, every hold back-pressured
                                              # (+ --selftest)
 python3 tools/check_mister_layout.py         # setname / config path / pack name agree
 python3 tools/check_dead_files.py            # every src/ file is named by a build list
-python3 tools/check_iobus_hit_equiv.py      # pc9821_iobus's predecoded hit[] lines == the full port compares (yosys; --old REV)
+python3 tools/check_iobus_hit_equiv.py      # pc9821_iobus's predecoded hit[] lines == the full port compares
+                                             # their names spell (yosys; --history: the cut's record, SKIP 2 without it)
 python3 tools/check_tool_citations.py        # every cited tools/ path exists (+ --selftest)
-python3 tools/check_line_citations.py        # every in-repo file:LINE citation resolves, its quote nearby (+ --selftest)
+python3 tools/check_line_citations.py        # every in-repo file:LINE citation resolves, its quote nearby; unquoted ones capped (+ --selftest)
+python3 tools/check_doc_citations.py         # every cited *.md is tracked; no retired report label is cited (+ --selftest)
 python3 tools/check_z486_patch_diff.py       # src/z486 vs the fork at the vendored commit (+ --selftest;
                                              # exit 2 = SKIP without --upstream/$Z486_UPSTREAM)
+python3 tools/check_ref_copies.py           # each frozen *_ref.sv is its revision's code (+ --selftest;
+                                             # exit 2 = SKIP in a clone without that history)
 python3 tools/check_opna_vendor_diff.py    # src/opna vs the PC88_MiSTer commit LICENSE-SCOPE.md pins (+ --selftest;
                                              # exit 2 = SKIP without --upstream/$OPNA_UPSTREAM)
 python3 tools/check_todo_split.py            # todo/ items, the index, and every `item NN` reference
+python3 tools/check_release_hygiene.py       # no machine name (list in the untracked .build/hygiene-names.txt) or home path in a tracked file; no list = SKIP, exit 2
 python3 tools/pc98_hdd_convert.py --selftest # the HDD-image converter on synthetic SASI/IDE disks, and --new (blank disk)
 python3 tools/cue2pcd.py --selftest          # the CD converter: synthetic CUE/BIN and CloneCD sets, --batch
 python3 tools/fdconv.py --selftest           # the floppy converter: synthetic FDI/Virtual98/NFD r0/r1 images, --batch
+python3 tests/pc9821/test_firmware_tools.py  # build_pack/check_pack/pack_layout on a synthetic machine (no NEC bytes)
 python3 tools/mister/zclick.py --selftest   # the uinput mouse helper's event streams (no device)
 python3 tools/mister/ztype.py --selftest    # every typed character of both layouts through Main_MiSTer's
                                              # set-2 table, translate() and the BIOS table (no device)
@@ -109,6 +118,17 @@ python3 tools/check_fir_acc_bound.py         # the FIR accumulator (ACCW) holds 
 python3 tools/check_powerup_init.py          # no output-port initializer, nor `initial` block on an output port,
                                              # Quartus would ignore or fold (+ --selftest;
                                              # --map-rpt <fit>/output_files/z486_mister.map.rpt checks a fit's ties)
+python3 tools/check_sdc_exceptions.py        # every timing exception in the SDC sources has exactly one row in
+                                             # tools/timing/sdc_exceptions.tsv (pattern, count range, proof) and
+                                             # every row's line exists once (+ --selftest; --fit <sweep or seed>
+                                             # checks each fit's counts, written by tools/timing/census.tcl,
+                                             # and that its clk_sys <-> video crossing audit ran: XENDN
+                                             # markers, or for a fit older than them XEND rows both ways)
+python3 tools/check_static_stage.py          # every free-running stage in the storage blocks is a
+                                             # pc9821_static_stage (or listed with why it is not one), every
+                                             # instance states .W/.DEPTH and a non-constant .chk_en strobe,
+                                             # and sim-only code is fenced one way, `// synthesis
+                                             # translate_off` .. `translate_on` (+ --selftest; --list)
 ```
 
 The yosys proofs above are induction from a reset over the real module text (pasted into a copy)
@@ -131,7 +151,14 @@ Quartus 17.0 synthesized wrong: black screen on hardware, every sim green): `pyt
 synthesizes cache_unit alone and proves its split routing class in the netlist, and
 `python3 tools/vqm_equiv.py regs A.vqm B.vqm --filter <hier> --rpt <A map.rpt> [--each]` proves
 two post-map netlists (`quartus_cdb <rev> --vqm=<file>` after `quartus_map`) compute the same
-next state for every register - run it on a rewrite claimed value-identical before a fit.
+next state for every register - run it on a rewrite claimed value-identical before a fit (a
+filter that matches no common register exits 2, and a register only one netlist has is DIFFERENT
+unless `--allow-missing`).
+A zero-cycle rewrite of the SDRAM controller is proven pin for pin by `python3
+tools/check_sdram_pin_equiv.py --old <rev>` (`--selftest` adds its plants): the working tree's
+`src/memory/sdram.v` beside the one at `<rev>`, from one random stimulus (gathers, single and
+two-word writes, read bursts, row splits, refresh, nce gating, the two-chip module, ADQM 1 and 0,
+90 and 50 MHz), every pin and port output compared on every cycle (about a minute).
 
 Also by hand: the records of past cuts proven against their pre-cut revision. They need the full
 history (absent from a squashed clone) and hold only until the module next changes:
@@ -153,7 +180,7 @@ and `+MSW_KEEP` set the OSD's SETUP items (`+GDC_CLOCK_5MHZ` and
 `+FDD_MODE=<n>` (the Boot order position) the other DIP Switch fields; `+FLOPPY_MODE=<n>` sets the Floppy mode position (0 Auto (1M), the default; 1 1M)
 and reports 0x00BE, 0x500 and 0x55C/0x55D at the end beside the Xe10's captures), `+KBD_MON` logs every 8251 keyboard access and
 the stores to the ITF's boot-key CG cells, and the traps stop at an event: `+TRAP_CSEIP=<cs:eip>`, `+TRAP_LIN=<linear>`, `+TRAP_AFTER=<cycle>`,
-`+TRAP_HITS=<n>`, `+TRAP_WIDE`, `+TRAP_RAMFILE=<path>`, `+PC_SEQ_N=<n>`. `+RESET_EVERY=<n>` (with `+RESETS=<k>`, default 3, and `+RESET_HOLD=<c>`) asserts the machine reset every n cycles, to watch the boot across repeated OSD-style resets, and `+SYSDIP_LOG` logs every port 0x0031, 0x841E-0x8F1E and 0x8F1F access with its CS:EIP and the P31 latch. `+IMG_OVL_OUT=<file>` dumps the `+IMG_RW` overlay at the end of the run, and
+`+TRAP_HITS=<n>`, `+TRAP_WIDE`, `+TRAP_RAMFILE=<path>`, `+PC_SEQ_N=<n>`. `+RESET_EVERY=<n>` (with `+RESETS=<k>`, default 3, and `+RESET_HOLD=<c>`) asserts the machine reset every n cycles, to watch the boot across repeated OSD-style resets, and `+VIDLOG` logs every display-port write (0x60/0x62/0xA0/0xA2/0x68/0x6A/0x09A8), the resets, 0x09A8 bit 0 and every frame whose measurement by the framework's resolution detector (sys/hps_io.sv video_calc) differs from the one before, with that detector's 15-frame report replayed (`VNRES`), and `+SYSDIP_LOG` logs every port 0x0031, 0x841E-0x8F1E and 0x8F1F access with its CS:EIP and the P31 latch. `+IMG_OVL_OUT=<file>` dumps the `+IMG_RW` overlay at the end of the run, and
 `tools/hwprobe/integ/ovl_extract.py` applies it to a copy of the image and copies out the files the
 guest wrote (a probe's capture, for one run on the core in simulation). It runs ~210 k cycles/s,
 so edit the image's CONFIG.SYS to reach the case directly rather than simulating a menu timeout.
@@ -161,14 +188,14 @@ Trust its PC trail and RAM dump over the trap registers, which can lag by a few 
 
 ## Real-controller measurements
 
-The boot golden (`run_boot.sh`, 930528) and the CPU's Dhrystone (242611) both run a fixed-latency
+The boot golden (`run_boot.sh`, 1706091) and the CPU's Dhrystone (242611) both run a fixed-latency
 memory model, so an SDRAM controller change cannot move them. Two runs put the real controller
 (`split_sdram_backend` over `sdram_sync_bridge` over `src/memory/sdram.v`, ADQM=1, FAST_GRADE=0)
 and `tests/pc9821/sdram_chip_model.sv`, with its protocol, -7 AC and tREFI checks, under the same
 programs:
 
 ```
-bash tests/pc9821/run_boot_real.sh           # the boot tier (50 MHz clk_sys): CYCLES used=942534
+bash tests/pc9821/run_boot_real.sh           # the boot tier (50 MHz clk_sys): CYCLES used=1706106
 python3 tools/dhrystone_real.py              # Dhrystone at 90 MHz: 271807 cycles
 ```
 

@@ -1,7 +1,7 @@
 // PC-9821 character generator (CG): the glyph fetch, the JIS row cache, the window and
 // the configuration record.
 //
-// Kept apart from pc9821_gdc_text so the SDRAM glyph burst can be measured apart from the
+// Kept apart from pc9821_crtc (the text raster) so the SDRAM glyph burst can be measured apart from the
 // raster. It owns:
 //   - the CG code/line registers and the 0xA1/0xA3/0xA5/0xA9 port decode;
 //   - the writable user-CG (gaiji) store and the 0xA4000 window's byte decode;
@@ -639,7 +639,7 @@ module pc9821_cg (
   // second write port on the scanout side cost 117,521 nodes and 65,552 registers.
   // ONE SOURCE, ONE WALK: the MACHINE-RESET seed (`sdip_seed_pulse`, one cycle at the reset
   // ASSERTION). The seed is why the walk state is NOT under `!rst_n_sys` below: this module's reset is clamped
-  // for the whole machine-reset window (`rst_n_sys = !(reset || !cpu_run)` in pc9821_system),
+  // for the whole machine-reset window (`rst_n_sys_cg = !(rst_q[R_CG] || !cpu_run)` in pc9821_system),
   // so a reset-held walk could not run AT ALL in the window it exists for - it would have to
   // wait for the release, which is the very instant the CPU starts issuing. Held only by its
   // own `initial` values instead, the walk runs inside the window (all three port-sharing
@@ -977,25 +977,34 @@ module pc9821_cg (
   //                                  cgwindowset's 0x58-0x60 arm)
   // and row 0x09's ODD page with 0xA5 bit 5 clear (cg_lr set) reads 0x00, the port's own answer
   // there (the same :758 `W00O=6A0A`, 16 x 0x00; every 0xA1 of the row), where the ver0.78 arm
-  // had the dummy. The class rules are therefore per ROW where a row was measured: the rest of
-  // each class keeps the answer it had, UNMEASURED - ver0.78 rows 0x0A/0x0B (even page, and the
-  // odd page with the half bit clear: 0x8F), wide rows 0x0D-0x0F (0x8F) and rows 0x59-0x5B and
-  // 0x5D-0x5F (0xFF, row 0x5C's) - todo item 189.
+  // had the dummy. Kit 3 read the remaining rows of both classes (XE10CG3 /CG, every 0xA1 =
+  // 0x00..0x2F, docs/probes/XE10CG3-XE10-CG.TXT), so the class rules are per ROW:
+  //   ver0.78 rows 0x0A, 0x0B  even page 0xFF, odd page with bit 5 clear 0x00, as row 0x09
+  //   wide rows 0x0D-0x0F      even page 0xFF, as row 0x0C
+  //   rows 0x59-0x5B           even page 0xFF, as row 0x5C
+  //   rows 0x5D-0x5F           even page 0x8F, as row 0x58; like row 0x58 their odd page and port
+  //                            reads are unstable (CG-RAM-like), so their block byte is not asserted
+  // for every 0xA1 = 0x01..0x2F (0xA1 = 0x00 is a one-byte code, the ANK arm's 0xFF), e.g.:
+  //   XE10CG3-XE10-CG.TXT:908 `CGX 210A P20=2957 P00=6A0A W20E=6A4B W20O=2957 W00E=6A4B W00O=6A0A`
+  //   XE10CG3-XE10-CG.TXT:956 `CGX 210B P20=6A0A P00=6A0A W20E=6A4B W20O=6A0A W00E=6A4B W00O=6A0A`
+  //   XE10CG3-XE10-CG.TXT:1004 `CGX 210D P20=4F50 P00=8AE2 W20E=6A4B`
+  //   XE10CG3-XE10-CG.TXT:1148 `CGX 2159 P20=17CB P00=A7E0 W20E=6A4B`
+  //   XE10CG3-XE10-CG.TXT:1292 `CGX 215D P20=C780 P00=6868 W20E=A0DD`
+  //   XE10CG3-XE10-CG.TXT:1259 `CGX 005D P20=EBC1 P00=EBC1 W20E=6A4B`
   localparam [7:0] CG_LOW_DUMMY = 8'h8F;
   localparam [7:0] CG_LOW_FF    = 8'hFF;
-  wire       cg_row_09  = (cg_lo7 == 7'h09);
-  // the wide rows whose even page is 0xFF: 0x0C (measured), 0x5C (measured) and the rest of
-  // 0x59-0x5F (unmeasured, row 0x5C's answer kept); 0x58 (measured) and 0x0D-0x0F take 0x8F
-  wire       cg_wide_ff = (cg_lo7 == 7'h0C) || ((cg_lo7 >= 7'h59) && (cg_lo7 < 7'h60));
+  // the wide rows whose even page is 0xFF: 0x0C-0x0F and 0x59-0x5C; 0x58 and 0x5D-0x5F take 0x8F
+  wire       cg_wide_ff = ((cg_lo7 >= 7'h0C) && (cg_lo7 < 7'h10)) ||
+                          ((cg_lo7 >= 7'h59) && (cg_lo7 < 7'h5D));
   reg  [7:0] cg_win_byte_r;
   always @(*) begin
     if (cg_gaiji)          cg_win_byte_r = win_page ? cg_ram_q : CG_LOW_DUMMY;
     // cgwindowset's ONE-BYTE branch (cgrom.c:21-25) is the ANK page for every low byte,
     // 0x09-0x0B included - the port's unmasked ver0.78 class does not exist here.
     else if (!cg_two_byte) cg_win_byte_r = win_page ? cg_ank_win_byte : CG_LOW_FF;
-    else if (cg_ver078)    cg_win_byte_r = !win_page ? (cg_row_09 ? CG_LOW_FF : CG_LOW_DUMMY)
+    else if (cg_ver078)    cg_win_byte_r = !win_page ? CG_LOW_FF
                                          : !cg_lr    ? cg_win_blk_byte
-                                         : (cg_row_09 ? 8'h00 : CG_LOW_DUMMY);
+                                         : 8'h00;
     else if (cg_wide)      cg_win_byte_r = win_page ? cg_win_blk_byte
                                          : (cg_wide_ff ? CG_LOW_FF : CG_LOW_DUMMY);
     else                   cg_win_byte_r = cg_win_blk_byte;
@@ -1210,7 +1219,8 @@ module pc9821_cg (
   // ---------------------------------------------------------------
   // CPU-side port reads. This module answers only its own addresses (0xA1/0xA3/0xA5/0xA9);
   // pc9821_system muxes it with pc9821_crtc's and pc9821_gdc2's, and the arm that reaches
-  // these three ports is the cg_io_dout one -- pc9821_system.sv:2173 "(device_io_addr[7:0] == 8'hA5) || (device_io_addr[7:0] == 8'" -- so the
+  // these three ports is the cg_io_dout arm of pc9821_system's device read mux
+  // (`(device_io_addr[7:0] == 8'hA5) || (device_io_addr[7:0] == 8'hA9)) ? cg_io_dout`), so the
   // bytes below are the bytes a CPU read of 0xA1/0xA3/0xA5 receives.
   //
   // The three register ports DO read back their latches. NP2kai attaches a read handler only

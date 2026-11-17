@@ -141,8 +141,10 @@ def gap_table(xe: Capture, mi: Capture) -> list[tuple]:
     return sorted(((c, *t) for c, t in tally.items()), key=lambda r: (-r[1], r[0]))
 
 
-def check_curd(xe: Capture) -> tuple[int, int, list[str]]:
-    """Model-vs-hardware on the CURD rows, and the CURS encoding's blind spot."""
+def check_curd(xe: Capture) -> tuple[int, list[str], list[str]]:
+    """Model-vs-hardware on the CURD rows, and the CURS encoding's blind spot.
+
+    Returns (rows, model mismatches, blind rows); a mismatch fails the generator."""
     bad_model: list[str] = []
     blind: list[str] = []
     n = 0
@@ -158,7 +160,7 @@ def check_curd(xe: Capture) -> tuple[int, int, list[str]]:
         _, _, b2 = curs_params(ead, dad)
         if (b2 >> 4) != dad:
             blind.append(row["case"])
-    return n, len(blind), blind
+    return n, bad_model, blind
 
 
 def render(clusters, xe_pass, mi_pass, gap, rev, n_curd, blind) -> str:
@@ -194,14 +196,21 @@ def main() -> int:
     rev = sum(1 for rid, row in xe.rows.items()
               if row.get("outcome") != "PASS"
               and mi.rows[rid].get("outcome") == "PASS")
-    n_curd, n_blind, blind = check_curd(xe)
+    n_curd, bad_model, blind = check_curd(xe)
 
     print(f"case rows per side                              : {len(xe.rows)}")
     print(f"with a hardware expectation (Xe10 PASS)         : {xe_pass}")
     print(f"this core PASS                                  : {mi_pass}")
     print(f"gap (Xe10 PASS, this core not PASS)             : {gap}")
     print(f"reverse gap (Xe10 not PASS, this core PASS)     : {rev}")
-    print(f"CURD rows the Xe10 read-back model reproduces   : {n_curd}")
+    print(f"CURD rows the Xe10 read-back model reproduces   : "
+          f"{n_curd - len(bad_model)} of {n_curd}")
+    if bad_model:
+        print(f"FAIL: the CURD read-back model disagrees with the Xe10 on {len(bad_model)} "
+              f"row(s):", file=sys.stderr)
+        for b in bad_model[:5]:
+            print(f"  {b}", file=sys.stderr)
+        return 1
     if blind:
         print(f"  rows the suite's 3-parameter CURS encoding CANNOT carry the DAD: "
               f"{len(blind)} (e.g. {blind[0]}) - see README.md")

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The GDC's SYNC command OWNS the raster: the eight-parameter sync block a guest programs through 0x62/0x60 decides the line length, the active width, every porch and the frame length exactly as NP2kai's gdc_updateclock() derives them (io/gdc.c:370-444, the only reference that derives a raster - qemu-pc98 latches the same bytes and then syncs on a fixed 18 ms), and the machine's power-on block still gives the measured default. The expectations are NP2kai's, computed in the bench from the block bytes by a transcription of gdc_updateclock(), never read out of the DUT; the DUT is measured only through its own sync outputs and raster counters (dots per line, lines per frame, active dots per line, active lines, the dot the hsync pulse starts on, the hsync width, the vline the vsync pulse rises on and its width in lines). Five cases: the default block {10 4e 07 25 07 07 90 65} -> 848x440 total with 640x400 active, front porch 80, hsync 64 and back porch 64 dots (the uPD7220's field map, MAME upd7220.cpp:1243-1246 - NP2kai only sums those fields into the line), VFP 7, an 8-line VSYNC pulse rising on vline 407, VBP 25, 56.42 Hz; defsyncm15 written on a 24 kHz machine -> x = 112 characters = 896 dots and the raw 260-line frame CLAMPED to the machine's 400-line minimum; a hand-built 550-line block (lf 480, vs 10, vfp 20, vbp 40) whose pulse rises on vline 500 at 45.1 Hz; and TXTMODE /D's AW 64 and AW 78 blocks (C/R 0x3E and 0x4C), whose lines run 720 and 832 dots (66.45 Hz / 29.24 kHz and 57.51 Hz / 25.30 kHz) as on the real Xe10 (docs/probes/KIT2-XE10-TXTMODE.TXT:36 `ticks=000120F1` and :27 `ticks=00014DE4` against the default's :9 `ticks=0001544F` = 848 dots), the 24 kHz x floor being the machine's 90, not NP2kai's gdcclk[1] minx 100. The default's pulse width is the block's vs field because the machine's own 2M-sample status histogram measures bit 5 high for 36 385 of 2 097 152 samples = 1.735 % = 8 of 440 lines once its loop's x1.048 duty bias is divided out (the factor its bit 6 carries against the 208/848 horizontal blank), where the '2.8 % = 12 lines' the tree used to carry divided the same count by 1 310 720 instead of the capture's own 2^21. FAIL-FIRST: before the kit-2 change case 4's line is clamped to 800 dots; on the pre-change tree cases 2 and 3 cannot move the raster at all, case 1's pulse is 12 lines wide and case 2's line never leaves 848; and on the tree before 2026-10-15 the default's hsync started at dot 768 (HFP 128) and was 56 dots wide, a 24-dot back porch; and the VSYNC pin moved 128 dots after the HSYNC leading edge (at the first active dot), where the uPD7220 moves it WITH the HSYNC leading edge (MAME upd7220.cpp update_vsync_timer) - every VSYNC-pin edge is now checked to land on an HSYNC-pin leading edge.
+// The GDC's SYNC command OWNS the raster: the eight-parameter sync block a guest programs through 0x62/0x60 decides the line length, the active width, every porch and the frame length exactly as NP2kai's gdc_updateclock() derives them (io/gdc.c:370-444, the only reference that derives a raster - qemu-pc98 latches the same bytes and then syncs on a fixed 18 ms), and the machine's power-on block still gives the measured default. The expectations are NP2kai's, computed in the bench from the block bytes by a transcription of gdc_updateclock(), never read out of the DUT; the DUT is measured only through its own sync outputs and raster counters (dots per line, lines per frame, active dots per line, active lines, the dot the hsync pulse starts on, the hsync width, the vline the vsync pulse rises on and its width in lines, and the hs_out/vs_out PINS' low time per frame). Seven cases: the default block {10 4e 07 25 07 07 90 65} -> 848x440 total with 640x400 active, front porch 80, hsync 64 and back porch 64 dots (the uPD7220's field map, MAME upd7220.cpp:1243-1246 - NP2kai only sums those fields into the line), VFP 7, an 8-line VSYNC pulse rising on vline 407, VBP 25, 56.42 Hz; defsyncm15 written on a 24 kHz machine -> x = 112 characters = 896 dots and the raw 260-line frame CLAMPED to the machine's 400-line minimum; a hand-built 550-line block (lf 480, vs 10, vfp 20, vbp 40) whose pulse rises on vline 500 at 45.1 Hz; and TXTMODE /D's AW 64 and AW 78 blocks (C/R 0x3E and 0x4C), whose lines run 720 and 832 dots (66.45 Hz / 29.24 kHz and 57.51 Hz / 25.30 kHz) as on the real Xe10 (docs/probes/KIT2-XE10-TXTMODE.TXT:36 `ticks=000120F1` and :27 `ticks=00014DE4` against the default's :9 `ticks=0001544F` = 848 dots), the 24 kHz x floor being the machine's 90, not NP2kai's gdcclk[1] minx 100; and the upper clamps of gdcclk[1], a raw x of 120 running 112 characters (896 dots) and a raw y of 600 a 575-line frame. The default's pulse width is the block's vs field because the machine's own 2M-sample status histogram measures bit 5 high for 36 385 of 2 097 152 samples = 1.735 % = 8 of 440 lines once its loop's x1.048 duty bias is divided out (the factor its bit 6 carries against the 208/848 horizontal blank), where the '2.8 % = 12 lines' the tree used to carry divided the same count by 1 310 720 instead of the capture's own 2^21. FAIL-FIRST: before the kit-2 change case 4's line is clamped to 800 dots; on the pre-change tree cases 2 and 3 cannot move the raster at all, case 1's pulse is 12 lines wide and case 2's line never leaves 848; and on the tree before 2026-10-15 the default's hsync started at dot 768 (HFP 128) and was 56 dots wide, a 24-dot back porch; and the VSYNC pin moved 128 dots after the HSYNC leading edge (at the first active dot), where the uPD7220 moves it WITH the HSYNC leading edge (MAME upd7220.cpp update_vsync_timer) - every VSYNC-pin edge is now checked to land on an HSYNC-pin leading edge.
 //
 // The GDC's SYNC command OWNS the raster. The eight-parameter sync block a guest programs
 // through 0x62 (command) / 0x60 (parameters) decides the line length, the active width, every
@@ -20,8 +20,9 @@
 // THE CASES:
 //  1. the DEFAULT, before any SYNC has been written: NP2kai's defsyncm24 (io/gdc.c:42), the
 //     block gdc_biosreset installs on a 24 kHz machine, {10 4e 07 25 07 07 90 65} ->
-//     848x440 total with 640x400 active, a 128-dot front porch, a 56-dot hsync, VFP 7, a
-//     VSYNC pulse 8 lines wide rising on vline 407, VBP 25, i.e. 24.83 kHz and 56.42 Hz.
+//     848x440 total with 640x400 active, an 80-dot front porch, a 64-dot hsync and a 64-dot
+//     back porch (the uPD7220's field map, MAME upd7220.cpp:1243-1246), VFP 7, a VSYNC pulse 8
+//     lines wide rising on vline 407, VBP 25, i.e. 24.83 kHz and 56.42 Hz.
 //     The pulse WIDTH is the block's vs field: the machine's own 2M-sample status histogram
 //     counts bit 5 high in 36 385 of 2 097 152 samples = 1.735 % (docs/probes/GDC.TXT), which
 //     is 8 of 440 lines once its sampling loop's x1.048 duty bias is divided out - the same
@@ -38,6 +39,14 @@
 //     vbp 40 -> y = 550 lines, the pulse rising on vline 500 and 45.1 Hz - so the frame period
 //     follows y = lf + vs + vfp + vbp and not any constant, and the pulse width follows the
 //     block's vs field rather than a fixed value.
+//  4. and 5. TXTMODE /D's AW 64 and AW 78 blocks (C/R 0x3E and 0x4C): 720- and 832-dot lines,
+//     as the real Xe10 runs them (docs/probes/KIT2-XE10-TXTMODE.TXT), the x floor being 90.
+//  6. and 7. the UPPER clamps of gdcclk[1] (io/gdc.c:34, maxx 112 / maxy 575): a block whose
+//     raw x is 120 runs a 112-character (896-dot) line, and one whose raw y is 600 a 575-line
+//     frame; every field of each still fits its clamped frame (case_guard).
+// Every case also measures the two sync PINS, not only the internal in_hsync/in_vsync: the
+// hs_out and vs_out low time per frame must be HSYNC_W dots x VTOTAL lines and VSYNC_W lines x
+// HTOTAL dots, and every VSYNC-pin edge must land on an HSYNC-pin leading edge.
 //
 // FAIL-FIRST: on the pre-change tree (HTOTAL/VTOTAL/VSYNC_W hardcoded 848/440/12) cases 2 and 3
 // cannot move the raster at all, case 1's pulse is 12 lines wide, and case 2's line length never
@@ -225,9 +234,14 @@ module tb_pc9821_gdc_sync_raster;
   // `time_until_pos(next_y, 0)`, update_hsync_timer `next_x = state ? m_hs * horiz_mult : 0`).
   reg        pin_hs_q = 1'b1, pin_vs_q = 1'b1;
   integer    n_pin_vs_edges = 0, n_pin_vs_off = 0;
+  // The pins' LOW time (both are active low: hs_out = ~hsync, vs_out = ~vsync) over the
+  // measured frame, in dots: the width check on the PIN path itself, which in_vsync cannot see.
+  integer    n_pin_hs_low = 0, n_pin_vs_low = 0;
   always @(posedge clk_sys) begin
     pin_hs_q <= hs_out;
     pin_vs_q <= vs_out;
+    if (meas && !hs_out) n_pin_hs_low = n_pin_hs_low + 1;
+    if (meas && !vs_out) n_pin_vs_low = n_pin_vs_low + 1;
     if (meas && (pin_vs_q != vs_out)) begin
       n_pin_vs_edges = n_pin_vs_edges + 1;
       if (!(pin_hs_q && !hs_out)) n_pin_vs_off = n_pin_vs_off + 1;
@@ -312,7 +326,7 @@ module tb_pc9821_gdc_sync_raster;
     begin
       @(negedge clk_sys);
       n_cyc = 0; n_hs = 0; n_vs = 0; n_de = 0; n_aline = 0; n_hsdots = 0; n_pulse = 0; n_irq = 0;
-      n_pin_vs_edges = 0; n_pin_vs_off = 0;
+      n_pin_vs_edges = 0; n_pin_vs_off = 0; n_pin_hs_low = 0; n_pin_vs_low = 0;
       line_had_de = 1'b0;
       meas = 1'b1;
       // EXACTLY one frame of the EXPECTED raster, so every quotient below is a whole number.
@@ -341,7 +355,8 @@ module tb_pc9821_gdc_sync_raster;
       $display("SYNC   rate: %.2f Hz (%.2f kHz line)  @ 21.0526 MHz / %0d dots / %0d lines",
                21.0526e6 / (line_dots * lines_frame), 21.0526e6 / line_dots / 1000.0,
                line_dots, lines_frame);
-      $display("SYNC   armed VSYNC IRQ pulses in one frame: %0d", n_irq);
+      $display("SYNC   armed VSYNC IRQ pulses in one frame: %0d; pin low dots: hs %0d vs %0d",
+               n_irq, n_pin_hs_low, n_pin_vs_low);
 
       if (n_vs == 0) fail("no vertical sync in a frame's worth of dots");
       expect_eq(line_dots,   g_htotal,  "line dots (HTOTAL)");
@@ -351,6 +366,8 @@ module tb_pc9821_gdc_sync_raster;
       expect_eq(hs_start_dot, g_hs_start, "hsync start dot (HACTIVE + HFP)");
       expect_eq(hs_w,        g_hs_d,    "hsync width (HSYNC_W)");
       expect_eq(n_pin_vs_off, 0, "VSYNC-pin edges not on an HSYNC-pin leading edge");
+      expect_eq(n_pin_hs_low, g_hs_d * g_vtotal, "HSYNC pin low dots per frame (HSYNC_W x VTOTAL)");
+      expect_eq(n_pin_vs_low, g_vs_w * g_htotal, "VSYNC pin low dots per frame (VSYNC_W x HTOTAL)");
       if (n_pin_vs_edges < 2) fail("no VSYNC-pin edges measured");
       // The back porch: the hsync's end to the line's end, MAME's m_hbp = (para[4] & 0x3f) + 1 characters.
       expect_eq(line_dots - hs_start_dot - hs_w, g_htotal - g_hact - g_hfp_d - g_hs_d, "hsync end to line end (HBP)");
@@ -422,7 +439,7 @@ module tb_pc9821_gdc_sync_raster;
 
     // ---- case 3: a hand-built 550-line block ----
     // lf 480 (0x1e0), vs 10, vfp 20 (0x14), vbp 40 -> y = 480 + 10 + 20 + 40 = 550 lines, the
-    // pulse rising on vline 500 with the hsync fixed at the default's 128/56. The block words:
+    // pulse rising on vline 500 with the hsync at the default's 80/64. The block words:
     // tmp = hs 7 | vs 10 << 5 | hfp2 9 << 10 = 0x2547 -> {47, 25}; tmp2 = lf 480 | vbp 40 << 10
     // = 0xa1e0 -> {e0, a1}.
     sb[0] = 8'h10; sb[1] = 8'h4e; sb[2] = 8'h47; sb[3] = 8'h25;
@@ -456,6 +473,27 @@ module tb_pc9821_gdc_sync_raster;
     expect_eq(g_htotal, (848 * 'h14DE4 + 'h1544F / 2) / 'h1544F,
               "AW 78 line: the Xe10's 832 dots (KIT2-XE10-TXTMODE.TXT:27 vs :9)");
 
+    // ---- cases 6 and 7: the UPPER clamps, gdcclk[1]'s maxx 112 and maxy 575 (io/gdc.c:34) ----
+    // Case 6: the default block with para[4] & 0x3f = 21 -> hfp = 9 + 21 = 30, raw x = 80 + 7 +
+    // 30 + 3 = 120 characters, clamped to 112 (896 dots); the uPD7220 porch fields stay the
+    // default's (HFP 80, HS 64), so the clamp shortens only the back porch.
+    sb[0] = 8'h10; sb[1] = 8'h4e; sb[2] = 8'h07; sb[3] = 8'h25;
+    sb[4] = 8'h15; sb[5] = 8'h07; sb[6] = 8'h90; sb[7] = 8'h65;
+    run_case("upper x clamp (raw 120)", 1);
+    np2_sync_geometry;
+    expect_eq(g_x_raw, 120, "upper-x block raw x");
+    expect_eq(g_htotal, 896, "upper-x block clamps to 112 characters");
+    // Case 7: lf 512, vs 10, vfp 20, vbp 58 -> raw y = 600 lines, clamped to 575; the pulse rises
+    // on vline 532. tmp = hs 7 | vs 10 << 5 | hfp2 9 << 10 = 0x2547 -> {47, 25}; tmp2 = lf 512
+    // (0x200) | vbp 58 << 10 = 0xEA00 -> {00, EA}.
+    sb[0] = 8'h10; sb[1] = 8'h4e; sb[2] = 8'h47; sb[3] = 8'h25;
+    sb[4] = 8'h07; sb[5] = 8'h14; sb[6] = 8'h00; sb[7] = 8'hEA;
+    run_case("upper y clamp (raw 600)", 1);
+    np2_sync_geometry;
+    expect_eq(g_lf, 512, "upper-y block lf");
+    expect_eq(g_y_raw, 600, "upper-y block raw y");
+    expect_eq(g_y, 575, "upper-y block clamps to 575 lines");
+
     // ==== VERDICT ====
     if (errors == 0) begin
       $display("TB_PC9821_GDC_SYNC_RASTER: PASS");
@@ -465,11 +503,11 @@ module tb_pc9821_gdc_sync_raster;
   end
 
   initial begin
-    // Five cases, each with a few frames of settling plus one measured frame; the longest is
-    // case 3's 550 lines x 848 dots = 466 400 dots, so ~6 M cycles is generous. Written as a
-    // literal because the structure checker accepts a cycle bound only in that form
+    // Seven cases, each with a few frames of settling plus one measured frame; the longest is
+    // case 7's 575 lines x 848 dots = 487 600 dots, so ~11 M cycles in all; 16 M is generous.
+    // Written as a literal because the structure checker accepts a cycle bound only in that form
     // (`repeat ( <number> ) @(posedge ...`).
-    repeat (9_000_000) @(posedge clk_sys);
+    repeat (16_000_000) @(posedge clk_sys);
     $fatal(1, "TB_PC9821_GDC_SYNC_RASTER: TIMEOUT (the raster produced no frame)");
   end
 endmodule

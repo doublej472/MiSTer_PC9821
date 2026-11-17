@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_RASTER_PALETTE: an analogue palette write reaches the raster lines scanned after it, not the next frame: the raster split a game makes (its VSYNC handler writes palette A in the vertical blank, a PIT one-shot writes palette B in the horizontal blank of raster line 105 and palette C in that of line 346, all sixteen entries each time through 0xA8/0xAA/0xAC/0xAE), run on the REAL pc9821_gdc_text, pc9821_gvram line buffer and pc9821_video_mixer for three frames, shows palette A on raster lines 0-104, B on lines 107-345 and C on lines 348-399 at entry 0 and entry 9 in the last frame, as NP2kai draws it (io/gdc.c gdc_setanalogpal logs each write with its frame clock and vram/scrndraw.c rasterdraw applies it from the next line pair) and as MAME does (src/mame/nec/pc9801.cpp pc9801rs_a0_w: update_partial at the write's vpos); the two lines after each write, where the references' line quantisation differs, are not asserted. And an 8-colour DIGITAL palette write reaches the dots after it inside its own line, as the real Xe10 shows it (XE10T /RASTER's DTOGGLE phase, docs/probes/XE10T-XE10-RASTER.TXT:28 `P RASTER DTOGGLE frames=283`, filmed as staggered blue/black dashes about one `out` long), not at the next frame as both references draw it: with 0x6A = 00 and 0xAE written 0x14 at dot 100 and 0x04 at dot 400 of raster line 200 in each of three frames, the last frame's line 200 shows digital entry 0 black at dot 60, blue at dot 300 and black at dot 600.
+// TB_PC9821_RASTER_PALETTE: an analogue palette write reaches the raster lines scanned after it, not the next frame: the raster split a game makes (its VSYNC handler writes palette A in the vertical blank, a PIT one-shot writes palette B in the horizontal blank of raster line 105 and palette C in that of line 346, all sixteen entries each time through 0xA8/0xAA/0xAC/0xAE), run on the REAL pc9821_gdc_text, pc9821_gvram line buffer and pc9821_video_mixer for three frames, shows palette A on raster lines 0-104, B on lines 107-345 and C on lines 348-399 at entry 0 and entry 9 in the last frame, as NP2kai draws it (io/gdc.c gdc_setanalogpal logs each write with its frame clock and vram/scrndraw.c rasterdraw applies it from the next line pair) and as MAME does (src/mame/nec/pc9801.cpp pc9801rs_a0_w: update_partial at the write's vpos); the two lines after each write, where the references' line quantisation differs, are not asserted. An analogue write made INSIDE a line reaches the dots after it in that line, as the real Xe10 shows it (XE10T /RASTER's TOGGLE phase, docs/probes/XE10T-XE10-RASTER.TXT:27 `P RASTER TOGGLE frames=283`, the blue channel toggled mid-line and filmed as dashes): with entry 0 grey (4,4,4), 0xAE written F at dot 100 and 0 at dot 400 of raster line 250 in each of three frames, the last frame's line 250 shows 444444 at dot 60, 4444FF at dot 300 and 444400 at dot 600. And an 8-colour DIGITAL palette write reaches the dots after it inside its own line, as the real Xe10 shows it (XE10T /RASTER's DTOGGLE phase, docs/probes/XE10T-XE10-RASTER.TXT:28 `P RASTER DTOGGLE frames=283`, filmed as staggered blue/black dashes about one `out` long), not at the next frame as both references draw it: with 0x6A = 00 and 0xAE written 0x14 at dot 100 and 0x04 at dot 400 of raster line 200 in each of three frames, the last frame's line 200 shows digital entry 0 black at dot 60, blue at dot 300 and black at dot 600.
 //
 // ---- the bench's own account of where each expectation comes from ----
 // THE SHAPE IS A GAME'S. Lemmings' VSYNC handler (int 0Ah) writes its level palette at the
@@ -180,7 +180,7 @@ module tb_pc9821_raster_palette;
   // analogue table's CPU write port comes from pc9821_gdc_text, exactly as pc9821_system
   // wires it.
   wire [7:0] r_out, g_out, b_out;
-  // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
+  // The PEGC arm's inputs: tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
   reg        mix_pegc_256 = 1'b0;
   reg        mix_pal256_wr_en = 1'b0;
@@ -330,6 +330,19 @@ module tb_pc9821_raster_palette;
     end
   end
 
+  // The analogue mid-line phase's capture (the machine's TOGGLE shape): entry 0 at the same
+  // three dots of raster line ALINE.
+  localparam [9:0] ALINE = 10'd250;
+  reg [23:0] acap [0:2];
+  reg [7:0]  acap_f [0:2];
+  always @(posedge clk) begin
+    if (pixel_ce && pix_h_active && pix_v_active && (u_gdc.u_crtc.vline == ALINE)) begin
+      if (u_gdc.u_crtc.hdot == 10'd60)  begin acap[0] <= {r_out, g_out, b_out}; acap_f[0] <= frame_no; end
+      if (u_gdc.u_crtc.hdot == 10'd300) begin acap[1] <= {r_out, g_out, b_out}; acap_f[1] <= frame_no; end
+      if (u_gdc.u_crtc.hdot == 10'd600) begin acap[2] <= {r_out, g_out, b_out}; acap_f[2] <= frame_no; end
+    end
+  end
+
   integer f, l, bad;
   reg [1:0]  due;
   reg [23:0] want0, want9;
@@ -399,6 +412,47 @@ module tb_pc9821_raster_palette;
     if (bad != 0) begin
       $display("  (%0d of 396 checked raster lines show the wrong palette)", bad);
       errors = errors + bad;
+    end
+
+    // ---- the 16-colour ANALOGUE palette written mid-line, the machine's TOGGLE shape ----
+    // The probe's TOGGLE phase sets entry 0 to grey (4,4,4) and then toggles its blue channel
+    // alone (`out 0xAE`) inside a band of lines; the Xe10 shows dashes of (4,4,F) and (4,4,0)
+    // along each line, each one `out` long (docs/probes/XE10T-XE10-RASTER.TXT:27
+    // `P RASTER TOGGLE frames=283`; tools/hwprobe/xe10t/README.md: on the Xe10 "both palettes
+    // take a write at once"). So with entry 0 grey, B = F written at dot 100 of line ALINE and
+    // B = 0 at dot 400 (grey restored in the horizontal blank), the last frame's line ALINE
+    // shows grey 444444 at dot 60, 4444FF at dot 300 and 444400 at dot 600. A line-latched
+    // analogue palette shows grey at dot 300; a frame-latched one, grey everywhere.
+    write_io(8'hA8, 8'h00);
+    write_io(8'hAA, 8'h04);
+    write_io(8'hAC, 8'h04);
+    write_io(8'hAE, 8'h04);
+    for (f = 0; f < 3; f = f + 1) begin
+      wait_at(ALINE, DW_ON);
+      write_io(8'hAE, 8'h0F);
+      wait_at(ALINE, DW_OFF);
+      write_io(8'hAE, 8'h00);
+      wait_at(ALINE, HBL);
+      write_io(8'hAE, 8'h04);
+    end
+    wait_at(VBL, 10'd0);
+    last_frame = acap_f[2];
+    if ((acap_f[0] !== last_frame) || (acap_f[1] !== last_frame)) begin
+      $display("FAIL analogue: line %0d was not captured whole in the last frame (%0d/%0d/%0d)",
+               ALINE, acap_f[0], acap_f[1], last_frame);
+      errors = errors + 1;
+    end
+    if (acap[0] !== 24'h444444) begin
+      $display("FAIL analogue: line %0d dot 60 (before the B = F write) is %06x, want grey 444444", ALINE, acap[0]);
+      errors = errors + 1;
+    end
+    if (acap[1] !== 24'h4444FF) begin
+      $display("FAIL analogue: line %0d dot 300 (after B = F at dot 100) is %06x, want 4444FF - the Xe10 shows an analogue write inside its line (XE10T-XE10-RASTER.TXT TOGGLE)", ALINE, acap[1]);
+      errors = errors + 1;
+    end
+    if (acap[2] !== 24'h444400) begin
+      $display("FAIL analogue: line %0d dot 600 (after B = 0 at dot 400) is %06x, want 444400", ALINE, acap[2]);
+      errors = errors + 1;
     end
 
     // ---- the 8-colour DIGITAL palette, the machine's DTOGGLE shape ----

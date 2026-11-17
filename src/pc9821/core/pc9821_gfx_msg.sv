@@ -6,13 +6,13 @@
 // here as values; the dispatch makes their owners mutually exclusive, so they are one breakdown and
 // never double count. The LAST THREE live here, because their signals are pc9821_system's: DW is the
 // CPU's DEVICE wait (the I/O subset of pc9821_perf_msg's MW, so MW - DW is the memory-only wait),
-// and FR/IR are event counts (vsync edges and interrupt acknowledges) that turn the cycle counts
-// into a per-frame or per-interrupt cost.
+// and FR/IR are event counts (vsync edges and INTA bus cycles, two per interrupt) that turn the
+// cycle counts into a per-frame or per-interrupt cost.
 
 // THE LAYOUT IS A CONTRACT with tools/decode_telemetry.py and tools/check_telemetry_contract.py:
 // "GFX", then eight 12-byte fields (a SPACE, a 2-char label, '=', 8 hex digits), then ONE LF, 100
-// bytes. Every field carries its leading space and there is no CR anywhere: see on why
-// every record here ends with a bare LF.
+// bytes. Every field carries its leading space and there is no CR anywhere: see
+// pc9821_watchdog_msg's header on why every record here ends with a bare LF.
 
 `default_nettype none
 
@@ -27,7 +27,7 @@ module pc9821_gfx_msg (
     input  wire        cpu_ack,   // z_ready: the target accepted it this cycle
     input  wire        cpu_io,    // z_io: ... and it is an I/O request, not memory
     input  wire        vsync,     // one clk_sys pulse per video frame
-    input  wire        irq,       // one clk_sys pulse per interrupt acknowledge
+    input  wire        irq,       // one clk_sys pulse per INTA bus cycle (two per interrupt)
     input  wire [15:0] wk_skips,  // the JIS row-cache walker's skipped-walk counter
     input  wire [6:0]  idx,       // 0..GFX_MSG_LEN-1, or past the record for NUL
     input  wire        snap,      // one pulse at the report's accept: latch the record's fields
@@ -54,10 +54,10 @@ module pc9821_gfx_msg (
         end
     end
 
-    // THE RECORD'S DIGITS ARE ONE INSTANT. This record is the report's TAIL: the 621-byte
-    // report overflows the 512-entry FIFO behind it, so these bytes are paced at the UART drain
-    // rate (~87 us each) while the four GVRAM path counters free-run and DW/FR/IR/WK keep
-    // counting. Read live, one field's eight hex digits sample eight different times and a carry
+    // THE RECORD'S DIGITS ARE ONE INSTANT. This record is the report's TAIL: the 707-byte
+    // report (pc9821_dbg_record's header) overflows the 512-entry FIFO behind it, so these bytes
+    // are paced at the UART drain rate (~87 us each) while the four GVRAM path counters free-run
+    // and DW/FR/IR/WK keep counting. Read live, one field's eight hex digits sample eight different times and a carry
     // crossing between two of them splices two values into a torn composite. `snap` (the
     // report's accept, pc9821_wdg_trigger's `start`) latches every field once, so the digits read
     // the held snapshot however long the emission waits and a record's fields are mutually
@@ -98,8 +98,9 @@ module pc9821_gfx_msg (
         end
     endfunction
 
-    // Which field and which byte inside it `idx` names. "GFX" is bytes 0..2, then seven 12-byte runs
-    // (3..14, 15..26, 27..38, 39..50, 51..62, 63..74, 75..86), then the LF at 87. `pos` is 7 bits
+    // Which field and which byte inside it `idx` names. "GFX" is bytes 0..2, then eight 12-byte runs
+    // (3..14, 15..26, 27..38, 39..50, 51..62, 63..74, 75..86, 87..98), then the LF at 99
+    // (GFX_MSG_LEN - 1). `pos` is 7 bits
     // because that is what the subtraction produces: narrowing it to 4 would be a truncation the
     // lint must then be told to ignore.
     reg [2:0] fld;

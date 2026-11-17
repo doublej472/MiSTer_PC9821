@@ -268,6 +268,8 @@ module tb_pc9821_watchdog;
     end
   endtask
 
+  integer dr_at;
+
   // ==== CHECKS ====
   initial begin
     fields_a;
@@ -348,6 +350,26 @@ module tb_pc9821_watchdog;
       if (got_a[i] !== golden_byte(i))
         $fatal(1, "a new snapshot did not take the fields: byte %0d is %02x, want %02x",
                i, got_a[i], golden_byte(i));
+
+    // 8. DR, the last access's direction, takes all three values its decoder names
+    //    (tools/decode_telemetry.py: "1 read, 2 write, 0 no access yet"): A is a read (1) and
+    //    B no access (0); a WRITE must read 2, and only the DR digit may move - so a formatter
+    //    that folded the write into the read bit (rd|wr) or dropped the write term fails here.
+    dr_at = -1;
+    for (i = 0; i + 3 < 351; i = i + 1)
+      if (got_a[i] == "D" && got_a[i + 1] == "R" && got_a[i + 2] == "=") dr_at = i + 3;
+    if (dr_at < 0) $fatal(1, "the record carries no DR= field");
+    if (got_a[dr_at] !== "1") $fatal(1, "DR for a read is %02x, not the digit 1", got_a[dr_at]);
+    if (got_b[dr_at] !== "0") $fatal(1, "DR with no access is %02x, not the digit 0", got_b[dr_at]);
+    fields_a;
+    last_io_rd = 1'b0;
+    last_io_wr = 1'b1;
+    capture(1);
+    if (got_b[dr_at] !== "2") $fatal(1, "DR for a write is %02x, not the digit 2", got_b[dr_at]);
+    for (i = 0; i < 351; i = i + 1)
+      if (i != dr_at && got_b[i] !== golden_byte(i))
+        $fatal(1, "a write moved record byte %0d (%02x, want %02x): only the DR digit may change",
+               i, got_b[i], golden_byte(i));
 
     $display("WATCHDOG-RECORD bytes=351 field_bytes=%0d literal_bytes=%0d lf_at=%0d cr=%0d",
              diff_ab, 351 - diff_ab, lf_at, cr_seen);

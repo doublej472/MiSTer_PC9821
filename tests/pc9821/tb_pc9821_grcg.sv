@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GRCG:
-// The GRCG VRAM write path in the shapes the five games issue, driven through pc9821_memory_map into pc9821_gvram so the guest window address is translated rather than assumed: a TDW zero-fill through the B window (master.lib graph_clear), an RMW fill that needs the old value (TH01's clear) and one that does not (all-ones data), the active-low plane mask (TH04's single-plane put), and the low-15-bit address fold that makes a store through ANY of the four plane windows reach all four planes. It also pins that a store with the mode bit clear stays a plain single-plane write, that a GRCG store is exactly four COLUMN writes each enabling all four lanes (no partial-byte-enable write, so no sdram.v read-modify-write), that a masked store writes only the enabled lanes, and that a store outside the aperture never reaches the GVRAM datapath at all.
+// The GRCG VRAM write path in the shapes the five games issue, driven through pc9821_memory_map into pc9821_gvram so the guest window address is translated rather than assumed: a TDW zero-fill through the B window (master.lib graph_clear), an RMW fill that needs the old value (TH01's clear) and one that does not (all-ones data), the active-low plane mask (TH04's single-plane put), and the low-15-bit address fold that makes a store through ANY of the four plane windows reach all four planes. It also pins that a store with the mode bit clear stays a plain single-plane write, that a masked store writes only the enabled lanes, that a page-1 store reaches page 1's four planes and leaves page 0 alone, and that a store outside the aperture is taken by the map (the bench's own wiring keeps it off the GVRAM port, so the subsystem's gate is not under test here).
 module tb_pc9821_grcg;
   reg clk = 0;
   always #5 clk = ~clk;
@@ -190,7 +190,7 @@ module tb_pc9821_grcg;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a GVRAM store never became ready: the datapath stopped answering");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG: FAIL (hang: a GVRAM store never became ready: the datapath stopped answering)");
         end
       end
       @(negedge clk);
@@ -234,7 +234,7 @@ module tb_pc9821_grcg;
           $display("PROBE LOAD HANG addr=%08x cs=%0d bstate=%0d cc_valid=%b cc_ready=%b b_done_r=%b",
                    addr, dut.u_arb.cs, dut.u_arb.gstate, dut.u_arb.cc_valid, dut.u_arb.cc_ready, dut.u_arb.b_done_r);
           fail("a GVRAM read never returned a response");
-          $finish;
+          $fatal(1, "TB_PC9821_GRCG: FAIL (hang: a GVRAM read never returned a response)");
         end
       end
       data = cpu_dout;
@@ -400,9 +400,9 @@ module tb_pc9821_grcg;
                   32'hFCFC_FCFC, 32'hFDFD_FDFD);
 
     // ------------------------------------------------------------------
-    // The active-low plane mask. 0xCE leaves bit 0 set -> only B enabled, which
-    // is TH04's single-plane put; the tile differs from the data so a plain
-    // write cannot pass.
+    // The active-low plane mask (bit CLEAR = plane enabled). 0xCE has only bit 0
+    // clear -> only B enabled, which is TH04's single-plane put; the tile differs
+    // from the data so a plain write cannot pass.
     // ------------------------------------------------------------------
     fill_all(8'h00);
     port_w(8'h7C, 8'h80 | 8'hCE);
@@ -410,7 +410,7 @@ module tb_pc9821_grcg;
     cpu_store(WIN_B + 32'h0600, 32'hFFFF_FFFF, 4'hF);
     expect_planes(WIN_B, 15'h0600, 32'h3C3C_3C3C, 32'h0, 32'h0, 32'h0);
 
-    // 0x8D leaves bit 1 set -> red only.
+    // 0x8D has only bit 1 clear -> red only.
     fill_all(8'h00);
     port_w(8'h7C, 8'h80 | 8'h8D);
     put_tiles(8'h77, 8'h77, 8'h77, 8'h77);

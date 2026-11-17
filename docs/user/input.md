@@ -51,6 +51,9 @@ No PC key gives VF3, VF4, VF5, APP.
 
 VF2 is on F12, which also opens the MiSTer menu.
 
+The two Windows keys send nothing until the running program turns on the keyboard's extended
+keys, as a PC-9801-119 keyboard does; a DOS program that never asks for them does not see them.
+
 ## Mouse
 
 The PC-98 bus mouse, driven by the mouse connected to the MiSTer. Mouse-driven DOS programs use a

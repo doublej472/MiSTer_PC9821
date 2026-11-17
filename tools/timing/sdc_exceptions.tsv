@@ -1,0 +1,85 @@
+# tools/timing/sdc_exceptions.tsv: the registry of every timing exception the build reads.
+# One row per exception, TAB-separated. tools/check_sdc_exceptions.py holds the SDC sources and this
+# file together (every exception line has exactly one row, every row's match occurs exactly once),
+# and, with --fit, the per-fit counts tools/timing/sdc_audit.tcl writes against min..max.
+# Columns: id, source (template = tools/profile/z486_mister.sdc.in, profile_gen = rendered by
+# tools/profile_gen.py, sys_top = sys/sys_top.sdc, hdl = an HDL-embedded SDC), when (always or the
+# build option it depends on), kind (what the pattern counts: registers/keepers/pins/ports/clocks),
+# pattern (for sdcvar_nodup: the SDC collection variable), min, max (the count a fitted netlist must show), measure (from/to: the census times the
+# paths with this exception removed; fall: its falling-edge launches are listed; - : not measured), match (the start of the SDC command line),
+# proof (why the exception is safe, with its citation).
+vid_groups	template	always	clocks	*vpll|vpll_inst|altera_pll_i|*[0].*|divclk	1	1	-	set_clock_groups -asynchronous -group $pc9821_clk_vid	the video PLL against the framework clocks: every crossing is a Gray FIFO pointer or a 2FF level (docs/clock-domains.md V1-V5)
+vid_s2v_max	template	always	clocks	*vpll|vpll_inst|altera_pll_i|*[0].*|divclk	1	1	-	set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid	clk_sys -> clk_vid: the core's Gray FIFO pointer and 2FF levels (docs/clock-domains.md V2-V3) PLUS raw quasi-static framework words (gamma_en, OSD/LFB/HDMI_PR config into vga_osd, videow, vmini..): SOFTWARE-PACED, NOT CYCLE-EXACT. Every endpoint must be on check_sdc_exceptions.py's whitelist (XEND)
+vid_v2s_max	template	always	clocks	*vpll|vpll_inst|altera_pll_i|*[0].*|divclk	1	1	-	set_max_delay -from $pc9821_clk_vid -to $pc9821_clk_sys	clk_vid -> clk_sys: the vsync synchronisers (V5) PLUS raw multi-bit framework words read by the HPS (hps_io video_calc counters, arx/ary, sync_fix): SOFTWARE-PACED, NOT CYCLE-EXACT (the HPS re-polls). Endpoints whitelisted (XEND)
+vid_s2v_hold	template	always	clocks	*vpll|vpll_inst|altera_pll_i|*[0].*|divclk	1	1	-	set_false_path -hold -from $pc9821_clk_sys -to $pc9821_clk_vid	hold of the same crossings; the endpoint whitelist (XEND) keeps a new clk_sys -> clk_vid word from losing its hold check silently
+vid_v2s_hold	template	always	clocks	*vpll|vpll_inst|altera_pll_i|*[0].*|divclk	1	1	-	set_false_path -hold -from $pc9821_clk_vid -to $pc9821_clk_sys	as vid_s2v_hold, for clk_vid -> clk_sys
+sdram_out_fall	profile_gen	sdram_out_ddio	registers	*|sdram:ctrl|*_out*|*ddio_outa[*]~DFF* *|sdram:ctrl|*dq_oe_q[*]	90	90	fall	set_false_path -fall_from $pc9821_clk_sys -to $pc9821_sdram_out	output DDIO with datain_h == datain_l: the falling-edge mux switch selects an equal value (tools/profile_gen.py render_out_cut)
+sdram_dq_lo	profile_gen	sdram_dq_ddio	registers	*|sdram:ctrl|*dq_cap|*ddio_ina[*]~DFFLO	16	16	-	set_false_path -from [get_ports SDRAM_DQ[*]] -to $pc9821_sdram_dq_lo	the input DDIO low halves have no consumer (tools/profile_gen.py render_dq_lo_cut)
+sdram_dq_mc	template	always	registers	*|sdram:ctrl|*dq_cap|*dataout_h[*] *|sdram:ctrl|*dq_r_ff[*]	16	16	-	set_multicycle_path -from [get_ports SDRAM_DQ[*]]	setup-2 shifted single-cycle capture, default hold deliberately (template comment; sdram.v T_RCD+CAS+2)
+status_from	template	always	registers	*hps_io|status[*]	45	90	from	set_false_path -from $pc9821_status_regs	SOFTWARE-PACED, NOT CYCLE-EXACT: the OSD word changes only at HPS command pace (microseconds); a consumer could see a multi-bit field torn for a cycle. Consumers are levels or sampled in reset (reset_req, ram_size_sel, the *_eff latches, the audio level handshake); see docs/clock-domains.md "Quasi-static levels"
+sdramsz_from	template	always	registers	*hps_io|sdram_sz[*]	2	4	from	set_false_path -from $pc9821_sdramsz_regs	SOFTWARE-PACED, NOT CYCLE-EXACT: Main_MiSTer user_io_init sends UIO_SET_MEMSZ (0x31, user_io.h) once and then resets the core (user_io_status_set("[0]", 1)); that is the only sender in user_io.cpp (other Main_MiSTer files not searched). Every consumer is reset after the change
+cdda_sync	template	cdrom_audio	registers	*cdda_inst|clk_d1*	1	2	to	set_false_path -from $pc9821_clk_audio -to $pc9821_cdda_sync1	2FF first stage of the clk_44100 toggle (src/soc/cdda.v); clk_d1 also feeds the agree-compare that gates the tick, so a metastable clk_d1 is filtered by clk_d2 == clk_d1. Redundant with the sys_top.sdc groups
+vs_sync	template	always	registers	vs_d0* vs_d1* vsd vsd~*	3	6	-	set_false_path -from $pc9821_clk_hdmi -to $pc9821_vs_sync1	2FF stages of HDMI_TX_VS (sys/sys_top.v:544-548, 1088-1093); redundant with the sys_top.sdc groups
+hdl_std_sync	hdl	always	registers	*altera_std_synchronizer:*|din_s1	2	2	-	-	HDL-embedded SDC of altera_std_synchronizer (pll_cfg_hdmi): the first stage of a depth-3 synchroniser of a 1-bit PLL locked
+mc_crtc_setup	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_crtc_src	59	73	-	set_multicycle_path -from $pc9821_mc_crtc_src -to $pc9821_mc_crtc_dst -setup	pixel_ce: SYNC roots loaded only on pixel_ce && frame_end -> text-fetch registers loaded only on pixel_ce; pulses >= floor(DEN/NUM31) apart (template comment, pc9821_crtc.sv:561/1833/1613); counts the sources, retimed _OTERM/_NEW_REG registers removed. 73 when synthesis keeps all SYNC roots (sdc-68d9f886), 59 when it retimes s_lc80_r and part of s_va_r/s_lc40_r into _OTERM chains (sdc-32503923); the count is fixed per build, the same on all seeds
+mc_crtc_hold	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_crtc_dst	92	92	-	set_multicycle_path -from $pc9821_mc_crtc_src -to $pc9821_mc_crtc_dst -hold	hold N-1 of the same multicycle; counts the destinations
+mc_jt12_setup	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_jt12_src	5	5	-	set_multicycle_path -from $pc9821_mc_jt12_src -to $pc9821_mc_jt12_dst -setup	OPNA cen: slot counter loaded only on clk_en, never cleared -> pg stage II and accumulators loaded only on cen-subset enables; cen >= floor(2^32/CEN_STEP) apart (jt12_reg.v:199-201, jt12_pg.v:66); counts the sources, retimed _OTERM/_NEW_REG registers removed
+mc_jt12_hold	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_jt12_dst	68	68	-	set_multicycle_path -from $pc9821_mc_jt12_src -to $pc9821_mc_jt12_dst -hold	hold N-1 of the same multicycle; counts the destinations
+mc_hpsio_setup	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_hpsio_src	27	27	-	set_multicycle_path -from $pc9821_mc_hpsio_src -to $pc9821_mc_hpsio_dst -setup	io_strobe: cmd/byte_cnt change only on a strobe or the ~io_enable clear (sys/hps_io.sv:330/339/342/561); status (:500-507) and img_size (:495) load only on a later strobe. SOFTWARE-PACED at the clear: exact only if the HPS never raises io_enable together with a strobe right after a one-cycle io_enable dip (owner-accepted 2026-11-12); counts the sources, retimed registers removed
+mc_hpsio_hold	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_hpsio_dst	109	109	-	set_multicycle_path -from $pc9821_mc_hpsio_src -to $pc9821_mc_hpsio_dst -hold	hold N-1 of the same multicycle; counts the destinations (status 45 + img_size 64)
+mc_rhythm_setup	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_rhythm_src	27	27	-	set_multicycle_path -from $pc9821_mc_rhythm_src -to $pc9821_mc_rhythm_dst -setup	io_strobe: ioctl_addr changes only on a strobe (sys/hps_io.sv:702/706/717); the loader captures with we=1 only two cycles after (wr at :722, ioctl_wr <= wr at :662, pc9821_rhythm_loader.sv:47-53). Exact from the RTL; counts the sources, retimed registers removed
+mc_rhythm_hold	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_rhythm_dst	28	28	-	set_multicycle_path -from $pc9821_mc_rhythm_src -to $pc9821_mc_rhythm_dst -hold	hold N-1 of the same multicycle; counts the destinations
+mc_sysio_setup	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_sysio_src	8	8	-	set_multicycle_path -from $pc9821_mc_sysio_src -to $pc9821_mc_sysio_dst -setup	io_strobe: sys_top cnt changes only on a strobe (sys/sys_top.v:384/413/445, no clear on ~io_uio); every indexed register loads only in the same else if(io_strobe) arm; strobes >= 2 apart (:256). Exact from the RTL; counts the sources, retimed registers removed
+mc_sysio_hold	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_sysio_dst	297	297	-	set_multicycle_path -from $pc9821_mc_sysio_src -to $pc9821_mc_sysio_dst -hold	hold N-1 of the same multicycle; counts the destinations
+mc_dmaaddr_setup	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_dmaaddr_src	31	31	-	set_multicycle_path -from $pc9821_mc_dmaaddr_src -to $pc9821_mc_dmaaddr_dst -setup	the DMA byte's address snapshot (owner 2026-11-13: "yes, approve 5a." / "yes, go with option 1"; T89): pc9821_dmac ld_addr is written only at S_IDLE's accept or in S_SEL, and the subsystem's DMA load registers load only on dma_load, two cycles after either write (pc9821_dmac.sv THE ADDRESS SNAPSHOT; its SIM-ONLY check asserts it at every load)
+mc_dmaaddr_hold	profile_gen	cen_n2	sdcvar_nodup	pc9821_mc_dmaaddr_dst	53	53	-	set_multicycle_path -from $pc9821_mc_dmaaddr_src -to $pc9821_mc_dmaaddr_dst -hold	hold N-1 of the same multicycle; counts the destinations (dma_be_addr, dma_cls, dma_gv_plane, dma_snoop_q)
+sys_groups	sys_top	always	clocks	*|pll|pll_inst|altera_pll_i|*[*].*|divclk	2	2	-	set_clock_groups -exclusive	the framework clock groups (frozen)
+sys_key	sys_top	always	ports	KEY*	1	8	-	set_false_path -from [get_ports {KEY*}]	board pins, asynchronous (frozen)
+sys_btn	sys_top	always	ports	BTN_*	1	8	-	set_false_path -from [get_ports {BTN_*}]	board pins (frozen)
+sys_led	sys_top	always	ports	LED_*	1	8	-	set_false_path -to   [get_ports {LED_*}]	board pins (frozen)
+sys_vga	sys_top	always	ports	VGA_*	1	64	-	set_false_path -to   [get_ports {VGA_*}]	analog video pins (frozen)
+sys_vgaen	sys_top	always	ports	VGA_EN	1	1	-	set_false_path -from [get_ports {VGA_EN}]	board pin (frozen)
+sys_spdif	sys_top	always	ports	AUDIO_SPDIF	1	1	-	set_false_path -to   [get_ports {AUDIO_SPDIF}]	audio pin (frozen)
+sys_audl	sys_top	always	ports	AUDIO_L	1	1	-	set_false_path -to   [get_ports {AUDIO_L}]	audio pin (frozen)
+sys_audr	sys_top	always	ports	AUDIO_R	1	1	-	set_false_path -to   [get_ports {AUDIO_R}]	audio pin (frozen)
+sys_sw	sys_top	always	ports	SW[*]	4	4	-	set_false_path -from {get_ports {SW[*]}}	upstream brace bug: the filter is the strings "get_ports" and "SW[*]" (frozen)
+sys_cfg_to	sys_top	always	keepers	cfg[*]	8	8	to	set_false_path -to   {cfg[*]}	UNPROVEN upstream: framework config word written from io_din on io_strobe; the -to cut hides the strobe path (the same flaw as the core's former status -to cut)
+sys_cfg_from	sys_top	always	keepers	cfg[*]	8	8	from	set_false_path -from {cfg[*]}	OVER-BROAD upstream: also cuts cfg[10] (direct_video) into the core's HDMI_WIDTH/HDMI_HEIGHT consumers (video_freak); software-paced
+sys_vset	sys_top	always	keepers	VSET[*]	12	24	from	set_false_path -from {VSET[*]}	framework (frozen) Range 12..24: VSET is 12 bits, and the fitter duplicates some of them per build (15 on one seed of the reset-tree sweep, 17 on seed 4 of the xe10-table sweep xt-3409ab24, 19 on seed 6 of the path-fixes sweep pf4-d0966ade); 24 is every bit duplicated once, so a count above it is no longer a duplication.
+sys_calc	sys_top	always	keepers	wcalc[*] hcalc[*]	24	24	to	set_false_path -to   {wcalc[*] hcalc[*]}	framework (frozen)
+sys_hdmiwh	sys_top	always	keepers	hdmi_width[*] hdmi_height[*]	24	24	to	set_false_path -to   {hdmi_width[*] hdmi_height[*]}	framework (frozen)
+sys_deb	sys_top	always	keepers	deb_* btn_en btn_up	18	18	to	set_false_path -to   {deb_* btn_en btn_up}	button debounce (frozen)
+sys_osd_mc_s	sys_top	always	keepers	*_osd|osd_vcnt*	44	48	-	set_multicycle_path -to {*_osd|osd_vcnt*} -setup 2	framework OSD counter, setup 2 hold 1 (frozen); OVER-BROAD upstream: also relaxes de_in/deD/ce_pix, valid only if ce_pix is >= 2 cycles apart
+sys_osd_mc_h	sys_top	always	keepers	*_osd|osd_vcnt*	44	48	-	set_multicycle_path -to {*_osd|osd_vcnt*} -hold 1	its hold 1 = setup - 1, correct (frozen)
+sys_osd_vcnt	sys_top	always	keepers	*_osd|v_cnt*	54	60	to	set_false_path -to   {*_osd|v_cnt*}	OVER-BROAD upstream: cuts v_cnt itself, not only its staging copies (frozen)
+sys_osd_vos_t	sys_top	always	keepers	*_osd|v_osd_start*	294	320	to	set_false_path -to   {*_osd|v_osd_start*}	OVER-BROAD upstream: cuts v_osd_start itself, not only its staging copies (frozen)
+sys_osd_vin_t	sys_top	always	keepers	*_osd|v_info_start*	70	80	to	set_false_path -to   {*_osd|v_info_start*}	framework OSD (frozen)
+sys_osd_hos_t	sys_top	always	keepers	*_osd|h_osd_start*	44	48	to	set_false_path -to   {*_osd|h_osd_start*}	OVER-BROAD upstream: also cuts the clk_video sources of h_osd_start (frozen)
+sys_osd_vos_f	sys_top	always	keepers	*_osd|v_osd_start*	294	320	from	set_false_path -from {*_osd|v_osd_start*}	framework OSD (frozen)
+sys_osd_vin_f	sys_top	always	keepers	*_osd|v_info_start*	70	80	from	set_false_path -from {*_osd|v_info_start*}	framework OSD (frozen)
+sys_osd_hos_f	sys_top	always	keepers	*_osd|h_osd_start*	44	48	from	set_false_path -from {*_osd|h_osd_start*}	framework OSD (frozen)
+sys_osd_rot	sys_top	always	keepers	*_osd|rot*	4	6	from	set_false_path -from {*_osd|rot*}	framework OSD (frozen)
+sys_osd_dspw	sys_top	always	keepers	*_osd|dsp_width*	44	48	from	set_false_path -from {*_osd|dsp_width*}	framework OSD (frozen)
+sys_osd_half	sys_top	always	keepers	*_osd|half	2	3	to	set_false_path -to   {*_osd|half}	framework OSD (frozen)
+sys_vtim_t	sys_top	always	keepers	WIDTH[*] HFP[*] HS[*] HBP[*] HEIGHT[*] VFP[*] VS[*] VBP[*]	98	100	to	set_false_path -to   {WIDTH[*] HFP[*]	UNSAFE upstream: WIDTH..VBP are written from io_din on io_strobe; the -to cut hides the strobe path, so a late strobe at some bits loads the next word (the core's former status -to flaw)
+sys_vtim_f	sys_top	always	keepers	WIDTH[*] HFP[*] HS[*] HBP[*] HEIGHT[*] VFP[*] VS[*] VBP[*]	98	100	from	set_false_path -from {WIDTH[*] HFP[*]	quasi-static video timing (frozen)
+sys_fb_t	sys_top	always	keepers	FB_BASE[*] FB_WIDTH[*] FB_HEIGHT[*] LFB_HMIN[*] LFB_HMAX[*] LFB_VMIN[*] LFB_VMAX[*]	104	108	to	set_false_path -to   {FB_BASE[*]	OVER-BROAD upstream: the same strobe-write -to cut as vtim_t; unused here (LFB_EN stays 0)
+sys_fb_f	sys_top	always	keepers	FB_BASE[*] FB_WIDTH[*] FB_HEIGHT[*] LFB_HMIN[*] LFB_HMAX[*] LFB_VMIN[*] LFB_VMAX[*]	104	108	from	set_false_path -from {FB_BASE[*]	framebuffer config (frozen)
+sys_vol_t	sys_top	always	keepers	vol_att[*] scaler_flt[*] led_overtake[*] led_state[*]	24	26	to	set_false_path -to   {vol_att[*]	UNSAFE upstream: vol_att/scaler_flt/led_* are strobe writes; the -to cut hides the strobe path
+sys_vol_f	sys_top	always	keepers	vol_att[*] scaler_flt[*] led_overtake[*] led_state[*]	24	26	from	set_false_path -from {vol_att[*]	framework config (frozen)
+sys_aflt	sys_top	always	keepers	aflt_* acx* acy* areset* arc*	200	230	from	set_false_path -from {aflt_* acx*	audio filter / aspect config (frozen)
+sys_arxy	sys_top	always	keepers	arx* ary*	25	26	from	set_false_path -from {arx* ary*}	aspect (frozen)
+sys_vsline	sys_top	always	keepers	vs_line*	12	13	from	set_false_path -from {vs_line*}	framework (frozen)
+sys_cvbs	sys_top	always	keepers	ColorBurst_Range* PhaseInc* pal_en cvbs yc_en	40	44	from	set_false_path -from {ColorBurst_Range*	YC encoder config; 4 of its 5 patterns match nothing with MISTER_DISABLE_YC (frozen)
+sys_ascal1	sys_top	always	keepers	ascal|o_ihsize*	40	48	from	set_false_path -from {ascal|o_ihsize*}	OVER-BROAD upstream: o_ihsize* also matches o_ihsizem/o_ihsize_temp*, which have single-cycle uses (frozen)
+sys_ascal2	sys_top	always	keepers	ascal|o_ivsize*	12	14	from	set_false_path -from {ascal|o_ivsize*}	ascal config (frozen)
+sys_ascal3	sys_top	always	keepers	ascal|o_format*	5	6	from	set_false_path -from {ascal|o_format*}	ascal config (frozen)
+sys_ascal4	sys_top	always	keepers	ascal|o_hdown	1	2	from	set_false_path -from {ascal|o_hdown}	ascal config (frozen)
+sys_ascal5	sys_top	always	keepers	ascal|o_vdown	1	2	from	set_false_path -from {ascal|o_vdown}	ascal config (frozen)
+sys_ascal6	sys_top	always	keepers	ascal|o_hmin* ascal|o_hmax* ascal|o_vmin* ascal|o_vmax* ascal|o_vrrmax* ascal|o_vrr	60	64	from	set_false_path -from {ascal|o_hmin*	ascal config (frozen)
+sys_ascal7	sys_top	always	keepers	ascal|o_hdisp* ascal|o_vdisp*	24	26	from	set_false_path -from {ascal|o_hdisp*	ascal config (frozen)
+sys_ascal8	sys_top	always	keepers	ascal|o_htotal* ascal|o_vtotal*	24	26	from	set_false_path -from {ascal|o_htotal*	ascal config (frozen)
+sys_ascal9	sys_top	always	keepers	ascal|o_hsstart* ascal|o_vsstart* ascal|o_hsend* ascal|o_vsend*	48	52	from	set_false_path -from {ascal|o_hsstart*	ascal config (frozen)
+sys_ascal10	sys_top	always	keepers	ascal|o_hsize* ascal|o_vsize*	24	26	from	set_false_path -from {ascal|o_hsize*	ascal config (frozen)
+sys_mcp	sys_top	always	keepers	mcp23009|flg_*	1	8	from	set_false_path -from {mcp23009|flg_*}	I2C expander flags (frozen)
+sys_f2h	sys_top	always	pins	sysmem|fpga_interfaces|clocks_resets|f2h*	1	4	-	set_false_path -to   {sysmem|fpga_interfaces|clocks_resets|f2h*}	HPS reset request pin (frozen)

@@ -11,7 +11,8 @@ text file has to travel inside the image. A PCD is a 2352-byte header followed b
                  12  lead-out LBA (u32 LE)
                  16  4 bytes per entry (tracks, then the lead-out): u32 LE =
                        control (0x14 data / 0x10 audio) | LBA << 8 (24 bits)
-                       | 0x80000000 for a MODE2 track
+                       | 0x80000000 if the track's sectors hold their user data at +24
+                         (the Mode 2 form 1 layout; never set by this tool: MODE 2 below)
                 512  per entry: the LBA, u32 big-endian      (READ TOC, LBA form)
                1024  per entry: 00 M S F of LBA + 150         (READ TOC, MSF form)
                1536  per entry: the same M S F in BCD         (NEC drivers' BCD form)
@@ -21,6 +22,22 @@ This is the layout of the Zet98 core's converter (Zet98_486_MiSTer's pc98_cd_ima
 read as a FORMAT DESCRIPTION only - none of its code is used here), so a PCD from either tool
 mounts in either core. src/pc9821/storage/pc9821_atapi.sv reads the header fields above and
 serves a data sector's MODE1 user data from raw offset +16.
+
+MODE 2 TRACKS ARE STORED AS MODE 1 SECTORS. The drive reads every PCD data sector's user data at
++16 and ignores the 0x80000000 flag (pc9821_atapi.sv's e_off: `(e_kind == EK_DATA) ? 32'd2368`,
+2352 + 16, for every PCD sector). The Zet98 description defines the flag as "bit 23 = MODE2,
+user data at +24" (of the entry's LBA field), and its core takes track 1's for the whole disc
+(pc98_atapi.sv: `19: hdr_mode2 <= sd_buff_dout[7];`). So a Mode 2 sector is rewrapped as a
+Mode 1 sector holding the 2048 bytes a READ(10) of it returns (its user data after the 8-byte
+subheader: offset 24 of a raw MODE2/2352 sector, 8 of a MODE2/2336 one), with the flag clear,
+and the PCD reads the same in both cores. A MODE2/2048 track is wrapped the same way. The TOC the guest reads (control 0x14,
+the LBAs) is unchanged: it does not carry the sector mode. What is lost is only what the drive
+cannot serve: the subheader and a form 2 sector's last 276 bytes (no READ CD).
+A FORM 2 sector (submode bit 5; 2324 bytes of user data, e.g. video, or the few run-out
+sectors at the end of many XA data tracks) gets the first 2048 of them, the same bytes the
+core's raw .bin reader (user data at +24 for a Mode 2 image) serves for it; the conversion
+reports how many there were. A sector of a MODE2/2352 track that is not a Mode 2 sector (no
+sync, e.g. an empty pregap, or mode byte 0 or 1) is copied raw, as before.
 
 WHAT IS NEW HERE: MIXED SECTOR SIZES IN ONE BIN, AND PREGAP. A CUE may describe one BIN whose
 tracks have different sector sizes - e.g. track 01 MODE1/2048 (cooked) followed by AUDIO tracks
@@ -54,9 +71,14 @@ INDEX 0 (else INDEX 1; track 1 from LBA 0) to the next track's start. The disc e
 a guest's READ TOC sees on the real disc, so where a track has an entry its PLBA is the PCD's
 TOC address (a stronger source than NP2kai's INDEX 1, which it uses only without one; a
 difference is reported). A data/audio disagreement between the two, or a lead-out that is not
-the image's end, is refused. MODE=2 is a MODE2 track (the PCD's MODE2 flag). Refused: more than one session (the drive has a
+the image's end, is refused. MODE=2 is a MODE2/2352 track (MODE 2 above). Refused: more than one session (the drive has a
 one-session TOC) and DataTracksScrambled=1. The .sub (96 subchannel bytes per sector) is not
 read: the drive serves no subchannel.
+
+TRACKS ARE NUMBERED 01..N. The drive's READ TOC reports first track 1 and finds a track by its
+number counted from 1 (as NP2kai's atapi_cmd_readtoc does), so a CUE or CCD whose first track is
+not TRACK 01, or whose numbers skip, is refused with one line naming the track (exit 1, nothing
+written) rather than converted into a disc whose TOC disagrees with its tracks.
 
 Usage:
   tools/cue2pcd.py GAME.cue [GAME.pcd] [--ecc] [--force]
@@ -137,6 +159,7 @@ class Disc:
     tracks: list[Track] = field(default_factory=list)
     leadout: int = 0
     notes: list[str] = field(default_factory=list)
+    form2: int = 0             # Mode 2 form 2 sectors met by sectors() (see MODE 2 above)
 
 
 def resolve(base: str, name: str) -> str:
@@ -148,55 +171,107 @@ def resolve(base: str, name: str) -> str:
     return os.path.join(base, folded[0]) if len(folded) == 1 else path
 
 
+def read_sheet(path: str) -> list[str]:
+    """A CUE or CCD's lines: UTF-8 (a leading BOM dropped), else cp932, else latin-1.
+
+    Sheets are written by many tools: modern ones save UTF-8, often with a BOM (which, read
+    as latin-1, glued three bytes to the first keyword and failed it as an unrecognised
+    line, and turned a non-ASCII FILE name into one that does not exist). PC-98 tools write
+    Shift-JIS (cp932), which is not valid UTF-8; decoding it as cp932 gives the FILE name
+    its real characters, so it resolves against a file stored under that name. A sheet that
+    is neither (a legacy Western 8-bit one) reads as latin-1, byte for byte as before.
+    Many latin-1 sheets are ALSO valid cp932 (an accented byte followed by an ASCII letter,
+    as in "Pok\xe9mon", reads as one cp932 pair): when the cp932 reading names a FILE that
+    does not exist and the latin-1 reading names files that all do, the latin-1 one is used.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    try:
+        return data.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        pass
+    try:
+        lines = data.decode("cp932").splitlines()
+    except UnicodeDecodeError:
+        return data.decode("latin-1").splitlines()
+    latin = data.decode("latin-1").splitlines()
+    if not sheet_files_exist(path, lines) and sheet_files_exist(path, latin):
+        return latin
+    return lines
+
+
+def sheet_files_exist(path: str, lines: list[str]) -> bool:
+    """Every FILE a CUE's lines name resolves to a file next to the sheet (resolve's rules)."""
+    base = os.path.dirname(os.path.abspath(path))
+    for raw in lines:
+        m = re.match(r'\s*FILE\s+(?:"([^"]+)"|(\S+))\s+\S+\s*$', raw, re.I)
+        if m and not os.path.exists(resolve(base, m.group(1) or m.group(2))):
+            return False
+    return True
+
+
+def check_numbering(tracks, what: str) -> None:
+    """Tracks must be numbered 1..N in order. The drive's READ TOC reports first track 1 and finds a
+    track by its number counted from 1 (as NP2kai's atapi_cmd_readtoc does), so a disc whose first
+    track is TRACK 02 would have a TOC that disagrees with its tracks: refused, not converted."""
+    if tracks and tracks[0].number != 1:
+        raise ValueError(f"the first track is TRACK {tracks[0].number:02d}, not TRACK 01: the drive's "
+                         f"READ TOC numbers tracks from 1 (as NP2kai does), so this {what} cannot be "
+                         f"converted as it is; renumber its tracks from 01")
+    for a, b in zip(tracks, tracks[1:]):
+        if b.number != a.number + 1:
+            raise ValueError(f"track {b.number} does not follow track {a.number}: tracks must be "
+                             f"numbered 1..N in order")
+
+
 def parse_cue(path: str) -> Disc:
     base = os.path.dirname(os.path.abspath(path))
     disc = Disc()
     cur_file, big = None, False
-    with open(path, encoding="latin-1") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line or line.upper().startswith(("REM", "CATALOG", "TITLE", "PERFORMER",
-                                                    "SONGWRITER", "ISRC", "FLAGS", "CDTEXTFILE")):
-                continue
-            m = re.match(r'FILE\s+(?:"([^"]+)"|(\S+))\s+(\S+)$', line, re.I)
-            if m:
-                kind = m.group(3).upper()
-                if kind not in ("BINARY", "MOTOROLA"):
-                    raise ValueError(f"FILE type {kind} is not supported (BINARY / MOTOROLA only)")
-                cur_file = resolve(base, m.group(1) or m.group(2))
-                big = kind == "MOTOROLA"
-                continue
-            m = re.match(r"TRACK\s+(\d+)\s+(\S+)$", line, re.I)
-            if m:
-                if cur_file is None:
-                    raise ValueError("TRACK before any FILE")
-                mode = m.group(2).upper()
-                if mode not in SIZES:
-                    raise ValueError(f"track mode {mode} is not supported")
-                disc.tracks.append(Track(int(m.group(1)), mode, cur_file, big))
-                continue
-            m = re.match(r"INDEX\s+(\d+)\s+(\S+)$", line, re.I)
-            if m:
-                if not disc.tracks:
-                    raise ValueError("INDEX before any TRACK")
-                n, t = int(m.group(1)), msf_frames(m.group(2))
-                if n == 0:
-                    disc.tracks[-1].index0 = t
-                elif n == 1:
-                    disc.tracks[-1].index1 = t
-                continue   # INDEX 02+ are sub-indices inside the track: nothing to lay out
-            m = re.match(r"(PREGAP|POSTGAP)\s+(\S+)$", line, re.I)
-            if m:
-                if not disc.tracks:
-                    raise ValueError(f"{m.group(1)} before any TRACK")
-                setattr(disc.tracks[-1], m.group(1).lower(), msf_frames(m.group(2)))
-                continue
-            raise ValueError(f"unrecognised CUE line: {line!r}")
+    for raw in read_sheet(path):
+        line = raw.strip()
+        if not line or line.upper().startswith(("REM", "CATALOG", "TITLE", "PERFORMER",
+                                                "SONGWRITER", "ISRC", "FLAGS", "CDTEXTFILE")):
+            continue
+        m = re.match(r'FILE\s+(?:"([^"]+)"|(\S+))\s+(\S+)$', line, re.I)
+        if m:
+            kind = m.group(3).upper()
+            if kind not in ("BINARY", "MOTOROLA"):
+                raise ValueError(f"FILE type {kind} is not supported (BINARY / MOTOROLA only)")
+            cur_file = resolve(base, m.group(1) or m.group(2))
+            big = kind == "MOTOROLA"
+            continue
+        m = re.match(r"TRACK\s+(\d+)\s+(\S+)$", line, re.I)
+        if m:
+            if cur_file is None:
+                raise ValueError("TRACK before any FILE")
+            mode = m.group(2).upper()
+            if mode not in SIZES:
+                raise ValueError(f"track mode {mode} is not supported")
+            disc.tracks.append(Track(int(m.group(1)), mode, cur_file, big))
+            continue
+        m = re.match(r"INDEX\s+(\d+)\s+(\S+)$", line, re.I)
+        if m:
+            if not disc.tracks:
+                raise ValueError("INDEX before any TRACK")
+            n, t = int(m.group(1)), msf_frames(m.group(2))
+            if n == 0:
+                disc.tracks[-1].index0 = t
+            elif n == 1:
+                disc.tracks[-1].index1 = t
+            continue   # INDEX 02+ are sub-indices inside the track: nothing to lay out
+        m = re.match(r"(PREGAP|POSTGAP)\s+(\S+)$", line, re.I)
+        if m:
+            if not disc.tracks:
+                raise ValueError(f"{m.group(1)} before any TRACK")
+            setattr(disc.tracks[-1], m.group(1).lower(), msf_frames(m.group(2)))
+            continue
+        raise ValueError(f"unrecognised CUE line: {line!r}")
     if not 1 <= len(disc.tracks) <= 99:
         raise ValueError("a disc has 1..99 tracks")
-    for a, b in zip(disc.tracks, disc.tracks[1:]):
-        if b.number != a.number + 1:
-            raise ValueError(f"track {b.number} does not follow track {a.number}")
+    check_numbering(disc.tracks, "CUE sheet")
     for t in disc.tracks:
         if t.index1 is None:
             raise ValueError(f"track {t.number} has no INDEX 01")
@@ -249,19 +324,18 @@ def parse_ccd(path: str) -> Disc:
     """A CloneCD set (see CLONECD above): the [TRACK n] list, checked against [Entry] TOC."""
     base = os.path.dirname(os.path.abspath(path))
     sections: list[tuple[str, dict[str, str]]] = []
-    with open(path, encoding="latin-1") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line or line.startswith(";"):
-                continue
-            m = re.fullmatch(r"\[(.+)\]", line)
-            if m:
-                sections.append((m.group(1).strip().upper(), {}))
-                continue
-            if "=" not in line or not sections:
-                raise ValueError(f"unrecognised CCD line: {line!r}")
-            k, v = line.split("=", 1)
-            sections[-1][1][k.strip().upper()] = v.strip()
+    for raw in read_sheet(path):
+        line = raw.strip()
+        if not line or line.startswith(";"):
+            continue
+        m = re.fullmatch(r"\[(.+)\]", line)
+        if m:
+            sections.append((m.group(1).strip().upper(), {}))
+            continue
+        if "=" not in line or not sections:
+            raise ValueError(f"unrecognised CCD line: {line!r}")
+        k, v = line.split("=", 1)
+        sections[-1][1][k.strip().upper()] = v.strip()
     if not sections or sections[0][0] != "CLONECD":
         raise ValueError("not a CloneCD control file (no [CloneCD] section)")
 
@@ -323,9 +397,7 @@ def parse_ccd(path: str) -> Disc:
         starts.append(0 if not starts else min(first, t.disc_lba))
     if not 1 <= len(disc.tracks) <= 99:
         raise ValueError("a disc has 1..99 tracks ([TRACK n] sections)")
-    for a, b in zip(disc.tracks, disc.tracks[1:]):
-        if b.number != a.number + 1:
-            raise ValueError(f"track {b.number} does not follow track {a.number}")
+    check_numbering(disc.tracks, "CloneCD set")
     disc.leadout = size // RAW
     starts.append(disc.leadout)
     for t, first, nxt in zip(disc.tracks, starts, starts[1:]):
@@ -432,16 +504,31 @@ def mode1_sector(user: bytes, lba: int, with_ecc: bool) -> bytes:
     return bytes(sector)
 
 
+SYNC = b"\x00" + b"\xff" * 10 + b"\x00"
+
+
+def mode2_user(data: bytes, mode: str) -> tuple[bytes, bool] | None:
+    """The 2048 bytes a READ(10) returns of a MODE2/2352 or MODE2/2336 sector and whether it is
+    a form 2 sector (MODE 2 above), or None for a 2352-byte sector that is not a Mode 2 one."""
+    if mode == "MODE2/2352":
+        if data[0:12] != SYNC or data[15] != 2:
+            return None
+        data = data[16:]
+    # the subheader (file, channel, submode, coding; twice), then the user data
+    return data[8:2056], bool(data[2] & 0x20)
+
+
 def header(disc: Disc) -> bytes:
     h = bytearray(RAW)
     h[0:8] = MAGIC
     h[8] = len(disc.tracks)
     h[9] = disc.tracks[0].number
     struct.pack_into("<I", h, 12, disc.leadout)
-    entries = [(t.control, t.disc_lba, t.mode.startswith("MODE2")) for t in disc.tracks]
-    entries.append((disc.tracks[-1].control, disc.leadout, False))
-    for i, (ctrl, lba, mode2) in enumerate(entries):
-        struct.pack_into("<I", h, 16 + 4 * i, ctrl | (lba << 8) | (0x80000000 if mode2 else 0))
+    # the +24 flag stays clear: every data sector is written in the Mode 1 layout (MODE 2 above)
+    entries = [(t.control, t.disc_lba) for t in disc.tracks]
+    entries.append((disc.tracks[-1].control, disc.leadout))
+    for i, (ctrl, lba) in enumerate(entries):
+        struct.pack_into("<I", h, 16 + 4 * i, ctrl | (lba << 8))
         struct.pack_into(">I", h, 512 + 4 * i, lba)
         m, s, f = msf(lba + 150)
         h[1024 + 4 * i:1028 + 4 * i] = bytes((0, m, s, f))
@@ -453,6 +540,7 @@ def sectors(disc: Disc, with_ecc: bool):
     """Yield every disc sector, LBA 0 first, as 2352 raw bytes."""
     handles: dict[str, object] = {}
     lba = 0
+    disc.form2 = 0
     try:
         for t in disc.tracks:
             silent = bytes(RAW)
@@ -465,7 +553,11 @@ def sectors(disc: Disc, with_ecc: bool):
                 data = h.read(t.size)
                 if len(data) != t.size:
                     raise ValueError(f"{t.file}: short read in track {t.number}")
-                if t.size == RAW:
+                m2 = mode2_user(data, t.mode) if t.mode in ("MODE2/2352", "MODE2/2336") else None
+                if m2 is not None:
+                    disc.form2 += m2[1]
+                    yield mode1_sector(m2[0], lba, with_ecc)
+                elif t.size == RAW:
                     if t.audio and t.big_endian:
                         data = bytes(b for pair in zip(data[1::2], data[0::2]) for b in pair)
                     yield data
@@ -493,6 +585,9 @@ def describe(disc: Disc) -> str:
     m, s, f = msf(disc.leadout + 150)
     out.append(f"lead-out LBA {disc.leadout} {m:02d}:{s:02d}:{f:02d}")
     out += ["note: " + x for x in disc.notes]
+    if disc.form2:
+        out.append(f"note: {disc.form2} Mode 2 form 2 sector(s): each carries the first 2048 of "
+                   f"its 2324 user data bytes")
     return "\n".join(out)
 
 
@@ -522,8 +617,8 @@ def convert(cue: str, out: str, with_ecc: bool, progress=None, disc: Disc | None
 # ---- batch mode (--batch DIR): a whole folder of CD images in one run ----
 # Every CUE under DIR gets a PCD beside it (same stem) unless an up-to-date one is already
 # there. The sources are only ever opened for reading. A PCD is up to date when it is a PCD of
-# exactly the size the CUE's layout gives, its header sector is the one this tool would write, and
-# it is not older than the CUE or any file the CUE names: then it is skipped, so the batch is safe
+# exactly the size the CUE's layout gives, its header sector is the one this tool would write, its
+# first wrapped data sector carries this run's --ecc choice, and it is not older than the CUE or any file the CUE names: then it is skipped, so the batch is safe
 # to re-run. Free space is checked per image BEFORE writing (the whole image plus a margin).
 PCD_MARGIN = 64 << 20
 
@@ -536,7 +631,28 @@ def _sources(cue: str, disc: Disc) -> list[str]:
     return [cue] + sorted({t.file for t in disc.tracks})
 
 
-def pcd_up_to_date(cue: str, out: str, disc: Disc) -> bool:
+def _wrapped_lba(disc: Disc) -> int | None:
+    """The first sector this tool writes in the Mode 1 layout itself (a data track's PREGAP, a
+    cooked 2048/2336-byte sector or a Mode 2 one), the only kind whose EDC/ECC tail depends on
+    --ecc; None when the disc has none (raw MODE1/2352 and AUDIO sectors are copied as they are)."""
+    for t in disc.tracks:
+        if t.audio:
+            continue
+        if t.pregap:
+            return t.disc_first
+        if not t.file_sectors:
+            continue
+        if t.mode in ("MODE1/2048", "MODE2/2048", "MODE2/2336"):
+            return t.disc_first
+        if t.mode == "MODE2/2352":
+            with open(t.file, "rb") as h:
+                h.seek(t.file_offset)
+                if mode2_user(h.read(t.size), t.mode) is not None:
+                    return t.disc_first
+    return None
+
+
+def pcd_up_to_date(cue: str, out: str, disc: Disc, with_ecc: bool = False) -> bool:
     try:
         st = os.stat(out)
     except FileNotFoundError:
@@ -546,6 +662,15 @@ def pcd_up_to_date(cue: str, out: str, disc: Disc) -> bool:
     with open(out, "rb") as f:
         if f.read(RAW) != header(disc):
             return False
+        # --ecc changes only the tail of the sectors this tool wraps, not the size or header:
+        # a PCD written with the other choice is stale. The stored sector is re-wrapped from its
+        # own user data with this run's choice and must come back byte for byte.
+        lba = _wrapped_lba(disc)
+        if lba is not None:
+            f.seek(RAW * (1 + lba))
+            sec = f.read(RAW)
+            if sec != mode1_sector(sec[16:2064], lba, with_ecc):
+                return False
     return all(st.st_mtime >= os.stat(s).st_mtime for s in _sources(cue, disc))
 
 
@@ -594,7 +719,7 @@ def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
             failed += 1
             continue
         if os.path.exists(out):
-            if pcd_up_to_date(cue, out, disc):
+            if pcd_up_to_date(cue, out, disc, with_ecc):
                 log(f"  up to date: {os.path.basename(out)}")
                 skipped += 1
                 continue
@@ -603,8 +728,8 @@ def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
                     log(f"  SKIP: {os.path.basename(out)} exists and is not a PCD; not replacing it")
                     failed += 1
                     continue
-            log(f"  {os.path.basename(out)} is stale (older than its sources or a different "
-                f"layout): rebuilding")
+            log(f"  {os.path.basename(out)} is stale (older than its sources, a different "
+                f"layout or the other --ecc choice): rebuilding")
         if os.path.exists(out + ".part"):
             os.remove(out + ".part")          # a previous run was interrupted
         need = pcd_size(disc)
@@ -631,6 +756,9 @@ def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
             log(f"  FAILED: {e}")
             failed += 1
             continue
+        if disc.form2:
+            log(f"  note: {disc.form2} Mode 2 form 2 sector(s): each carries the first 2048 of "
+                f"its 2324 user data bytes")
         made += 1
     log(f"cue2pcd: {made} converted, {skipped} already up to date, {failed} failed")
     return failed
@@ -638,6 +766,7 @@ def batch(root: str, with_ecc: bool = False, free_bytes=None, log=print) -> int:
 
 # ---- self-test: synthetic discs, every rule above checked against independent arithmetic ----
 def selftest() -> int:
+    import shutil
     fails = 0
 
     def check(cond, what):
@@ -717,6 +846,7 @@ def selftest() -> int:
                     s1 ^= _gmul(v, GF_EXP[44 - i])
                 ok &= s0 == 0 and s1 == 0
         check(ok, "RSPC syndromes zero")
+        fails += _selftest_mode2(d)
         # rejected inputs
         with open(os.path.join(d, "bad.cue"), "w") as f:
             f.write('FILE "x.bin" BINARY\n  TRACK 01 MODE1/2048\n    INDEX 01 00:00:00\n'
@@ -726,10 +856,161 @@ def selftest() -> int:
             check(False, "a size that is not whole sectors must be rejected")
         except ValueError:
             pass
+        # The drive's READ TOC reports first track 1 and indexes tracks from 1, so a sheet whose
+        # first track is not TRACK 01 is refused: one line, exit 1, no output file
+        with open(os.path.join(d, "t2.cue"), "w") as f:
+            f.write(open(os.path.join(d, "x.cue")).read().replace("TRACK 03", "TRACK 04")
+                    .replace("TRACK 02", "TRACK 03").replace("TRACK 01", "TRACK 02"))
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            try:
+                code = main([os.path.join(d, "t2.cue"), os.path.join(d, "t2.pcd")])
+            except (ValueError, OSError) as e:
+                code = f"uncaught {type(e).__name__}"
+        check(code == 1 and "TRACK 02" in err.getvalue() and "TRACK 01" in err.getvalue()
+              and err.getvalue().count("\n") == 1 and not os.path.exists(os.path.join(d, "t2.pcd"))
+              and not os.path.exists(os.path.join(d, "t2.pcd.part")),
+              f"a sheet starting at TRACK 02 is refused in one line, nothing written "
+              f"(got {code!r}, {err.getvalue()!r})")
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = main([os.path.join(d, "x.cue"), os.path.join(d, "ok.pcd")])
+        check(code == 0 and os.path.exists(os.path.join(d, "ok.pcd")),
+              "a sheet starting at TRACK 01 still converts through the CLI")
+        # A sheet saved as UTF-8 (often with a BOM, as Windows editors write it) naming a
+        # non-ASCII file: the BOM must not reach the first line, and the name must resolve.
+        # A legacy 8-bit sheet that is not valid UTF-8 still reads as latin-1.
+        uname = "ディスク.bin"
+        shutil.copy(os.path.join(d, "x.bin"), os.path.join(d, uname))
+        sheet = open(os.path.join(d, "x.cue")).read().replace('"x.bin"', f'"{uname}"')
+        with open(os.path.join(d, "u.cue"), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + sheet.encode("utf-8"))
+        try:
+            check(header(parse_cue(os.path.join(d, "u.cue"))) == header(parse_cue(
+                os.path.join(d, "x.cue"))), "a UTF-8 sheet with a BOM and a non-ASCII FILE")
+        except (ValueError, OSError) as e:
+            check(False, f"a UTF-8 sheet with a BOM and a non-ASCII FILE: {e}")
+        # a Shift-JIS (cp932) sheet, as PC-98 tools write them, naming the same file
+        with open(os.path.join(d, "s.cue"), "wb") as f:
+            f.write(sheet.encode("cp932"))
+        try:
+            check(header(parse_cue(os.path.join(d, "s.cue"))) == header(parse_cue(
+                os.path.join(d, "x.cue"))), "a Shift-JIS sheet naming a non-ASCII FILE")
+        except (ValueError, OSError) as e:
+            check(False, f"a Shift-JIS sheet naming a non-ASCII FILE: {e}")
+        shutil.copy(os.path.join(d, "x.bin"), os.path.join(d, "caf\xe9.bin"))
+        with open(os.path.join(d, "l.cue"), "wb") as f:
+            f.write(sheet.replace(f'"{uname}"', '"caf\xe9.bin"').encode("latin-1"))
+        try:
+            check(header(parse_cue(os.path.join(d, "l.cue"))) == header(parse_cue(
+                os.path.join(d, "x.cue"))), "a latin-1 sheet still reads")
+        except (ValueError, OSError) as e:
+            check(False, f"a latin-1 sheet still reads: {e}")
+        # a latin-1 name that is also valid cp932 (0xE9 'm' is a cp932 pair): the cp932 reading
+        # names no existing file, so the latin-1 reading is used
+        shutil.copy(os.path.join(d, "x.bin"), os.path.join(d, "Pok\xe9mon.bin"))
+        with open(os.path.join(d, "p.cue"), "wb") as f:
+            f.write(sheet.replace(f'"{uname}"', '"Pok\xe9mon.bin"').encode("latin-1"))
+        try:
+            check(header(parse_cue(os.path.join(d, "p.cue"))) == header(parse_cue(
+                os.path.join(d, "x.cue"))), "a latin-1 sheet that is also valid cp932")
+        except (ValueError, OSError) as e:
+            check(False, f"a latin-1 sheet that is also valid cp932: {e}")
+        # the CLI reports a bad sheet as one error line and a non-zero exit, not a traceback
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            try:
+                code = main([os.path.join(d, "bad.cue"), "--info"])
+            except (ValueError, OSError) as e:
+                code = f"uncaught {type(e).__name__}"
+        check(code == 1 and err.getvalue().startswith("cue2pcd: "),
+              f"a bad sheet exits 1 with a one-line message (got {code!r}, {err.getvalue()!r})")
         fails += _selftest_ccd(d)
         fails += _selftest_batch(d, os.path.join(d, "x0.pcd"))
     print("cue2pcd selftest:", "PASS" if fails == 0 else f"FAIL ({fails})")
     return 0 if fails == 0 else 1
+
+
+def _selftest_mode2(d: str) -> int:
+    """MODE 2 tracks (see MODE 2 above): a CUE MODE2/2352 track, the same set as a CloneCD
+    MODE=2 track, a MODE2/2336 track and a MODE2/2048 one all give a PCD whose sectors carry
+    the user data at +16 (where the drive reads a PCD's data sector) and no MODE2 flag."""
+    fails = 0
+
+    def check(cond, what):
+        nonlocal fails
+        if not cond:
+            fails += 1
+            print("SELFTEST FAIL (mode2):", what)
+    md = os.path.join(d, "mode2")
+    os.makedirs(md)
+    n = 6
+    form2 = 4                     # sector 4 is a form 2 sector (2324 bytes of user data)
+
+    def payload(lba):
+        size = 2324 if lba == form2 else 2048
+        return bytes((lba * 13 + i * 7 + (i >> 8)) & 0xFF for i in range(size))
+
+    raw = b""
+    for lba in range(n):
+        m, s_, f = msf(lba + 150)
+        sub = bytes((0, 0, 0x28 if lba == form2 else 0x08, 0)) * 2   # submode bit 5 = form 2
+        body = sub + payload(lba)
+        raw += b"\x00" + b"\xff" * 10 + b"\x00" + bytes((bcd(m), bcd(s_), bcd(f), 2)) \
+            + body + bytes(RAW - 16 - len(body))
+    with open(os.path.join(md, "m.bin"), "wb") as f:
+        f.write(raw)
+    with open(os.path.join(md, "m.cue"), "w") as f:
+        f.write('FILE "m.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
+    with open(os.path.join(md, "m.img"), "wb") as f:
+        f.write(raw)
+    write_ccd(os.path.join(md, "m.ccd"), [(1, 2, 0, None)], n)
+    # the same sectors without their sync and header (MODE2/2336), and cooked (MODE2/2048)
+    with open(os.path.join(md, "x.bin"), "wb") as f:
+        f.write(b"".join(raw[RAW * l + 16:RAW * l + 16 + 2336] for l in range(n)))
+    with open(os.path.join(md, "x.cue"), "w") as f:
+        f.write('FILE "x.bin" BINARY\n  TRACK 01 MODE2/2336\n    INDEX 01 00:00:00\n')
+    with open(os.path.join(md, "c.bin"), "wb") as f:
+        f.write(b"".join(payload(l)[:2048] for l in range(n)))
+    with open(os.path.join(md, "c.cue"), "w") as f:
+        f.write('FILE "c.bin" BINARY\n  TRACK 01 MODE2/2048\n    INDEX 01 00:00:00\n')
+    images = {}
+    for name in ("m.cue", "m.ccd", "x.cue", "c.cue"):
+        out = os.path.join(md, name.replace(".", "_") + ".pcd")
+        try:
+            disc = convert(os.path.join(md, name), out, False)
+        except ValueError as e:
+            check(False, f"{name}: refused: {e}")
+            continue
+        img = open(out, "rb").read()
+        images[name] = img
+        check(len(img) == RAW * (1 + n), f"{name}: length")
+        check(struct.unpack_from("<I", img, 16)[0] == 0x14,
+              f"{name}: data control, LBA 0, no MODE2 flag")
+        for lba in range(n):
+            s = img[RAW * (1 + lba):RAW * (2 + lba)]
+            check(s[16:2064] == payload(lba)[:2048], f"{name}: LBA {lba} user data at +16")
+            m, s_, f = msf(lba + 150)
+            check(s[12:16] == bytes((bcd(m), bcd(s_), bcd(f), 1)), f"{name}: LBA {lba} header")
+        if name != "c.cue":
+            check(disc.form2 == 1 and any("form 2" in x for x in describe(disc).split("\n")),
+                  f"{name}: the form 2 sector is counted and reported")
+    check(images.get("m.cue") == images.get("m.ccd") == images.get("x.cue"),
+          "CUE MODE2/2352, CCD MODE=2 and CUE MODE2/2336 give the same PCD")
+    # a MODE2/2352 sector that is not a Mode 2 sector (no sync, or mode byte 1) is kept raw
+    odd = bytearray(raw[:RAW])
+    odd[15] = 1
+    with open(os.path.join(md, "o.bin"), "wb") as f:
+        f.write(bytes(odd) + bytes(RAW))
+    with open(os.path.join(md, "o.cue"), "w") as f:
+        f.write('FILE "o.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
+    convert(os.path.join(md, "o.cue"), os.path.join(md, "o.pcd"), False)
+    check(open(os.path.join(md, "o.pcd"), "rb").read()[RAW:] == bytes(odd) + bytes(RAW),
+          "a mode 1 sector and an empty sector in a MODE2 track are copied raw")
+    return fails
 
 
 CCD_HEAD = "[CloneCD]\nVersion=3\n[Disc]\nTocEntries={n}\nSessions={sessions}\n" \
@@ -792,8 +1073,8 @@ def _selftest_ccd(d: str) -> int:
     check(img == open(ref, "rb").read(), "the CCD's PCD equals the equivalent CUE's")
     check(img[RAW:] == body, "the .img is the PCD body byte for byte")
     check([t.disc_lba for t in disc.tracks] == [0, 8, 12] and disc.leadout == 15, "TOC")
-    check(struct.unpack_from("<I", img, 16 + 8)[0] == 0x14 | (12 << 8) | 0x80000000,
-          "MODE2 track: data control and the MODE2 flag")
+    check(struct.unpack_from("<I", img, 16 + 8)[0] == 0x14 | (12 << 8),
+          "MODE2 track: data control, no +24 flag (its sectors have no sync: copied raw)")
     check(struct.unpack_from("<I", img, 16 + 4)[0] == 0x10 | (8 << 8), "audio track word")
     # without [Entry] sections (NP2kai reads only [TRACK n]) the result is the same
     text = open(os.path.join(cd, "c.ccd")).read()
@@ -950,6 +1231,24 @@ def _selftest_batch(d: str, x_ref: str) -> int:
           "a newer source rebuilds its PCD only")
     check(open(mp, "rb").read() == m, "the rebuilt PCD is the same image")
 
+    # --ecc on a PCD converted without it: rebuilt with the EDC/ECC, and only the image that has
+    # wrapped sectors (m.cue is raw MODE1/2352 + AUDIO, which --ecc does not change). m.pcd's
+    # mtime is first brought level with the future-dated m2.bin above, so only --ecc decides.
+    m2_ns = os.stat(os.path.join(g2, "m2.bin")).st_mtime_ns
+    os.utime(mp, ns=(m2_ns, m2_ns))
+    t_x, t_m = os.stat(xp).st_mtime_ns, os.stat(mp).st_mtime_ns
+    logs.clear()
+    batch(root, with_ecc=True, free_bytes=big, log=logs.append)
+    x1 = os.path.join(d, "x1.pcd")
+    check(open(xp, "rb").read() == open(x1, "rb").read(), "--ecc rebuilds a PCD made without it")
+    check(os.stat(mp).st_mtime_ns == t_m, "--ecc leaves a PCD with no wrapped sector alone")
+    logs.clear()
+    batch(root, with_ecc=True, free_bytes=big, log=logs.append)
+    check(sum(x.startswith("  up to date") for x in logs) == 2, "--ecc re-run: both up to date")
+    logs.clear()
+    batch(root, free_bytes=big, log=logs.append)
+    check(open(xp, "rb").read() == open(x_ref, "rb").read(), "no --ecc rebuilds an --ecc PCD")
+
     # a truncated PCD is not up to date
     with open(xp, "r+b") as f:
         f.truncate(RAW * 3)
@@ -989,6 +1288,16 @@ def main(argv: list[str]) -> int:
         return 1 if batch(a.batch, a.ecc, log=lambda m: print(m, flush=True)) else 0
     if not a.cue:
         ap.error("a CUE sheet or CloneCD .ccd is required")
+    try:
+        return convert_one(ap, a)
+    except (ValueError, OSError) as e:
+        # a sheet or image the tool refuses is a user error: one line, not a traceback
+        print(f"cue2pcd: {a.cue}: {e}", file=sys.stderr)
+        return 1
+
+
+def convert_one(ap: argparse.ArgumentParser, a: argparse.Namespace) -> int:
+    """--info, or one CUE/CCD to one PCD (main's single-image form)."""
     if a.info:
         print(describe(parse_image(a.cue)))
         return 0

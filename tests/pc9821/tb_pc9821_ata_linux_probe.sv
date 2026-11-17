@@ -322,13 +322,17 @@ module tb_pc9821_ata_linux_probe;
     if (st2 !== 8'h00) fail("L2 an absent device 1 did not read ALTSTATUS 0x00");
 
     // ---- L3: a command for the absent device is not executed ----
+    // nIEN is cleared for the command, so an executed IDENTIFY's interrupt would reach the
+    // line (with nIEN set the "no interrupt" half could never fail), then set again.
+    tf_write(16'h074C, 8'h00);
     k = irqs;
     tf_write(16'h064E, 8'hEC);
     repeat (400) @(negedge clk);
+    if (irqs != k) fail("L3 IDENTIFY to the absent device 1 raised an interrupt");
     tf_read(16'h064E, st);
     if (st !== 8'h00) fail("L3 IDENTIFY to the absent device 1 changed its STATUS from 0x00");
-    if (irqs != k) fail("L3 IDENTIFY to the absent device 1 raised an interrupt");
     if (ata.xfer_state != 3'd0) fail("L3 IDENTIFY to the absent device 1 started a data phase");
+    tf_write(16'h074C, 8'h02);
 
     // ---- L4: EXECUTE DEVICE DIAGNOSTIC is device 0's for the pair, whoever is selected ----
     k = irqs;

@@ -5,6 +5,7 @@
 // PLANT: lfmax     = y - 10'd1; => lfmax     = y - 10'd2;
 // PLANT: hactive + hfp, htotal - 10'd1}; => hactive + hfp, htotal - 10'd2};
 // PLANT: y_raw = {1'b0, crtc_lf(b6, b7)} + {4'b0000, vfbs}; => y_raw = {1'b0, crtc_lf(b6, b7)} + {4'b0000, vfbs0};
+// PLANT: crtc_d = {hblank, vsync_w, => crtc_d = {hblank - 10'd8, vsync_w,
 // Combinational proof for pc9821_crtc's registered geometry (V1-a): for EVERY eight-byte SYNC
 // block and every (hdot, vline), each compare the raster makes against crtc_d(crtc_x, crtc_y,
 // crtc_lf) of the block
@@ -113,5 +114,6 @@ module m(input [7:0] b0, b1, b2, b3, b4, b5, b6, b7, input [9:0] hdot, vline, in
       (o_feed_odd != n_feed_odd) || (o_at_line_tick != n_at_line_tick) ||
       (HTOTAL != n_htotal) || (VTOTAL != n_vtotal) || roots_bad ||            // o_htotal / o_vtotal
       (HACTIVE != n_hact) || (VACTIVE != n_vact) ||
-      (VFP != g[G_VFP +: 10]) || (VSYNC_W != g[G_VSYNC_W +: 10]);   // the userdisk dump (o_vbp is v_sync[7][7:2] in both)
+      (VFP != g[G_VFP +: 10]) || (VSYNC_W != g[G_VSYNC_W +: 10]) ||  // the userdisk dump (o_vbp is v_sync[7][7:2] in both)
+      (s_hblank != g[G_HBLANK +: 10]);   // the status bit 6 window's length, HTOTAL - HACTIVE
 endmodule

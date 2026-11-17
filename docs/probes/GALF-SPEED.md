@@ -72,6 +72,25 @@ First release 09a16b4b, fit seed 2 (plays at Full, 7 of 7 runs):
 So a CPU Speed setting is not a guaranteed workaround on every build: it moves the timing, and
 33 MHz hung once on the build that plays at Full.
 
+Release core 12171e25 (sha256 of the RBF; card 1, one run per speed, 2026-11-13), the recipe
+above with two more Enter presses at 175 and 215 s, about 245 s per run. The keys landed about
+3 s late (58, 98, 138, 178, 218 s after load), the same on every run. These runs were recorded
+to compare the game's pace at slower speeds:
+
+| OSD CPU Speed | result | what was seen |
+|---|---|---|
+| 16 MHz | GOOD | Every scene of the intro, then it loops: the title at about 45, 115 and 185 s after load, a loop of about 70 s (about 47 s at 25 MHz on an earlier capture). Enter does not leave the intro. |
+| 12 MHz | GOOD | The same scenes, slower: the title at about 56, 148 and 241 s, a loop of about 92 s. Enter does not leave the intro. |
+| 8 MHz | BAD | Lab, press conference and face scenes, then black from about 79 s to the end, with one sound held; Enter changes nothing. |
+| 6 MHz | GOOD | Every scene of the intro, slower again: the title at about 106 s, then it loops, the intro starting over at about 180 s. Enter does not leave the intro. (2026-11-14) |
+| 4 MHz | GOOD, 3 of 3 runs | Every scene of the intro: the title at about 158 s on each run, the motorbike chase still playing at the end of the run, no loop within it. The three runs show the same scene at the same time throughout. (2026-11-14) |
+
+The loop length grows almost as 1/clock (47 : 70 : 92 s for 25 : 16 : 12 MHz, about 180 s at
+6 MHz), so the intro is paced by the CPU. 8 MHz lands in one of the narrow hang windows described
+above, and the result is from a single run. Of the speeds tried, 4 MHz gives the game's pace that
+looked right when the recordings were compared by eye, and it played the intro on every run, so
+it is the setting `docs/user/compatibility.md` recommends.
+
 Other points (all at Full, single seed 2 unless noted):
 
 | build | runs | result |

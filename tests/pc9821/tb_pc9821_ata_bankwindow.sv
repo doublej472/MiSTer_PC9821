@@ -107,6 +107,10 @@ module tb_pc9821_ata_bankwindow;
       @(posedge clk);
       @(negedge clk);
       io_wr = 0;
+      // The guest's next access comes at least five clk_sys after a command's (pc9821_iobus
+      // S_BYTE -> S_REPLY -> S_HOLD -> S_IDLE -> S_IOWAIT -> S_BYTE), and a media command
+      // dispatches pc9821_ata's MEDIA_WAIT cycles after its write: look no sooner than the bus.
+      if (addr == 16'h064E) repeat (4) @(negedge clk);
     end
   endtask
 

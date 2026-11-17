@@ -23,6 +23,7 @@ module pc9821_gvram_dut #(
     // window it keys on. A bench that leaves them unconnected runs Fast.
     input wire        timing_xe10,
     input wire        gfx_scan_on,
+    input wire  [1:0] xe10_mode,
 
     input  wire [1:0]   win_plane,
     input  wire [14:0]  win_offset,
@@ -123,6 +124,7 @@ module pc9821_gvram_dut #(
   wire        grcg_cl_ready, grcg_cl_done;
   wire [31:0] grcg_cpu_dout;
   wire        grcg_cpu_ready, grcg_cpu_resp_valid;
+  wire        grcg_rd_hold;
   wire        grcg_dbg_busy, grcg_dbg_rmw, grcg_dbg_write;
   wire        egc_cl_valid, egc_cl_write;
   wire [15:0] egc_cl_addr;
@@ -208,7 +210,7 @@ module pc9821_gvram_dut #(
 
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_arb (
       .clk(clk), .reset(reset),
-      .timing_xe10(timing_xe10), .gfx_scan_on(gfx_scan_on),
+      .timing_xe10(timing_xe10), .gfx_scan_on(gfx_scan_on), .xe10_mode(xe10_mode),
       .access_page(gvr_page),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
       .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),
@@ -232,7 +234,7 @@ module pc9821_gvram_dut #(
       .grcg_cl_hold_mergeable(grcg_cl_hold_mergeable),
       .grcg_cl_tile(grcg_cl_tile),
       .grcg_cl_ready(grcg_cl_ready),
-      .grcg_cpu_dout(grcg_cpu_dout), .grcg_cpu_ready(grcg_cpu_ready),
+      .grcg_cpu_dout(grcg_cpu_dout), .grcg_cpu_ready(grcg_cpu_ready), .grcg_rd_hold(grcg_rd_hold),
       .grcg_cpu_resp_valid(grcg_cpu_resp_valid),
       .grcg_dbg_busy(grcg_dbg_busy), .grcg_dbg_rmw(grcg_dbg_rmw),
       .grcg_dbg_write(grcg_dbg_write),
@@ -289,7 +291,7 @@ module pc9821_gvram_dut #(
       .cl_hold_burst(grcg_cl_hold_burst), .cl_hold_addr(grcg_cl_hold_addr),
       .cl_hold_wbe(grcg_cl_hold_wbe), .cl_hold_wdata(grcg_cl_hold_wdata),
       .cl_hold_wdata2(grcg_cl_hold_wdata2),
-      .cl_rdata(cl_rdata), .cl_done(grcg_cl_done),
+      .cl_rdata(cl_rdata), .cl_done(grcg_cl_done), .rd_hold(grcg_rd_hold),
       .dbg_busy(grcg_dbg_busy), .dbg_rmw(grcg_dbg_rmw), .dbg_write(grcg_dbg_write),
       .dbg_grcg_store(dbg_grcg_store)
   );

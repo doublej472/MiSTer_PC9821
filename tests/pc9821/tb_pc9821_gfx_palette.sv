@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GFX_PALETTE:
-// The graphics palette reads the way the MACHINE's palette does, in both modes, for the DIGITAL table entirely (its eight colours, the 8-colour mode's use of only the low three index bits, and the intensity bit not changing the answer) and for the ANALOGUE table: the power-on entries are the ITF ROM's own (itf.rom 0x042F, entry 2 red / entry 4 green), a CPU write through the 0xA8-index/0xAA-G/0xAC-R/0xAE-B port reaches the displayed table at the next clock with no frame-boundary commit - the dot read in the write's own cycle is the old entry and the next dot the new one, which is what a raster palette split needs - a channel write moves only its own nibble of its own entry, the whole 4-bit index selects an entry (the intensity bit is part of it, so entry 8 differs from entry 0), and the read stays combinational so no dot of the pixel path moves. The PEGC 256-colour table is a SECOND store beside them: full bytes per channel at the full 8-bit index (NP2kai stores and renders the written byte verbatim), a registered dot-path read one clk after the index (the async form refuses every block type), and the 16-entry path unchanged by any of it.
+// The graphics palette reads the way the MACHINE's palette does, in both modes, for the DIGITAL table entirely (its eight colours, the 8-colour mode's use of only the low three index bits, and the intensity bit not changing the answer) and for the ANALOGUE table: the power-on entries are the ITF ROM's own (itf.rom 0x042F, entry 2 red / entry 4 green), a CPU write through the 0xA8-index/0xAA-G/0xAC-R/0xAE-B port reaches the displayed table at the next clock with no frame-boundary commit - the dot read in the write's own cycle is the old entry and the next dot the new one, which is what a raster palette split needs - a channel write moves only its own nibble of its own entry, the whole 4-bit index selects an entry (the intensity bit is part of it, so entry 8 differs from entry 0), and the read stays combinational so no dot of the pixel path moves. The PEGC 256-colour table is a SECOND store beside them: full bytes per channel at the full 8-bit index (entries 0x2B, 0x6B, 0xAB and 0xEB, which differ only in bits 7:6, each hold their own bytes; NP2kai stores and renders the written byte verbatim), a registered dot-path read one clk after the index (the async form refuses every block type), and the 16-entry path unchanged by any of it.
 // ---- the bench's own account of where each expectation comes from ----
 // THE DIGITAL (8-COLOUR) TABLE, and why this is a specification test. The four
 // palette registers 0xA8/0xAA/0xAC/0xAE are packed as one word; the machine
@@ -34,7 +34,7 @@ module tb_pc9821_gfx_palette;
   reg  [1:0]  wchan = 0;     // 0 = G, 1 = R, 2 = B
   reg  [3:0]  wdata = 0;
   wire [11:0] colour;
-  // The PEGC 256-colour table's ports (pegc-scope-REPORT.md 4 row 4).
+  // The PEGC 256-colour table's ports.
   reg         p256_we = 1'b0;
   reg  [7:0]  p256_widx = 8'd0, p256_wdata = 8'd0;
   reg  [1:0]  p256_wchan = 2'd0;
@@ -55,6 +55,8 @@ module tb_pc9821_gfx_palette;
   integer errors = 0;
   integer i;
   reg [7:0] n;
+  integer    k256;
+  reg [23:0] want256;
   reg [11:0] colour16_before;   // the 16-entry read's value before the 256 activity
   reg [3:0] gn, bn;   // the expected G and B nibbles for the entry under test
   reg [11:0] entry0 = 12'h000;
@@ -272,6 +274,27 @@ module tb_pc9821_gfx_palette;
     if (colour256 !== 24'hFE0180) begin
       $display("FAIL: the registered read did not settle one clk after the index");
       errors = errors + 1;
+    end
+    // Index bits 7 and 6 select entries too: 0x2B, 0x6B, 0xAB and 0xEB differ only there, and
+    // each takes its own distinct G/R/B bytes (written after 0x2B, so an index that drops bit 6
+    // or 7 overwrites 0x2B or an alias and reads back wrong).
+    for (k256 = 1; k256 < 4; k256 = k256 + 1) begin
+      p256_we = 1'b1; p256_widx = {k256[1:0], 6'h2B};
+      p256_wchan = 2'd0; p256_wdata = 8'h10 + k256[7:0]; @(negedge clk);   // G
+      p256_wchan = 2'd1; p256_wdata = 8'h40 + k256[7:0]; @(negedge clk);   // R
+      p256_wchan = 2'd2; p256_wdata = 8'h70 + k256[7:0]; @(negedge clk);   // B
+      p256_we = 1'b0;
+    end
+    for (k256 = 0; k256 < 4; k256 = k256 + 1) begin
+      idx256 = {k256[1:0], 6'h2B};
+      @(negedge clk);
+      want256 = (k256 == 0) ? 24'hFE0180
+                            : {8'h40 + k256[7:0], 8'h10 + k256[7:0], 8'h70 + k256[7:0]};
+      if (colour256 !== want256) begin
+        $display("FAIL: 256-entry %02x read %06x, want %06x (index bits 7:6 select the entry)",
+                 {k256[1:0], 6'h2B}, colour256, want256);
+        errors = errors + 1;
+      end
     end
     // ... and the 16-entry path is untouched by any of it: the combinational
     // read answers the same value before and after the 256-colour activity.

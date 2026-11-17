@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// Every window the PC-9821 memory map decodes is driven against the reference decode and the RTL's answer is recorded: the first-megabyte RAM, window 0's 0x0461 alias (the identity, the 0x0C absent area and the 0x0E ROM window), the A0000-BFFFF text/CG/plane windows, the 0xD8000 option-ROM window and its 8 KiB byte routing, the 0xC0000-D7FFF absent area and the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window carved out of it, the E8000-F7FFF lower BIOS, the F8000-FFFFF banked ROM window (every bank selection plus the 0xFFFF8000 top-of-4G alias), the 0x043F EMS page window, the 0xF00000 PEGC window, the 0x043B system-space split (PEGC VRAM, the F80000-F9FFFF hole, and the FA0000-FFFFFF mirror onto the low routes), the open-bus responder's phases, and window 0's own 0x0A page (RAM of its own on the machine, docs/probes/DMAROUTE-XE10.TXT W1/W2, not QEMU's VRAM overlay), the E plane at 0xE0000 only in the 16-colour mode (the digital-mode slot is open bus, docs/probes/DMAROUTE-XE10.TXT P4 view V1 and WIN.TXT 0461=0E); the references are qemu-pc98 hw/i386/pc98-mem.c (the memory map) and NP2kai i386c/cpumem.c + mem/memvram.c + mem/memems.c, with the machine's own probes (docs/probes/WIN.TXT, EMS.TXT) where they disagree. The PEGC 256-colour window arms are driven the same way (pegc-scope-REPORT.md 4 row 2): the packed windows 0xA8000/0xB0000 splice to peg_base + {bank, offset[14:0]} and shadow the EMS overlay entirely, 0xB8000-0xBFFFF is not connected, 0xE0000-0xE7FFF is the register file's byte port under the view, plane mode (0xE0100 bit 0) reads open bus because the engine is ladder rung L3 and is not built, the flat aperture is gated by the register file's [0xE0102] bit 0 (open bus with it clear - the FAIL-FIRST row for that gate), and with the view down the planar arms are unchanged.
+// Every window the PC-9821 memory map decodes is driven against the reference decode and the RTL's answer is recorded: the first-megabyte RAM, window 0's 0x0461 alias (the identity, the 0x0C absent area, the 0x0E ROM window, page 0x00 as the hole the machine measures (docs/probes/KIT2-XE10-RISKY-461.TXT) and a 0x10 page past a 1 MiB guest's RAM as open bus), the A0000-BFFFF text/CG/plane windows, the 0xD8000 option-ROM window and its 8 KiB byte routing, the 0xC0000-D7FFF absent area and the 0xCC000-0xCFFFF PC-9801-86 SOUND.ROM window carved out of it, the E8000-F7FFF lower BIOS, the F8000-FFFFF banked ROM window (every bank selection plus the 0xFFFF8000 top-of-4G alias), the 0x043F EMS page window, the 0xF00000 PEGC window, the 0x043B system-space split (PEGC VRAM, the F80000-F9FFFF hole, and the FA0000-FFFFFF mirror onto the low routes), the open-bus responder's phases, and window 0's own 0x0A page (RAM of its own on the machine, docs/probes/DMAROUTE-XE10.TXT W1/W2, not QEMU's VRAM overlay), the E plane at 0xE0000 only in the 16-colour mode (the digital-mode slot is open bus, docs/probes/DMAROUTE-XE10.TXT P4 view V1 and WIN.TXT 0461=0E); the references are qemu-pc98 hw/i386/pc98-mem.c (the memory map) and NP2kai i386c/cpumem.c + mem/memvram.c + mem/memems.c, with the machine's own probes (docs/probes/WIN.TXT, EMS.TXT) where they disagree. Every decode row also asserts gvram_window, set or clear, so a non-plane address that raises it fails; three rows are reported divergences between the references, pinned at exactly three. The PEGC 256-colour window arms are driven the same way: the packed windows 0xA8000/0xB0000 splice to peg_base + {bank, offset[14:0]} and shadow the EMS overlay entirely, 0xB8000-0xBFFFF is not connected, 0xE0000-0xE7FFF is the register file's byte port under the view, plane mode (0xE0100 bit 0) reads open bus because the engine is ladder rung L3 and is not built, the flat aperture is gated by the register file's [0xE0102] bit 0 (open bus with it clear - the FAIL-FIRST row for that gate), and with the view down the planar arms are unchanged.
 
 // ==== DUT ====
 // TWO instances, because the decode is split across them. pc9821_memory_map owns the
@@ -52,14 +52,14 @@ module tb_pc9821_memmap_ref;
   reg [7:0]  cpu_burstcount = 8'd1;
   reg        cpu_line_read = 0, cpu_valid = 0, cpu_write = 0;
 
-  // ---- the PEGC window arms' state (pegc-scope-REPORT.md 4 row 2) ----
+  // ---- the PEGC window arms' state ----
   // pegc_256 is the 0x6A dat 0x21 view select (pc9821_crtc's mode2_256col) and is
   // shared with the subsystem instance through `.*`; the map instance takes its
   // own copies of the bank/mode state so its decode can be probed directly (the
   // subsystem's copy lives in its pc9821_pegc register file and is set through
   // the register route, the machine's own flow).
   reg        pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -109,7 +109,7 @@ module tb_pc9821_memmap_ref;
   reg [15:0] ioctl_dout = 0;
   wire       ioctl_wait, rom_ready, load_error, cpu_run;
   reg        scan_enable = 0, scan_line_tick = 0, scan_page = 0;
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_walk_page = 0;
   reg [14:0] scan_line_base = 0;
   reg  [6:0] line_rd_addr = 0;
@@ -211,6 +211,7 @@ module tb_pc9821_memmap_ref;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -379,9 +380,8 @@ module tb_pc9821_memmap_ref;
       cpu_addr = a; cpu_write = 1'b0; cpu_line_read = 1'b0; cpu_valid = 1'b1;
       #1;
       if (map_mem_addr !== want_mem || map_mem_valid !== want_valid ||
-          map_absent_area !== want_absent ||
-          (want_gv && (gvram_window !== 1'b1 || gvram_win_plane !== want_plane ||
-                       gvram_win_offset !== want_off))) begin
+          map_absent_area !== want_absent || gvram_window !== want_gv ||
+          (want_gv && (gvram_win_plane !== want_plane || gvram_win_offset !== want_off))) begin
         $display("FAIL     %0s: mem_addr=%08x valid=%b gvram=%b plane=%0d off=%04x absent=%b, want mem_addr=%08x valid=%b gvram=%b plane=%0d off=%04x absent=%b   [%0s]",
                  name, map_mem_addr, map_mem_valid, gvram_window, gvram_win_plane,
                  gvram_win_offset, map_absent_area, want_mem, want_valid, want_gv,
@@ -468,19 +468,20 @@ module tb_pc9821_memmap_ref;
     map_case(32'h0008_0000, 32'h000C_0000, 1'b0, 0, 2'd0, 15'd0, 1'b1,
              "win0 0x0C 0x80000 -> C0000", "MEAS WIN.TXT 0461=0C b=FFFF (absent area)");
     // 0x0461 = 0x00: the machine reads 0xFFFF at the window base and discards the store
-    // (WIN.TXT 0461=00 b=FFFF a=FFFF, the same as 0x0C/0x0E/0x0F), while this core maps
-    // the page to 0x00000-0x1FFFF. The mechanism is unknown and an open
-    // question; recorded, not failed.
-    begin
-      reg [31:0] shown;
-      win0_sel = 8'h00;
-      cpu_addr = 32'h0008_0000; cpu_write = 1'b0; cpu_valid = 1'b1;
-      #1;
-      shown = map_mem_addr;
-      $display("DIVERGE  win0 0x00 0x80000 -> %08x; MEAS WIN.TXT 0461=00 b=FFFF (reads open bus)   [MEAS vs RTL, OPEN]", shown);
-      cpu_valid = 1'b0; cases = cases + 1; diverge = diverge + 1;
-      win0_sel = 8'h08;
-    end
+    // (WIN.TXT 0461=00 b=FFFF a=FFFF, the same as 0x0C/0x0E/0x0F; pages 00-06 are a hole,
+    // docs/probes/KIT2-XE10-RISKY-461.TXT:5-15): the map routes it to the absent area.
+    win0_sel = 8'h00;
+    cases = cases + 1;
+    cpu_addr = 32'h0008_0000; cpu_write = 1'b0; cpu_valid = 1'b1;
+    #1;
+    if (!map_absent_area || map_mem_valid || gvram_window) begin
+      $display("FAIL     win0 0x00 0x80000: absent=%b valid=%b gvram=%b, want absent=1 valid=0 gvram=0   [MEAS WIN.TXT 0461=00 b=FFFF / KIT2-XE10-RISKY-461]",
+               map_absent_area, map_mem_valid, gvram_window);
+      errors = errors + 1;
+    end else
+      $display("ok       win0 0x00 0x80000: absent area   [MEAS WIN.TXT 0461=00 b=FFFF / KIT2-XE10-RISKY-461]");
+    cpu_valid = 1'b0;
+    win0_sel = 8'h08;
 
     // ---- the graphics-plane windows [NP2 memvram.c; QEMU vram_*] ----
     win0_sel = 8'h08;
@@ -718,8 +719,8 @@ module tb_pc9821_memmap_ref;
     // high alias explicitly (pegc_high, and pc98_mem_init's own comment "Real PC-9821
     // hardware decodes the same 512 KiB linear PEGC VRAM at both 0x00f00000 and
     // 0xfff00000") and NP2kai special-cases it in memp_read8 ("address >= 0xfff00000 &&
-    // < 0xfff80000 -> memvgaf"). This core decodes only the low one, so the high window
-    // reaches the open-bus responder instead of the PEGC store.
+    // < 0xfff80000 -> memvgaf"). This core decodes both aliases onto the same PEGC store,
+    // each gated by [0xE0102] bit 0 (the enable-clear case is the fail-first block below).
     route_case(1'b0, 32'hFFF0_0000, R_BACKEND, peg_base + 32'h0000_0000,
                "0xFFF00000 PEGC high alias",
                "QEMU pegc_high at 0xfff00000 / NP2 memp_read8 memvgaf branch");
@@ -774,12 +775,10 @@ module tb_pc9821_memmap_ref;
     end
     guest_ram_bytes = 32'h0200_0000;
 
-    // ---- two reported divergences that are not route cases ----
-    // qemu's pc98_mem_init seeds sys16m = 1 (the 16 MB system space present at power-on);
-    // this core resets the latch to 0, so 15-16 MiB is RAM until the guest clears bit 2.
-    // The ITF clears the bit itself, so the boot path does not see the difference.
-    $display("DIVERGE  0x043B reset default: RTL hole OFF; QEMU pc98_mem_init leaves sys16m = 1   [QEMU vs RTL]");
-    cases = cases + 1; diverge = diverge + 1;
+    // ---- a reported divergence that is not a route case ----
+    // (0x043B's reset default is NOT one: pc9821_iobus resets the hole ON, sys16m_en = 1,
+    // which is qemu pc98_mem_init's sys16m = 1 and the Xe10's as-found 0x043B = FB at the DOS
+    // prompt, docs/probes/KIT2-XE10-RISKY-43B.TXT:3. This bench does not hold the iobus.)
     // qemu's non-PCI branch made 0xC0000-0xDFFFF rom_empty and gated the 0xD8000 IDE
     // work RAM on 0x1E8E; this core now takes the same 8 KiB gate at 0xDA000-0xDBFFF
     // and the same FF-always rom_empty shape at 0xDC000-0xDFFFF (the machine's own
@@ -790,27 +789,26 @@ module tb_pc9821_memmap_ref;
     // machine's FE/FF and this core's reset-OFF are the measured ones.
     $display("DIVERGE  0xC0000-0xDFFFF content: RTL all-ones absent area + the 0x1E8E-gated 8 KiB at 0xDA000 + FF-always tail at 0xDC000; QEMU non-PCI = rom_empty (0xFF/0xCB RETF fill) with the same gate but read-back 0x80/0x81 and reset ON   [QEMU non-PCI vs RTL]");
     cases = cases + 1; diverge = diverge + 1;
-    // Window 0's alias is judged against the UNBIASED address: with the window at 0x10
-    // and a 1 MiB guest, 0x80000 maps to physical 0x100000, above guest RAM, and the RTL
-    // issues a backend access there. The reference has no RAM to read, and qemu's own
-    // alias is built over its RAM blob, so it is not a clean oracle; recorded with the
-    // reachable OSD sizes named (1/2/4/8 MiB can reach above guest RAM through window 0).
+    // Window 0 at 0x10 with a 1 MiB guest: 0x80000 names physical 0x100000, past guest RAM.
+    // The bound is judged on the BIASED address (pc9821_memory_map's d_addr), so the access is
+    // open bus exactly as the direct encoding of that page is (tb_pc9821_win0_out_of_range
+    // pins the bytes): no backend access above guest RAM.
     begin
       guest_ram_bytes = 32'h0010_0000;
       win0_sel = 8'h10;
+      cases = cases + 1;
       route_probe(32'h0008_0000, 1'b1, probe_route, probe_target);
-      cases = cases + 1; diverge = diverge + 1;
-      if (probe_route == R_BACKEND)
-        $display("DIVERGE  win0 0x10 0x80000 with a 1 MiB guest: backend access at %08x, above guest RAM   [RTL out_of_range is judged pre-bias]",
-                 probe_target);
-      else
-        $display("ok       win0 0x10 0x80000 above guest RAM: route=%0d   [read as open bus]",
-                 probe_route);
+      if (probe_route != R_OPEN) begin
+        $display("FAIL     win0 0x10 0x80000 with a 1 MiB guest: route=%0d target=%08x, want open bus (above guest RAM)",
+                 probe_route, probe_target);
+        errors = errors + 1;
+      end else
+        $display("ok       win0 0x10 0x80000 above guest RAM: open bus");
       guest_ram_bytes = 32'h0200_0000;
       win0_sel = 8'h08;
     end
 
-    // ==== the PEGC 256-colour window arms (pegc-scope-REPORT.md 4 row 2) ====
+    // ==== the PEGC 256-colour window arms ====
     //
     // Fail-first for the 0xE0102 aperture gate: CLEAR the VRAM enable (the
     // register file's reset value is the same clear, and the rows above ran with
@@ -936,13 +934,15 @@ module tb_pc9821_memmap_ref;
   // ==== VERDICT ====
     $display("TB_PC9821_MEMMAP_REF: %0d reference cases, %0d mismatches, %0d reported divergences",
              cases, errors, diverge);
-    // The divergence report is PINNED: the six reported rows are each a recorded
+    // The divergence report is PINNED: the three reported rows are each a recorded
     // judgement, so a decode change that adds one (an asserted-agreeing note row turning
     // into a DIVERGE) or removes one must fail here and be re-adjudicated, not scroll by.
     // (Seven until the window-0 0x0E row became a case: the E plane is mode-gated now,
     // docs/probes/WIN.TXT `0461=0E rb=0F b=FFFF a=FFFF`.)
-    if (diverge != 6) begin
-      $display("FAIL     the reported divergences changed: %0d, the adjudicated set is 6", diverge);
+    // (Six until the window-0 0x00 and 0x10 rows became asserted cases and the 0x043B
+    // reset row, which the RTL does not diverge on, was removed.)
+    if (diverge != 3) begin
+      $display("FAIL     the reported divergences changed: %0d, the adjudicated set is 3", diverge);
       errors = errors + 1;
     end
     if (errors == 0) begin

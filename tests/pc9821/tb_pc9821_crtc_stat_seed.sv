@@ -1,7 +1,7 @@
 // tb_pc9821_crtc_stat_seed - the GDC status byte's resample flops at reset.
 //
 // ==== WHAT THIS PROVES ====
-// The GDC status byte's resample family comes up at its reset state: the first two port-0x60 status reads after a reset return the reset raster's BLANK (bit 6) / NO-VSYNC (bit 5) values with bit 2 set and bit 0 a RESOLVED free-running toggle - stat_dr <= ~stat_dr is the same self-fed X-lock shape as audio_volume's channel counter and was X forever in 4-state sim - and the steady-state byte never goes X (run under iverilog for the fail-first X-lock).
+// The GDC status byte's resample family comes up at its reset state: the first two port-0x60 status reads after a reset return the reset raster's BLANK (bit 6) / NO-VSYNC (bit 5) values with bit 2 set and bit 0 a RESOLVED free-running toggle - stat_dr <= ~stat_dr is the same self-fed X-lock shape as audio_volume's channel counter and was X forever in 4-state sim - and the steady-state byte never goes X. The X-lock half is proven only under iverilog (tools/check_4state_xlock.py, run by hand): Verilator is 2-state, so the battery's run of this bench cannot see bit 0 go X and asserts the reset values alone.
 //
 // The vsync/blank/data-ready resample flops (`vs_sync_ff`, `de_ff`, `stat_dr`)
 // come up at their RESET state - 00/00 - so the first two GDC status reads

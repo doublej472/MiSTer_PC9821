@@ -142,6 +142,16 @@ FIT_TECHNIQUES = ("SPEED", "AREA", "BALANCED")
 # timing up to 133 MHz, and the board's SDRAM part has a hard limit at about 120 MHz, which
 # heavyoc sits at.
 CLK_SYS_MIN_HZ = 25_000_000
+# The Xe10 I/O timing's hold floor (pc9821_iobus, OSD I/O timing = Xe10, a RUNTIME choice, so every
+# build can take it). S_IOWAIT loads io_hold with each fetched lane's class less one, less
+# 2 + IO_XE10_CPU_CYC + 2 (`- 12'd2 - 12'(IO_XE10_CPU_CYC) - 12'd2`) in 12-bit unsigned arithmetic,
+# so an access whose class is under XE10_HOLD_TAKE cycles wraps to a ~4090-cycle stall per access.
+# The fastest class is 0x0FAA's 255 ns (IO_NS_FAA); every class is ceil(ns x clk_sys), so the
+# floor is the clock at which ceil(255 ns x clk_sys) reaches 13 cycles, about 47.06 MHz.
+# --selftest re-reads these three numbers from pc9821_iobus.sv so they cannot drift.
+XE10_FASTEST_CLASS_NS = 255
+XE10_CPU_CYC = 8
+XE10_HOLD_TAKE = 1 + 2 + XE10_CPU_CYC + 2
 # The PC-98 dot rate, 400/19 MHz (pc9821_dot_ce): clk_sys must exceed it (the dot enable's guard).
 PIXEL_HZ = 21_052_632
 CLK_SYS_MAX_HZ = 133_000_000
@@ -202,6 +212,45 @@ GDC_PACE_MAX_NS = 100_000
 # range (and every override at the preset clocks) and requires the RTL's values and its fired
 # checks to equal this model's, so the model cannot drift from the file it describes.
 SDRAM_NS_7 = {"rcd": 21, "rp": 21, "rc": 68, "wr": 15, "ras": 42, "wr_ds": 14}
+
+
+def xe10_hold_problem(clk_hz: int) -> str | None:
+    """Why pc9821_iobus's Xe10 hold would underflow at clk_hz, or None when it cannot."""
+    cycles = (clk_hz * XE10_FASTEST_CLASS_NS + 999_999_999) // 1_000_000_000   # IO_NS_FAA's ceil
+    if cycles >= XE10_HOLD_TAKE:
+        return None
+    return (f"clk_sys {clk_hz:_} Hz makes pc9821_iobus's fastest Xe10 I/O class (0x0FAA, "
+            f"{XE10_FASTEST_CLASS_NS} ns) {cycles} cycles, under the {XE10_HOLD_TAKE} its hold "
+            "subtracts (class - 1, less 2 + IO_XE10_CPU_CYC + 2): with the OSD's I/O timing set to "
+            "Xe10 the hold count wraps and every such access stalls about 4090 cycles. "
+            "The OSD field exists in every build, so clk_sys must make "
+            f"ceil({XE10_FASTEST_CLASS_NS} ns x clk_sys) >= {XE10_HOLD_TAKE} "
+            f"(clk_sys >= {xe10_hold_min_hz():_} Hz)")
+
+
+def xe10_hold_min_hz() -> int:
+    """The lowest clk_sys in Hz at which the Xe10 hold cannot underflow."""
+    # ceil(f x ns / 1e9) >= TAKE  <=>  f x ns > (TAKE - 1) x 1e9
+    return (XE10_HOLD_TAKE - 1) * 1_000_000_000 // XE10_FASTEST_CLASS_NS + 1
+
+
+def xe10_hold_model_problems(iobus_text: str) -> list[str]:
+    """Where pc9821_iobus.sv disagrees with the three numbers xe10_hold_problem models."""
+    problems = []
+    ns = [int(n) for n in re.findall(r"localparam\s*\[15:0\]\s*IO_NS_\w+\s*=\s*16'\(\(SYS_CLOCK_HZ\s*\*\s*64'd(\d+)",
+                                     iobus_text)]
+    if not ns or min(ns) != XE10_FASTEST_CLASS_NS:
+        problems.append(f"the fastest IO_NS_* class is {min(ns) if ns else None} ns, the model has "
+                        f"{XE10_FASTEST_CLASS_NS}")
+    cpu = re.search(r"localparam\s*\[15:0\]\s*IO_XE10_CPU_CYC\s*=\s*16'd(\d+)\s*;", iobus_text)
+    if cpu is None or int(cpu.group(1)) != XE10_CPU_CYC:
+        problems.append(f"IO_XE10_CPU_CYC is {cpu.group(1) if cpu else None}, the model has {XE10_CPU_CYC}")
+    if not re.search(r"-\s*12'd2\s*-\s*12'\(IO_XE10_CPU_CYC\)\s*-\s*12'd2\s*;", iobus_text):
+        problems.append("the S_IOWAIT load no longer subtracts 2 + IO_XE10_CPU_CYC + 2")
+    if not re.search(r"io_access_cycles\(base_addr\[15:0\] \+ 16'\(xl\), request_write, 1'b1\) - 16'd1",
+                     iobus_text):
+        problems.append("the per-lane Xe10 class is no longer taken less one")
+    return problems
 
 
 def sdram_table(clk_hz: int, dbg_cl: int = 0, dbg_trcd: int = 0) -> dict:
@@ -539,11 +588,12 @@ class Config:
         return pg.PllRequest(self.clk_sys_hz, self.phase()[0], dps=self.sdram_phase_dyn)
 
     def vpll_request(self) -> pg.VpllRequest:
-        """The video PLL: FRACTIONAL and RECONFIGURABLE in every build, GENERATED at its fastest
-        run-time setting, the 31 kHz clock (50.336 MHz), so the fitter times the video domain at
-        19.87 ns (tools/profile_gen.py, the video PLL section). pc9821_vpll_ctl moves it to the
-        24 kHz clock after lock and back on 0x09A8 bit 0. The TV converter is gone, so the
-        TV-rate proxy generation is never asked for."""
+        """The video PLL: FRACTIONAL and RECONFIGURABLE in every build, GENERATED at its 24 kHz
+        setting (42.105 MHz), the one the guest starts in, so a core load reconfigures nothing; the
+        SDC re-declares its clock at the fastest run-time setting, the 31 kHz clock (50.336 MHz), so
+        the fitter times the video domain at 19.87 ns (tools/profile_gen.py, the video PLL section).
+        pc9821_vpll_ctl moves it to the 31 kHz clock and back on 0x09A8 bit 0. The TV converter is
+        gone, so the TV-rate proxy generation is never asked for."""
         return pg.VpllRequest(False)
 
     def record(self) -> dict:
@@ -609,6 +659,8 @@ class Config:
                             f"{CLK_SYS_MIN_HZ // 10**6}..{CLK_SYS_MAX_HZ // 10**6} MHz: it is also "
                             "the SDRAM controller's clock, and sdram.v's timing derivation tops out "
                             "at 133 MHz")
+        if CLK_SYS_MIN_HZ <= self.clk_sys_hz and xe10_hold_problem(self.clk_sys_hz):
+            problems.append(xe10_hold_problem(self.clk_sys_hz))
         if self.clk_sys_hz <= PIXEL_HZ:
             problems.append(f"clk_sys {self.clk_sys_hz:_} Hz cannot carry the {PIXEL_HZ:_} Hz dot "
                             "enable (pc9821_dot_ce); the analog converters run on the video PLL's "
@@ -1806,6 +1858,8 @@ def agreement(root: Path, *, require_generated: bool = False) -> list[str]:
         problems += pg.vclk_pkg_problems((root / pg.VCLK_PKG).read_text())
     elif require_generated:
         problems.append(f"{root / pg.VCLK_PKG} is missing: the video PLL settings cannot be checked")
+    if (root / pg.OPNA_PATH).exists():
+        problems += pg.opna_cen_problems((root / pg.OPNA_PATH).read_text())
 
     vpll2 = root / "rtl" / "vpll" / "vpll_0002.v"
     if vpll2.exists() and (root / "rtl" / "vpll.v").exists():
@@ -1897,6 +1951,7 @@ def _fake_vpll(root: Path, config: Config) -> None:
     """A video PLL directory that reads back like a generated one (no container needed)."""
     req = config.vpll_request()
     _, freq_text, (mh, ml), k, vco = pg.VPLL_CONFIGS[req.tv]
+    ch, cl = pg.VPLL_C0
     rtl = root / "rtl"
     (rtl / "vpll").mkdir(parents=True, exist_ok=True)
     (rtl / "vpll.v").write_text(pg.render_vpll_v(req) + "// reconfig_to_pll\n")
@@ -1907,7 +1962,7 @@ def _fake_vpll(root: Path, config: Config) -> None:
         '\t\t.pll_subtype("Reconfigurable"),\n'
         f"\t\t.m_cnt_hi_div({mh}),\n\t\t.m_cnt_lo_div({ml}),\n"
         '\t\t.n_cnt_bypass_en("true"),\n'
-        f"\t\t.c_cnt_hi_div0({pg.VPLL_C0[0]}),\n\t\t.c_cnt_lo_div0({pg.VPLL_C0[1]}),\n"
+        f"\t\t.c_cnt_hi_div0({ch}),\n\t\t.c_cnt_lo_div0({cl}),\n"
         f'\t\t.pll_output_clk_frequency("{vco}"),\n'
         f'\t\t.pll_fractional_division("{k}"),\n')
 
@@ -2227,44 +2282,63 @@ def selftest() -> int:
         sub(root / "rtl" / "pll" / "pll_0002.v", f".number_of_clocks({pg.PLL_OUTPUTS})",
             ".number_of_clocks(3)")
 
-    @plant("video PLL: its output is not 50 MHz x (M + K/2^32) / 19 (another C0)")
+    @plant("video PLL: its output is not 50 MHz x (M + K/2^32) / 24 (another C0)")
     def _(root, cfg):
-        sub(root / "rtl" / "vpll" / "vpll_0002.v", "c_cnt_hi_div0(10)", "c_cnt_hi_div0(9)")
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", "c_cnt_hi_div0(12)", "c_cnt_hi_div0(11)")
 
-    @plant("video PLL: another M (the ratio to the 31 kHz dot rate is no longer the generated one)")
+    @plant("video PLL: another M (the ratio to the 24 kHz dot rate is no longer the generated one)")
     def _(root, cfg):
         sub(root / "rtl" / "vpll" / "vpll_0002.v", "m_cnt_hi_div(10)", "m_cnt_hi_div(9)")
 
     @plant("video PLL: another fraction K")
     def _(root, cfg):
-        sub(root / "rtl" / "vpll" / "vpll_0002.v", 'pll_fractional_division("548405248")',
-            'pll_fractional_division("548405249")')
+        sub(root / "rtl" / "vpll" / "vpll_0002.v", 'pll_fractional_division("904200192")',
+            'pll_fractional_division("904200193")')
 
     @plant("video PLL: an integer-N PLL (pc9821_vpll_ctl's K writes do nothing)")
     def _(root, cfg):
         sub(root / "rtl" / "vpll" / "vpll_0002.v", 'fractional_vco_multiplier("true")',
             'fractional_vco_multiplier("false")')
 
-    @plant("video PLL: not reconfigurable (pc9821_vpll_ctl cannot reach the 24 kHz clock)")
+    @plant("video PLL: not reconfigurable (pc9821_vpll_ctl cannot reach the 31 kHz clock)")
     def _(root, cfg):
         sub(root / "rtl" / "vpll" / "vpll_0002.v", 'pll_subtype("Reconfigurable")', 'pll_subtype("General")')
 
     @plant("video PLL: the RTL's 31 kHz fraction is not the generator's (pc9821_vclk_pkg)")
     def _(root, cfg):
-        sub(root / pg.VCLK_PKG, "VPLL_K31   = 32'h20B0_0000", "VPLL_K31   = 32'h20B1_0000")
+        sub(root / pg.VCLK_PKG, "VPLL_K31   = 32'h294C_0000", "VPLL_K31   = 32'h294D_0000")
 
     @plant("video PLL: the RTL's 24 kHz M is not the generator's (pc9821_vclk_pkg)")
     def _(root, cfg):
-        sub(root / pg.VCLK_PKG, "VPLL_M24   = 16", "VPLL_M24   = 17")
+        sub(root / pg.VCLK_PKG, "VPLL_M24   = 20", "VPLL_M24   = 21")
+
+    @plant("video PLL: the RTL's C0 is not the generator's (pc9821_vclk_pkg)")
+    def _(root, cfg):
+        sub(root / pg.VCLK_PKG, "VPLL_C     = 24", "VPLL_C     = 19")
+
+    @plant("video PLL: the RTL's 24 kHz setting is the old integer M 16, K 0, C0 19 (outside the legal fraction)")
+    def _(root, cfg):
+        sub(root / pg.VCLK_PKG, "VPLL_M24   = 20", "VPLL_M24   = 16")
+        sub(root / pg.VCLK_PKG, "VPLL_K24   = 32'h35E5_0000", "VPLL_K24   = 32'h0000_0000")
+        sub(root / pg.VCLK_PKG, "VPLL_C     = 24", "VPLL_C     = 19")
+
+    @plant("video PLL: the RTL starts in the 31 kHz configuration although the PLL is generated at 24 kHz")
+    def _(root, cfg):
+        sub(root / pg.VCLK_PKG, "VPLL_GEN_31 = 0", "VPLL_GEN_31 = 1")
 
     @plant("video PLL: missing while generation is required")
     def _(root, cfg):
         (root / "rtl" / "vpll" / "vpll_0002.v").unlink()
 
-    @plant("SDC: the video clock's crossing bound is the 24 kHz period, not the generated 31 kHz one")
+    @plant("SDC: the video clock's crossing bound is the 24 kHz period, not the fastest 31 kHz one")
     def _(root, cfg):
         sub(root / SDC_NAME, "set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid 19.866",
             "set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid 23.750")
+
+    @plant("SDC: the video clock is timed at its generated 24 kHz rate (the 31 kHz re-declaration dropped)")
+    def _(root, cfg):
+        sub(root / SDC_NAME, "create_generated_clock -name $pc9821_clk_vid_name",
+            "# create_generated_clock -name $pc9821_clk_vid_name")
 
     @plant("SDC: the video clock lost its asynchronous group")
     def _(root, cfg):
@@ -2555,6 +2629,37 @@ def selftest() -> int:
         else:
             print(f"selftest: {' '.join(argv)} resolves")
     failures += sdram_table_selftest()
+    # The Xe10 hold floor: the model must match pc9821_iobus.sv, the edge must be exact, and a
+    # --custom clock under it is refused while one at it resolves (no shipped preset is near it).
+    xe10_drift = xe10_hold_model_problems(
+        (PROJECT_DIR / "src/pc9821/core/pc9821_iobus.sv").read_text())
+    edge = xe10_hold_min_hz()
+    if xe10_drift or xe10_hold_problem(edge) or not xe10_hold_problem(edge - 1):
+        print("SELFTEST FAIL: the Xe10 hold floor model disagrees with pc9821_iobus.sv or its edge: "
+              + "; ".join(xe10_drift or [f"edge {edge} Hz"]))
+        failures += 1
+    else:
+        print(f"selftest: the Xe10 hold floor is {edge:_} Hz and matches pc9821_iobus.sv")
+    for argv, refused in ((["--custom", "--clk-sys-mhz", "30"], True),
+                          (["--custom", "--clk-sys-hz", str(edge - 1)], True),
+                          (["--custom", "--clk-sys-hz", str(edge)], False),
+                          (["--custom", "--clk-sys-mhz", "50"], False)):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                resolve_config(None, contract_parser.parse_args(argv))
+            got = False
+        except SystemExit as exc:
+            got = "Xe10 I/O class" in str(exc)
+        if got != refused:
+            print(f"SELFTEST FAIL: {' '.join(argv)} is {'accepted' if not got else 'refused'}, "
+                  f"want {'refused (the Xe10 hold underflows)' if refused else 'accepted'}")
+            failures += 1
+        else:
+            print(f"selftest: {' '.join(argv)} is {'refused (Xe10 hold underflow)' if refused else 'accepted'}")
+    for name, prof in PROFILES.items():
+        if xe10_hold_problem(prof.clk_sys_hz):
+            print(f"SELFTEST FAIL: preset {name} ({prof.clk_sys_hz:_} Hz) is under the Xe10 hold floor")
+            failures += 1
     sys_text = (PROJECT_DIR / "src/pc9821/core/pc9821_system.sv").read_text()
     top_arm = re.search(r"generate if \(SDRAM_PHASE_DYN\) begin : g_sdph_dps(.*?)end else begin",
                         (PROJECT_DIR / TOP_NAME).read_text(), re.S)

@@ -123,6 +123,8 @@ module tb_pc9821_hps_slot_integrity;
   localparam integer PCD_SECS = 70;   // track 1 data 0..9, track 2 audio 10..19, track 3 20..69
   localparam integer PLAY_FIRST = 10;
   localparam integer PLAY_SECS = 50;
+  localparam integer P1_MIN_READS = 12;
+  integer p1_reads, p1_dry;
 
   function automatic [7:0] hbyte(input integer s, input integer i);
     hbyte = 8'(s * 37 + i * 11 + (i >> 8) * 5 + 8'h5C);
@@ -368,24 +370,33 @@ module tb_pc9821_hps_slot_integrity;
     // each disk request lands a different number of clk after a CD transfer is acknowledged, so
     // it WAITS in the engine (sd_rd up, its own ack low) while that transfer's words go by
     nxt = 0;
-    for (k = 0; k < 24 && errors < 6; k++) begin
+    // Up to 24 disk reads, each against a CD transfer in flight; the loop stops early when the
+    // player runs dry. The 50-sector play leaves 14 transfers after the first, so a run reads
+    // 14; fewer than P1_MIN_READS means the interleave this phase exists for hardly happened.
+    p1_reads = 0; p1_dry = 0;
+    for (k = 0; k < 24 && errors < 6 && !p1_dry; k++) begin
       cd_x0 = n_cd_xfers;
       n = 0;
       while (!cd_sd_ack && n < 400000) begin @(negedge clk); n++; end
       if (!cd_sd_ack) begin
         // the player ran dry: no CD transfer left to land on
         $display("note: the CD fetched no more after %0d disk reads", k);
-        k = 1000;
+        p1_dry = 1;
       end else begin
         repeat (offs[nxt]) @(negedge clk);
         nxt = (nxt + 1) % 5;
         lba_pick = (k * 29 + 7) % DISK_SECS;
         disk_read(lba_pick, "P1 (CD playing)");
+        p1_reads++;
         // let the player's next fetch come round
         repeat (50) @(negedge clk);
       end
     end
-    if (k < 1000 && k < 24 && errors == 0) $display("note: loop ended early at %0d", k);
+    if (p1_reads < P1_MIN_READS) begin
+      errors++;
+      $display("FAIL: P1 made only %0d disk reads against a playing CD (want at least %0d)",
+               p1_reads, P1_MIN_READS);
+    end
 
     // ==== P2: the CD-DA samples are the audio sectors' own, with none of the disk's words ====
     begin

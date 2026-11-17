@@ -62,7 +62,7 @@ module pc9821_pcm86 #(
     // latched flag OR the live buffer-low level). It is LOW while the guest
     // masks it and rises AGAIN on a re-enable with the flag still latched,
     // which is the fresh edge the edge-latched PIC consumes
-    // (pc9821_pic.sv:172 `ir_set = ir_in & ~ir_prev`). The guest clears the
+    // (pc9821_pic.sv:178 `ir_set = ir_in & ~ir_prev`). The guest clears the
     // latched flag by writing 0xA468 with bit 4 clear. On the card one strap
     // feeds the OPNA's timers and this block, so pc9821_system puts this and
     // the OPNA's IRQ line on one 8259 input (pc9821_irq_share) rather than
@@ -128,15 +128,25 @@ module pc9821_pcm86 #(
   assign io_rd_wait = 1'b0;
 
   // The write back-pressure (S6), for the 0xA46C stream. The decode is the
-  // 4-port WINDOW 0xA468-0xA46F, not 0xA46C alone: the bus presents the FIRST
-  // lane's address before the access, and a word/dword OUT whose lanes straddle
-  // 0xA46C (first lane 0xA469-0xA46B) must stall before its 0xA46C lane reaches
-  // the FIFO. Over-stalling the window's other ports while the FIFO is full is
-  // extra latency, never a loss (and the stall always ends: the SDRAM drain pops
-  // without the guest). pc9821_iobus gates this with request_write, so reads
-  // -- including the 0xA46C pcm86_inpdummy read -- pass unwaited. The window is
-  // the term's own bound: pc9821_system must NOT re-qualify it with pcm_cs,
-  // which excludes the odd first lanes the window exists for.
+  // DWORD 0xA46C-0xA46F, not 0xA46C alone. pc9821_iobus now checks the wait at
+  // every write lane's S_BYTE on that lane's own port (lane_wr_wait), so 0xA46C
+  // alone would do; the dword is what the decode was built for when the check
+  // sat in S_IOWAIT on the access's FIRST lane (port_addr = the dword base plus
+  // first_lane(be)), where it had to cover every first lane an access that
+  // carries the 0xA46C byte can present, and that is 0xA46C itself (the dword's
+  // lane 0) - 0xA46D-0xA46F are covered too, harmlessly (a 0xA46E lane of a dword
+  // write waits for the drain the 0xA46C lane before it caused). No access with a first lane
+  // below 0xA46C can carry the 0xA46C byte: the iobus takes one dword-aligned
+  // base with four byte enables, and z486 splits an I/O access that crosses a
+  // dword into two dword-aligned bus cycles (paging_unit.sv `IO crossing: split
+  // into two DWORD-aligned bus cycles`), so `out dx,ax` at 0xA46B is a 0xA468
+  // cycle (lane 3) and then a 0xA46C cycle that waits here. Widening the decode
+  // to 0xA468-0xA46B would only stall the 0xA468/0xA46A control writes while the
+  // FIFO is full, latency with nothing to protect. pc9821_iobus gates this with
+  // request_write, so reads -- including the 0xA46C pcm86_inpdummy read -- pass
+  // unwaited. The decode is the term's own bound: pc9821_system must NOT
+  // re-qualify it with pcm_cs, which is false for the odd ports 0xA46D/0xA46F
+  // a first lane of this dword can be.
   wire buf_wr_wait;   // the buffer's write FIFO is full (u_buf below)
   assign io_wr_wait = (io_addr[15:2] == P_DATA[15:2]) && buf_wr_wait;
 
@@ -241,17 +251,15 @@ module pc9821_pcm86 #(
 
   // ------------------------------------------------------------------
   // The 32 KiB buffer: one write port (the guest's 0xA46C byte) and one read
-  // port (the drain engine), both on clk. It is block RAM, not registers --
-  // 32,768 bytes, which is why the design report puts it in M10K and not in the
-  // SDRAM window the OPNA's ADPCM-B RAM needs.
+  // port (the drain engine), both on clk, backed by SDRAM on the memory
+  // controller's third port (src/pcm86/pc9821_pcm86_buf.sv).
   //
-  // The drain engine's state is declared here because the buffer's read enable
-  // is derived from it.
+  // The drain engine's state is declared here because the buffer's read request
+  // is derived from it. The engine is a REQUEST/VALID handshake: a read takes the
+  // controller's latency, and D_WAIT is where the engine rides it out. A frame is
+  // <=4 bytes against a strobe period of SYS_CLOCK_HZ / 44100 clk at 44.1 kHz
+  // (about 2041 clk at a 90 MHz clk_sys), so the extra states are free.
   // ------------------------------------------------------------------
-  // The engine is a REQUEST/VALID handshake now, not a one-cycle block-RAM read: the buffer
-  // is in SDRAM (src/pcm86/pc9821_pcm86_buf.sv), so a read takes the controller's latency
-  // rather than one cycle, and D_WAIT is where the engine rides it out. A frame is <=4
-  // bytes against a 1134-clk strobe period, so the extra states are free.
   localparam [1:0] D_IDLE = 2'd0, D_REQ = 2'd1, D_WAIT = 2'd2, D_DONE = 2'd3;
 
   reg  [1:0]  dstate;
@@ -267,8 +275,8 @@ module pc9821_pcm86 #(
 
   pc9821_pcm86_buf u_buf (
     .clk(clk), .reset(reset), .buf_base(buf_base),
-    // The guest's write: a one-cycle strobe at wrptr, the address BEFORE the pointer advances --
-    // exactly where the block-RAM port A landed it. wr_wait back-pressures it (io_wr_wait).
+    // The guest's write: a one-cycle strobe at wrptr, the address BEFORE the pointer advances.
+    // wr_wait back-pressures it (io_wr_wait).
     .wr_en(wr_data), .wr_addr(wrptr), .wr_data(io_din), .wr_wait(buf_wr_wait),
     // The drain engine's read, as a request/valid handshake.
     .rd_req(rd_req), .rd_addr(rd_addr), .rd_data(rd_q), .rd_valid(rd_valid),
@@ -280,11 +288,9 @@ module pc9821_pcm86 #(
 
   // ------------------------------------------------------------------
   // The drain engine. One sample frame per sample strobe, while 0xA468 bit 7
-  // (playback enable) is set and the buffer holds a whole frame. The read port
-  // is registered, so a frame takes two cycles per byte: present the address,
-  // capture what the block RAM registered. A frame is therefore at most 8 clk
-  // against a strobe period of 1134 clk at 50 MHz and 44.1 kHz, so the engine
-  // always finishes long before the next strobe.
+  // (playback enable) is set and the buffer holds a whole frame. Each byte is one
+  // D_REQ/D_WAIT round trip through the buffer's SDRAM read (see above); a frame
+  // of at most 4 bytes finishes long before the next strobe.
   // ------------------------------------------------------------------
   reg [1:0]  bidx;
   reg [2:0]  nbyte_rg;
@@ -364,7 +370,7 @@ module pc9821_pcm86 #(
   // A wire driven by irq_pending alone is NOT that query: it stays HIGH through
   // an 0xA468 write of 0x90 (bit 5 clear, bit 4 set, so the latch survives -
   // cbus/pcm86io.c:114-121) and eats the re-enable's rising edge at the PIC
-  // (pc9821_pic.sv:168; wired in through pc9821_system.sv:1533, `.irq_a(opna_irq), .irq_b(pcm86_irq),`). tb_pc9821_pcm86_irqmask.
+  // (pc9821_pic.sv:178; wired in through pc9821_system.sv:1588, `.irq_a(opna_irq), .irq_b(pcm86_irq),`). tb_pc9821_pcm86_irqmask.
   wire irq_query = (irq_pending || (count <= fifosize)) && fifo[5];
 
   // EVERY ARMED THRESHOLD EVENT IS A FRESH REQUEST. NP2kai delivers each one with its own
@@ -552,6 +558,9 @@ module pc9821_pcm86 #(
         // D_WAIT holds until the SDRAM read answers. The byte arrives with rd_valid.
         D_WAIT: if (rd_valid) begin
           acc <= {acc[23:0], rd_q};
+          // The last byte of the frame. nbyte_rg is 1, 2 or 4 (frame_bytes), and BOTH sides are
+          // 2 bits: the 4-byte frame's nbyte_rg[1:0] is 0, so 0 - 1 wraps to 3, its last bidx.
+          // Widening either side breaks the 16-bit-stereo frame.
           if (bidx == nbyte_rg[1:0] - 2'd1) begin
             dstate <= D_DONE;
           end else begin

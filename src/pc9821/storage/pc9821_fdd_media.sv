@@ -842,8 +842,10 @@ module pc9821_fdd_media (
   reg        aerr;         // the sticky error for the current request
   reg        ahdrv;        // the READ ID answer is standing
 
-  // 128 << N, clamped at N >= 8 exactly as NP2kai does (`if (fdc.N < 8) ... else 128<<8`).
-  wire [15:0] rq_sec_bytes = (rq_n[7:4] != 4'd0) ? 16'd32768 : (16'd128 << rq_n[3:0]);
+  // 128 << N, clamped at N >= 8 exactly as NP2kai does (`if (fdc.N < 8) ... else 128<<8`,
+  // diskimage/fd/fdd_d88.c fdd_read_d88): every N of 8..255 is 32768 bytes. (128 << 9 and up do
+  // not fit 16 bits, so the clamp must start at bit 3.)
+  wire [15:0] rq_sec_bytes = (rq_n[7:3] != 5'd0) ? 16'd32768 : (16'd128 << rq_n[2:0]);
 
   // ---------------------------------------------------------------- the write byte
   // A write request's `adv` with a FILE byte left (file_left: the bytes a read would take from
@@ -1022,6 +1024,20 @@ module pc9821_fdd_media (
                          (walk_fdsz[20:0] <= D88_MAX_EXTENT[20:0]) &&
                          (walk_size[21] || (walk_fdsz[20:0] <= walk_size[20:0])) &&
                          (tp0 != 22'd0) && !tp0[21] && (tp0[20:0] < walk_fdsz[20:0]);
+  // ... staged one free-running clk_sys for ST_PARSE, which is all that reads it: the walked
+  // drive's size and extent compares were one cycle from `mnt_u` through the fd_size/mnt_size
+  // muxes into the parse registers (-1.8 to -2.7 ns on every seed of the lane head's sweep).
+  // Every input is latched long before ST_PARSE: mnt_u at the walk's start, fd_type and fd_size
+  // at header bytes 0x1B-0x1F and tp0 at 0x20-0x23, while ST_PARSE follows byte 0x2AF, one
+  // consume per cycle at the fastest; mnt_size[mnt_u] changes only with a mount of that drive,
+  // whose mnt_req restarts the walk (walk_en) instead of letting ST_PARSE decide. So the staged
+  // verdict is the combinational one wherever it is taken: pc9821_static_stage asserts the
+  // premise at exactly the cycles ST_PARSE reads it (walk_en and abort_now take the FSM's other
+  // arms first). Mount time only: no guest-visible cycle moves.
+  wire d88_looks_valid_q;
+  pc9821_static_stage #(.W(1), .DEPTH(1)) u_d88_valid (
+      .clk(clk), .d(d88_looks_valid), .q(d88_looks_valid_q),
+      .chk_en(!reset && (st == ST_PARSE) && !walk_en && !abort_now));
 
   always @(posedge clk) begin
     if (reset) begin
@@ -1265,7 +1281,7 @@ module pc9821_fdd_media (
           end
 
           ST_PARSE: begin
-            if (d88_looks_valid) begin
+            if (d88_looks_valid_q) begin
               is_d88[mnt_u]  <= 1'b1;
               cls_2dd[mnt_u]   <= (fd_type[7:4] == 4'd0) || (fd_type[7:4] == 4'd1);
               cls_rpm1[mnt_u]  <= 1'b0;
@@ -1585,7 +1601,7 @@ module pc9821_fdd_media (
       end
   end
 
-`ifndef SYNTHESIS
+  // synthesis translate_off
   // R8: a write-back is never scheduled in the cycle the fetch engine issues the previous one
   // (w_sched's R3 note) - that coincidence would lose the earlier block's write-back.
   always @(posedge clk)
@@ -1598,7 +1614,7 @@ module pc9821_fdd_media (
     if (!reset && rdy && !present[req_u])
       $error("pc9821_fdd_media: rdy for drive %0d with no medium (a media change leaked a byte)",
              req_u);
-`endif
+  // synthesis translate_on
 
 endmodule
 

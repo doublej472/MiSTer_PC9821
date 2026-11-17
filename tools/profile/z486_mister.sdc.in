@@ -27,8 +27,8 @@ if {[get_collection_size $pc9821_clk_sys] != 1 ||
 
 # ---------------- The video clock (CLK_VIDEO): the video PLL, rtl/vpll -----------------
 # The analog picture leaves on its own PLL clock, an exact multiple of the dot rate the raster runs
-# on (2 x 400/19 MHz for the native and doubled 24 kHz pictures, 2 x 25.168 MHz while 0x09A8 bit 0
-# selects the 31 kHz dot clock; tools/profile_gen.py, the video PLL section), so every pixel and
+# on (2 x 400/19 MHz within 0.04 ppm for the native and doubled 24 kHz pictures, 2 x 25.168 MHz while
+# 0x09A8 bit 0 selects the 31 kHz dot clock; tools/profile_gen.py, the video PLL section), so every pixel and
 # sync period is a constant number of clocks. The raster
 # stays on clk_sys; pc9821_video_out carries each dot across through a 16-entry FIFO whose write
 # pointer crosses Gray-coded through two flops, and the OSD/PLL-state levels through two flops each.
@@ -37,6 +37,35 @@ if {[get_collection_size $pc9821_clk_sys] != 1 ||
 set pc9821_clk_vid [get_clocks {*vpll|vpll_inst|altera_pll_i|*[0].*|divclk}]
 if {[get_collection_size $pc9821_clk_vid] != 1} {
     error "PC9821: the video PLL's clock not found"
+}
+# THE PERIOD THE VIDEO DOMAIN IS TIMED AT. The PLL is generated at its 24 kHz setting (42.105 MHz,
+# the one the guest starts in, so a core load reconfigures nothing: src/pc9821/video/pc9821_vclk_pkg.sv),
+# but pc9821_vpll_ctl also runs it at the faster 31 kHz one (50.336 MHz). derive_pll_clocks declares
+# only the generated rate, so the output clock is declared again, under the same name on the same
+# pin, from the PLL's 50 MHz reference at the 31 kHz ratio (tools/profile_gen.py VCLK_TIMED_RATIO):
+# every path in the video domain is timed at the fastest clock it runs at, as it was while the PLL
+# was generated at 31 kHz. The new declaration replaces the derived one.
+set pc9821_clk_vid_name [get_clock_info -name $pc9821_clk_vid]
+set pc9821_clk_vid_pin  [get_clock_info -targets $pc9821_clk_vid]
+set pc9821_vpll_refclk  [get_pins -compatibility_mode {*vpll|vpll_inst|altera_pll_i|*|fpll|refclkin}]
+if {[get_collection_size $pc9821_vpll_refclk] != 1} {
+    error "PC9821: the video PLL's reference clock pin not found"
+}
+create_generated_clock -name $pc9821_clk_vid_name -source $pc9821_vpll_refclk \
+    -master_clock FPGA_CLK2_50 -multiply_by @VCLK_MULT@ -divide_by @VCLK_DIV@ $pc9821_clk_vid_pin
+set pc9821_clk_vid [get_clocks $pc9821_clk_vid_name]
+if {[get_collection_size $pc9821_clk_vid] != 1} {
+    error "PC9821: the video PLL's clock not re-declared"
+}
+# Every member of the second group must exist exactly once: a renamed framework clock would
+# otherwise drop out of the group silently and be timed against the video clock again.
+foreach pc9821_vg_member {{pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0].*|divclk}
+                          {pll_audio|pll_audio_inst|altera_pll_i|*[0].*|divclk}
+                          spi_sck hdmi_sck {*|h2f_user0_clk}
+                          FPGA_CLK1_50 FPGA_CLK2_50 FPGA_CLK3_50} {
+    if {[get_collection_size [get_clocks -nowarn $pc9821_vg_member]] != 1} {
+        error "PC9821: video clock group member $pc9821_vg_member: expected exactly 1 clock"
+    }
 }
 set_clock_groups -asynchronous -group $pc9821_clk_vid \
     -group [get_clocks { pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0].*|divclk \
@@ -47,8 +76,8 @@ set_clock_groups -asynchronous -group $pc9821_clk_vid \
 # their edges (a setup relationship of a fraction of a nanosecond somewhere in the 19-cycle
 # pattern), which no crossing here needs: every path between them ends in a synchroniser's first
 # stage (the FIFO pointer, the levels, sys_top's vs_d0/vsd on HDMI_TX_VS) or comes from a quasi-static
-# register. Bound each to one period of its destination clock (the video clock's generated, FASTEST
-# configuration: the 31 kHz clock) and drop the hold check, the standard treatment of a
+# register. Bound each to one period of its destination clock (the video clock's FASTEST
+# configuration, the 31 kHz clock, as declared above) and drop the hold check, the standard treatment of a
 # synchronised crossing; a
 # max-delay rather than a false path keeps the Gray pointer's bits within one period of each other.
 set_max_delay -from $pc9821_clk_sys -to $pc9821_clk_vid @VCLK_PERIOD_NS@
@@ -68,9 +97,9 @@ set_false_path -hold -from $pc9821_clk_vid -to $pc9821_clk_sys
 # tAC 6.0 ns, tOH 2.5 ns, tDS 1.5 ns, tDH 0.8 ns. Commands/write data launch
 # from the controller's clk_sys I/O registers and are sampled on the phase-shifted
 # SDRAM_CLK. Read DQ launches from the SDRAM clock and is captured by the sole
-# controller input register in sdram.v. Board skew is not yet characterized separately;
-# these constraints use the full device limits and must be revisited with
-# measured/board-level skew before declaring hardware acceptance.
+# controller input register in sdram.v. Board skew is not characterized separately;
+# these constraints use the full device limits, and the hardware acceptance gate is the
+# run-time SDRAM I/O margin (`--min-sdram-io` and the phase shmoo, docs/sdram-margin.md).
 create_generated_clock -name PC9821_SDRAM_CLK \
     -source $pc9821_clk_sdram_pin -divide_by 1@SDRAM_CLK_INVERT@ [get_ports SDRAM_CLK]
 
@@ -116,50 +145,131 @@ set_multicycle_path -from [get_ports SDRAM_DQ[*]] \
 # where the real margin at 4000 ps was +0.016 ns at the slow 100C corner and negative at the
 # others. The phase is now chosen to centre this window (tools/profile_gen.py).
 
-# Reset/control-release paths. Previously written as
-#   set_false_path -from [get_registers {*cpu_reset_n*}]
-#   set_false_path -from [get_registers {*boot_done*}]
-# and both matched nothing (cpu_reset_n is a *net*, boot_done does not exist in
-# the fitted netlist), so they were silently inert: Warning 332049, reported
-# once and then ignored. The reset exception is wanted, but it has to name
-# objects that exist -- the two reset synchroniser chains.
-#
-# reset_sync_r is the clk_sys chain, and it is the whole exception: the SDRAM controller runs on
-# clk_sys and takes reset_sync_r's release directly. (The split-clock build also carried
-# resetn_sdram_r, the clock-domain bridge's clk_sdram re-synchroniser, named here until that
-# configuration was removed.)
-set pc9821_reset_regs [get_registers {*reset_sync_r*}]
-if {[get_collection_size $pc9821_reset_regs] == 0} {
-    error "PC9821: reset synchroniser registers not found"
-}
-set_false_path -from $pc9821_reset_regs
+# The reset release is TIMED: there is no exception on reset_sync_r (z486_mister.sv, the clk_sys
+# reset synchroniser). reset_sync_r[2] is a SYNCHRONOUS reset into pc9821_system, the SDRAM
+# controller and its pin cells, about 9,700 endpoints on a fitted netlist; it now reaches them
+# through the registered reset tree (pc9821_reset_tree: one copy per block, all loaded on one edge),
+# so the timed paths are reset_sync_r[2] -> the copies and each copy -> its own block. A false path from it (here until 2026-11-12, a remnant of the split-clock
+# build's resetn_sdram_r crossing) left that release untimed: on the h5b-5900c2a2 seed-3 fit 1,380
+# of those endpoints, the SDRAM command/address DDIO cells among them, read -4.5 ns when timed,
+# i.e. they left reset a cycle after the rest of the machine. Nothing makes such a skew safe: a
+# block whose registers leave reset on different cycles can start in a state the RTL never
+# reaches. Do not re-add the cut; a slow release is fixed in the RTL (the reset tree), not in the
+# constraints.
 
 # Quasi-static OSD/load-time configuration: hps_io's 128-bit `status` word and
 # `sdram_sz`. MiSTer re-sends the whole word on a UI command (core load, OSD
 # setting, or one of the `R`/`T` action entries -- those arrive as LEVELS, 1 then
-# 0, which pc9821_iobus edge-detects into the one-cycle DIP-store pulses its port
-# comment documents), and the BIOS-set field is latched again at the core's
-# reset/reload strobe. The real requirement on these bits is software pace --
-# microseconds between changes at the closest -- not a single clk_sys edge, so
-# timing every status -> core path (reset_req, pc9821_osd's RAM-size/vsync/BIOS
-# decode, the joystick_dis decode) at one clock cycle is pure over-constraint.
+# 0), and the BIOS-set field is latched again at the core's reset/reload strobe.
+# Its consumers: status[0], the reset (reset_req and the loader's apply-reset);
+# the T[7..11] eject actions, whose rising edges pc9821_mount_eject detects; the
+# level fields (pc9821_osd's decodes, the machine, CPU speed, floppy-mode and I/O
+# timing straps into pc9821_system, the analog-video select); and on clk_vid the
+# `ar`/`scale` captures and VGA_SL. The real requirement on these bits is software
+# pace -- microseconds between changes at the closest -- not a single clk_sys edge,
+# so timing every status -> core path at one clock cycle is pure over-constraint.
 # reset_req = buttons[1] | status[0] shows the asymmetry this removes: its
 # `buttons` half (= cfg[1:0]) is already false-pathed both ways by
 # sys/sys_top.sdc's `cfg[*]` pair, and the status half is the same class of
 # signal. sdram_sz likewise (fixed per core load) feeds only the
-# controller's row/bank geometry decode. Cut both directions, mirroring `cfg`.
+# controller's row/bank geometry decode. sdram_sz is written exactly once per core load:
+# Main_MiSTer's user_io_init sends UIO_SET_MEMSZ ('h31, user_io.h `#define UIO_SET_MEMSZ   0x31`;
+# user_io.cpp `spi_uio_cmd16(UIO_SET_MEMSZ, sdram_sz(-1));`) before it asserts the core reset
+# (`user_io_status_set("[0]", 1);`), so every consumer is reset after the change and sees a
+# constant from then on.
+#
+# -from ONLY. The WRITE into these words is a single-cycle path and stays timed: hps_io loads
+# them on io_strobe from io_din, selected by byte_cnt, and advances byte_cnt on the SAME strobe
+# edge (sys/hps_io.sv:339, `if(~&byte_cnt) byte_cnt <= byte_cnt + 1'd1;`). A strobe that reached
+# a status bit's enable a cycle late would load the NEXT 16-bit field. An earlier `-to` cut on both
+# words hid exactly that path (gp_outr[17] -> io_strobe -> status: -7.4 ns when timed on the
+# h5b-5900c2a2 seed-3 fit, byte_cnt -> status -9.6 ns, placed with no constraint at all).
+# The guards are lower bounds (the fitted netlists keep 45 status bits and 2 sdram_sz bits; the
+# pattern also matches the fitter's ~DUPLICATE copies), so a rename that leaves the cut inert
+# fails the build instead.
 # This is not a CDC handshake: hps_io writes both words on clk_sys and the HPS
 # side crosses through the already-grouped h2f/spi interface.
 set pc9821_status_regs  [get_registers {*hps_io|status[*]}]
 set pc9821_sdramsz_regs [get_registers {*hps_io|sdram_sz[*]}]
-if {[get_collection_size $pc9821_status_regs] == 0 ||
-    [get_collection_size $pc9821_sdramsz_regs] == 0} {
-    error "PC9821: quasi-static hps_io config registers not found"
+if {[get_collection_size $pc9821_status_regs] < 32} {
+    error "PC9821: hps_io status registers not found (expected at least 32)"
+}
+if {[get_collection_size $pc9821_sdramsz_regs] < 2} {
+    error "PC9821: hps_io sdram_sz registers not found (expected at least 2)"
 }
 set_false_path -from $pc9821_status_regs
-set_false_path -to   $pc9821_status_regs
 set_false_path -from $pc9821_sdramsz_regs
-set_false_path -to   $pc9821_sdramsz_regs
+
+# hps_io's img_size[63:0] is TIMED: no exception. Its one reader is pc9821_mount_eject, which loads
+# it into its size stage on every clk_sys (pc9821_mount_eject.sv:108, `.clk(clk), .d((|issue) ? 65'd0 : {hps_readonly, hps_size}), .q({readonly_q, size_q}),`)
+# through one mux. The consumers read mount_eject's registered size, never img_size itself. The
+# false path that stood here (from hygiene4) described the earlier topology, in which consumers
+# sampled img_size on their img_mounted pulse. Timed on all twelve sdc-32503923/sdc-3ae7832e fits,
+# its 127 endpoints are at +5.85 ns or better (setup) and +0.109 ns or better (hold), so the cut
+# protected nothing and only hid a single-cycle path.
+
+# ---------------- Clock-enable multicycles ----------------------------------
+# Each is exact: (1) every source register changes only on its enable's pulse (or while the
+# destination is held in the same reset), (2) every destination loads only on that enable's
+# pulse, and (3) two pulses are at least N clk_sys apart, so a source change is never captured
+# by a destination sooner than N cycles after it. Where a source also reaches a destination's
+# load condition, it is ANDed with the enable, so at a non-pulse edge the destination holds
+# whatever the source is. The enable's own path (its generator) is in no -from set and stays
+# single-cycle. -hold N-1 puts the hold check back at the default edge. N depends on clk_sys and
+# is computed by tools/profile_gen.py (render_cen_multicycles); with N < 2 the line is omitted.
+# tools/check_sdc_exceptions.py --fit counts each matched set exactly (sdc_exceptions.tsv mc_*).
+#
+# crtc - pixel_ce (pc9821_dot_ce: `assign ce = (sum >= W'(DEN));`, acc < NUM after a pulse, so
+#   pulses are >= floor(DEN / NUM31) apart: 3 at 90 MHz; N is capped at 3, the shortest rst_n_sys
+#   assertion, because the sources also take their reset values on the edge it asserts). From the CRTC's SYNC-block roots
+#   s_x_r .. s_lc40_r and v_sync, loaded only in `end else if (pixel_ce && frame_end) begin`
+#   (pc9821_crtc.sv:561, reset by rst_n_sys), to the text-fetch registers loaded only in
+#   `end else if (pixel_ce) begin` (pc9821_crtc.sv:1833, the same rst_n_sys) and f_rowbase_r
+#   (`else if (pixel_ce) f_rowbase_r <= {6'd0, f_k} * {8'd0, v_pitch};`, pc9821_crtc.sv:1613).
+#   The raster counter hdot/vline is NOT a source: rst_n_vid re-seeds it on clocks that need not
+#   be pixel_ce clocks (pc9821_raster_reseed: the machine reset's last clock and the one after it,
+#   cpu_run's rise; pc9821_system.sv:2022, `wire rst_n_vid = !cpu_run_reseed;`), so it stays timed.
+# jt12 - the OPNA cen (pc9821_opna.sv `cen           <= cen_sum[32];`, >= floor(2^32 / CEN_STEP)
+#   apart: 11 at 90 MHz). From the slot counter, loaded only on clk_en and never cleared
+#   (jt12_reg.v:199-201, `always @(posedge clk) begin : up_counter` / `if( clk_en ) begin`), to the
+#   phase generator's stage-II registers (jt12_pg.v:66, `always @(posedge clk) if(clk_en) begin`)
+#   and the two accumulators (jt12_single_acc.v `always @(posedge clk) if( clk_en ) begin`, its
+#   clk_en being jt08_acc.v's `assign int_clk_en = clk_en | (cen & cen_pcm_a) | (cen & cen_pcm_b) ;`).
+#   Every edge involved is a cen edge, so the cen spacing is the bound. The LFO's lfo_mod is NOT a
+#   source: it clears on `if( rst || !lfo_en )` (jt12_lfo.v:90), a guest register write.
+# hpsio - io_strobe (sys/sys_top.v:256, `wire io_strobe = ~rack & io_clk;`; rack follows io_clk,
+#   so strobes are >= 2 clk_sys apart). hps_io loads its command (`cmd <= io_din;`,
+#   sys/hps_io.sv:342) and byte count (:339, and :561's gamma wrap) only on io_strobe, and the
+#   status word (:500-507) and img_size (:495, `'h1d: if(byte_cnt<5)`) only on a later io_strobe.
+#   Their one other change is the clear on ~io_enable (:330). That case rests on the HPS, not on the
+#   RTL: io_enable must not fall for one cycle and rise together with the next strobe, otherwise a
+#   relaxed capture could still see the old command and count. Main_MiSTer drives io_enable (the
+#   SPI select bits) and the strobe with separate register writes, so it is software-paced, not
+#   cycle-exact; the owner accepted it on that basis (2026-11-12). The strobe, io_enable and io_din
+#   paths stay timed: io_din's data bits cross the HPS gp register beside the strobe bit with no
+#   bound on their gap.
+# rhythm - the same strobe. hps_io's ioctl_addr changes only on io_strobe (sys/hps_io.sv:702, :706,
+#   :717), and its one use that matters is the rhythm loader's capture with we = 1
+#   (pc9821_rhythm_loader.sv:47-53, `we <= write;` / `waddr <= offset[12:1];`): `wr <= 1;` is set at
+#   a TX_DAT strobe S (:722, the edge that moves ioctl_addr), `ioctl_wr <= wr;` (:662) is high in
+#   [S+1, S+2), so the written word is captured at S+2, two cycles after its address. At S+1 we = 0
+#   and the RHYTHM_ROM write port ignores waddr/wdata. ioctl_download, ioctl_wr and ioctl_dout are
+#   not sources. Exact from the RTL.
+# sysio - the same strobe in sys_top. Its command byte counter `cnt` changes only on io_strobe
+#   (sys/sys_top.v:384, :413, :445; no clear on ~io_uio), and every register it indexes (acx, acy*,
+#   arc*, cfg_custom_*, cfg_done, lowlat, vol_boost, LFB_*, PhaseInc) loads only inside the same
+#   `else if(io_strobe)` arm, so a cnt change is first used two cycles later. The constraint lives
+#   here, not in the frozen sys/sys_top.sdc. Exact from the RTL.
+# dmaaddr - the DMA byte's address snapshot, not a clock enable but the same shape (owner decision
+#   2026-11-13, "yes, go with option 1"; docs/trade-candidates.md T89). pc9821_dmac's ld_addr is
+#   written only `else if (ld_we)`, ld_we being S_IDLE's accept or S_SEL (pc9821_dmac.sv THE ADDRESS
+#   SNAPSHOT), and pc9821_memory_subsystem's DMA load registers (dma_be_addr, dma_cls, dma_gv_plane,
+#   dma_snoop_q; dma_addr_ld is simulation-only) load only `end else if (dma_load) begin`, dma_load being S_FIRST of a
+#   memory-to-port byte (two cycles after the accept, through S_SEL) or S_DEV of a port-to-memory one
+#   (two cycles after S_SEL, through S_FIRST). So a snapshot is first captured two cycles after it is
+#   written, at any clk_sys; pc9821_dmac's SIM-ONLY check asserts it at every load. The map
+#   configuration and the load enable are not sources and stay single-cycle.
+@CEN_MULTICYCLES@
 
 # ---------------- Asynchronous CDC: named synchroniser exceptions -----------
 #

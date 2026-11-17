@@ -16,7 +16,7 @@ each row. Template citations quote the line, since the generated file is rendere
 | `clk_sys` | main PLL output 0, `z486_mister.sv` (`.outclk_0 (clk_sys)`) | 90 MHz (`base`) | the platform, the CPU (through the gate below), the SDRAM controller and PHY, `pc9821_system`, `hps_io`, the debug UART, the SDRAM pin clock's launch registers |
 | `cpu_clk` (gated `clk_sys`) | `pc9821_cpu_clk`, a `cyclonev_clkena` with `ena_register_mode("falling edge")` (`src/pc9821/core/pc9821_cpu_clk.sv:81-85`, `.ena_register_mode("falling edge")`) | clk_sys, enabled by `cpu_ce` | z486 and `pc9821_cpu_bus_bridge` only |
 | `CLK_50M` = `FPGA_CLK2_50` | the framework's 50 MHz pin | 50 MHz | the main PLL's `refclk`, the video PLL's `refclk`, `pc9821_vpll_ctl`, `pll_cfg_hdmi` |
-| `CLK_VIDEO` = `clk_vid` | video PLL `vpll` output 0, `z486_mister.sv` (`.outclk_0(clk_vid)`) | 42.105263 MHz (24 kHz config) or 50.336015 MHz (31 kHz config) | `pc9821_video_out`'s read side and converters, `pc9821_video_cleaner`, `gamma_fast`, `pc9821_aspect`, `video_freak`, `sys_top`'s analog/HDMI video path and `ascal` input |
+| `CLK_VIDEO` = `clk_vid` | video PLL `vpll` output 0, `z486_mister.sv` (`.outclk_0(clk_vid)`) | 42.105261 MHz (24 kHz setting) or 50.336075 MHz (31 kHz setting) | `pc9821_video_out`'s read side and converters, `pc9821_video_cleaner`, `gamma_fast`, `pc9821_aspect`, `video_freak`, `sys_top`'s analog/HDMI video path and `ascal` input |
 | `CLK_AUDIO` = `clk_audio` | `pll_audio` output 0 (`sys/sys_top.v:1569-1574`) | 24.576 MHz | `cdda`'s sample side, `pc9821_audio_mix` (with its `pc9821_audio_volume`), `pc9821_audio_out`, the framework's `audio_out` |
 | `PC9821_SDRAM_CLK` | generated clock on the `SDRAM_CLK` port, `z486_mister.sdc.in` (`create_generated_clock -name PC9821_SDRAM_CLK`) | clk_sys rate, phase-shifted (PLL output 1) or inverted (output DDIO at >= 100 MHz) | the SDRAM device only; no fabric register |
 | `pll_hdmi` | framework HDMI PLL | 148.54 MHz | `ascal`, HDMI OSD, shadowmask; frozen |
@@ -28,7 +28,9 @@ refclk-to-output path is inside the PLL primitive and is not a fabric crossing.
 ## The crossings
 
 "2FF" is a two-flop synchroniser chain (`src/common/synchronizer.sv` or the hand-written pairs,
-all carrying `SYNCHRONIZER_IDENTIFICATION`). "Async group" is `sys_top.sdc:13-22`'s
+carrying `SYNCHRONIZER_IDENTIFICATION`; the one exception is the CD-DA `clk_d1`/`clk_d2` pair in
+`src/soc/cdda.v`, row A4, which carries no attribute and whose first stage also feeds the
+agree-compare, so it is a filtered chain rather than a plain one). "Async group" is `sys_top.sdc:13-22`'s
 `set_clock_groups -exclusive`, plus the generated SDC's video group below.
 
 ### Video (`clk_sys` <-> `clk_vid`)
@@ -44,18 +46,22 @@ set_false_path -hold -from $pc9821_clk_sys -to $pc9821_clk_vid
 set_false_path -hold -from $pc9821_clk_vid -to $pc9821_clk_sys
 ```
 
-(19.866 ns is the video clock's *fastest generated* configuration, the 31 kHz one; the 24 kHz
-period is 23.750 ns, so the bound is conservative. The values are `VPLL_PERIOD_NS` and
-`1e9 / clk_sys` from `tools/profile_gen.py:render_sdc`.)
+(19.866 ns is the video clock's *fastest* run-time configuration, the 31 kHz one; the PLL is
+generated at the 24 kHz one (23.750 ns), so the template re-declares the PLL's output clock at the
+31 kHz ratio of the 50 MHz reference (`create_generated_clock ... -multiply_by 131953 -divide_by
+131072`) and the whole video domain is timed at the faster period. The values are
+`VCLK_TIMED_PERIOD_NS`, `VCLK_TIMED_RATIO` and `1e9 / clk_sys` from `tools/profile_gen.py:render_sdc`.)
 
 | # | From -> to | Signal(s) | Mechanism | Constraint | Verdict |
 |---|---|---|---|---|---|
-| V1 | `clk_sys` -> `clk_vid` | the 27-bit dot word `{vs,hs,de,r,g,b}` | 16-entry simple-dual-port M10K, written on `clk_sys`, read on `clk_vid` (`pc9821_video_out.sv:88-91`, `mem[wptr[AW-1:0]] <=`; `:139`). The read address is the Gray-decoded write pointer minus `PRIME`=8, so the entry being read was written at least 8 dots earlier | no path from a `clk_sys` register to a `clk_vid` register through the RAM; the RAM ports are timed separately | sound |
-| V2 | `clk_sys` -> `clk_vid` | `wgray[4:0]` | registered Gray code (`wgray`, `:87`, `:93`) through `wg_s1`/`wg_s2` (`:98-106`). Only one bit changes per write, so a late or metastable bit resolves to the old or new *valid* pointer | the `set_max_delay`/hold pair above | sound |
-| V3 | `CLK_50M` / `clk_sys` -> `clk_vid` | `vclk_31`, `vid_rst` (from `CLK_50M`); `dbl_on` (from `clk_sys`, `video_dbl_on`) | three independent levels, each through `lv_s1`/`lv_s2` (`:98-110`). The vector is not a coherent word: each bit is a separate control | `vclk_31`/`vid_rst`: `set_clock_groups -asynchronous` puts the video clock against `FPGA_CLK1/2/3_50` (`z486_mister.sdc.in`, `set_clock_groups -asynchronous`). `dbl_on`: the `clk_sys -> clk_vid` max-delay | sound; the bits are independent, so a one-cycle mix is two valid settings |
+| V1 | `clk_sys` -> `clk_vid` | the 27-bit dot word `{vs,hs,de,r,g,b}` | 16-entry simple-dual-port M10K, written on `clk_sys`, read on `clk_vid` (`pc9821_video_out.sv:87-96`, `mem[wptr[AW-1:0]] <=`). The reader keeps its own `rptr` (`:128-150`, `q <= mem[rptr_n[AW-1:0]];`): a flush sets it to the synchronised write pointer, a re-centre to that pointer minus `PRIME`=8, and each `take` advances it by one. `take` needs `level != 0` on the Gray-decoded, synchronised pointer, so an entry is read only after the write pointer that covers it has crossed `wg_s1`/`wg_s2`; `wgray` is updated on the same `clk_sys` edge as the entry's write, so the write precedes the pointer's visibility by at least two `clk_vid` edges. The fill is not a fixed distance from the write: it wobbles around `PRIME` (V6), and an underrun unprimes the reader | no path from a `clk_sys` register to a `clk_vid` register through the RAM; the RAM ports are timed separately | sound |
+| V2 | `clk_sys` -> `clk_vid` | `wgray[4:0]` | registered Gray code (`wgray`, `:88`, `:94`) through `wg_s1`/`wg_s2` (`:99-108`). Only one bit changes per write, so a late or metastable bit resolves to the old or new *valid* pointer | the `set_max_delay`/hold pair above | sound |
+| V3 | `CLK_50M` / `clk_sys` -> `clk_vid` | `vclk_31`, `vid_rst` (from `CLK_50M`); `dbl_on` (from `clk_sys`, `video_dbl_on`) | three independent levels, each through `lv_s1`/`lv_s2` (`:99-111`). The vector is not a coherent word: each bit is a separate control | `vclk_31`/`vid_rst`: `set_clock_groups -asynchronous` puts the video clock against `FPGA_CLK1/2/3_50` (`z486_mister.sdc.in`, `set_clock_groups -asynchronous`). `dbl_on`: the `clk_sys -> clk_vid` max-delay | sound; the bits are independent, so a one-cycle mix is two valid settings |
 | V4 | `clk_sys` -> `clk_vid` | hps_io's `status` fields: `ar`, `scale` sampled on `clk_vid` (`z486_mister.sv`, `scale <= status[46:45];`; `arx_i`/`ary_i` follow from `ar` on `clk_vid` in `pc9821_aspect`, with option 0's 16:10 or 4:3 chosen from the displayed line count, which `pc9821_aspect` measures on `clk_vid` from the `gamma_vs`/`gamma_de` picture and the `clk_vid` `dbl_active`, so that choice crosses no domain), and `VGA_SL` (`status[83:82]` gated by the `clk_vid` `dbl_active`). `dbl_active`, `VIDEO_ARX/ARY` and `fifo_ev` are `clk_vid` signals with `clk_vid` consumers | quasi-static OSD/aspect/scale/scanline levels. No coherent multi-bit word with an invalid state | the `set_max_delay`/hold pair above | sound; the worst case is one frame of a stale OSD setting while the OSD menu is open |
 | V5 | `clk_vid` -> `clk_sys` | `HDMI_TX_VS` (`hdmi_out_vs`, `sys/sys_top.v:1300-1335`) | `vs_d0 -> vs_d1 -> vs_d2` with a stability filter (`sys_top.v:544-548`) and `vsd -> vsd2` (`:1088-1093`) | named `set_false_path -from $pc9821_clk_hdmi -to $pc9821_vs_sync1` (`z486_mister.sdc.in`, `set_false_path -from $pc9821_clk_hdmi`) for the `pll_hdmi` leg; the `clk_vid` leg (direct-video mode) by the `clk_vid -> clk_sys` max-delay | sound |
 | V6 | `clk_sys` <-> `CLK_VIDEO` (frame timing) | the FIFO fill level | the write and read sides' dot enables are the *same rational rate* of the 50 MHz reference (`pc9821_dot_ce.sv`: 400/19 MHz or 25.168 MHz; the video PLL: 2 x those), so the fill only wobbles by the enable phase and the synchroniser latency, around `PRIME`; a PLL switch flushes and re-primes | the bench `tb_pc9821_video_clk` (100 frames, 0 FIFO events at each clk_sys it runs) | sound |
+| V7 | `clk_sys` -> `clk_vid` (framework) | raw multi-bit framework words: hps_io `gamma_en`, the OSD config into `vga_osd`/`hdmi_osd` (`info`, `infoh`, `osd_enable`), `LFB_EN`/`HDMI_PR`/`FREESCALE`/`lowlat` into `vmini`..`hmaxi`, `videow`, `state`, `ascal|i_mode`, and `cfg_done` into `pll_hdmi_adj` | none: frozen `sys_top` logic samples them on `clk_vid` unsynchronised. **Software-paced, not cycle-exact**: each changes only on an HPS command, and the worst case is one frame of a mixed setting | the `set_max_delay`/hold pair above (and `sys_top.sdc`'s own cuts); every endpoint is on `tools/check_sdc_exceptions.py`'s `XEND_WHITELIST`, so a new word fails the check | software-paced; upstream issues in the sdc-audit report |
+| V8 | `clk_vid` -> `clk_sys` (framework) | `hps_io`'s `video_calc` counters (`vid_vcnt`/`vid_hcnt`/`vid_ccnt` into `dout`), the aspect words `arx`/`ary`, the line doubler's `active` into `sl_r`, `sync_fix` polarity | none: read raw on `clk_sys`. **Software-paced, not cycle-exact**: the HPS reads them by command and re-polls, so a torn read is one wrong sample | the `clk_vid -> clk_sys` max-delay; endpoints whitelisted (`XEND_WHITELIST`) | software-paced |
 
 ### Audio (`clk_sys` <-> `CLK_AUDIO`)
 
@@ -85,8 +91,8 @@ resampled samples leave the domain.
 
 | # | From -> to | Signal(s) | Mechanism | Constraint | Verdict |
 |---|---|---|---|---|---|
-| P1 | `clk_sys` -> `CLK_50M` | `core_31k` (0x09A8 bit 0) | `c31_s` 2FF (`pc9821_vpll_ctl.sv:70`, `reg [1:0] c31_s`) | main PLL vs `FPGA_CLK2_50` in `sys_top.sdc`'s exclusive group | sound |
-| P2 | `vpll` (locked) -> `CLK_50M` | `vpll_locked` | `lock_s` 2FF (`pc9821_vpll_ctl.sv:89`, `lock_s <= {lock_s[0], pll_locked};`) | the same group | sound |
+| P1 | `clk_sys` -> `CLK_50M` | `core_31k` (0x09A8 bit 0) | `c31_s` 2FF (`pc9821_vpll_ctl.sv:108`, `reg [1:0] c31_s`) | main PLL vs `FPGA_CLK2_50` in `sys_top.sdc`'s exclusive group | sound |
+| P2 | `vpll` (locked) -> `CLK_50M` | `vpll_locked` | `lock_s` 2FF (`pc9821_vpll_ctl.sv:133`, `lock_s <= {lock_s[0], pll_locked};`) | the same group | sound |
 | P3 | `CLK_50M` -> `vpll` | `reconfig_to_pll[63:0]` / `reconfig_from_pll[63:0]` | the vendor `altera_pll_reconfig` core's serial DPRIO interface; the cut-down `pll_cfg_hdmi` is the framework's own write-only core, and it contains an `altera_std_synchronizer` for the PLL's status | vendor core; `tb_pc9821_pll_cfg_lockstep` proves the cut-down core produces the same management sequence and the same DPRIO register file as the full `pll_cfg` for the same `pc9821_vpll_ctl` stimulus | sound |
 | P4 | PLL relock -> `clk_vid` | `vid_rst` (from `busy`) | P1/P2 + V3; the read side flushes while `v_rst` is high and waits for `level >= PRIME` after it falls | V2/V3; `tb_pc9821_vpll_ctl`, `tb_pc9821_crt31k_video`, `tb_pc9821_video_reprogram` | sound (see below) |
 
@@ -94,7 +100,9 @@ resampled samples leave the domain.
 `clk_sys`, so `pc9821_dot_ce` switches the *write* dot rate on the next `clk_sys` edge. On the
 same event `pc9821_vpll_ctl` 2FF-samples the request on `CLK_50M`, sets `vclk_31` to the new
 value, raises `busy`, and starts a four-write management sequence: N (address 3), M (4), K (7),
-then start (2), each held until `waitrequest` drops (`pc9821_vpll_ctl.sv:93-125`, `busy_r <= 1'b1;`). `busy` reaches
+then start (2), each held until `waitrequest` drops (`pc9821_vpll_ctl.sv:146-183`, `busy_r           <= 1'b1;`). A write
+or a relock that has not completed in `TIMEOUT` (5 ms) resets the PLL and the reconfiguration core
+(`pll_rst`) and reprograms; `busy` stays high throughout. `busy` reaches
 the video side through `lv_s1/lv_s2` and flushes the FIFO. The first management write is issued on
 the same `CLK_50M` edge as `busy`, several 20 ns periods before the start, and the 2FF latency is
 at most two old `clk_vid` clocks (47.5 ns at 24 kHz), so the flush is in effect before the PLL is
@@ -160,8 +168,12 @@ puts `spi_sck`, `hdmi_sck`, `h2f_user0_clk` and `FPGA_CLK1/2/3_50` in exclusive 
 core-side path from those domains is cut; `hps_io` is the framework's frozen module and carries
 its own input synchronisers. The core only consumes its `clk_sys` outputs (`status`, `sdram_sz`,
 `ioctl_*`, `ps2_*`, `img_*`, `sd_*`). The generated SDC additionally false-paths the
-quasi-static `hps_io|status` and `sdram_sz` words in both directions (`z486_mister.sdc.in`, `set_false_path -from $pc9821_status_regs`),
-which is a software-pace cut (microseconds at the closest), not a handshake.
+paths FROM the quasi-static `hps_io|status` and `sdram_sz` words (`img_size` is timed: mount_eject re-registers it every cycle) (`z486_mister.sdc.in`, `set_false_path -from $pc9821_status_regs`),
+which is a software-pace cut (microseconds at the closest), not a handshake. The writes INTO those
+words stay timed: hps_io loads them on `io_strobe` and advances `byte_cnt` on the same edge, so the
+strobe-to-word path is a real single-cycle path. Every exception the build reads, with its count
+on a fitted netlist and its proof, is registered in `tools/timing/sdc_exceptions.tsv`
+(`tools/check_sdc_exceptions.py`).
 
 `pll_hdmi`, `pll_audio`, `spi_sck`, `hdmi_sck`, `h2f_user0_clk` and `FPGA_CLK1/3_50` are all in
 the generated SDC's asynchronous group that contains the video clock

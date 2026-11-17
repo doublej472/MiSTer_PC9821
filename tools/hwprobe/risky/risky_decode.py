@@ -29,8 +29,9 @@ ITEMS = ('43F', '989', '461', '43B')
 
 
 def blocks(text: str) -> dict:
-    """item -> list of lines between BEGIN:RISKY item and END:RISKY item (the last block wins;
-    an unended block is kept with ended=False)."""
+    """item -> {'lines': every line of every BEGIN:RISKY item ... END:RISKY item block, in file
+    order (a resumed run, e.g. 43F with the same /O file, is a second block whose rows continue
+    the first's), 'ended': whether the LAST block of the item has its END line}."""
     out = {}
     cur = None
     for raw in text.splitlines():
@@ -38,7 +39,7 @@ def blocks(text: str) -> dict:
         m = re.match(r'BEGIN:RISKY (\w+)$', line)
         if m:
             cur = m.group(1)
-            out[cur] = {'lines': [], 'ended': False}
+            out.setdefault(cur, {'lines': [], 'ended': False})['ended'] = False
             continue
         m = re.match(r'END:RISKY (\w+)$', line)
         if m and cur == m.group(1):
@@ -48,20 +49,6 @@ def blocks(text: str) -> dict:
         if cur:
             out[cur]['lines'].append(line)
     return out
-
-
-def all_lines(text: str, item: str) -> list:
-    """every line of every block of ITEM (a resumed 43F run is a second block in the same file)."""
-    res, cur = [], None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line == f'BEGIN:RISKY {item}':
-            cur = item
-        elif line == f'END:RISKY {item}':
-            cur = None
-        elif cur:
-            res.append(line)
-    return res
 
 
 def dec_43f(lines: list) -> tuple:
@@ -211,7 +198,7 @@ def decode(text: str) -> tuple:
         out.append(f'== RISKY {item} ' + ('' if bl[item]['ended'] else '(NO END line: hung or cut)'))
         ok &= bl[item]['ended']
         if item == '43F':
-            o, _, _ = dec_43f(all_lines(text, '43F'))
+            o, _, _ = dec_43f(bl['43F']['lines'])
             out += o
         elif item == '989':
             out += dec_989(bl[item]['lines'])
@@ -294,6 +281,11 @@ def selftest() -> int:
     _, ok2 = decode(SELF.replace('END:RISKY 43B\n', ''))
     if ok2:
         print('SELFTEST FAIL: a missing END was not flagged')
+        return 1
+    # a second block of an item (a resumed run) adds its rows; the first block's are kept
+    two = blocks('BEGIN:RISKY 989\nA\nEND:RISKY 989\nBEGIN:RISKY 989\nB\n')
+    if two['989']['lines'] != ['A', 'B'] or two['989']['ended']:
+        print('SELFTEST FAIL: a second block of an item dropped the first or kept its END', two)
         return 1
     print('SELFTEST PASS')
     return 0

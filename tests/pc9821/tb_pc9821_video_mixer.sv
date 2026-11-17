@@ -564,7 +564,7 @@ module tb_pc9821_video_mixer;
     end
 
     // ---------------------------------------------------------------
-    // 8. THE PEGC 256-COLOUR ARM (pegc-scope-REPORT.md 4 row 4).
+    // 8. THE PEGC 256-COLOUR ARM.
     // ---------------------------------------------------------------
     // The table stores FULL bytes per channel and the dot path renders them
     // verbatim (NP2kai pal_make9821 `p[i].p.g = pal[i*4+0]`, vram/palettes.c;

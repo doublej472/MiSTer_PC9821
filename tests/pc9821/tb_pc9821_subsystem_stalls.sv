@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SUBSYSTEM_STALLS: the INTER-SUBSYSTEM handshakes complete under adversarial interleavings, or a scenario that genuinely wedges FAILS BY NAME instead of hanging the runner. The whole pc9821_memory_subsystem (the route queue, the mapper, the real GVRAM with its WCB + M10K cache, the font requester, the scanout line fetch) runs over the REAL SDRAM bridge and the REAL src/memory/sdram.v controller (on clk_sys, as every build runs it) against the chip model.
+// TB_PC9821_SUBSYSTEM_STALLS: the INTER-SUBSYSTEM handshakes complete under adversarial interleavings, or a scenario that genuinely wedges FAILS BY NAME instead of hanging the runner. The whole pc9821_memory_subsystem (the route queue, the mapper, the real GVRAM over its block-RAM array, the font requester, the scanout line fetch) runs over the REAL SDRAM bridge and the REAL src/memory/sdram.v controller (on clk_sys, as every build runs it) against the chip model. Beyond completion, the valid-held read stream (B) returns its 64 seeded dwords in order, the EGC 0x3100 posted put (E3, K) lands the pattern and not its differing CPU datum, and the plane store behind the line ticks (G) reads back.
 //
 // The scenarios, each with a bounded wait and its own failure name. A - K are the
 // handshakes that must complete; the mux-moved counter records any launch whose payload the
@@ -96,7 +96,7 @@ module tb_pc9821_subsystem_stalls;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -191,6 +191,7 @@ module tb_pc9821_subsystem_stalls;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -212,10 +213,10 @@ module tb_pc9821_subsystem_stalls;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -324,6 +325,16 @@ module tb_pc9821_subsystem_stalls;
 
   // Route-queue depth, so a scenario can state the wedge's shape (accepted, never retired).
   wire [2:0] rt_depth = dut.rt_wr - dut.rt_rd;
+
+  // Scenario B's response recorder: every CPU response beat, in arrival order.
+  reg        b_rec = 1'b0;
+  integer    b_n = 0;
+  reg [31:0] b_dat [0:127];
+  always @(posedge clk)
+    if (b_rec && cpu_resp_valid) begin
+      if (b_n < 128) b_dat[b_n] = cpu_dout;
+      b_n = b_n + 1;
+    end
 
   task automatic fail(input [255:0] what);
     begin
@@ -494,7 +505,7 @@ module tb_pc9821_subsystem_stalls;
   reg [31:0] d0, d1;
   reg ok0, ok1;
   integer k, s;
-  integer h_bad, h_first_bad, h_overlap;
+  integer h_bad, h_first_bad;
   reg [31:0] h_addr_saved;
 
   initial begin
@@ -520,9 +531,15 @@ module tb_pc9821_subsystem_stalls;
     // Present back-to-back mapped reads with `valid` held from each `ready` straight into the
     // next access (no idle cycle), so the bridge has one read's response in flight when it
     // accepts the next. Repeated 32 times: the route queue must hold two accepts at a time,
-    // retire them in order, and drain.
+    // retire them in order, and drain. Each of the 64 dwords is seeded with its own value first,
+    // and every response beat is recorded as it arrives, so a swapped, duplicated or dropped
+    // response fails on its data and its order, not only on the queue's end state.
     begin : scen_b
-      integer bb;
+      integer bb, bk;
+      for (bb = 0; bb < 64; bb = bb + 1)
+        cpu_access(32'h0002_0200 + (bb[31:0] * 4), 32'hB000_0000 | bb[31:0], 4'hF, 1'b1, 1'b0, 8'd1, d0, ok0);
+      repeat (20) @(negedge clk);
+      b_n = 0; b_rec = 1'b1;
       for (bb = 0; bb < 32; bb = bb + 1) begin
         @(negedge clk);
         cpu_addr = 32'h0002_0200 + (bb[31:0] * 8); cpu_din = 32'd0; cpu_be = 4'hF;
@@ -542,10 +559,18 @@ module tb_pc9821_subsystem_stalls;
       end
       cpu_valid = 1'b0;
       repeat (20) @(negedge clk);
+      b_rec = 1'b0;
+      if (b_n != 64)
+        fail("B: the 64-read stream did not return exactly 64 response beats");
+      for (bk = 0; bk < 64 && bk < b_n; bk = bk + 1)
+        if (b_dat[bk] !== (32'hB000_0000 | bk[31:0])) begin
+          $display("FAIL B: response %0d carried %08x, want %08x (in-order data)", bk, b_dat[bk], 32'hB000_0000 | bk[31:0]);
+          errors = errors + 1;
+        end
       if (rt_depth != 3'd0)
         fail("B: the response-route queue was left non-empty after the read stream drained");
       else
-        $display("PASS B: the 64-read valid-held stream drained its route queue");
+        $display("PASS B: the 64-read valid-held stream drained its route queue (%0d beats recorded)", b_n);
     end
 
     // ---- C. CPU + scanout + font all pending at once (ports 0, 1 and 3) ----
@@ -626,7 +651,10 @@ module tb_pc9821_subsystem_stalls;
       gvram_access_page = 1'b1;
       cpu_access(win_addr(2'd0, 15'h0500), 32'd0, 4'hF, 1'b0, 1'b0, 8'd1, src, ok0);  // pattern load
       gvram_access_page = 1'b0;
-      cpu_access(win_addr(2'd0, 15'h0500), 32'hA5A5_A5A5, 4'hF, 1'b1, 1'b0, 8'd1, d0, ok1); // posted put
+      // The put's CPU datum differs from the source: under 0x3100 (ope & 0x1800 = 0x1000, fgbg
+      // 0x00FF selects the pattern register) the EGC writes the pattern the read loaded and
+      // ignores the datum (NP2kai mem/memegc.c egc_opew), so a bypassed EGC reads 3C3CC3C3.
+      cpu_access(win_addr(2'd0, 15'h0500), 32'h3C3C_C3C3, 4'hF, 1'b1, 1'b0, 8'd1, d0, ok1); // posted put
       egc_enable = 1'b0;
       while (dut.u_egc.state != pc9821_egc_pkg::EGC_IDLE) @(negedge clk);
       cpu_access(win_addr(2'd0, 15'h0500), 32'd0, 4'hF, 1'b0, 1'b0, 8'd1, got, ok0);
@@ -677,20 +705,29 @@ module tb_pc9821_subsystem_stalls;
         $display("PASS F: first post-reset access completed (%08x)", rd);
     end
 
-    // ---- G. a dirty WCB word behind a scanout line tick ----
+    // ---- G. a plane store behind a scanout line tick ----
+    // The store goes to the G plane (window 2): the E plane at 0xE0000 is open bus in this
+    // bench's digital mode (mode2_16color = 0, pc9821_memory_map's e_plane_nc), so a store
+    // there would reach nothing. The byte must still read back after the two line fetches.
     begin : scen_g
       integer lines0;
+      reg [31:0] gget;
+      reg        ok2;
       lines0 = line_sel_edges;
-      cpu_access(win_addr(2'd3, 15'h0700), 32'h0000_7700, 4'b0001, 1'b1, 1'b0, 8'd1, d0, ok0);
+      cpu_access(win_addr(2'd2, 15'h0700), 32'h0000_0077, 4'b0001, 1'b1, 1'b0, 8'd1, d0, ok0);
       scan_line_start(15'h0800, 1'b0);
       scan_wait_line(ok1);
       scan_line_start(15'h0880, 1'b0);
       scan_wait_line(ok0);
       repeat (20) @(negedge clk);
+      cpu_access(win_addr(2'd2, 15'h0700), 32'd0, 4'b0001, 1'b0, 1'b0, 8'd1, gget, ok2);
       if (!ok1 || !ok0)
-        fail("G: a scanout line did not complete across a WCB flush");
-      else
-        $display("PASS G: scanout lines completed across the WCB flush (line swaps=%0d)",
+        fail("G: a scanout line did not complete behind a plane store");
+      else if (!ok2 || gget[7:0] !== 8'h77) begin
+        $display("FAIL G: the G-plane byte at 0x0700 read %02x after the line fetches, want 77", gget[7:0]);
+        fail("G: the plane store did not survive the scanout line fetches");
+      end else
+        $display("PASS G: scanout lines completed behind a plane store, which reads back (line swaps=%0d)",
                  line_sel_edges - lines0);
     end
 
@@ -699,8 +736,10 @@ module tb_pc9821_subsystem_stalls;
     // is only the loader and the mapper. The interleaving that used to matter here (a GVRAM
     // write-back flush moving the mux under a bridge launch) cannot arise, so what is left to
     // prove is the stronger statement - a GVRAM store burst and a scanout line tick leave the
-    // mapper's own port-0 reads untouched, byte-exact, with no route ever miscredited.
-    h_bad = 0; h_first_bad = 0; h_overlap = 0;
+    // mapper's own port-0 reads untouched: each of the 48 reads answers, byte-exact, with
+    // the value seeded at its own address. No route or credit signal is sampled, so a
+    // misroute is seen only as wrong data or a read that never answers.
+    h_bad = 0; h_first_bad = 0;
     // Seed the addresses the concurrency reads so a misrouted response is caught as wrong data.
     for (k = 0; k < 48; k = k + 1)
       cpu_access(32'h0002_3000 + (k * 4), 32'h3300_0000 + k, 4'hF, 1'b1, 1'b0, 8'd1, d0, ok0);
@@ -711,7 +750,6 @@ module tb_pc9821_subsystem_stalls;
     scan_line_start(15'h0900, 1'b0);
     for (k = 0; k < 48; k = k + 1) begin
       h_addr_saved = 32'h0002_3000 + (k * 4);
-      if (1'b0) h_overlap = h_overlap + 1;
       cpu_access(h_addr_saved, 32'd0, 4'hF, 1'b0, 1'b0, 8'd1, d0, ok0);
       if (!ok0 || d0 !== (32'h3300_0000 + k)) begin
         h_bad = h_bad + 1;
@@ -763,7 +801,8 @@ module tb_pc9821_subsystem_stalls;
     // which the request mux can move under a bridge launch (see the mux-moved counter). The
     // mapped read must still complete with its own data.
     begin : scen_k
-      reg [31:0] ksrc, kgot;
+      reg [31:0] ksrc, kgot, kdst;
+      reg        ok2;
       egc_setup;
       cpu_access(32'h0002_4000, 32'h4B4B_4B4B, 4'hF, 1'b1, 1'b0, 8'd1, d0, ok0);
       gvram_access_page = 1'b1;
@@ -774,11 +813,17 @@ module tb_pc9821_subsystem_stalls;
       gvram_access_page = 1'b1;
       cpu_access(win_addr(2'd0, 15'h0600), 32'd0, 4'hF, 1'b0, 1'b0, 8'd1, ksrc, ok0);
       gvram_access_page = 1'b0;
-      cpu_access(win_addr(2'd0, 15'h0600), 32'hA5A5_A5A5, 4'hF, 1'b1, 1'b0, 8'd1, d0, ok1);
+      cpu_access(win_addr(2'd0, 15'h0600), 32'h3C3C_C3C3, 4'hF, 1'b1, 1'b0, 8'd1, d0, ok1);  // datum ignored (E3)
       // ...and NOW, while the GVRAM still owns port 0 draining the put, a mapped read.
       cpu_access(32'h0002_4000, 32'd0, 4'hF, 1'b0, 1'b0, 8'd1, kgot, ok0);
       egc_enable = 1'b0;
       while (dut.u_egc.state != pc9821_egc_pkg::EGC_IDLE) @(negedge clk);
+      // The EGC half: the put landed the pattern, not the datum.
+      plane_load(2'd0, 15'h0600, kdst, ok2);
+      if (!ok2 || kdst !== 32'hA5A5_A5A5) begin
+        $display("FAIL K: the posted EGC put left %08x at plane 0 0x0600, want a5a5a5a5 (the pattern)", kdst);
+        fail("K: the posted EGC put did not land the pattern");
+      end
       if (!ok0 || !ok1)
         fail("K: a mapped read behind a posted EGC write never completed");
       else if (kgot !== 32'h4B4B_4B4B) begin

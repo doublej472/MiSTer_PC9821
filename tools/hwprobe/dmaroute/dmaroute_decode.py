@@ -3,6 +3,7 @@
 
 Usage:
     python3 tools/hwprobe/dmaroute/dmaroute_decode.py DMAROUTE.TXT
+    python3 tools/hwprobe/dmaroute/dmaroute_decode.py --selftest
 
 DMAROUTE (tools/hwprobe/dmaroute/dmaroute.s) moves LEN bytes of a known floppy sector
 (C0 H0 R1) into a memory window twice per case, once with the CPU (XFER=CPU) and once
@@ -24,6 +25,7 @@ Each POST view is classified:
     FF    every byte reads 0xFF (open bus / not connected)
     ORIG  the as-found bytes (a store that is dropped but whose reads are not 0xFF)
     MIX   anything else (the counts are printed)
+    MISSING  the POST (or PRE) line is absent or shorter than N: a torn capture, not an answer
 
 and every DMA run is compared with the CPU run of the same case: "DMA = CPU" when every
 view's POST bytes are identical, i.e. the DMA byte went where the CPU's byte went - which
@@ -202,6 +204,10 @@ def expected(sector, kind, n):
 
 
 def classify(data, exp, orig, keys, nviews):
+    # A row that never arrived (or arrived short) is not a hardware answer: without this the
+    # all(... == 0xFF) test below is vacuously true on [] and a torn capture reads as open bus.
+    if not data or len(data) != len(exp):
+        return "MISSING"
     if data == exp:
         return "D"
     for k in range(nviews):
@@ -215,7 +221,41 @@ def classify(data, exp, orig, keys, nviews):
     return "MIX(d=%d/%d)" % (d, len(data))
 
 
+def selftest():
+    """Plants: a torn POST row and a view with no header must decode as MISSING, not FF."""
+    sector = [0x11, 0x22, 0x33, 0x44]
+    keys = [0x5A, 0xA5]
+    assert classify([], sector, None, keys, 2) == "MISSING"
+    assert classify([0xFF, 0xFF], sector, None, keys, 2) == "MISSING"
+    assert classify([0xFF] * 4, sector, None, keys, 2) == "FF"
+    assert classify(sector, sector, None, keys, 2) == "D"
+    assert classify([b ^ 0xA5 for b in sector], sector, None, keys, 2) == "P1"
+    cap = ["SECTOR 11223344\r\n", "KEYS 5AA5\r\n",
+           "RUN P3 XFER=CPU STATE=X DST=000B8100 LEN=04\r\n",
+           "V0 STATE=X AT=B800:0100 KIND=MEM N=04\r\n", "V0 PRE=4B78691E\r\n",
+           "V1 POST=11223344\r\n"]          # V0 POST torn off, V1's header never arrived
+    _, _, runs, _ = parse(cap)
+    assert sorted(runs[0]["views"]) == [0, 1] and "kind" not in runs[0]["views"][1]
+    import io
+    import contextlib
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".TXT", delete=False) as f:
+        f.writelines(cap)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = main(["dmaroute_decode.py", f.name])
+    import os
+    os.unlink(f.name)
+    text = out.getvalue()
+    assert rc == 1, rc
+    assert "MISSING MISSING" in text and "V1 has no header row" in text, text
+    print("dmaroute_decode selftest: PASS")
+    return 0
+
+
 def main(argv):
+    if len(argv) == 2 and argv[1] == "--selftest":
+        return selftest()
     if len(argv) != 2:
         print(__doc__)
         return 2
@@ -239,8 +279,14 @@ def main(argv):
     for r in runs:
         nv = len(r["views"])
         r["tags"] = []
-        for i in range(nv):
+        for i in sorted(r["views"]):
             v = r["views"][i]
+            if "kind" not in v or "n" not in v:
+                # a V<n> data row whose 'V<n> STATE=' header never arrived (a torn capture)
+                print("WARNING: %s %s V%d has no header row: view not decoded" % (r["case"], r["xfer"], i))
+                v["pre_tag"] = v["post_tag"] = "MISSING"
+                r["tags"].append("MISSING")
+                continue
             exp = expected(sector, v["kind"], v["n"])
             v["exp"] = exp
             v["pre_tag"] = classify(v.get("pre", []), exp, v.get("orig"), keys, nv)
@@ -259,8 +305,9 @@ def main(argv):
         dtag = " ".join(dma["tags"]) if dma else "-"
         same = "-"
         if cpu and dma:
-            diffs = [i for i in range(len(cpu["views"]))
-                     if cpu["views"][i].get("post") != dma["views"].get(i, {}).get("post")]
+            diffs = [i for i in sorted(set(cpu["views"]) | set(dma["views"]))
+                     if cpu["views"].get(i, {}).get("post") is None
+                     or cpu["views"].get(i, {}).get("post") != dma["views"].get(i, {}).get("post")]
             same = "yes" if not diffs else "NO:" + ",".join("V%d" % i for i in diffs)
         exp_lane = EXPECT_DMA_ROUTE.get(name)
         exp_np2 = NP2KAI.get(name)
@@ -270,6 +317,8 @@ def main(argv):
                                                      "DIFF:" + " ".join(exp_np2))
         print("%-3s %-38s %-22s %-22s %-8s %-10s %s" % (name, CASE_TEXT.get(name, "?"), ctag, dtag,
                                                         same, lane, np2))
+        if any("MISSING" in x["tags"] for x in (cpu, dma) if x):
+            rc_all = 1
         if dma and dma["dma"]:
             x = dma["dma"]
             st0, st1, st2 = x["res"][0], x["res"][1], x["res"][2]
@@ -289,7 +338,7 @@ def main(argv):
             r = d.get(xfer)
             if not r:
                 continue
-            for i in range(len(r["views"])):
+            for i in sorted(r["views"]):
                 v = r["views"][i]
                 print("  %s %s V%d %-12s %s %-4s %-6s -> %-10s %s" % (
                     name, xfer, i, v.get("state", "?"), v.get("at", "?"), v.get("kind", "?"),

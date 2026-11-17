@@ -205,7 +205,7 @@ module tb_pc9821_gvram_pagecopy;
   // z486 presents an I/O access as a DWORD-ALIGNED address with the operand's byte
   // lane carried only in `be` (pc9821_system forms {z_addr, 2'b00}); pc9821_iobus
   // steps `lane` = be's first set bit and forms the byte port as base_addr + lane
-  // (pc9821_iobus.sv:870-872, `lane_addr = base_addr + {30'd0, lane}`). The responder MUST do the same: without it
+  // (pc9821_iobus.sv:909-916, `port_addr = {base_addr[15:2], lane}`). The responder MUST do the same: without it
   // `out 0x7E,al` (base 0x7C, lane 2) decodes as `out 0x7C,al` and every tile write
   // lands on the mode register, so the GRCG is never armed - which is exactly the
   // false failure this bench reported before the lane was modelled.
@@ -2489,7 +2489,7 @@ mem[PROG_BASE+16'h0000] = 8'hB8;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a bench window store never became ready");
-          $finish;
+          $fatal(1, "TB_PC9821_GVRAM_PAGECOPY: FAIL (hang: a bench window store never became ready)");
         end
       end
       @(negedge clk);
@@ -2514,7 +2514,7 @@ mem[PROG_BASE+16'h0000] = 8'hB8;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a bench window read never became ready");
-          $finish;
+          $fatal(1, "TB_PC9821_GVRAM_PAGECOPY: FAIL (hang: a bench window read never became ready)");
         end
       end
       @(negedge clk);
@@ -2526,7 +2526,7 @@ mem[PROG_BASE+16'h0000] = 8'hB8;
         wd = wd + 1;
         if (wd == 400) begin
           fail("a bench window read never returned a response");
-          $finish;
+          $fatal(1, "TB_PC9821_GVRAM_PAGECOPY: FAIL (hang: a bench window read never returned a response)");
         end
       end
       data = gv_cpu_dout;

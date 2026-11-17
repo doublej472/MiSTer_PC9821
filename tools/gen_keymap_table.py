@@ -139,7 +139,20 @@ def parse_translate(text: str) -> dict[str, dict[tuple[bool, int], int]]:
     """translate() -> {'us': {(ext, set2): pc98}, 'jis': {...}}; unmapped codes are absent."""
     body = text[text.index("function automatic [7:0] translate"):]
     body = body[:body.index("endfunction")]
-    ext_part, _, base_part = body.partition("end else begin")
+    # The function's shape is pinned, not found by the first `end else begin`: exactly two
+    # `case (set2)` blocks, the extended one under `if (extended) begin` and the base one
+    # under its `end else begin`. Comments are blanked first (line structure kept), so prose
+    # cannot add or hide a keyword. Any other shape is an error, not a silent mis-split.
+    code = re.sub(r"//[^\n]*", "", body)
+    shape = re.fullmatch(r"(?s).*?\bif\s*\(\s*extended\s*\)\s*begin\s*case\s*\(\s*set2\s*\)"
+                         r"(?P<ext>(?:(?!\bcase\b|\bendcase\b).)*)\bendcase\s*"
+                         r"end\s+else\s+begin\s*case\s*\(\s*set2\s*\)"
+                         r"(?P<base>(?:(?!\bcase\b|\bendcase\b).)*)\bendcase\s*end\s*end\s*", code)
+    if shape is None:
+        raise SystemExit("gen_keymap_table: translate() is not `if (extended) begin case (set2) "
+                         "... endcase end else begin case (set2) ... endcase end`; update "
+                         "parse_translate() for its new shape")
+    ext_part, base_part = shape.group("ext"), shape.group("base")
     tables: dict[str, dict[tuple[bool, int], int]] = {"us": {}, "jis": {}}
     row = re.compile(r"^\s*((?:8'h[0-9A-Fa-f]{2},\s*)*8'h[0-9A-Fa-f]{2}):\s*translate\s*=\s*"
                      r"(?:jis\s*\?\s*8'h([0-9A-Fa-f]{2})\s*:\s*)?8'h([0-9A-Fa-f]{2})\s*;", re.M)
@@ -162,13 +175,19 @@ def parse_remap_slot(text: str) -> set[tuple[bool, int]]:
 
 def name(code: int | None) -> str:
     """The table cell for a PC-98 key: a `|` is escaped so it does not end the markdown cell."""
-    return "nothing" if code is None else PC98_KEYS[code].replace("|", "\\|")
+    if code is None:
+        return "nothing"
+    return PC98_KEYS.get(code, f"unknown {code:02X}").replace("|", "\\|")
 
 
 def build(tables) -> tuple[str, list[str]]:
     problems: list[str] = []
     known = {k for k, _, _ in PC_KEYS}
     for lay in ("us", "jis"):
+        for k, v in sorted(tables[lay].items()):
+            if v not in PC98_KEYS:
+                problems.append(f"translate() maps set-2 {'E0 ' if k[0] else ''}{k[1]:02X} "
+                                f"({lay}) to PC-98 {v:02X}, which PC98_KEYS does not name")
         for k in sorted(set(tables[lay]) - known):
             problems.append(f"translate() maps set-2 {'E0 ' if k[0] else ''}{k[1]:02X} ({lay}), "
                             "which PC_KEYS does not name: add the key to the table")

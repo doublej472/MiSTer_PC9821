@@ -12,7 +12,7 @@
 // accept cycle was neither latched nor re-queued whenever the boundary was
 // consuming a DIFFERENT request (an older pending NMI): one NMI gone with no way
 // for the edge source to re-request (the same S2 shape as the PIC's ir_set/ir_clr
-// collision, race-idiom R3). After the fix the accept consumes EXACTLY ONE
+// collision, docs/single-cycle-event-discipline.md R3). After the fix the accept consumes EXACTLY ONE
 // request - the pending latch if it has one (a same-cycle edge is then a NEW
 // event and is deferred - set wins - never eaten), or the same-cycle edge itself
 // when the latch is empty (the combinational nmi_request_active path has already

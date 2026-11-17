@@ -1,8 +1,8 @@
 @ECHO OFF
-REM RUNPEGC - the PEGC 256-colour palette read-back.
+REM RUNPEGCR - the PEGC 256-colour palette read-back.
 REM
 REM Copy PEGCRD.COM and this file to the machine, then:
-REM     RUNPEGC
+REM     RUNPEGCR
 REM and send back PEGCRD.TXT.
 REM
 REM Run from a freshly booted plain DOS prompt (0x6A = 00 there). The probe
@@ -24,6 +24,6 @@ GOTO END
 
 :NOPROG
 ECHO PEGCRD.COM is not in this directory.
-ECHO Copy PEGCRD.COM here first, then run RUNPEGC again.
+ECHO Copy PEGCRD.COM here first, then run RUNPEGCR again.
 
 :END

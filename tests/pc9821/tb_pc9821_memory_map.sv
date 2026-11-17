@@ -67,7 +67,7 @@ module tb_pc9821_memory_map;
   // tb_pc9821_pegvram.sv reads the bytes back through the subsystem.
   reg         peg_window = 1'b0;
   reg  [31:0] peg_base = 32'd0;
-  // The PEGC window-arm state (pegc-scope-REPORT.md 4 row 2): 0 = the pre-PEGC
+  // The PEGC window-arm state: 0 = the pre-PEGC
   // decode; the arms themselves are tb_pc9821_memmap_ref's cases.
   wire        pegc_256 = 1'b0;
   wire        pegc_plane = 1'b0;

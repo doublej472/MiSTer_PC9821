@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_IO_5F: port 0x5F through the real pc9821_iobus at the shipped 90 MHz clk_sys, against the real Xe10 (docs/probes/XE10T-XE10.TXT /IO): an `in al,5Fh` costs no more than the machine's 788.4 ns (its R8_005F row, the default read class), an `out 5Fh,al` releases the CPU no later than 1404.1 ns after it starts (the machine's write period 1744.2 ns less the 340.1 ns of nops its W8_005F k=32 row overlaps with it: the write is posted), and back-to-back writes with the machine's own between-write work (its W8_005F control times 19.1, 41.3, 57.2, 98.5, 178.0 and 340.1 ns for k = 0..32 nops) recur every 1744.2 ns within one clk_sys at every k (the row's flat PIT period, 1744.0-1744.4 ns), where a blocking write grows with the work; an I/O access to another port after a 0x5F write starts no earlier than that period after it, so a firmware delay pair (`out 0x02 / out 0x5F`) is never shorter than on the machine.
+// TB_PC9821_IO_5F: port 0x5F through the real pc9821_iobus at the shipped 90 MHz clk_sys, against the real Xe10 (docs/probes/XE10T-XE10.TXT /IO): an `in al,5Fh` costs no more than the machine's 788.4 ns (its R8_005F row, the default read class), an `out 5Fh,al` releases the CPU no later than 1404.1 ns after it starts (the machine's write period 1744.2 ns less the 340.1 ns of nops its W8_005F k=32 row overlaps with it: the write is posted), and back-to-back writes with the machine's own between-write work (its W8_005F control times 19.1, 41.3, 57.2, 98.5, 178.0 and 340.1 ns for k = 0..32 nops) recur every 1744.2 ns within one clk_sys at every k (the row's flat PIT period, 1744.0-1744.4 ns), where a blocking write grows with the work; an I/O access to another port after a 0x5F write starts no earlier than that period after it, so a firmware delay pair (`out 0x02 / out 0x5F`) is never shorter than on the machine, and that write plus the access behind it is the longest wait any access imposes, longer than the 8253 write's one-PIT-tick floor timed at the same clock.
 //
 // The expected values are the machine's: tools/hwprobe/xe10t/xe10t_decode.py on
 // docs/probes/XE10T-XE10.TXT prints, for the /IO rows,
@@ -99,32 +99,6 @@ module tb_pc9821_io_5f;
   wire        egc_shift_we;
   integer     egc_shift_pulses = 0;
 
-// ==== WHAT THIS PROVES ====
-// Counts actual clk_sys cycles from request to cpu_ready for one port per class (0x005F wait, the 8253 0x0071 in BOTH directions, 0x0043 chipset, 0x0060 text GDC, 0x00A0 graphics GDC, the GRCG pair 0x007C/0x007E, an unmapped port) after a change lowered every class but the two the firmware measures to the FSM minimum: an 8253 WRITE still carries the one-2.4576-MHz-tick floor (21) while an 8253 READ is the FSM floor, which is the direction the floor is FOR (the ITF's own self-test programs a count and reads it straight back, and the capture reads 8253 count registers at the default class), the I/O-wait port is still the LONGEST (30), and every other class -- the chipset default, both GDC idle polls, the GRCG pair and an unmapped port -- is now the 4-cycle FSM floor, so the machine's measured ladder (default 15 > graphics GDC 13 > text GDC 8 > EGC 7, with the GRCG pair at the EGC class) is no longer modelled. Also checks the responder contract on every access: the response must arrive on a later cycle than the accept, never in it.
-//
-// ---- the bench's own account of where each expectation comes from ----
-//
-// This exists because the per-class I/O wait is the fix that unblocked the boot
-// and it has almost no test. The ITF's POST self-test at BANK4@0x038F programs a
-// PIT counter, latches it and reads it back, and requires the count to have
-// MOVED between the two writes: the bus access must outlast one 2.4576 MHz PIT
-// tick (20.34 cycles) or the read is the byte just written and POST halts with
-// TIMER ERROR at cs:0x2b39.
-//   [source: the commit that landed the table]
-//
-// WHAT IS ASSERTED. The machine's per-class ladder was measured; matching it is
-// waived in favour of the minimum, so EVERY class but the two
-// the FIRMWARE measures is now IO_MIN_HOLD (4):
-//   1. the 8253 WRITE costs at least one PIT tick (21 >= 20.34) - the ITF's own
-//      requirement, and the floor that was being violated; its READ costs the default
-//      class, which is what the capture prices (F7);
-//   2. the I/O-wait port 0x005F is still the LONGEST (30): the firmware's own
-//      delay loops measure it, so it is a floor rather than a timing choice;
-//   3. every other class measures the 4-cycle FSM floor: the chipset default, the
-//      text/graphics GDC, the GRCG pair 0x007C/0x007E and an unmapped port alike.
-//
-// Ports: 0x005F wait, 0x0071 the 8253, 0x0043 chipset/system, 0x0060 text GDC,
-// 0x00A0 graphics GDC, 0x007C/0x007E the GRCG pair, 0x0123 unmapped.
 
   // ==== DUT ====
   // The software-DIP store is now enabled by default in the core, but the
@@ -175,6 +149,7 @@ module tb_pc9821_io_5f;
   wire        dma_mem_resp_valid = 1'b0;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
 /* verilator lint_on UNUSEDSIGNAL */
   // Stage A's write-protect seam. Declared because pc9821_iobus is instantiated with `.*`
   // here, which requires every one of its ports to resolve (tools/check_wiring.py).
@@ -308,6 +283,19 @@ module tb_pc9821_io_5f;
     if (gap < M_5F_PERIOD - CLK_NS) begin
       $display("FAIL an access behind a 0x5F write completed %0.1f ns after it, inside the machine's %0.1f ns write",
                gap, M_5F_PERIOD);
+      errors = errors + 1;
+    end
+
+    // 5. ...and that wait is the LONGEST any access imposes: longer than the 8253 WRITE, the
+    //    other floor the firmware measures (the ITF self-test's one 2.4576 MHz tick). Timed here
+    //    at the same 90 MHz, from its start to its release, against case 4's write-plus-access.
+    repeat (400) @(posedge clk);
+    io(16'h0071, 1'b1);
+    cost = t_ready - t_start;
+    $display("  out 71h (the 8253 write floor): %0.1f ns; 0x5F write plus the access behind it: %0.1f ns", cost, gap);
+    if (!(gap > cost)) begin
+      $display("FAIL the 0x5F write plus the access behind it (%0.1f ns) is not longer than the 8253 write (%0.1f ns)",
+               gap, cost);
       errors = errors + 1;
     end
 

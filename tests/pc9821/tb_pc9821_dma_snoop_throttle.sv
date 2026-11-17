@@ -171,7 +171,9 @@ module tb_pc9821_dma_snoop_throttle;
         if (dut.dma_snoop_valid) begin
           accept_seen   <= 1'b1;
           accept_addr   <= dut.dma_mem_addr;
-          accept_disabled <= accept_disabled + 1;
+          // Sampled BEFORE the release below: the count is the accepts that landed with
+          // cpu_ce actually low, so a force that did not take proves nothing and fails.
+          if (!dut.cpu_ce) accept_disabled <= accept_disabled + 1;
           release dut.cpu_ce;
           phase_hold    <= 1'b0;
         end
@@ -234,11 +236,6 @@ module tb_pc9821_dma_snoop_throttle;
       8'hE8: saw_notc2 <= 1'b1;
       default: ;
     endcase
-  end
-
-  initial begin
-    #200_000_000;
-    $fatal(1, "TB_PC9821_DMA_SNOOP_THROTTLE: watchdog timeout (no verdict reached)");
   end
 
   integer i;
@@ -310,8 +307,10 @@ module tb_pc9821_dma_snoop_throttle;
         $finish;
       end
       begin
-        repeat (50_000_000) @(posedge clk_sys);
-        $fatal(1, "dma_snoop_throttle timeout CS:EIP=%04x:%08x (POST B0=%0d B1=%0d B2=%0d B3=%0d B4=%0d)",
+        // The one watchdog: 10M clk_sys cycles (200 ms at 50 MHz) after the pack load, no
+        // tighter than the bare 200 ms bound it replaces, and it prints where the guest stopped.
+        repeat (10_000_000) @(posedge clk_sys);
+        $fatal(1, "TB_PC9821_DMA_SNOOP_THROTTLE: timeout CS:EIP=%04x:%08x (POST B0=%0d B1=%0d B2=%0d B3=%0d B4=%0d)",
                cpu_cs, cpu_eip, saw_b0, saw_b1, saw_b2, saw_b3, saw_b4);
       end
     join

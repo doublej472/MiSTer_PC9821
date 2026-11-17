@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// Every non-0x2x/non-0xEx write to 0x043F leaves the EMS window state alone: after 0x22 enables the 64 KiB page, the BIOS's pre-mov-cr0 cache-flush write 0xA0 - and 0x80/0xC4 - still serve the EMS page at 0xB0000 instead of resetting the window to the VRAM planes, exactly as qemu's mem_bankctl_write acts only on 0x20 (EMS) and 0xE0 (bank) (pc98-mem.c:684-701). FAIL-FIRST: before this fix every other nibble took the else arm, reset ems_state to the identity, and 0xB0000 fell back to VRAM - an EMM386-style driver that enables 0x22 and then toggles paging with the BIOS's 0xA0 flush lost its page. And 0x24 written from the identity keeps the VRAM planes (docs/probes/DMAROUTE-XE10.TXT cases E1/E2: the 0x20 and 0x24 views are one storage) while written from the page it unmaps the window (docs/probes/EMS.TXT `B0000 under 20/22/24: 1111 2222 FFFF`) - FAIL-FIRST, the identity case read unmapped.
+// Every non-0x2x/non-0xEx write to 0x043F leaves the EMS window state alone: after 0x22 enables the 64 KiB page, the BIOS's pre-mov-cr0 cache-flush write 0xA0 - and 0x80/0xC4 - still serve the EMS page at 0xB0000 instead of resetting the window to the VRAM planes, exactly as qemu's mem_bankctl_write acts only on 0x20 (EMS) and 0xE0 (bank) (pc98-mem.c:684-701). FAIL-FIRST: before this fix every other nibble took the else arm, reset ems_state to the identity, and 0xB0000 fell back to VRAM - an EMM386-style driver that enables 0x22 and then toggles paging with the BIOS's 0xA0 flush lost its page. And 0x24 written from the identity keeps the VRAM planes (docs/probes/DMAROUTE-XE10.TXT cases E1/E2: the 0x20 and 0x24 views are one storage) while written from the page it unmaps the window (docs/probes/EMS.TXT `B0000 under 20/22/24: 1111 2222 FFFF`) - FAIL-FIRST, the identity case read unmapped; and 0x21 written after that unmapped state does not send a store at B0000 to the R plane (EMS.TXT `B0000 under 20 after 21 wrote FF21: 1111`).
 //
 // The defect: pc9821_iobus's 0x043F
 // write arm returned ems_state to the identity for every nibble except 0x2x
@@ -213,6 +213,25 @@ module tb_pc9821_ems;
     end
   endtask
 
+  // A store at 0xB0000 that does not reach the VRAM R plane (whatever else serves it).
+  task automatic check_not_plane(input [8*120-1:0] what);
+    begin
+      @(negedge clk);
+      mem_cpu_addr = 32'h000B_0000;
+      mem_cpu_valid = 1;
+      mem_cpu_write = 1;
+      #1;
+      if (gvram_window && gvram_win_plane === 2'd1) begin
+        $display("FAIL %0s: 0xB0000 -> gvram=%b plane=%0d, the store would land in the R plane",
+                 what, gvram_window, gvram_win_plane);
+        errors = errors + 1;
+      end
+      @(negedge clk);
+      mem_cpu_valid = 0;
+      mem_cpu_write = 0;
+    end
+  endtask
+
   task automatic check_vram(input [8*120-1:0] what);
     begin
       @(negedge clk);
@@ -257,6 +276,14 @@ module tb_pc9821_ems;
     check_unmapped("0x24 written from the page unmaps the window (EMS.TXT 24 -> FFFF)");
     write_port(16'h043F, 8'h24);
     check_unmapped("0x24 again keeps the window unmapped");
+    // The capture's next row: probe2 writes 0x21 right after that 0x24 read, stores 0x2121 at
+    // B0000, and reads it back under 0x20 (tools/hwprobe/probe2/probe2.s, "Is bit 0 a page
+    // bit?"): docs/probes/EMS.TXT `B0000 under 20 after 21 wrote FF21: 1111` - the plane kept
+    // its 1111, so under 0x21 a store at B0000 does NOT reach the VRAM R plane. Only that is
+    // measured (unmapped and an EMS page would both leave the plane alone), so only that is
+    // asserted.
+    write_port(16'h043F, 8'h21);
+    check_not_plane("0x21 written from the unmapped state: a store at B0000 misses the R plane (EMS.TXT 1111)");
     write_port(16'h043F, 8'h20);
     check_vram("0x20 after the unmapped state: the planes (EMS.TXT 20 -> 1111)");
 

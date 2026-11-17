@@ -162,6 +162,7 @@ module tb_pc9821_opna_flagsync;
   wire        dma_mem_resp_valid = 1'b0;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
 /* verilator lint_on UNUSEDSIGNAL */
   // Stage A's write-protect seam. Declared because pc9821_iobus is instantiated with `.*`
   // here, which requires every one of its ports to resolve (tools/check_wiring.py).

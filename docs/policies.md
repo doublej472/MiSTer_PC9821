@@ -39,26 +39,36 @@ within-recording ratio. Validate the analysis (windows, alignment) before blamin
   cannot silently fall back to the default. **Exception (owner, 2026-11-08):** the I/O timing
   choice (item 82) is an OSD option, a runtime choice between "Fast" (as fast as timing allows,
   no defined cost table) and the measured Xe10 costs. The same exception covers the field's
-  GVRAM half (owner, 2026-11-08): in Xe10 the GVRAM stores (GRCG read-modify-write and TDW,
-  and plain dword stores) take the machine's measured sustained store period
-  (`pc9821_gvram_arb.sv`'s Xe10 table, `tb_pc9821_gvram_xe10_store`); in Fast every GVRAM period
-  is exactly what it was before the field existed.
+  GVRAM half (owner, 2026-11-08; reads and the text RAM, 2026-11-11; the PEGC packed bank and
+  the display-mode column, 2026-11-12): in Xe10 every CPU access to the GVRAM (GRCG
+  read-modify-write and TDW, plain stores, plain and GRCG TCR reads), the text RAM and the PEGC
+  packed bank is priced from ONE generated class table (`tools/xe10_classes.csv` ->
+  `pc9821_xe10_timing_pkg.sv`, every row cited to its capture and re-derived by
+  `tools/check_xe10_table.py`) by mode, width (one 16-bit word or two), raster state and display
+  mode (24 kHz, 31 kHz, 31 kHz with the 256-colour display on): a store at the machine's
+  sustained period, a read held to the machine's latency (the CPU's work after it adds, as on the
+  machine); `tb_pc9821_xe10_latency`, `tb_pc9821_gvram_xe10_store`, `tb_pc9821_tram_xe10_pace`. In
+  Fast every GVRAM, text RAM and PEGC access is exactly what it was before the field existed.
 - **Comments carry hardware facts and external assumptions** with their citation next to the
   claim, not narration of the next line. A `file:NNN` citation should quote a short fragment of
   the target line (`` `...` ``, `"..."` or `(...)`, at most 80 characters) so it can be checked by
   eye. `tools/check_line_citations.py` gates every citation of a file in this repository: the
   line must exist and a quoted fragment must sit within 3 lines of it, so re-point citations
-  when you move their target (`--unquoted` lists the ones with no fragment to check by eye).
+  when you move their target (`--unquoted` lists the ones with no fragment to check by eye; their
+  count may not grow past the checker's UNQUOTED_CEILING, so a new citation quotes its line).
+  A citation must name something the tree tracks: `tools/check_doc_citations.py` fails a cited
+  `*.md` that no tracked file matches and any label of the retired report set
+  (`<name>-REPORT`, `rNN/NNN`, `<name>-audit X1`, `TODO NN`; its list is RETIRED_LABELS); cite the capture,
+  the reference `file:line` or the doc section that holds the fact, or state it inline.
 - **Latency and performance trades are raised, not decided by a contributor.** A change that saves
   area but costs cycles on a guest-visible path goes into
   [`docs/trade-candidates.md`](trade-candidates.md) with both sides priced. A value read
   differently, a feature removed, or a capture-pinned timing exceeded is not a trade.
-- **The boot golden is a canary, not a constant.** `CYCLES used=930528` moves only with a reported,
+- **The boot golden is a canary, not a constant.** `CYCLES used=1706091` moves only with a reported,
   attributed reason and the maintainer's approval; it is never re-pinned silently (last move
-  930533 -> 930528, a z486 re-vendor: -1 for CLI/STI and LOOP-not-taken without the 386
-  refetch, -3 for the real-mode far-transfer tail without its CS-limit restore, -1 for
-  real-mode interrupt delivery without its long jump back, 0 for misaligned direct loads on
-  the probe pipeline). Its blind spots:
+  930528 -> 1706091: the CPU starts on the power-on raster's first frame end instead of when the
+  pack lands, a wait of exactly 775563 clk_sys with the boot after it cycle-identical,
+  trade-candidates T93, approved by the owner 2026-11-14: "The boot golden changing is fine"; the move before, 930533 -> 930528, a z486 re-vendor). Its blind spots:
   it is VSYNC-locked at its endpoint (so it cannot see I/O exposure), runs with paging off, and
   uses a fixed-latency SDRAM model rather than `sdram.v` (a controller change cannot move it).
 - **Generated files: fix the generator, then regenerate.** `tests/pc9821/bench_sources.sh`
@@ -87,6 +97,12 @@ within-recording ratio. Validate the analysis (windows, alignment) before blamin
   the captures in `docs/probes/` (the boot golden alone is blind to I/O latency). Exception: the
   storage paths (IDE, CD-ROM, FDD) are variable and slow on the real machine, so they may take a
   small measured, reported increase without a trade.
+- **I/O timing `Fast` may be lengthened to help routing** (maintainer decision 2026-11-12). A
+  guest I/O access in `Fast` may take extra `clk_sys` cycles (a registered read mux, a registered
+  decode or chip select, a staged write strobe) when that frees the fitter for genuinely
+  latency-critical paths, as long as no access becomes slower than the same access in `Xe10`
+  (the measured machine, `pc9821_iobus`'s Xe10 table). Each such change needs a seed sweep before
+  and after that shows it helps, and the I/O timing benches updated with the new `Fast` cost.
 - **Main RAM only needs the ballpark of a 486/33 with 60 ns FPM DRAM** (about 150-180 ns for a
   single miss, 270-330 ns for a 16-byte line fill); faster is fine, and no main-RAM capture is
   needed. Device timings pinned by captures are not covered by this.

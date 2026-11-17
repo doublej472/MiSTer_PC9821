@@ -12,15 +12,17 @@ that requires this file is in [README.md](../../README.md) ("Licensing").
 `09e56f54b6d36b23a154fd3390d3f36160fce661` (2026-09-10).
 
 Every file under `jt12/` and `jt49/` is a byte-identical copy of that tree
-(`diff` clean), except **ten** files that carry documented local changes (each
+(`diff` clean), except **thirteen** files that carry documented local changes (each
 marked in-file with a `LOCAL CHANGE`/`LOCAL FIX`/`LOCAL PATCH` comment, or
 cross-referenced to one): `jtopna.v` (see below), `jt12/hdl/jt08.v`,
 `jt12/hdl/jt12_top.v`, `jt12/hdl/jt08_acc.v`, the two ADPCM-A files
 `jt12/hdl/adpcm/jt08_adpcm_drvA.v` and `jt12/hdl/adpcm/jt08_adpcm_acc.v`,
 `jt12/hdl/adpcm/jt08_adpcm_cnt.v`, `jt12/hdl/jt12_timers.v`,
-`jt12/hdl/jt12_mmr.v`, and `jt49/hdl/jt49.v`. (A `diff -rq` against the pinned commit above reports exactly
-these ten; 55 of the 63 files named by upstream's `jt08.qip`+`jt49.qip` are
-byte-identical and none is missing. Do not add an eleventh without a marked,
+`jt12/hdl/jt12_mmr.v`, `jt12/hdl/jt12_div.v`, `jt12/hdl/jt12_rst.v`,
+`jt12/hdl/adpcm/jt08_adpcm_drvB.v` and `jt49/hdl/jt49.v`. (A `diff -rq` against the pinned commit above reports exactly
+these thirteen; 51 of the 63 files named by upstream's `jt08.qip`+`jt49.qip` are
+byte-identical (the other twelve are the list above but for `jtopna.v`, which no qip names) and
+none is missing. Do not add a fourteenth without a marked,
 reference-backed reason.)
 
 The `jt08.v`/`jt12_top.v`/`jt08_adpcm_drvA.v`/
@@ -80,7 +82,47 @@ because a real Xe10's -86 board interrupts on Timer A with 0x29 = 00 and 02 exac
 (`docs/probes/YM29-XE10.TXT`, verdict NO-GATE) and NEC's own SOUND.ROM relies on it; Timer B
 follows NP2kai (`sound/opntimer.c`, which never reads 0x29), as the die model's identical gate is
 falsified for Timer A. `irq_mask[4:2]` still gates the ADPCM flags (`tb_pc9821_opna_timers` 9b,
-`tb_pc9821_opna_regs` 9). The only
+`tb_pc9821_opna_regs` 9).
+`jt12_div.v` carries `LOCAL PATCH (PC-98 core, timing)`, the eleventh file (owner decision
+2026-11-12: "we can patch jt12 locally if needed, but we should make it clear"): its six clock
+enables (`clk_en`, `clk_en_2`, `clk_en_ssg`, `clk_en_666`, `clk_en_111`, `clk_en_55`) are
+registered on the RISING edge of clk from the next cycle's chip enable instead of on the FALLING
+edge from the enable itself. Upstream's falling-edge stage gave the whole chip's enable net
+(one direct clock-enable net of about 1000 loads in Quartus) half a clk_sys period to reach
+those six flip-flops, and that path missed setup on 2 of 6 seeds of the timing-hygiene lane's
+base sweep (seed 2 -0.21 ns, seed 4 -0.81 ns) and on the th05 release+fixes sweep's seed 4
+(-1.64 ns); a missed enable desynchronises FM, SSG, ADPCM and the timers at once. Every reader
+of the six is a rising-edge register, and each is loaded one edge earlier with the value
+upstream's falling edge latched, so every rising edge reads what it read before. The next
+cycle's enable arrives on a new `cen_nx` input, carried by `LOCAL PATCH (cen_nx seam, PC-98
+core)` port lines in `jtopna.v`, `jt08.v`, `jt12_top.v` and `jt12_mmr.v` from `pc9821_opna.sv`
+(the registered DDS's next carry). `tb_pc9821_opna_cen` holds the six enables equal to a verbatim
+copy of the pinned upstream `jt12_div` at every rising edge (9.0 million edges, three mutations
+killed).
+`jt12_rst.v` carries `LOCAL PATCH (PC-98 core, timing)`, the twelfth file, for the same reason
+and in the same way: upstream's two-stage ADPCM reset synchroniser (instantiated in `jt12_top.v`'s
+`use_adpcm==2` branch, the YM2608's ADPCM-A and ADPCM-B reset `rst_n`) is registered on the
+FALLING edge of clk from `rst`, which gave the `rst_n` net half a clk_sys period to reach its loads
+across the ADPCM blocks (+0.55 ns and +0.60 ns of setup slack on two of six seeds of the base
+build at 90 MHz, the narrowest half-cycle path left in the chip). Both stages now load on the
+RISING edge from `rst_nx`, the value `rst` takes at that edge (`pc9821_opna.sv`'s `op_rst_nx`, the
+stretched reset's next state), so every rising-edge reader sees the `rst_n` it saw before; it
+reaches the module on `LOCAL PATCH (rst_nx seam, PC-98 core)` port lines in `jtopna.v`, `jt08.v`
+and `jt12_top.v` (all three `jt12_rst` instances there are wired, two of them in branches this
+build does not elaborate). `tb_pc9821_opna_cen` holds `rst_n` equal to a verbatim copy of the
+pinned upstream `jt12_rst` at every rising edge through seven releases and six assertions (two
+mutations killed), and a simulation assertion in the module holds `rst_nx` to `rst` one cycle
+early.
+`jt08_adpcm_drvB.v` carries `LOCAL FIX (PC-98 core, BRDY after a flag reset)`, the thirteenth file
+(owner decision 2026-11-14: known issues are fixed for the release, as marked local blocks where the
+capture establishes them): upstream sets the ADPCM-B BRDY flag whenever the memory port is idle, so a
+`0x110 = 80` flag reset cleared it for one clock enable and the guest's next read found it set again.
+On a real Xe10 the read after the reset finds it clear (`docs/probes/XE10T-XE10-OPNA2.TXT`
+`ADB_SETUP ... st1=00 stl=00 reads=1`, `FR_ADB i=3..7 st1=00 ... reads=1`), and it is set again by a
+`0x100` write, by a memory byte, or with the unit idle and out of reset some time later (the next
+row's `sb=08`, kit 1's `C0 ... 018C=08`). The idle return waits two of the unit's 55.5 kHz enables
+after the reset, inside the bounds the capture gives; playback keeps upstream's rule
+(`tb_pc9821_opna_adpcmb_mem`, `tb_pc9821_opna_kit1`). The only
 additions outside those trees are our own `RHYTHM_ROM.v`,
 `pc9821_rhythm_loader.sv` (under `src/pc9821/core/`), `pc9821_opna.sv`,
 `opna.qip` and this file. The file list is exactly the union

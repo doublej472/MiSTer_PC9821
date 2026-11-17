@@ -1,7 +1,7 @@
 // PC-9821 video mixer: the text plane over the graphics plane, and the RGB the
 // framework sees - the end of the pixel pipeline
 //   gvram line buffer -> plane fold -> graphics palette -> RGB
-//   pc9821_gdc_text (text_opaque/cell/colour) -> compositor mux -> {R,G,B}
+//   pc9821_crtc (text_opaque/cell/colour) -> compositor mux -> {R,G,B}
 //
 // D4 is one two-way priority mux, and it is a rule SELECT rather than hard-wired because
 // NP2kai's rule is a model and not a measurement; the arms are named at the
@@ -17,8 +17,8 @@
 `default_nettype none
 
 module pc9821_video_mixer (
-    // The palette's write clock and the PEGC arm's delay. clk_sys and clk_vid are the same
-    // net at the top level.
+    // The palette's write clock and the PEGC arm's delay: clk_sys (pc9821_system's
+    // `.clk(clk_sys)`). The video clock domain (clk_vid) starts in pc9821_video_out.
     input  wire        clk,
 
     input  wire [9:0]  dot_x,        // hdot: 0..847 within the line
@@ -39,7 +39,7 @@ module pc9821_video_mixer (
     output wire        line_rd_sel,
 
     // Graphics palette: the mode's frame-coherent snapshot and the live digital bytes from
-    // pc9821_gdc_text, and the analogue table's CPU write port, which that module owns
+    // pc9821_crtc, and the analogue table's CPU write port, which that module owns
     // (0xA8 selects the entry there; 0xAA/0xAC/0xAE arrive here as channel 0/1/2).
     input  wire        pal_mode16,   // 1 = 16-colour analogue, 0 = 8-colour digital
     input  wire [31:0] pal_dig,      // {0xA8, 0xAA, 0xAC, 0xAE}
@@ -83,7 +83,7 @@ module pc9821_video_mixer (
 );
 
   // The line buffer's data port is REGISTERED - valid one clk_sys after the address - and a dot
-  // is 50/21.0526 = 2.375 clk_sys, so presenting column c for the WHOLE of column c leaves the
+  // is f(clk_sys)/21.0526 MHz clk_sys (about 4.3 at the base 90 MHz), so presenting column c for the WHOLE of column c leaves the
   // read settled before the dot enable samples ANY of its eight dots, the first included. Parking
   // at 0 outside the active dots is also what the line boundary needs: HBLANK (208 dots) is far
   // longer than the read latency, so the ping-pong swap has settled before the next line's first

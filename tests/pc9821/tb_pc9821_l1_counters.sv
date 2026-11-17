@@ -7,10 +7,11 @@
 // WHY THIS IS THE BENCH THE COUNTERS NEED. A cache counter is only worth the registers it costs if
 // the number it reports is the decision the datapath makes rather than a second, drifting statement
 // of it. The FSM leaves S_LOOKUP for S_FILL on a miss, and here the two counters are driven by
-// must therefore agree: the pulse the platform counts, the FSM's own state register entering
-// S_FILL, and the fill request that leaves on the memory port. All three are counted here from
-// different places - the module's output, its hierarchical `state`, and its `mem_valid`/`mem_ready`
-// handshake - so a pulse that fired one cycle early, or on a lookup that did not fill, fails.
+// must therefore agree: the FSM's own state register entering S_FILL, and the fill request that
+// leaves on the memory port. The two are counted here from different places - its hierarchical
+// `state` and its `mem_valid`/`mem_ready` handshake - so a fill entry without a launch, or a launch
+// without a fill entry, fails. (The platform perf record's DL/DM fields are tied off in this tree,
+// so no counter OUTPUT is checked: this bench checks the fill accounting such a counter would use.)
 //
 // The two arms that must NOT count are the reason the numbers are usable at all. The PC-98's
 // device aperture, the ROM windows and the I/O and INTA routes all reach the data cache as either
@@ -134,8 +135,10 @@ module tb_pc9821_l1_counters;
   // no observation port (the old dbg_lookup/dbg_miss are gone), and `state == S_LOOKUP` ALONE
   // is not that event: l1_cache's S_LOOKUP arms retire a protection-fault store and bypass an
   // uncacheable read without using the comparison, and l1_icache's bypasses !cache_enable and
-  // takes a no-allocate pass-through -- all four still pass THROUGH S_LOOKUP. Excluding them is
-  // exactly what this bench's assertions 4, 5 and 7 check, so they are excluded here too.
+  // takes a no-allocate pass-through -- all four still pass THROUGH S_LOOKUP, so they are excluded
+  // here. That makes the LOOKUP half of assertions 4, 5 and 7 true by this definition, not by the
+  // FSM: what those arms really prove is the independent half, no S_FILL entry and no fill launch
+  // on the memory port (and, for 4 and 7, that the access still completes).
   integer n_fill_entry = 0, n_fill_launch = 0;
   integer n_ifill_entry = 0, n_ifill_launch = 0;
   // Upstream 6613858 replaced l1_icache's single-dword S_BYPASS_WAIT with a line read that

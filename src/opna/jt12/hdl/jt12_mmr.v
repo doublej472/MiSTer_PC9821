@@ -23,6 +23,7 @@ module jt12_mmr(
     input           rst,
     input           clk,
     input           cen /* synthesis direct_enable */,
+    input           cen_nx,     // LOCAL PATCH (cen_nx seam, PC-98 core): the next cycle's cen, for jt12_div's posedge clock-enable registers; see jt12_div.v's LOCAL PATCH
     output          clk_en,
     output          clk_en_2,
     output          clk_en_ssg,
@@ -149,6 +150,7 @@ jt12_div #(.use_ssg(use_ssg)) u_div (
     .rst            ( rst             ),
     .clk            ( clk             ),
     .cen            ( cen             ),
+    .cen_nx         ( cen_nx          ),   // LOCAL PATCH (cen_nx seam, PC-98 core)
     .div_setting    ( div_setting     ),
     .clk_en         ( clk_en          ),
     .clk_en_2       ( clk_en_2        ),

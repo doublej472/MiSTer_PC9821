@@ -26,10 +26,16 @@ THE SCRIPTED SET (--items, default all)
                needs --osd-reset-downs and --osd-verify); the release card run uses it with N >= 6
   speeds       loads the core once per OSD CPU Speed in --speeds (default 33, 25 and 16 MHz), each time with
                that setting written into the card's PC9821.CFG before the load (backed up first and
-               restored after, also when the item fails), and checks that each load booted the hard
-               disk. A reduced speed gates the CPU's clock, which Full never exercises: a placement
-               whose clock-gate enable path was too long booted at Full and never below it
-               (docs/clock-domains.md, "The enable into the clock-control block"), so the release card run includes it
+               restored after, also when the item fails), checks that each load booted the hard
+               disk, and then MEASURES the speed in the guest: SPEED.COM (tools/hwprobe/speed; profile 0,
+               no EMM386, as cpusuite) writes ZSPD<n>.TXT, whose LOOP row (dec/jnz, interrupts off,
+               ARTIC-timed) gives each load's speed. PASS needs every capture complete, the speeds
+               strictly ordered as the settings are, and each rated speed relative to the fastest
+               within 10% of the nominal rate ratio (src/z486/cpu_throttle.sv rate_khz()); a booted
+               load whose setting did not take effect FAILs. A reduced speed gates the CPU's clock,
+               which Full never exercises: a placement whose clock-gate enable path was too long
+               booted at Full and never below it (docs/clock-domains.md, "The enable into the
+               clock-control block"), so the release card run includes it
   crt31k       CRT31K.COM (tools/hwprobe/crt31k): times the 24 kHz raster, switches to the 31 kHz dot clock
                (0x09A8 bit 0 + the BIOS 31 kHz master SYNC), times it, restores; screenshots every 3 s
                show the switch on HDMI. Not in the default set (run it with --items crt31k)
@@ -50,6 +56,11 @@ THE SCRIPTED SET (--items, default all)
                cpusuite: CPUSUITE.TXT ends 'CPUSUITE END ... FAIL=0', ran every program the pack holds
                (its build/manifest.json) on every pass, and each one has a PASS row; a run that stops
                early names the program it stopped in (the harness commits each name before running it).
+
+EXIT STATUS. 0 only when every requested item (--items, or the default plan) PASSed: a FAIL, an
+item that ended SKIP or SKIP-FRAME (it proved nothing), or a plan in which nothing ran exits 1, and
+the lines after the summary table name each. A plan-only run (no --go) reports its DRY items as 0
+and its SKIPs as 1, so a plan that cannot prove an item says so before the card is touched.
 
 NOTHING OF THE USER'S IS EVER COMMITTED. The images are arguments; reference frames live in --refs
 (a directory of the user's choosing, outside any commit); the patched image copies live under
@@ -128,7 +139,21 @@ OSD_RESET_ROW = "Reset and close OSD"
 # list position in status bits 17:14, which Main_MiSTer keeps in config/<setname>.CFG as the
 # status word's bytes, least significant first (bit n = byte n/8, bit n%8).
 SPEED_LSB, SPEED_WIDTH = 14, 4
-SPEED_LABELS = {1: "33 MHz", 2: "25 MHz", 3: "16 MHz", 4: "12 MHz", 5: "8 MHz"}
+# The CPU clock-edge rate each position selects, in kHz: src/z486/cpu_throttle.sv rate_khz() (0,
+# Full, is ungated). The `speeds` item judges the guest's measured speed against these ratios.
+SPEED_KHZ = {1: 33000, 2: 25000, 3: 16000, 4: 12000, 5: 8000, 6: 6000, 7: 4000, 8: 3000, 9: 2000,
+             10: 1500, 11: 1000, 12: 750, 13: 500}
+SPEED_LABELS = {0: "Full", **{p: f"{k / 1000:g} MHz" for p, k in SPEED_KHZ.items()}}
+# speeds: SPEED.COM (tools/hwprobe/speed) runs once per load and its LOOP row (a dec ecx / jnz loop
+# timed with the ARTIC, interrupts off, cache-resident: pure CPU clock edges) gives the measured
+# speed. Each rated load's speed relative to the fastest rated one must be its nominal rate ratio
+# within SPEED_BAND (the gate makes the edge rate exact, so a setting that took effect lands near
+# 1.00; one that did not is off by the whole step, 25/33 = 0.76 at the smallest default step).
+SPEED = ROOT / "tools/hwprobe/speed"
+SPEED_BAND = 0.10
+SPEED_CAPTURE = "ZSPD{k}.TXT"
+SPEED_POLL_S = 15
+SPEED_TIMEOUT_S = 300       # SPEED takes ~20 s with interrupts off at the Xe10's speed; 16 MHz is slower
 CARD_CFG = f"/media/fat/config/{SETNAME}.CFG"
 CARD_CFG_BAK = f"{CARD_CFG}.{TAG}-bak"
 CPUSUITE = ROOT / "tools/hwprobe/cpusuite"
@@ -449,6 +474,66 @@ def cpusuite_files() -> tuple[dict, list]:
              "CPUSUITE.BIN": (CPUSUITE / "build/CPUSUITE.BIN").read_bytes()}, man["run"])
 
 
+def speed_files() -> dict:
+    """Build SPEED.COM (make) -> {DOS name: bytes}."""
+    subprocess.run(["make", "-C", str(ROOT / "tools/hwprobe"), "speed/speed.com"], check=True)
+    return {"SPEED.COM": (SPEED / "speed.com").read_bytes()}
+
+
+def judge_speeds(runs):
+    """runs: [(OSD position, SPEED capture text or None)] in load order -> (ok, detail).
+
+    Each capture must be complete and problem-free (speed_decode.Capture.problems: END:SPEED, the
+    Dhrystone validation, the ARTIC against the PIT) and carry the LOOP row. The measured speed of a
+    load is 1 / LOOP's ns per iteration. PASS needs: the speeds strictly ordered as the settings
+    are (Full above every rated one, a higher rate strictly faster), and every rated load's speed
+    relative to the fastest rated load within SPEED_BAND of the nominal rate ratio."""
+    sys.path.insert(0, str(SPEED))
+    import speed_decode
+    problems, meas = [], []
+    for pos, text in runs:
+        name = SPEED_LABELS.get(pos, f"position {pos}")
+        if not text:
+            problems.append(f"{name}: no SPEED capture")
+            continue
+        c = speed_decode.Capture(text, name)
+        p = c.problems()
+        if "LOOP" not in c.rows:
+            p.append("no LOOP row")
+        if p:
+            problems.append(f"{name}: " + "; ".join(p))
+            continue
+        meas.append((pos, name, SPEED_KHZ.get(pos), c.ns("LOOP"), c.dps().get("DHRY100000")))
+    if problems:
+        return False, "; ".join(problems)
+    if len({pos for pos, *_ in meas}) != len(meas):
+        return False, "a speed was measured twice (--speeds lists a position more than once)"
+    rated = [m for m in meas if m[2]]
+    ref = max(rated, key=lambda m: m[2]) if rated else None
+    rows = []
+    for pos, name, khz, ns, dps in meas:
+        row = f"{name}: LOOP {ns:.2f} ns/iter"
+        if ref and khz:
+            row += f" = {ref[2] / 1000 * ref[3] / ns:.2f} MHz measured"
+        if dps:
+            row += f", {dps:.0f} Dhrystone/s"
+        rows.append(row)
+    order = sorted(meas, key=lambda m: -(m[2] or float("inf")))      # Full first, then by rate
+    for hi, lo in zip(order, order[1:]):
+        if not lo[3] > hi[3]:
+            problems.append(f"{lo[1]} is not slower than {hi[1]} (LOOP {lo[3]:.2f} vs {hi[3]:.2f} "
+                            f"ns/iter): the CPU Speed setting did not take effect")
+    for pos, name, khz, ns, _ in rated:
+        if ref is None or pos == ref[0]:
+            continue
+        want, got = khz / ref[2], ref[3] / ns
+        if abs(got / want - 1) > SPEED_BAND:
+            problems.append(f"{name} runs at x{got:.3f} of {ref[1]}, nominal x{want:.3f} "
+                            f"(outside +-{SPEED_BAND:.0%})")
+    detail = "; ".join(rows)
+    return (not problems), "; ".join(problems + [detail])
+
+
 def crt31k_files() -> dict:
     """Build CRT31K.COM (make) -> {DOS name: bytes}."""
     subprocess.run(["make", "-C", str(ROOT / "tools/hwprobe"), "crt31k/crt31k.com"], check=True)
@@ -607,6 +692,12 @@ def item_needs(item, sc, a=None):
             return "needs the boot check (--no-boot-check given): a load that did not boot is the failure"
         if not a.speeds:
             return "--speeds is empty"
+        if len(set(a.speeds)) < 2 or len(set(a.speeds)) != len(a.speeds):
+            return ("--speeds needs two or more different positions (the measured speeds are judged "
+                    "against each other)")
+        unknown = [p for p in a.speeds if p not in SPEED_LABELS]
+        if unknown:
+            return f"--speeds: unknown CPU Speed position(s) {unknown} (0..13)"
     if item in GAME_ITEMS:
         if item not in sc:
             return f"no '{item}' entry in the scenarios file"
@@ -754,7 +845,9 @@ class Mister:
         return r.stdout
 
     def put(self, local, remote):
-        assert TAG in remote.lower(), f"refusing to write outside the {TAG} namespace: {remote}"
+        # an explicit raise, not an assert: `python -O` strips asserts, and this is a safety guard
+        if TAG not in remote.lower():
+            raise AssertionError(f"refusing to write outside the {TAG} namespace: {remote}")
         self.plan.append(("scp-put", f"{local} -> {remote}"))
         self.created.append(remote)
         if not self.dry:
@@ -930,10 +1023,31 @@ def cfg_set_speed(m: Mister, pos: int):
          "PY")
 
 
+def speed_capture(m: Mister, a, hskip, k: int, itemdir: Path):
+    """Run SPEED.COM in the guest (at the DOS prompt the boot check found) into SPEED_CAPTURE k and
+    poll the image copy until it ends -> the capture text, or None."""
+    cap = SPEED_CAPTURE.format(k=k)
+    for line in ("cd \\\n", f"SPEED > {cap}\n"):    # SPEED writes its capture in the cwd
+        m.sh(f"python3 {REMOTE_TMP}/ztype.py {shlex.quote(line)}")
+    t0 = time.time()
+    text = None
+    while True:
+        time.sleep(0 if m.dry else SPEED_POLL_S)
+        text = m.sh(cat_cmd(a, hskip, cap), check=False) or None
+        if m.dry or (text and "END:SPEED" in text) or time.time() - t0 > SPEED_TIMEOUT_S:
+            break
+    if text:
+        (itemdir / cap).write_text(text)
+    return text
+
+
 def speeds_item(m: Mister, a, hskip, boot, itemdir, out, stopped):
     """One core load per --speeds position, the setting written into the card's config first; each
-    load must boot the hard disk (the image copy gets one more boot row per load)."""
+    load must boot the hard disk (the image copy gets one more boot row per load), and then SPEED.COM
+    measures the CPU's speed in the guest -> (verdict, detail, collected: stopped() already took the
+    screenshots and the UART). The measured speeds are judged against each other (judge_speeds)."""
     sel = a.speeds
+    runs = []
     had = m.sh(f"test -f {CARD_CFG} && echo yes", check=False).strip() == "yes"
     if had:
         m.sh(f"cp {CARD_CFG} {CARD_CFG_BAK}")
@@ -947,8 +1061,16 @@ def speeds_item(m: Mister, a, hskip, boot, itemdir, out, stopped):
             ok, d = boot_guard(m, a, hskip, k, len(sel), boot)
             m.sh("echo screenshot > /dev/MiSTer_cmd", check=False)
             if not ok:
-                return stopped(f"CPU Speed {name}: {d}")
+                return stopped(f"CPU Speed {name}: {d}") + (True,)
             log(out, f"speeds: CPU Speed {name}: {d}")
+            text = speed_capture(m, a, hskip, k, itemdir)
+            m.sh("echo screenshot > /dev/MiSTer_cmd", check=False)
+            if not m.dry and not (text and "END:SPEED" in text):
+                return stopped(f"CPU Speed {name}: SPEED.COM did not finish within {SPEED_TIMEOUT_S}s "
+                               f"({SPEED_CAPTURE.format(k=k)} {'incomplete' if text else 'absent'}); "
+                               f"see the screenshots") + (True,)
+            runs.append((pos, text))
+            log(out, f"speeds: CPU Speed {name}: SPEED captured")
     finally:
         # the user's settings come back whatever happened (a load that never booted included)
         if had:
@@ -956,7 +1078,10 @@ def speeds_item(m: Mister, a, hskip, boot, itemdir, out, stopped):
         else:
             m.sh(f"rm -f {CARD_CFG}; sync", check=False)
     time.sleep(0 if m.dry else SHOT_SETTLE_S)
-    return None
+    if m.dry:
+        return "DRY", "dry run", False
+    ok, detail = judge_speeds(runs)
+    return ("PASS" if ok else "FAIL"), detail, False
 
 
 def run_item(m: Mister, item, a, sc, prep, out):
@@ -972,7 +1097,8 @@ def run_item(m: Mister, item, a, sc, prep, out):
             m.sh(f"cp {GAMES}/{TAG}-{n}.base {GAMES}/{TAG}-{n}.img")
             m.created.append(f"{GAMES}/{TAG}-{n}.img")
     cfg = (sc.get(item, {}) if sc else {}).get("config_default")
-    if cfg is None and item == "cpusuite" and re.search(rb"(?m)^REM DEFAULT\d+\r?$", prep["config_sys"]):
+    if cfg is None and item in ("cpusuite", "speeds") and re.search(rb"(?m)^REM DEFAULT\d+\r?$",
+                                                                   prep["config_sys"]):
         cfg = 0          # the programs enter protected mode themselves: no EMM386 (profile 0, noemm)
     if cfg is not None:
         # a per-item boot profile: CONFIG.SYS of THIS item's image copy (SELSYS `REM DEFAULTn`, 0-based:
@@ -1004,16 +1130,14 @@ def run_item(m: Mister, item, a, sc, prep, out):
         return "FAIL", why
 
     if item == "speeds":
-        r = speeds_item(m, a, hskip, boot, itemdir, out, stopped)
-        if r is not None:
-            return r
+        verdict, detail, collected = speeds_item(m, a, hskip, boot, itemdir, out, stopped)
+        if collected:
+            return verdict, detail
         collect_shots(m, a, before, since, itemdir)
         if a.uart:
             m.get(f"{REMOTE_TMP}/uart.bin", itemdir / "uart.bin")
             stop_uart(m)
-        names = ", ".join(SPEED_LABELS.get(p, f"position {p}") for p in a.speeds)
-        return ("DRY", "dry run") if m.dry else (
-            "PASS", f"the hard disk booted at CPU Speed {names} (one core load each); look at the screenshots")
+        return verdict, detail
     log(out, f"{item}: load_core")
     m.sh(f"echo 'load_core {REMOTE_MGL}' > /dev/MiSTer_cmd")
     time.sleep(0 if m.dry else boot)
@@ -1246,13 +1370,17 @@ def main(argv=None):
                     help="how often --lock-wait asks for the lock (default 30; a back-to-back loop on the card "
                          "re-takes it within seconds of releasing it)")
     ap.add_argument("--go", action="store_true", help="actually touch the MiSTer (otherwise: print the plan)")
-    ap.add_argument("--keep", action="store_true", help="do not clean up (debugging)")
+    ap.add_argument("--keep", action="store_true",
+                    help="do not clean up (debugging); the card's lock is kept too, so later runs "
+                         f"wait on it until it is removed by hand (rm -rf {LOCK})")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args(argv)
     if a.selftest:
         return selftest()
     if not (a.rbf and a.hdd_image):
         ap.error("--rbf and --hdd-image are required")
+    if a.record_refs and not a.refs:
+        ap.error("--record-refs writes the known frames into --refs DIR: give --refs")
     if a.fdd0 and a.hdd_drive.upper() == "A:":
         ap.error("the HDD is drive A: here, which the floppy would also be; no floppy with --hdd-drive A:")
     items = [i for i in a.items.split(",") if i]
@@ -1299,6 +1427,8 @@ def main(argv=None):
         files.update(cf)
     if "crt31k" in items:
         files.update(crt31k_files())
+    if "speeds" in items:
+        files.update(speed_files())
     files.update(boot_files)
     if a.go:
         log(out, f"patching a COPY of {a.hdd_image} -> {patched}")
@@ -1368,8 +1498,33 @@ def main(argv=None):
     print("\n== mister_regress ==")
     for k, (v, d) in results.items():
         print(f"{v:10s} {k:12s} {d}")
+    code, why = exit_status(results, items)
+    for line in why:
+        print(line)
+    return code
+
+
+# Verdicts that mean an item was not proved: SKIP (it did not run) and SKIP-FRAME (it ran, but its
+# known frame had no reference, so the check that judges it never happened).
+NOT_PROVED = ("SKIP", "SKIP-FRAME")
+
+
+def exit_status(results: dict, items: list) -> tuple[int, list]:
+    """(exit code, the lines saying why) for a finished run. 1 when anything FAILed, when an item the
+    run was asked for (--items, or the default plan) ended SKIP or SKIP-FRAME, or when nothing was
+    run at all: a skipped item proved nothing, and a run whose exit code is read (the release
+    checklist, a script) must not report it as a pass. 0 otherwise. The table above is unchanged."""
+    why = []
     bad = [k for k, (v, _) in results.items() if v == "FAIL"]
-    return 1 if bad else 0
+    if bad:
+        why.append("EXIT 1: FAILED: " + ", ".join(bad))
+    unproved = [k for k in items if k in results and results[k][0] in NOT_PROVED]
+    if unproved:
+        why.append("EXIT 1: requested but NOT PROVED (" + "/".join(NOT_PROVED) + "): "
+                   + ", ".join(f"{k} ({results[k][0]}: {results[k][1]})" for k in unproved))
+    if items and all(k in results and results[k][0] in NOT_PROVED for k in items):
+        why.append("EXIT 1: no requested item was run")
+    return (1 if why else 0), why
 
 
 def cleanup(m: Mister, out: Path):
@@ -1382,8 +1537,10 @@ def cleanup(m: Mister, out: Path):
     for p in paths:
         # a test-named file, or one of this run's own screenshots (directly in SHOTS, named by
         # own_shot's pattern with a stem this run loaded); nothing else is ever removed
-        assert TAG in Path(p).name.lower() or p.startswith(REMOTE_TMP + "/") or (
-            str(Path(p).parent) == SHOTS and own_shot(Path(p).name, m.shot_stems, "")), p
+        # an explicit raise, not an assert: `python -O` strips asserts, and this guards an rm
+        if not (TAG in Path(p).name.lower() or p.startswith(REMOTE_TMP + "/") or (
+                str(Path(p).parent) == SHOTS and own_shot(Path(p).name, m.shot_stems, ""))):
+            raise AssertionError(f"cleanup refuses to remove a file it does not own: {p}")
     # the run's own screenshots are listed by name in m.created; the test files carry the tag
     m.sh("rm -f " + " ".join(shlex.quote(p) for p in paths) + f" {REMOTE_MGL}", check=False)
     m.sh(f"rm -rf {REMOTE_TMP}", check=False)
@@ -1814,8 +1971,19 @@ def selftest() -> int:
         def get(self, remote, local):
             pass
 
-    global SHOT_SETTLE_S
+    global SHOT_SETTLE_S, SPEED_POLL_S, SPEED_TIMEOUT_S
     settle, SHOT_SETTLE_S = SHOT_SETTLE_S, 0
+    spoll, SPEED_POLL_S = SPEED_POLL_S, 0
+    stime, SPEED_TIMEOUT_S = SPEED_TIMEOUT_S, 0
+    sys.path.insert(0, str(SPEED))
+    import speed_decode
+
+    def speed_capture_text(khz):
+        """speed_decode's synthetic capture with its LOOP row as a CPU at `khz` would time it
+        (100 ns per iteration at 33 MHz)."""
+        art = round(122880 * 33000 / khz)
+        return speed_decode.SELFTEST.replace("ROW LOOP n=4000000 bytes=0 art=122880 t=122880,122881,122882",
+                                             f"ROW LOOP n=4000000 bytes=0 art={art} t={art},{art},{art}")
     try:
         def ns(**kw):
             base = dict(partition=None, pack="pc98pack-xe10.bin", uart=False, boot_wait=0, cpusuite_passes=1,
@@ -1865,12 +2033,25 @@ def selftest() -> int:
                   "boot-loop: --osd-verify counted presses Enter after the counted Downs")
             # speeds: one load per position, each one more boot row; the config restored either way
             class SpeedCard(Card):
-                def __init__(self, bad_pos=None):
+                """`runs_at` {position: kHz the CPU really runs at} overrides the nominal rate (a
+                setting that did not take effect); `no_end` positions never finish SPEED."""
+                def __init__(self, bad_pos=None, runs_at=None, no_end=()):
                     super().__init__()
                     self.bad_pos, self.pos, self.loads = bad_pos, None, 0
+                    self.runs_at, self.no_end, self.captures = runs_at or {}, no_end, {}
                 def sh(self, cmd, check=True, timeout=600):
                     if cmd.startswith(f"python3 - {CARD_CFG} "):
                         self.pos = int(cmd.split()[3])
+                    m_ = re.search(r"SPEED > (ZSPD\d+\.TXT)", cmd)
+                    if "ztype.py" in cmd and m_:
+                        khz = self.runs_at.get(self.pos, SPEED_KHZ.get(self.pos, 90000))
+                        text = speed_capture_text(khz)
+                        self.captures[m_.group(1)] = (text.replace("END:SPEED", "")
+                                                      if self.pos in self.no_end else text)
+                    m_ = re.search(r"--cat (ZSPD\d+\.TXT)", cmd)
+                    if m_:
+                        self.plan.append(("ssh", cmd))
+                        return self.captures.get(m_.group(1), "")
                     if "load_core" in cmd:
                         self.plan.append(("ssh", cmd))
                         self.loads += 1
@@ -1883,7 +2064,10 @@ def selftest() -> int:
             c = SpeedCard()
             v, msg = run_item(c, "speeds", ns(), {}, prep_b, bd)
             cmds = [x for _, x in c.plan]
-            check(v == "PASS" and c.loads == 3 and c.boots == 3 and "33 MHz, 25 MHz, 16 MHz" in msg
+            check(v == "PASS" and c.loads == 3 and c.boots == 3
+                  and all(f"{n}: LOOP" in msg for n in ("33 MHz", "25 MHz", "16 MHz"))
+                  and "25.00 MHz measured" in msg and "16.00 MHz measured" in msg
+                  and sorted(c.captures) == ["ZSPD1.TXT", "ZSPD2.TXT", "ZSPD3.TXT"]
                   and sum(x.startswith(f"python3 - {CARD_CFG} ") for x in cmds) == 3
                   and cmds.index(f"cp {CARD_CFG} {CARD_CFG_BAK}") < min(i for i, x in enumerate(cmds) if "load_core" in x)
                   and max(i for i, x in enumerate(cmds) if x.startswith(f"cp {CARD_CFG_BAK} {CARD_CFG}"))
@@ -1895,12 +2079,49 @@ def selftest() -> int:
             check(v == "FAIL" and "CPU Speed 25 MHz" in msg and "BIOS did not boot" in msg and c.loads == 2
                   and any(x.startswith(f"cp {CARD_CFG_BAK} {CARD_CFG}") for x in cmds),
                   f"speeds: a speed whose load does not boot fails there, naming it, config restored ({msg})")
+            # the setting must be MEASURED to have taken effect, not just the boot
+            for runs_at, why in (({2: 33000}, "is not slower than 33 MHz"),        # 25 MHz ignored
+                                 ({1: 90000, 2: 90000, 3: 90000}, "is not slower"),  # all at Full
+                                 ({3: 12000}, "16 MHz runs at x0.364")):          # wrong step
+                v, msg = run_item(SpeedCard(runs_at=runs_at), "speeds", ns(), {}, prep_b, bd)
+                check(v == "FAIL" and why in msg,
+                      f"speeds: a CPU Speed that did not take effect as set fails ({runs_at}: {msg})")
+            v, msg = run_item(SpeedCard(runs_at={2: 24000}), "speeds", ns(), {}, prep_b, bd)
+            check(v == "PASS", f"speeds: a measured rate within the band passes ({msg})")
+            v, msg = run_item(SpeedCard(no_end=(3,)), "speeds", ns(), {}, prep_b, bd)
+            check(v == "FAIL" and "CPU Speed 16 MHz: SPEED.COM did not finish" in msg,
+                  f"speeds: a SPEED run that does not finish fails, naming the speed ({msg})")
+            ok, msg = judge_speeds([(1, speed_capture_text(33000)), (0, speed_capture_text(90000))])
+            check(ok, f"speeds: Full above a rated speed passes ({msg})")
+            ok, msg = judge_speeds([(1, speed_capture_text(33000)), (0, speed_capture_text(33000))])
+            check(not ok and "is not slower than Full" in msg, f"speeds: Full no faster than 33 MHz fails ({msg})")
+            ok, msg = judge_speeds([(1, speed_capture_text(33000).replace(
+                "result=00000000 fault=0 dps=50000 PASS", "result=D0000006 fault=0 dps=50000 FAIL", 1)),
+                (2, speed_capture_text(25000))])
+            check(not ok and "33 MHz: DHRY" in msg, f"speeds: a capture with a failed Dhrystone fails ({msg})")
+            check(item_needs("speeds", {}, ns(speeds=[1])) is not None
+                  and item_needs("speeds", {}, ns(speeds=[1, 1])) is not None
+                  and item_needs("speeds", {}, ns(speeds=[1, 14])) is not None
+                  and item_needs("speeds", {}, ns()) is None,
+                  "speeds: needs two or more different known positions")
+            # the exit status: a requested item that was not proved fails the run
+            r_ok = {"probe": ("PASS", ""), "doom": ("PASS", "")}
+            check(exit_status(r_ok, ["probe", "doom"])[0] == 0, "exit: every requested item passed -> 0")
+            code, why = exit_status({"probe": ("PASS", ""), "doom": ("SKIP", "no 'doom' entry")}, ["probe", "doom"])
+            check(code == 1 and "doom (SKIP" in why[0], f"exit: a requested item that SKIPped -> 1, named ({why})")
+            code, why = exit_status({"th05": ("SKIP-FRAME", "no ref")}, ["th05"])
+            check(code == 1 and any("th05 (SKIP-FRAME" in w for w in why) and any("no requested item" in w for w in why),
+                  f"exit: SKIP-FRAME is not a pass, and an all-skipped plan fails ({why})")
+            check(exit_status({"probe": ("FAIL", "x")}, ["probe"])[0] == 1, "exit: a FAIL -> 1")
+            check(exit_status({"probe": ("DRY", "dry run")}, ["probe"])[0] == 0, "exit: a dry run's plan -> 0")
             c = Card(load_ok=False)
             v, msg = run_item(c, "keymap", ns(no_boot_check=True), {"keymap": {"steps": [["type", "dir\n"]], "run": 0}},
                               prep_b, bd)
             check("BIOS did not boot" not in msg and c.typed == ["dir\n"], "boot check: --no-boot-check skips it")
     finally:
         SHOT_SETTLE_S = settle
+        SPEED_POLL_S = spoll
+        SPEED_TIMEOUT_S = stime
     check(item_needs("boot-loop", {}, ns()) is None and "--osd-reset-downs" in item_needs("boot-loop", {}, ns(osd_reset_downs=None))
           and "--osd-verify" in item_needs("boot-loop", {}, ns(osd_verify=None))
           and item_needs("boot-loop", {}, ns(boot_count=1)) is not None,

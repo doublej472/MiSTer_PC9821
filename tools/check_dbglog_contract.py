@@ -12,9 +12,12 @@ in lint (a mux whose table is one byte short splits a record on hardware and not
 and the CD log's lengths are a fourth: tools/decode_cdlog.py (the CD log's own decoder, header
 + payload) must give the same totals as the table's 0x01-0x0B rows.
 
-This checks 1 against 2, 2 against the CD log's decoder, and that every record type the emitters
-in pc9821_dbg_cpu.sv / pc9821_gdc_log.sv / pc9821_fdc_log.sv name is in the table with the length their record builders
-declare. The benches (tb_pc9821_dbg_mux, tb_pc9821_dbg_cpu) carry their OWN tables, written from the
+This checks 1 against 2, 2 against the CD log's decoder (imported, so its LEN is read as Python
+data), and that every record type the emitters in pc9821_dbg_cpu.sv / pc9821_gdc_log.sv /
+pc9821_fdc_log.sv name is in the table. Lengths checked against the emitters: the CPU
+serialiser's k_len per record kind, the display log's `r_last = r_long ? 8 : 6` and the floppy
+log's seven-byte `r_i == 6`; each is matched as text, so a reshaped expression is a failure
+that names it, never a silent pass. The benches (tb_pc9821_dbg_mux, tb_pc9821_dbg_cpu) carry their OWN tables, written from the
 record definitions, so a change must be made in all of them or a bench fails.
 
 Usage:  tools/check_dbglog_contract.py            (--selftest plants a wrong table and a missing type)
@@ -46,21 +49,29 @@ def mux_table(text: str) -> dict[int, int]:
     return table
 
 
-def table_problems(mux_text: str | None = None) -> list[str]:
+def cd_lengths(cd_len: dict | None = None) -> dict[int, int]:
+    """The CD log decoder's payload table, imported from decode_cdlog.py."""
+    if cd_len is not None:
+        return cd_len
+    if not CDDEC.exists():
+        raise SystemExit(f"{CDDEC.relative_to(ROOT)} is missing: the CD log's lengths cannot be checked")
+    import decode_cdlog
+    return decode_cdlog.LEN
+
+
+def table_problems(mux_text: str | None = None, cd_len: dict | None = None) -> list[str]:
     import decode_dbglog as d
     problems = []
     mux = mux_table(mux_text if mux_text is not None else MUX.read_text())
     for t in sorted(set(mux) | set(d.LEN)):
         if mux.get(t) != d.LEN.get(t):
             problems.append(f"type 0x{t:02X}: the mux says {mux.get(t)}, decode_dbglog.py says {d.LEN.get(t)}")
-    if CDDEC.exists():
-        txt = CDDEC.read_text()
-        m = re.search(r"^LEN = (\{.*?\})", txt, re.M)
-        if m:
-            cd = eval(m.group(1), {})
-            for t, payload in cd.items():
-                if d.LEN.get(t) != 4 + payload:
-                    problems.append(f"CD type {t}: decode_cdlog.py gives {4 + payload} bytes, the table {d.LEN.get(t)}")
+    cd = cd_lengths(cd_len)
+    if not cd:
+        problems.append("decode_cdlog.py's LEN is empty: nothing to compare the CD rows with")
+    for t, payload in cd.items():
+        if d.LEN.get(t) != 4 + payload:
+            problems.append(f"CD type {t}: decode_cdlog.py gives {4 + payload} bytes, the table {d.LEN.get(t)}")
     return problems
 
 
@@ -73,9 +84,14 @@ def emitter_problems(cpu_text: str | None = None, gdc_text: str | None = None,
     seen = set()
     for m in re.finditer(r"8'hA5,\s*(?:e_cur\[100\]\s*\?\s*)?8'h([0-9A-Fa-f]{2})(?:\s*:\s*8'h([0-9A-Fa-f]{2}))?", cpu):
         seen |= {int(g, 16) for g in m.groups() if g}
-    for m in re.finditer(r"8'hA5,\s*8'h(2[01])", cpu):
-        seen.add(int(m.group(1), 16))
-    seen |= {0x21} if "8'h21" in cpu else set()
+    # The sample record's type byte is replaced on the wire by smp_t (0x20, or 0x21 after a
+    # loss): the types are the ones smp_t is assigned, not any 8'h21 anywhere in the file.
+    if re.search(r"\(bi\s*==\s*6'd1\)\s*\?\s*smp_t\b", cpu):
+        for m in re.finditer(r"\bsmp_t\s*<=\s*([^;]*);", cpu):
+            seen |= {int(x, 16) for x in re.findall(r"8'h([0-9A-Fa-f]{2})", m.group(1))}
+    else:
+        problems.append("pc9821_dbg_cpu.sv no longer sends smp_t as the sample record's type "
+                        "byte: re-check how types 0x20/0x21 are emitted")
     for t in sorted(seen):
         if t not in d.LEN:
             problems.append(f"pc9821_dbg_cpu.sv emits type 0x{t:02X}, which is not in the table")
@@ -146,6 +162,16 @@ def selftest() -> int:
     fdc = FDC.read_text()
     if not any("0x5E" in p for p in emitter_problems(None, None, fdc.replace("8'h5E", "8'h1E"))):
         print("SELFTEST FAIL: the floppy log emitting another instrument's LOST type was not caught")
+        bad += 1
+    if not any("0x21" in p for p in emitter_problems(
+            cpu.replace("smp_t <= s_lost ? 8'h21 : 8'h20;", "smp_t <= 8'h20;  // 8'h21 retired"))):
+        print("SELFTEST FAIL: the CPU instrument no longer emitting 0x21 (named only in a comment) was not caught")
+        bad += 1
+    if not any("CD type 4" in p for p in table_problems(None, {4: 13})):
+        print("SELFTEST FAIL: a CD log decoder length that disagrees with the table was not caught")
+        bad += 1
+    if not any("empty" in p for p in table_problems(None, {})):
+        print("SELFTEST FAIL: an empty CD log decoder table was not caught")
         bad += 1
     if table_problems() or emitter_problems():
         print("SELFTEST FAIL: the real tree is not clean")

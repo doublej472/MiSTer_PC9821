@@ -21,8 +21,8 @@ recomputed from ARTIC here and flagged if they disagree (integer rounding).
 
 CONTROLS. CTRLPW / CTRLGC / CTRLCP are loop-shell control rows (the ioprobe
 discipline: the same loop with each GVRAM access replaced by a register op).
-The decoder nets each matched case and prints the per-op NS that the
-rusty-pacing-fix-plan.md section 4 "Fix 1" fail-first constants need:
+The decoder nets each matched case and prints the per-op NS that the GVRAM pacing
+benches' fail-first constants need (tb_pc9821_gvram_latency, tb_pc9821_egc_xe10_pace):
 
     GRCG_RMW net = (GRCG_RMW - CTRLGC) / 16    ns per 4-plane RMW word
     PW4RW    net = (PW4RW - CTRLPW) / 128     ns per access (32 per RMW word)
@@ -204,9 +204,9 @@ def main() -> int:
                 rc = 1
         by = {c[0]: c for c in cases}
 
-        # The Fix-1 per-op constants, net of the matched loop-shell controls.
+        # The per-op constants, net of the matched loop-shell controls.
         print()
-        print("  NET OF CONTROL (rusty-pacing-fix-plan.md section 4 Fix 1 constants):")
+        print("  NET OF CONTROL (per-op constants net of the matched loop-shell controls):")
         rmw, rmw_how = net_ns(by, "GRCG_RMW", 16)
         print(f"    GRCG RMW word (4-plane read-merge-write store) = "
               f"{rmw:.1f} ns   [{rmw_how} / 16 stores]")

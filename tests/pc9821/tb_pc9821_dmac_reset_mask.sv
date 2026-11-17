@@ -3,7 +3,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DMAC_RESET_MASK: after a hardware reset every DMA channel is MASKED, so a device that raises its request on a channel the guest has programmed (mode, address, count) but not yet unmasked is never granted - no DACK, no memory access for 200 clocks - and the same request is served as soon as the guest clears the masks (register 0x1D), which proves the request path itself was live and only the reset mask held it off.
+// TB_PC9821_DMAC_RESET_MASK: after a hardware reset every DMA channel is MASKED - each of the four checked from its own reset - so a device that raises its request on a channel the guest has programmed (mode, address, count) but not yet unmasked is never granted - no DACK, no memory access for 200 clocks - and the same request is served as soon as the guest clears the masks (register 0x1D), which proves the request path itself was live and only the reset mask held it off.
 
 // ---- where the expectation comes from ----
 //   uPD71071 / 8237-family datasheet: the RESET input clears the command, status, request and
@@ -69,31 +69,41 @@ module tb_pc9821_dmac_reset_mask;
   endtask
 
   // ==== CHECKS ====
+  // Each channel on its own, from its own reset: a reset that masks only SOME channels (the
+  // FDC's channel 2 or the IDE's channel 0 left open) fails on the channel it left open.
+  integer c, d0, m0;
+  reg [3:0] dack_seen;
+  always @(posedge clk) dack_seen <= reset ? 4'h0 : (dack_seen | dack);
   initial begin
-    reset = 1;
-    repeat (8) @(negedge clk);
-    reset = 0;
-    repeat (4) @(negedge clk);
+    for (c = 0; c < 4; c = c + 1) begin
+      drq = 4'h0;
+      reset = 1;
+      repeat (8) @(negedge clk);
+      reset = 0;
+      repeat (4) @(negedge clk);
+      d0 = dack_clks; m0 = mem_reqs;
 
-    // Channel 0, memory to device, four bytes at 0: programmed but NOT unmasked.
-    reg_wr(5'd11, 8'h08);   // mode (0x17)
-    reg_wr(5'd0, 8'h00); reg_wr(5'd0, 8'h00);   // address
-    reg_wr(5'd1, 8'h03); reg_wr(5'd1, 8'h00);   // count
-    drq[0] = 1;
-    repeat (200) @(negedge clk);
-    if (dack_clks != 0 || mem_reqs != 0) begin
-      $display("MISMATCH a masked-at-reset channel was served: dack_clks=%0d mem_reqs=%0d",
-               dack_clks, mem_reqs);
-      errors = errors + 1;
-    end
+      // Channel c, memory to device, four bytes at 0: programmed but NOT unmasked.
+      reg_wr(5'd11, 8'h08 | c[7:0]);                         // mode (0x17), channel c
+      reg_wr(5'(2 * c), 8'h00); reg_wr(5'(2 * c), 8'h00);    // address
+      reg_wr(5'(2 * c + 1), 8'h03); reg_wr(5'(2 * c + 1), 8'h00);   // count
+      drq[c] = 1'b1;
+      repeat (200) @(negedge clk);
+      if (dack_clks != d0 || mem_reqs != m0) begin
+        $display("MISMATCH channel %0d, masked at reset, was served: dack_clks=%0d mem_reqs=%0d",
+                 c, dack_clks - d0, mem_reqs - m0);
+        errors = errors + 1;
+      end
 
-    // Control: clearing the masks (0x1D) serves the same request.
-    reg_wr(5'd14, 8'h00);
-    repeat (200) @(negedge clk);
-    drq[0] = 0;
-    if (dack_clks == 0 || mem_reqs == 0) begin
-      $display("MISMATCH the request was not served after the masks were cleared (control)");
-      errors = errors + 1;
+      // Control: clearing the masks (0x1D) serves the same request, on its own channel.
+      reg_wr(5'd14, 8'h00);
+      repeat (200) @(negedge clk);
+      drq[c] = 1'b0;
+      if (dack_clks == d0 || mem_reqs == m0 || dack_seen != (4'h1 << c)) begin
+        $display("MISMATCH channel %0d's request was not served on its own channel after the masks were cleared (control): dack_seen=%b",
+                 c, dack_seen);
+        errors = errors + 1;
+      end
     end
 
     // ==== VERDICT ====
@@ -105,7 +115,7 @@ module tb_pc9821_dmac_reset_mask;
   end
 
   initial begin
-    #200_000;
+    #800_000;
     $fatal(1, "TB_PC9821_DMAC_RESET_MASK: TIMEOUT");
   end
 

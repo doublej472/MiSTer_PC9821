@@ -1,9 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught. And the 0x871E software-DIP BEEPER VOLUME (bits [3:2]) actually scales the speaker amplitude: writing each code through the real I/O path yields the 0/1024/2048/3072 ladder through pc9821_audio_mix's own amplitude stage at the OSD Beeper level's 0 dB - linear in the code with 0 = EXACT mute (NP2kai io/dipsw.c:44-57 sets BEEP_VOL from (value>>2)&3, sound/beepg.c:113-114 scales `samp *= vol`, sound/beepg.c:161-163 goes silent at 0), the unit pinned so code 2 - NP2kai's default 'Mid' (pccore.c:847) - is the historical 2,048, and the exported beep_vol port carries exactly the written bits.
-//
-// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed through the 0x3FDF/0x3FDB port alias exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and channel 2 is shown NOT to be the beeper, so the routing that put the beep on the RS-232C channel's divisor is caught; and the exported beep_vol volume port carries the SELECTED bank's 0x871E bits, which is the other half of that register - 0x871E is bank A's sdip[3] with 0x8F1F bit 6 clear and bank B's sdip[15] with it set, so a bank-select write alone moves the volume and the two banks hold independent images, where a single mirror loaded only on the 0x871E write would answer bank A's code for both.
+// TB_PC9821_BEEPER: The machine's own power-on beep is audible, and each half of it is the machine's: the TONE is the PIT's CHANNEL-1 mode-3 square wave, programmed exactly as the firmware's own beep routine programs it (BANK4@0x4B2B: control 0x76 = channel 1, LSB then MSB, mode 3, then divisor 0x04CD = 1229 low and high) and measuring 2.4576 MHz divided by the divisor = 2000 Hz, and the GATE is system port C bit 3 used as a MUTE, so the 8255 bit-set/reset form on 0x37 with 0x06 makes it audible and 0x07 silences it, a whole-register write on 0x35 does the same, and the sound stops the moment the bit is set even though the counter is still running; and programming the PIT's channel 2 (the RS-232C clock) leaves channel 1's tone unmoved; the PIT is driven directly (the 0x3FDF/0x3FDB port decode is not exercised) and the speaker is this bench's one-gate copy of pc9821_system's `~beep_mute & pit_out1`, so the system-level routing is not what this bench proves. And the 0x871E software-DIP BEEPER VOLUME (bits [3:2]) actually scales the speaker amplitude: writing each code through the real I/O path yields the 0/1024/2048/3072 ladder through pc9821_audio_mix's own amplitude stage at the OSD Beeper level's 0 dB - linear in the code with 0 = EXACT mute (NP2kai io/dipsw.c:44-57 sets BEEP_VOL from (value>>2)&3, sound/beepg.c:113-114 scales `samp *= vol`, sound/beepg.c:161-163 goes silent at 0), the unit pinned so code 2 - NP2kai's default 'Mid' (pccore.c:847) - is the historical 2,048, and the exported beep_vol port carries exactly the written bits, reads code 3 at power-up (the measured 0x871E image 0x3E, (0x3E >> 2) & 3 = 3) and follows the SELECTED bank's 0x871E bits - 0x871E is bank A's sdip[3] with 0x8F1F bit 6 clear and bank B's sdip[15] with it set, so a bank-select write alone moves the volume and the two banks hold independent images, where a single mirror loaded only on the 0x871E write would answer bank A's code for both.
 //
 // WHERE THE EXPECTATIONS COME FROM, because none of them is read back off this
 // tree's implementation:
@@ -112,7 +110,7 @@ module tb_pc9821_beeper;
   wire [1:0]  beep_vol;
 
   // ---------------------------------------------------------------
-  // DUT B: the PIT, whose channel 2 is the tone
+  // DUT B: the PIT, whose channel 1 is the tone
   // ---------------------------------------------------------------
   // Named pit_sel, not pit_cs: pc9821_iobus is instantiated with `.*` and P5 made it output the
   // device-bus chip selects, so `pit_cs` there is the fabric's decode (this bench drives the PIT
@@ -174,6 +172,7 @@ module tb_pc9821_beeper;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -296,7 +295,7 @@ module tb_pc9821_beeper;
     end
   endtask
 
-  // ---- the PIT, exactly the way the firmware programs channel 2 ----
+  // ---- the PIT, exactly the way the firmware programs its channels ----
   task automatic pit_write(input [1:0] regsel, input [7:0] data);
     begin
       @(negedge clk);
@@ -393,6 +392,13 @@ module tb_pc9821_beeper;
     end
     if (speaker !== 1'b0) begin
       $display("FAIL: the beeper must be silent at power-on");
+      errors = errors + 1;
+    end
+    // ...and the beeper VOLUME powers up at code 3: the measured 0x871E power-up image is
+    // 0x3E (pc9821_iobus sdip_powerup(3), the machine's bank-A image 7C 02 76 3E ...), and
+    // NP2kai io/dipsw.c:44-57 takes BEEP_VOL as (value >> 2) & 3 = 3. Read before any write.
+    if (beep_vol !== 2'd3) begin
+      $display("FAIL: beep_vol at power-up is %0d, want 3 (0x871E image 0x3E)", beep_vol);
       errors = errors + 1;
     end
 

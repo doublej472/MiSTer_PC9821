@@ -4,7 +4,7 @@
  *                      bytes each (640 x 400 / 8), in the order 0xA8000 (B), 0xB0000 (R),
  *                      0xB8000 (G), 0xE0000 (I): 128000 bytes. Reads only.
  *
- * Used after GDCFIG (todo item 126): the GDC draws into GVRAM, so the same binary's dump on
+ * Used after GDCFIG: the GDC draws into GVRAM, so the same binary's dump on
  * the core and on the machine compares byte for byte (gvdump_decode.py --compare, or --png to
  * look at it). A plane the current mode does not map (0xE0000 in the digital 8-colour mode,
  * todo item 31) reads FF and is dumped as read.

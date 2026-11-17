@@ -127,7 +127,7 @@ module pc9821_gdc_text_dut (
   wire        crtc_o_frame_end, crtc_o_cfg_snap, crtc_o_cfg_pending, crtc_o_display_page;
   wire        crtc_o_stat_blank, crtc_o_stat_vsync;
   wire [7:0]  crtc_io_dout, cg_io_dout, gdc2_io_dout;
-  // The PEGC palette-write port and view select (pegc-scope-REPORT.md 4 row 5),
+  // The PEGC palette-write port and view select,
   // parked: this bench drives the I/O ports, not the palette's write port.
   wire        pal256_wr_en;
   wire  [7:0] pal256_wr_idx, pal256_wr_data;

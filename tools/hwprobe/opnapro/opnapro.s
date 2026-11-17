@@ -1,7 +1,7 @@
 /* opnapro.s - the PC-9801-86 OPNA (YM2608) sound-register READ-BACK probe.
  *
  * WHY. The two NP2kai-vs-qemu disagreements the OPNA audit could not settle from
- * the references (ISSUES.md C-5, and the register defect it owns, B-1) are both
+ * the references (the 0x18E A/D read and the status-2 timer bits, below) are both
  * reads of the board's host ports:
  *
  *   (1) 0x18E read with the extended select at 0x0F. That address is the YM2608's

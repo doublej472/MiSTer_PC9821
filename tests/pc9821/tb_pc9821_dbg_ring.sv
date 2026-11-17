@@ -68,10 +68,23 @@ module tb_pc9821_dbg_ring;
 
   // One producer step: push a record of `len` bytes if (and only if) room was high, one byte per
   // cycle, the way the instruments do.
+  // While the UART is stalled (stall_check), room is checked EXACTLY at every record start:
+  // high iff at least MAX_REC bytes are free (pushed - taken <= depth - MAX_REC), the module's
+  // own contract. Every byte of the previous record has landed by this negedge.
+  reg stall_check = 1'b0;
+  integer room_exact_checks = 0;
   task automatic push_record(input integer ring, input integer len);
     integer i;
     begin
       @(negedge clk);
+      if (stall_check) begin
+        room_exact_checks = room_exact_checks + 1;
+        if (room[ring] !== ((pushed[ring] - got[ring]) <= depth[ring] - maxrec[ring])) begin
+          $display("FAIL: ring %0d: room=%b with %0d of %0d bytes used (MAX_REC %0d)", ring, room[ring],
+                   pushed[ring] - got[ring], depth[ring], maxrec[ring]);
+          errors = errors + 1;
+        end
+      end
       if (room[ring]) begin
         for (i = 0; i < len; i = i + 1) begin
           push[ring] = 1'b1; din[ring] = pat(pushed[ring]); pushed[ring] = pushed[ring] + 1;
@@ -87,6 +100,9 @@ module tb_pc9821_dbg_ring;
   always @(posedge clk) begin
     for (k = 0; k < 3; k = k + 1) begin
       used_now = pushed[k] - got[k];
+      // +1: this model counts a byte as pushed at the negedge it is presented and as taken only
+      // at the UART accept, so it reads one byte high for a cycle when a full ring is pushed and
+      // drained at once; the exact room check in the stalled phase is the tight contract.
       if (used_now > depth[k] + 1) begin
         if (errors < 20) $display("FAIL: ring %0d holds %0d bytes of %0d", k, used_now, depth[k]);
         errors = errors + 1;
@@ -99,15 +115,21 @@ module tb_pc9821_dbg_ring;
   initial begin
     // 1. stalled: fill each ring through room alone, then check room dropped at the right fill
     repeat (4) @(negedge clk);
+    stall_check = 1'b1;
     for (rr = 0; rr < 3; rr = rr + 1) begin
       i = 0;
       while (room[rr] && i < 20000) begin push_record(rr, 4); i = i + 1; end
+      push_record(rr, 4);   // one more start with room low: checked exact, pushes nothing
       // room low means fewer than MAX_REC bytes were free when it was sampled; one more record
       // of MAX_REC could not have fit, and the pushes so far did not overrun (checked above)
       if (depth[rr] - (pushed[rr] - got[rr]) >= maxrec[rr] + 4 + 1)
         begin $display("FAIL: ring %0d: room low with %0d bytes free", rr, depth[rr] - (pushed[rr] - got[rr])); errors = errors + 1; end
       if (depth[rr] - (pushed[rr] - got[rr]) < 0)
         begin $display("FAIL: ring %0d: overran", rr); errors = errors + 1; end
+    end
+    stall_check = 1'b0;
+    if (room_exact_checks < 100) begin
+      $display("FAIL: only %0d exact room checks ran in the stalled phase", room_exact_checks); errors = errors + 1;
     end
     // 2. drain everything
     acc_en = 3'b111;

@@ -217,14 +217,14 @@ module pc9821_pic_ref #(
       // SINGLE assignment: the edge latch and the INTA clear are folded into one
       // expression. A separate `ir_latch[highest] <= 1'b0` NBA races with this
       // whole-vector update - the clear is lost and every interrupt re-asserts forever.
-      // SET WINS on a same-bit collision (race-idiom R3): a rising edge landing on the
+      // SET WINS on a same-bit collision (docs/single-cycle-event-discipline.md R3): a rising edge landing on the
       // acknowledge edge of the same level is a NEW request - the ack consumed the old
       // one - and `(latch | set) & ~clr` ate it, losing one interrupt per acknowledge
       // window with no way for an edge source to re-request. tb_pc9821_pic's
       // same-cycle collision case pins this.
       ir_prev  <= ir_in;
       // clear = INTA (ir_clr) OR the machine's masked falling-edge withdraw
-      // (ir_wd_eff); SET WINS on a same-bit collision (race-idiom R3).
+      // (ir_wd_eff); SET WINS on a same-bit collision (docs/single-cycle-event-discipline.md R3).
       ir_latch <= (ir_latch & ~ir_clr_all) | ir_set;
 
       // I/O write

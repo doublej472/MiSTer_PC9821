@@ -4,6 +4,8 @@ module jtopna (
     input           rst,
     input           clk,
     input           cen,
+    input           rst_nx,     // LOCAL PATCH (rst_nx seam, PC-98 core): rst one cycle early, for jt12_rst's posedge synchroniser; see jt12_rst.v's LOCAL PATCH
+    input           cen_nx,     // LOCAL PATCH (cen_nx seam, PC-98 core): the next cycle's cen, for jt12_div's posedge clock-enable registers; see jt12_div.v's LOCAL PATCH
     input   [7:0]   din,
     input   [1:0]   addr,
     input           cs_n,
@@ -29,8 +31,9 @@ module jtopna (
     output  signed  [19:0] fm_snd_right,
     output  signed  [19:0] fm_snd_left,
     output          [11:0] psg_snd,
-    // LOCAL CHANGE -- everything else in this file is upstream's, byte for byte.
-    // These three inputs are the only difference. They wire the write port the
+    // LOCAL CHANGE -- the RHYTHM_ROM write seam. The LOCAL-tagged ports and
+    // connections in this file are its differences from upstream (LICENSE-SCOPE.md
+    // lists them). These three inputs wire the write port the
     // RHYTHM_ROM instance below always exposed (upstream leaves it unconnected,
     // so `we` was tied to 0); pc9821_opna drives them from
     // pc9821_rhythm_loader. See src/opna/rhythm_rom/RHYTHM_ROM.v and
@@ -86,8 +89,11 @@ jt08 u_jt08(
     .rst            ( rst          ),
     .clk            ( clk          ),
     .cen            ( cen          ),
-    // The ADPCM-A drum-bus gain is hard-wired at 0 (the 0 dB default, bit-identical
-    // to upstream at 0). The vendored jt12 tree keeps its gain input unmodified.
+    .cen_nx         ( cen_nx       ),   // LOCAL PATCH (cen_nx seam, PC-98 core)
+    .rst_nx         ( rst_nx       ),   // LOCAL PATCH (rst_nx seam, PC-98 core)
+    // LOCAL CHANGE (rhythm_gain_shift seam): the ADPCM-A drum-bus gain input the
+    // local jt08/jt12_top/drvA/acc seam adds (LICENSE-SCOPE.md), hard-wired at 0 (the
+    // 0 dB default, bit-identical to upstream at 0).
     .rhythm_gain_shift ( 3'd0 ),
     .din            ( din          ),
     .addr           ( addr         ),

@@ -47,9 +47,7 @@
 `default_nettype none
 
 // ==== WHAT THIS PROVES ====
-// The memory-mapped CG window at 0xA4000: a 32-byte repeating view of the glyph the CG registers select, the user CG RAM write/read path, the code registers packing as A1 high / A3 low, the decode boundary at 0xA5000, a ready-then-response phase, and the ITF configuration record present on a fresh power-up store (the marker at window offsets 0x11/0x13 and the ten bytes the ITF sums, read before anything writes them). It does NOT cover the ROM glyph classes: the ANK page is answered from the pack slice by tb_pc9821_cg_read_path. The even/low page is ASSERTED at the dummy byte the machine itself measures, 0x8F (docs/probes/VRAM.TXT, exactly this class; NP2kai has one dummy page shared by every class, io/cgrom.c:18): a store there vanishes and a read answers 0x8F.
-//
-// The memory-mapped CG window at 0xA4000: a 32-byte repeating view of the glyph the CG registers select, the user CG RAM write/read path, the code registers packing as A1 high / A3 low, the decode boundary at 0xA5000, a ready-then-response phase, and the ITF configuration record present on a fresh power-up store (the marker at window offsets 0x11/0x13 and the ten bytes the ITF sums, read before anything writes them). It does NOT cover the ROM glyph classes: the ANK page is answered from the pack slice by tb_pc9821_cg_read_path. The even/low page is ASSERTED at the machine's measured dummy 0x8F (docs/probes/VRAM.TXT, exactly this class; NP2kai has one dummy page shared by every class, io/cgrom.c:18) - the old reported-only note tracked a zero-read model both references contradicted.
+// The memory-mapped CG window at 0xA4000: a 32-byte repeating view of the glyph the CG registers select, the user CG RAM write/read path (and that only a user-CG code takes a store: window and port 0xA9 stores under a JIS, an ANK and a ver0.78 code leave the byte and the user-CG store unchanged), the code registers packing as A1 high / A3 low, the decode boundary at 0xA5000, a ready-then-response phase, and the ITF configuration record present on a fresh power-up store (the marker at window offsets 0x11/0x13 and the ten bytes the ITF sums, read before anything writes them). It does NOT cover the ROM glyph classes: the ANK page is answered from the pack slice by tb_pc9821_cg_read_path. The even/low page is ASSERTED at the dummy byte the machine itself measures, 0x8F (docs/probes/VRAM.TXT, exactly this class; NP2kai has one dummy page shared by every class, io/cgrom.c:18): a store there vanishes and a read answers 0x8F.
 
 
 module tb_pc9821_cg_window;
@@ -453,6 +451,44 @@ module tb_pc9821_cg_window;
 
     mem_read_byte(32'h000A_4007, rval);
     if (rval !== 8'h3C) fail("even-offset write clobbered the odd-offset byte");
+
+    // ---------------------------------------------------------------
+    // 3a. ONLY the user-CG codes are writable: a store through the window and
+    //     through port 0xA9 under a two-byte JIS code (A1 = 0x10, A3 = 0x10), an
+    //     ANK code (A1 = 0x00, A3 = 0x41) and a ver0.78 code (A1 = 0x10, A3 = 0x0A)
+    //     must leave the selected byte as it read before (qemu cgwindow_writeb and
+    //     NP2kai memtram_wr8:98-102 write only a low byte of 0x56/0x57; cgrom_oa9
+    //     likewise), and must not land in the user-CG store either: the JIS and
+    //     ver0.78 codes share A1 and the low bit of A3 with 0x1056, i.e. its user-CG
+    //     store cell, so a store that escaped the gate would overwrite 0x1056's row 3
+    //     (0x3C, which must still read back afterwards).
+    // ---------------------------------------------------------------
+    begin : ro_codes
+      reg [7:0] hi_c [0:2];
+      reg [7:0] lo_c [0:2];
+      reg [7:0] before_w, before_p, after_w, after_p;
+      hi_c[0] = 8'h10; lo_c[0] = 8'h10;   // JIS
+      hi_c[1] = 8'h00; lo_c[1] = 8'h41;   // ANK
+      hi_c[2] = 8'h10; lo_c[2] = 8'h0A;   // ver0.78
+      for (integer q = 0; q < 3; q = q + 1) begin
+        select_code(hi_c[q], lo_c[q], 8'h03);
+        mem_read_byte(32'h000A_4007, before_w);
+        read_io(8'hA9, before_p);
+        if ((^before_w === 1'bx) || (^before_p === 1'bx))
+          fail("read-only code: the selected byte reads X, so the store check below would be vacuous");
+        mem_write_byte(32'h000A_4007, ~before_w);
+        write_io(8'hA9, ~before_p);
+        mem_read_byte(32'h000A_4007, after_w);
+        read_io(8'hA9, after_p);
+        $display("NOTE cg_window: code %02x%02x row 3: window %02x -> %02x, port %02x -> %02x after the stores",
+                 hi_c[q], lo_c[q], before_w, after_w, before_p, after_p);
+        if (after_w !== before_w) fail("a window store under a non-user-CG code changed the selected byte");
+        if (after_p !== before_p) fail("a port 0xA9 store under a non-user-CG code changed the selected byte");
+      end
+      select_code(8'h10, 8'h56, 8'h03);
+      mem_read_byte(32'h000A_4007, rval);
+      if (rval !== 8'h3C) fail("a store under a read-only code landed in the user-CG store");
+    end
 
     // ---------------------------------------------------------------
     // 3b. The shape the authentic ITF uses. Its repair writes the configuration

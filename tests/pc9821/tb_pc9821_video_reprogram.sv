@@ -1,7 +1,7 @@
 `timescale 1ps/1ps
 
 // ==== WHAT THIS PROVES ====
-// The analog output recovers within one output frame when the guest reprograms the master GDC mid-frame: with clk_sys 80 MHz, the core's dot enable and the real pc9821_crtc feeding pc9821_video_out (native and doubled), a SYNC block written in the middle of a frame - the 550-line block (lf 480), defsyncm15 (an 896-dot line) and back to the default - and a GDC RESET command with the default block leave, from the SECOND output frame after the write on, every line exactly the new length (native 2 x HTOTAL, doubled HTOTAL video clocks - HTOTAL from the block by NP2kai's gdc_updateclock() transcription), every VSYNC edge on an HSYNC leading edge, no DE inside HSYNC or VSYNC, and no crossing-FIFO event; what the transition frame carried is printed. FAIL-FIRST: it passes on the current design, so it is proven able to fail by recorded mutants of the crossing FIFO's recovery and the doubler's line resynchronisation.
+// The analog output recovers within one output frame when the guest reprograms the master GDC mid-frame: with clk_sys 80 MHz, the core's dot enable and the real pc9821_crtc feeding pc9821_video_out (native and doubled), a SYNC block written in the middle of a frame - the 550-line block (lf 480), defsyncm15 (an 896-dot line) and back to the default - and a GDC RESET command with the default block leave, from the SECOND output frame after the write on, every line exactly the new length (native 2 x HTOTAL, doubled HTOTAL video clocks - HTOTAL from the block by NP2kai's gdc_updateclock() transcription), every frame exactly the block's VTOTAL lines (twice that doubled), every VSYNC edge on an HSYNC leading edge, no DE inside HSYNC or VSYNC, and no crossing-FIFO event; what the transition frame carried is printed. FAIL-FIRST: it passes on the current design, so it is proven able to fail by recorded mutants of the crossing FIFO's recovery and the doubler's line resynchronisation.
 //
 // WHAT IT IS BLIND TO: the graphics plane (text-only raster), the real PLL's relock time (modelled as a
 // reset window), and what a monitor makes of the transition frame - only that it does not stick.
@@ -231,18 +231,21 @@ module tb_pc9821_video_reprogram;
 
   // After a change: report the transition frame, then require the next frame clean.
   task automatic check_after(input string name, input integer clk_per_dot);
-    integer want;
+    integer want, want_lines;
     begin
       np2_sync_geometry;
       want = clk_per_dot * g_htotal;
+      // The frame's line count (HSYNC leading edges from one VSYNC fall to the next) is the
+      // block's VTOTAL, NP2kai's clamped y; the doubler emits every source line twice.
+      want_lines = (run_dbl ? 2 : 1) * g_vtotal;
       wait_out_frames(1);
       $display("  %-34s transition frame: lines %0d..%0d clocks x %0d, %0d VS edges off HS, %0d DE in sync, %0d FIFO events",
                name, f_lo, f_hi, f_lines, f_vsoff, f_desync, f_ev);
       wait_out_frames(1);
       wait_out_frames(1);
-      $display("  %-34s clean frame:      lines %0d..%0d clocks x %0d (want %0d), %0d VS edges off HS, %0d DE in sync, %0d FIFO events",
-               name, f_lo, f_hi, f_lines, want, f_vsoff, f_desync, f_ev);
-      if (f_lo != want || f_hi != want || f_vsoff != 0 || f_desync != 0 || f_ev != 0) begin
+      $display("  %-34s clean frame:      lines %0d..%0d clocks x %0d (want %0d x %0d), %0d VS edges off HS, %0d DE in sync, %0d FIFO events",
+               name, f_lo, f_hi, f_lines, want, want_lines, f_vsoff, f_desync, f_ev);
+      if (f_lo != want || f_hi != want || f_lines != want_lines || f_vsoff != 0 || f_desync != 0 || f_ev != 0) begin
         $display("FAIL %0s: the output is not clean one frame after the change", name);
         errors = errors + 1;
       end

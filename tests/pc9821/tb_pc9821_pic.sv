@@ -1,24 +1,34 @@
 // tb_pc9821_pic - focused 8259 interrupt controller checks.
 //
-// Verifies the pc9821_pic module in isolation: reset masking, the ICW1/ICW2
+// Verifies the pc9821_pic module in isolation: no INT out of reset, the ICW1/ICW2
 // programming sequence, edge-triggered request latching (including the
 // no-re-latch-after-INTA and falling-edge-does-not-withdraw rules), INT
 // assertion with vector = base + IRQ, INTA IRR->ISR transfer, non-specific
 // EOI, masking, and the critical no-spurious-INTA guarantee (an INTA with
 // nothing pending must not re-assert INT).
 //
-// INT timing uses fixed posedge waits: the DUT latches a rising edge one
-// posedge later and asserts INT one posedge after that (2 cycles edge-to-INT),
-// and deasserts INT one posedge after INTA. Fixed waits are used (rather than
-// wait()/task polling) because iverilog's wait() and task-based NBA sampling
-// miss the DUT's posedge-updated int_out in isolation.
+// Where each expectation comes from. The programming sequence (an ICW1 clears the IMR and
+// the IRR and starts the ICW2.. walk: NP2kai io/pic.c pic_o00's `default:` arm, `imr = 0;
+// irr = 0;`), the IMR, the non-specific EOI (pic_o00's OCW2 arm clearing the highest ISR
+// bit) and the vector = base + IRQ (pic_irq) are NP2kai's, which follows the 8259A
+// datasheet; the IRR -> ISR transfer on INTA and the no-spurious-INTA rule are pic_irq's
+// acknowledge. Edge-triggered latching (no re-latch while the line stays high; a falling
+// edge does not withdraw a latched request) is the datasheet's edge mode, which the ITF's
+// ICW1 = 0x11 selects; NP2kai has no line, only IRR bits a device sets with pic_setirq
+// and may clear with its own pic_resetirq call, so it is not the reference for those two.
+//
+// INT timing uses fixed posedge waits: the DUT latches a rising edge one posedge later and
+// asserts INT one posedge after that (2 cycles edge-to-INT), and deasserts INT one posedge
+// after INTA. That latency is THIS RTL's own contract (a registered latch and a registered
+// INT), not a hardware fact: neither reference times it, and a change to it is a change to
+// this bench, not a conformance failure.
 
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The 8259: reset masking, ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE set-wins, race-idiom S2; FAIL-FIRST against the old clear-wins fold).
+// The 8259: no INT out of reset (the reset IMR value itself is not asserted: no reference agrees on it and the ITF programs it), ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE set-wins, docs/single-cycle-event-discipline.md R3; FAIL-FIRST against the old clear-wins fold).
 //
-// The 8259: reset masking, ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE - set wins - or the request is lost forever; review interrupts.md F5 / race-idiom S2, FAIL-FIRST against the old clear-wins fold).
+// The 8259: no INT out of reset (the reset IMR value itself is not asserted: no reference agrees on it and the ITF programs it), ICW1/ICW2, edge-triggered latching including no re-latch after INTA and a falling edge not withdrawing a request, INT with vector = base + IRQ, the IRR to ISR transfer on INTA, non-specific EOI, masking, no spurious INTA, and the same-cycle edge-set vs ack-clear collision (a new IR edge landing on the acknowledge edge of the same level must SURVIVE - set wins - or the request is lost forever; docs/single-cycle-event-discipline.md R3, FAIL-FIRST against the old clear-wins fold).
 
 
 module tb_pc9821_pic;
@@ -129,9 +139,10 @@ module tb_pc9821_pic;
     rst_n = 1;
     repeat (2) @(negedge clk);
 
-    // Reset: all IRQs masked, no INT.
-    read_data(value);
-    if (value !== 8'hFF) fail("reset IMR is not all-masked");
+    // Reset: no INT. The reset IMR value is NOT asserted: no reference agrees on it
+    // (NP2kai presets 0x7D, QEMU i8259 and MAME pic8259 reset to 0x00), no Xe10
+    // capture exists, and the ITF writes the IMR before it enables interrupts, so it
+    // is not guest-observable (tb_pc9821_pic_ref case 10 waives it for the same reason).
     if (int_out) fail("INT asserted at reset");
 
     // Program: ICW1 (SNGL=1, IC4=0), ICW2 = 0x08. The model's ICW state
@@ -281,7 +292,7 @@ module tb_pc9821_pic;
     if (value !== 8'h7F) fail("ICW1=0x11 sequence left a wrong IMR");
 
     // ------------------------------------------------------------------
-    // The same-cycle collision (race-idiom S2): an old
+    // The same-cycle collision (docs/single-cycle-event-discipline.md R3): an old
     // pulse set ir_latch[2], the line fell again, and a NEW pulse rises in the exact
     // clk edge where inta acknowledges bit 2. The old fold `(latch | set) & ~clr` let
     // the clear eat the set for the same bit - the new request vanished with no way

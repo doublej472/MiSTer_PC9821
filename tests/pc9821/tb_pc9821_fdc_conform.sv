@@ -1,9 +1,9 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is the PER-STATE class -- an equipped drive with no diskette answers SE|NR = 0x28 to RECALIBRATE, which the BIOS's drive-present probe counts as PRESENT, and a unit whose READY is never asserted answers SE|IC0|NR = 0x68 and is not counted, with the guest's forced-ready strap adding EC (SE|IC0|EC = 0x70|unit for an unequipped unit, SE = 0x20 for an equipped one), while SEEK has NP2kai FDC_Seek's single not-ready class SE|IC0|NR = 0x68|unit even under forced ready -- a data command on a drive with no diskette answers the seven-byte result with its interrupt and ST0 = IC0|NR (0x48|u, READ ID included, where NP2kai's READ ID answers ND) after an MSR of CB alone with no drive-busy bit - the real Xe10's NRID/NRRD rows (docs/probes/XE10T-XE10-FDC2C.TXT) - and SENSE INTERRUPT STATUS then answers 80, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), its WP bit is the MOUNTED MEDIUM's protect state -- the D88 header's bit 4 OR the mount's read-only flag, never "media is present" -- the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the seven eight-parameter commands no target game issues (0x02/0x05/0x09/0x0C and the three SCANs 0x11/0x19/0x1D), its explicit ST_EXEC MSR for FORMAT, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (set fdc.c:562-563/300-302/111-113, cleared fdc.c:907-909) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454) -- FAIL-FIRST: the model answered 0x90/0xD0/0x80 only and 7 of the 12 new cases mismatched.
+// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is the PER-STATE class -- an equipped drive with no diskette answers SE|NR = 0x28 to RECALIBRATE, which the BIOS's drive-present probe counts as PRESENT, and a unit whose READY is never asserted answers SE|IC0|NR = 0x68 and is not counted, with the guest's forced-ready strap adding EC (SE|IC0|EC = 0x70|unit for an unequipped unit, SE = 0x20 for an equipped one), while SEEK has NP2kai FDC_Seek's single not-ready class SE|IC0|NR = 0x68|unit even under forced ready -- a data command on a drive with no diskette answers the seven-byte result with its interrupt and ST0 = IC0|NR (0x48|u, READ ID included, where NP2kai's READ ID answers ND) after an MSR of CB alone with no drive-busy bit - the real Xe10's NRID/NRRD rows (docs/probes/XE10T-XE10-FDC2C.TXT) - and SENSE INTERRUPT STATUS then answers 80, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), its WP bit is the MOUNTED MEDIUM's protect state -- the D88 header's bit 4 OR the mount's read-only flag, never "media is present" -- the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. WRITE DATA with no diskette is asserted as NP2kai FDC_WriteData answers it (its FDC_DriveCheck): MSR 0x90 after the opcode, eight parameters, the seven-byte result with ST0 = IC0|NR|u (0x48|u, units 0 and 1) and its interrupt, and READ TRACK/WRITE DATA/WRITE DELETED/READ DELETED (0x02/0x05/0x09/0x0C) dispatch their eight parameters. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the three SCANs no target game issues (0x11/0x19/0x1D), its explicit ST_EXEC MSR for FORMAT, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (set fdc.c:562-563/300-302/111-113, cleared fdc.c:907-909) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454) -- FAIL-FIRST: the model answered 0x90/0xD0/0x80 only and 7 of the 12 new cases mismatched.
 //
-// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is SE|IC0|NR (0x68) -- the drive-not-ready class qemu's PC-98 handler answers when no diskette is inserted -- so the BIOS's probe does not count an unusable drive, a data command on a drive with no diskette answers the seven-byte result with its interrupt and ST0 = IC0|NR (0x48|u, READ ID included, where NP2kai's READ ID answers ND) after an MSR of CB alone with no drive-busy bit - the real Xe10's NRID/NRRD rows (docs/probes/XE10T-XE10-FDC2C.TXT) - and SENSE INTERRUPT STATUS then answers 80, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the seven eight-parameter commands no target game issues (0x02/0x05/0x09/0x0C and the three SCANs 0x11/0x19/0x1D), its explicit ST_EXEC MSR for FORMAT, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (fdc.c:562-563/300-302/111-113 set, 907-909 clear) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454).
+// The FDC model is driven through its own three ports against NP2kai io/fdc.c with a PC-9821's two drives equipped and no diskette inserted, and each command's dispatch (which opcodes take parameters and how many), its status (ST0/ST1/ST3), its interrupt, the SENSE INTERRUPT STATUS drain and the DOR read-back are compared byte for byte. The real register bugs the model had are ASSERTED and fixed: the drive/unit is parameter 0 (not the last byte), RECALIBRATE/SEEK completion is SE|IC0|NR (0x68) -- the drive-not-ready class qemu's PC-98 handler answers when no diskette is inserted -- so the BIOS's probe does not count an unusable drive, a data command on a drive with no diskette answers the seven-byte result with its interrupt and ST0 = IC0|NR (0x48|u, READ ID included, where NP2kai's READ ID answers ND) after an MSR of CB alone with no drive-busy bit - the real Xe10's NRID/NRRD rows (docs/probes/XE10T-XE10-FDC2C.TXT) - and SENSE INTERRUPT STATUS then answers 80, the SENSE DRIVE STATUS ST3 bits are TS/T0/HD for an equipped drive and the fault bit 0x80 for a unit the PC-9821 does not equip (drives 2/3), the parameter-phase MSR is RQM|CB, the DOR read is NP2kai's computed 0x44, and the 0x92 idle byte is the MACHINE's 0x80 (R10.TXT/PORTS.TXT), not NP2kai's zeroed lastdata. WRITE DATA with no diskette is asserted as NP2kai FDC_WriteData answers it (its FDC_DriveCheck): MSR 0x90 after the opcode, eight parameters, the seven-byte result with ST0 = IC0|NR|u (0x48|u, units 0 and 1) and its interrupt, and READ TRACK/WRITE DATA/WRITE DELETED/READ DELETED (0x02/0x05/0x09/0x0C) dispatch their eight parameters. The reference deviations this model KEEPS by design are printed as WAIVED, not asserted: the three SCANs no target game issues (0x11/0x19/0x1D), its explicit ST_EXEC MSR for FORMAT, and the absent media/data phase. The MSR read-back is pinned bit for bit against fdc.status (fdc_i90 returns it verbatim): the low nibble carries one drive-busy bit per unit from the command's claim to the result drain (fdc.c:562-563/300-302/111-113 set, 907-909 clear) and bit 5 NDM tracks the SPECIFY ND latch (fdc.c:265) over a data command's transfer window (fdc.c:450-454).
 
 module tb_pc9821_fdc_conform;
 
@@ -85,6 +85,8 @@ module tb_pc9821_fdc_conform;
   task automatic cmd(input [7:0] op); begin wr8(2'd1, op); end endtask
   task automatic param(input [7:0] p); begin wr8(2'd1, p); end endtask
 
+  integer wu;   // the WRITE DATA case's unit (get_result owns i)
+
   // Drain the COMMAND's own result phase (DIO set after the command), not SIS.
   task automatic get_result;
     begin
@@ -146,14 +148,14 @@ module tb_pc9821_fdc_conform;
     end
   endfunction
 
-  // The reference dispatchers this model deliberately does NOT implement: no target game
-  // issues them (READ TRACK 0x02, WRITE DELETED 0x09, READ DELETED 0x0C, SCAN 0x11/0x19/
-  // 0x1D; WRITE DATA 0x05 is NP2kai's FDC_WriteData). They answer the one-byte invalid
-  // result like any other unimplemented opcode, so their bench cases are WAIVED.
+  // The reference dispatchers this model deliberately does NOT implement: the SCANs (0x11/
+  // 0x19/0x1D), which no target game issues. They answer the one-byte invalid result like any
+  // other unimplemented opcode, so their dispatch cases are WAIVED. READ TRACK 0x02, WRITE
+  // DATA 0x05, WRITE DELETED 0x09 and READ DELETED 0x0C take their eight parameters as NP2kai's
+  // FDCCMD_TABLE does (pc9821_fdc.sv cmd_params), so they are asserted.
   function automatic ref_unimplemented(input [4:0] op);
     begin
       case (op)
-        5'h02, 5'h05, 5'h09, 5'h0C,
         5'h11, 5'h19, 5'h1D: ref_unimplemented = 1'b1;
         default: ref_unimplemented = 1'b0;
       endcase
@@ -509,15 +511,23 @@ module tb_pc9821_fdc_conform;
     waive("write_data_data_phase", 8'd0, 8'd1);
 
     // ---- WRITE DATA (0x05): FDC_WriteData, 8 parameters ---------------------------
-    // A reference command no target game issues: the model answers the invalid result,
-    // so the reference's FDC_DriveCheck/eight-parameter/error7 shape is WAIVED.
-    reset_dut();
-    cmd(8'h05);
-    get_msr; waive("write_msr_after_opcode", g_msr, 8'h90);
-    get_result;
-    waive("write_result_len", g_len[7:0], 8'd7);
-    waive("write_result_st0", g_b0, 8'h48);
-    wait_irq(3000); waive("write_irq", g_irq, 8'd1);
+    // No media: FDC_WriteData's FDC_DriveCheck(TRUE) fails first -> stat = IC0|NR|hd<<2|us,
+    // fdcsend_error7 -> the seven-byte result and the interrupt (io/fdc.c FDC_WriteData,
+    // FDC_DriveCheck), the same shape READ DATA has. Both units, so the |us term is seen.
+    for (wu = 0; wu < 2; wu = wu + 1) begin
+      reset_dut();
+      cmd(8'h45);
+      get_msr; check("write_msr_after_opcode", g_msr, 8'h90);
+      param(wu[7:0]);                                  // HD/US: unit wu, head 0
+      param(8'h00); param(8'h00); param(8'h01); param(8'h02);   // C H R N
+      param(8'h08); param(8'h1B); param(8'hFF);                 // EOT GSL DTL
+      wait_irq(3000); check("write_irq", g_irq, 8'd1);
+      get_result;
+      check("write_result_len", g_len[7:0], 8'd7);
+      check("write_result_st0", g_b0, 8'h48 | wu[7:0]);
+      get_sis;
+      check("write_sis0", g_sis0, 8'h80);
+    end
 
     // ---- an unimplemented opcode answers 0x80 with no interrupt (both agree) --------
     reset_dut();

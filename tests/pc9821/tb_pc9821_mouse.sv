@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The PC-98 BUS MOUSE (pc9821_mouse behind pc9821_iobus's 0x7FD9-0x7FDF/0xBFDB decode) against NP2kai io/mouseif.c: the power-up read-back composes to 0xEF (buttons 0xE0 with the latch_x = -1 reset nibble, mouseif_reset:325-326), a 0x7FDF MODE WRITE resets the Port C latch to 0 (mouseif_o7fdf's setportc(0), :197-216 - unambiguous in NP2kai and identical in qemu-pc98's hw/input/pc98-mouse.c), PS/2 packets accumulate into the X/Y delta counters with Y NEGATED (PS/2 up-positive vs the PC-98 down-positive counter, sdl/mousemng.c:229-234) and portc bits 7/6/5 select latch-vs-live, axis and nibble (i7fd9:239-271), the Port C low nibble is 0x08 | three strap bits DERIVED from the live software-DIP store rather than a constant (mouseif.c:296-303 computes bit 2 from dipsw[2] bit 7 and bits 1:0 from ~dipsw[0] bits 5:4; over the measured power-up image 0x841E = 0x7C / 0x8E1E = 0x49 all three are 0, so the power-up 0x7FDD read is 0xF8 - the old hardcoded 0x03 strap answered 0xFB, a nibble no power-up bank yields), the buttons read as active-low L/M/R at bits 7/6/5 (mousemng.h + MAME's bit map; middle PRESSED is the one MAME-only behaviour and is NOTE'd, not silently claimed), the latch edge clamps to [-128,127] and arms the four-read overflow guard (setportc:142-163, i7fd9:253-266: +496 reads nibble F clamped for four reads and then nibble 0 wrapped - software ASSUMES the overflow), and IRQ13 pulses every (SYS_CLOCK_HZ/120) << timing clk with the 0xBFDB timing field (mouseint:131-140 + mouseif_obfdb:309-312; the 120 Hz base qemu and MAME agree on), silenced by INT# and re-armed by its falling edge (setportc:164-173). The R4 packet/latch coincidence merge is swept across the latch write with the same-cycle hit counted and asserted. FAIL-FIRST: the file connects no NEW port (pc9821_iobus by .*, ps2_mouse/mouse_irq joining the existing nets), so the same file builds against the pre-change pc9821_iobus.sv and every section fails there (0xE0 not 0xEF, no Port C reset, the strap nibble 0x0B where the store's bytes give 0x08, frozen deltas/buttons, no guard, mouse_irq never pulses). With Port C's upper half an input and the lower half an output, the 0x7FDD read is the latch masked to 0x1F (bit 4, INT#, survives).
+// The PC-98 BUS MOUSE (pc9821_mouse behind pc9821_iobus's 0x7FD9-0x7FDF/0xBFDB decode) against NP2kai io/mouseif.c: the power-up read-back composes to 0xEF (buttons 0xE0 with the latch_x = -1 reset nibble, mouseif_reset:325-326), a 0x7FDF MODE WRITE resets the Port C latch to 0 (mouseif_o7fdf's setportc(0), :197-216 - unambiguous in NP2kai and identical in qemu-pc98's hw/input/pc98-mouse.c), PS/2 packets accumulate into the X/Y delta counters with Y NEGATED (PS/2 up-positive vs the PC-98 down-positive counter, sdl/mousemng.c:229-234) and portc bits 7/6/5 select latch-vs-live, axis and nibble (i7fd9:239-271), the Port C low nibble is 0x08 | three strap bits DERIVED from the live software-DIP store rather than a constant (mouseif.c:296-303 computes bit 2 from dipsw[2] bit 7 and bits 1:0 from ~dipsw[0] bits 5:4; over the measured power-up image 0x841E = 0x7C / 0x8E1E = 0x49 all three are 0, so the power-up 0x7FDD read is 0xF8 - the old hardcoded 0x03 strap answered 0xFB, a nibble no power-up bank yields), the buttons read as active-low L/M/R at bits 7/6/5 (mousemng.h + MAME's bit map; middle PRESSED is the one MAME-only behaviour and is NOTE'd, not silently claimed), the latch edge clamps to [-128,127] and arms the four-read overflow guard (setportc:142-163, i7fd9:253-266: +496 reads nibble F clamped for four reads and then nibble 0 wrapped - software ASSUMES the overflow), and IRQ13 pulses every (SYS_CLOCK_HZ/120) << timing clk with the 0xBFDB timing field (mouseint:131-140 + mouseif_obfdb:309-312; the 120 Hz base qemu and MAME agree on), silenced by INT# and re-armed by its falling edge (setportc:164-173). The R4 packet/latch coincidence merge is swept across the latch write with the same-cycle hit counted and asserted. FAIL-FIRST: the file connects no NEW port (pc9821_iobus by .*, ps2_mouse/mouse_irq joining the existing nets), so the same file builds against the pre-change pc9821_iobus.sv and every section fails there (0xE0 not 0xEF, no Port C reset, the strap nibble 0x0B where the store's bytes give 0x08, frozen deltas/buttons, no guard, mouse_irq never pulses). With Port C's upper half an input and the lower half an output, the 0x7FDD read is the latch masked to 0x1F (bit 4, INT#, survives). A reset while hps_io still holds a packet with bit 24 set comes out in mouseif_reset's state (0x7FD9 = 0xEF, the live X counter 0: no replay of the held packet, since hps_io flips bit 24 only on a new packet, sys/hps_io.sv) and the next new packet still counts.
 //
 // TB_PC9821_MOUSE: the PC-98 BUS MOUSE (pc9821_mouse behind pc9821_iobus's
 // port decode) against NP2kai io/mouseif.c - the PRIMARY reference - driven
@@ -199,6 +199,7 @@ module tb_pc9821_mouse;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -513,6 +514,25 @@ module tb_pc9821_mouse;
     rd_is(16'h7FDD, 8'h0B, "the strap follows the bank select (bank B gives 0x0B)");
     wr(16'h8F1F, 8'h80);   // bank A again: the bytes bank A was left holding
     rd_is(16'h7FDD, 8'h0C, "back to bank A's stored bytes");
+
+    // ==== 9. a reset with a stale packet held (mouseif_reset:317-330) =====
+    // hps_io keeps the last packet as a level and flips bit 24 only on a new one, and an OSD
+    // reset does not reset hps_io: a reset must come out with NP2kai's mouseif_reset state
+    // (counters 0, latch -1, buttons released) whatever packet the port is still holding, and
+    // the next NEW packet must still count. Bit 24 is left at 1 for the reset so a cleared
+    // edge register would see a packet at the release.
+    if (ps2_mouse[24] == 1'b1) packet(8'h00, 8'h00, 3'b000);
+    packet(8'h37, 8'h00, 3'b001);   // x += 0x37, left pressed; bit 24 is now 1
+    if (ps2_mouse[24] !== 1'b1) fail("section 9 setup: bit 24 is not 1 for the reset");
+    @(negedge clk); reset = 1;
+    repeat (8) @(negedge clk);
+    reset = 0;
+    repeat (4) @(negedge clk);
+    rd_is(16'h7FD9, 8'hEF, "after reset with a held packet: buttons released, latch -1 (no replay)");
+    wr(16'h7FDD, 8'h10);   // live X low nibble, INT# masked
+    rd_is(16'h7FD9, 8'hE0, "after reset with a held packet: the live X counter is 0");
+    packet(8'h05, 8'h00, 3'b000);
+    rd_is(16'h7FD9, 8'hE5, "the first new packet after reset still counts");
 
     // ==== VERDICT ====
     $display("NOTE tb_pc9821_mouse: %0d cases, %0d mismatched, sim %0t", cases, errors, $time);

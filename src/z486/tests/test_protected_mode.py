@@ -551,9 +551,11 @@ Examples:
             print('Error: expected failures are not release passes: ' + ', '.join(expected))
             return 1
 
-    # Run tests
+    # Run tests.  A SKIP counts toward the summary's pass total (callers parse
+    # that line), but is labelled SKIP and counted on a line of its own.
     passed_count = 0
     failed_count = 0
+    skipped_count = 0
 
     print(f"Running {len(tests_to_run)} protected mode test(s)...\n")
 
@@ -569,7 +571,12 @@ Examples:
             cycles=args.cycles
         )
 
-        if passed:
+        if passed and message.startswith("SKIP"):
+            passed_count += 1
+            skipped_count += 1
+            color = "\033[93m"  # Yellow
+            status = "SKIP"
+        elif passed:
             passed_count += 1
             color = "\033[92m"  # Green
             status = "PASS"
@@ -586,6 +593,8 @@ Examples:
     total = passed_count + failed_count
     percentage = (passed_count * 100 / total) if total > 0 else 0
     print(f"Summary: {passed_count}/{total} tests passed ({percentage:.1f}%)")
+    if skipped_count:
+        print(f"{skipped_count} of the {passed_count} passes were skipped, not run")
 
     return 0 if failed_count == 0 else 1
 

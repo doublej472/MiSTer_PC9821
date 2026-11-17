@@ -1,4 +1,4 @@
-// TEST REFERENCE: pc9821_gdc2 as of 3b134fe4 (before the area-video pass), renamed. Never edited, except that the 0xA0 status bit-2 behaviour change (FIFO empty clears while read-back data is queued, docs/probes/RDBACK.TXT:172) is mirrored from the shipped module so the pair stays equivalent, so are the two figure-engine changes the WRITE slice can see - CSRW's third byte loads the mask with its dAD one-hot (the Xe10's GDCCURS MASK_THEN_CURS rows) and the 0xA0 status bit 3 reads DRAWING while the engine holds a job -, and so is the walker's odd-frame wrap step (w_nz) and the packed walk's stride (the PITCH command 0x47 kept, stepped as NP2kai vram/makegrex.c:286-291 from PITCH and the gdc_5m clock input instead of the SCROLL im bit while pegc_256), and the planar walk's step from the same PITCH byte and the SCROLL im bit (NP2kai vram/makegrph.c:147-151) instead of a constant 40; the lockstep bench tb_pc9821_gdc2_equiv proves the shipped module against it.
+// TEST REFERENCE: pc9821_gdc2 as of 3b134fe4 (before the area-video pass), renamed. Never edited, except that the 0xA0 status bit-2 behaviour change (FIFO empty clears while read-back data is queued, docs/probes/RDBACK.TXT:172) is mirrored from the shipped module so the pair stays equivalent, so are the two figure-engine changes the WRITE slice can see - CSRW's third byte loads the mask with its dAD one-hot (the Xe10's GDCCURS MASK_THEN_CURS rows) and the 0xA0 status bit 3 reads DRAWING while the engine holds a job -, and so is the walker's odd-frame wrap step (w_nz) and the packed walk's stride (the PITCH command 0x47 kept, stepped as NP2kai vram/makegrex.c:286-291 from PITCH and the gdc_5m clock input instead of the SCROLL im bit while pegc_256), and the planar walk's step from the same PITCH byte and the SCROLL im bit (NP2kai vram/makegrph.c:147-151) instead of a constant 40, and the WRITE-walk fixes from the Xe10's GDCADDR/GDCWDAT/GDPIT rows (the x step rotates the mask, the walk carries into the plane bits and on into CSRR byte 2's EAD[18:16] and the write-back keeps them, the y step is the PITCH byte at 2.5 MHz and half of it under DGD, DC is 14 bits, and a WDAT re-arms for further data words); the lockstep bench tb_pc9821_gdc2_equiv proves the shipped module against it.
 // PC-9821 GDC2 (the graphics GDC) display-address generator.
 //
 // The slave GDC's SCROLL parameter block, its START/STOP display latch, and the byte
@@ -215,8 +215,9 @@ module pc9821_gdc2_ref (
                    D_WR = 3'd3, D_NEXT = 3'd4;
   reg [2:0]  d_state;
   reg [16:0] d_left;      // units still to paint: VECTW[1..2] + 1, NP2kai's leng
-  reg [13:0] d_waddr;     // the word in the plane: CSRW's low 14 bits
+  reg [18:0] d_waddr;     // mirrored: the EAD, {EAD[18:16], plane, word} (the walk carries through it)
   reg  [1:0] d_rop;       // the command byte's low two bits
+  reg        d_gd;        // mirrored: FIGS P3 bit 6, DGD
   reg  [2:0] d_ope;       // VECTW byte 0's low three bits: the direction (vectdir[])
   reg [15:0] d_color;     // INTERNAL-domain write pattern
   reg [15:0] d_mask;      // INTERNAL-domain write mask (the dot positions painted)
@@ -227,6 +228,7 @@ module pc9821_gdc2_ref (
   reg        pend_wg;     // CSRW byte 2 bit 3: CURS.WG
   reg  [7:0] pend_code0, pend_code1;
   reg  [7:0] pend_csrw0, pend_csrw1;
+  reg  [2:0] pend_csrw2;   // mirrored
   reg  [7:0] pend_mask0, pend_mask1;
   reg  [2:0] pend_dir;    // VECTW byte 0's direction
   reg  [7:0] pend_vect1, pend_vect2;
@@ -387,14 +389,14 @@ module pc9821_gdc2_ref (
   // edge - the same fold the unit walk's wrap gives (NP2kai's `(adrs + 2) & 0x7ffe`).
   wire        adv_wrap_p_w = adv_xp_w && d_mask[15];
   wire        adv_wrap_m_w = adv_xm_w && d_mask[0];
-  wire [15:0] adv_mask_w = adv_xp_w ? (d_mask[15] ? 16'h0001 : {d_mask[14:0], 1'b0}) :
-                           adv_xm_w ? (d_mask[0]  ? 16'h8000 : {1'b0, d_mask[15:1]}) :
+  wire [15:0] adv_mask_w = adv_xp_w ? {d_mask[14:0], d_mask[15]} :   // mirrored: the rotate
+                           adv_xm_w ? {d_mask[0], d_mask[15:1]} :
                            d_mask;
-  wire [13:0] adv_pitch_w = {6'd0, GDC2_PITCH};
-  wire [13:0] adv_waddr_w = (adv_yp_w ? d_waddr + adv_pitch_w :
-                             adv_ym_w ? d_waddr - adv_pitch_w : d_waddr) +
-                            (adv_wrap_p_w ? 14'd1 :
-                             adv_wrap_m_w ? (14'd0 - 14'd1) : 14'd0);
+  wire [15:0] adv_pitch_w = {8'd0, gdc_5m ? GDC2_PITCH : (d_gd ? {1'b0, gdc2_pitch[7:1]} : gdc2_pitch)};   // mirrored: PITCH at 2.5 MHz, DGD halves it
+  wire [18:0] adv_waddr_w = (adv_yp_w ? d_waddr + {3'd0, adv_pitch_w} :        // mirrored: 19-bit, into the plane and EAD[18:16]
+                             adv_ym_w ? d_waddr - {3'd0, adv_pitch_w} : d_waddr) +
+                            (adv_wrap_p_w ? 19'd1 :
+                             adv_wrap_m_w ? (19'd0 - 19'd1) : 19'd0);
   // The cursor write-back: the machine advances CSRW's EAD and the MASK register (the
   // CURD rows read both back after a draw), so the NEXT command starts from the
   // advanced cursor. A guest CSRW/MASK parameter write during the draw (or landing in
@@ -442,6 +444,7 @@ module pc9821_gdc2_ref (
       pend_code1 <= 8'h00;
       pend_csrw0 <= 8'h00;
       pend_csrw1 <= 8'h00;
+      pend_csrw2 <= 3'd0;   // mirrored
       pend_mask0 <= 8'h00;
       pend_mask1 <= 8'h00;
       pend_dir <= 3'd0;
@@ -455,8 +458,9 @@ module pc9821_gdc2_ref (
       d_mask_touch <= 1'b0;
       d_state <= D_IDLE;
       d_left <= 17'd0;
-      d_waddr <= 14'd0;
+      d_waddr <= 19'd0;   // mirrored
       d_rop <= 2'd0;
+      d_gd <= 1'b0;   // mirrored
       d_ope <= 3'd0;
       d_color <= 16'd0;
       d_mask <= 16'd0;
@@ -501,7 +505,7 @@ module pc9821_gdc2_ref (
           gdc2_snd[0] <= gdc2_csrw[0];
           gdc2_snd[1] <= gdc2_csrw[1];
           // The Xe10's CURD (GDCCURS.CSV raw_curd, GDCWG.CSV WG row): see pc9821_gdc2.sv.
-          gdc2_snd[2] <= {4'hF, gdc2_csrw[2][3], 1'b0, gdc2_csrw[2][1:0]};
+          gdc2_snd[2] <= {4'hF, gdc2_csrw[2][3], gdc2_csrw[2][2:0]};   // mirrored: bit 2 is the EAD bit-18 carry
           gdc2_snd[3] <= gdc2_mask[0];
           gdc2_snd[4] <= gdc2_mask[1];
           gdc2_snd_cnt <= 3'd5;
@@ -604,7 +608,7 @@ module pc9821_gdc2_ref (
       end else if (gdc2_recv_left != 4'd0) begin
         case (gdc2_recv_tgt)
           RCV_CSRW: begin   // mirrored: the third byte's dAD loads the one-hot mask
-            gdc2_csrw[gdc2_recv_ptr[1:0]] <= io_din;
+            gdc2_csrw[gdc2_recv_ptr[1:0]] <= (gdc2_recv_ptr[1:0] == 2'd2) ? (io_din & 8'hFB) : io_din;   // mirrored: bit 2 kept 0
             if (gdc2_recv_ptr[1:0] == 2'd2) begin
               gdc2_mask[0] <= (io_din[7] == 1'b0) ? (8'h01 << io_din[6:4]) : 8'h00;
               gdc2_mask[1] <= (io_din[7] == 1'b1) ? (8'h01 << io_din[6:4]) : 8'h00;
@@ -618,8 +622,13 @@ module pc9821_gdc2_ref (
           RCV_PITCH:   gdc2_pitch <= io_din;   // mirrored
           default: ;
         endcase
-        gdc2_recv_ptr  <= gdc2_recv_ptr + 4'd1;
-        gdc2_recv_left <= gdc2_recv_left - 4'd1;
+        if (draw_fire_w) begin   // mirrored: a WDAT re-arms for the next word/byte (WDAT_STREAM_3)
+          gdc2_recv_ptr  <= 4'd0;
+          gdc2_recv_left <= ((gdc2_wcmd & 8'h18) == 8'h00) ? 4'd2 : 4'd1;
+        end else begin
+          gdc2_recv_ptr  <= gdc2_recv_ptr + 4'd1;
+          gdc2_recv_left <= gdc2_recv_left - 4'd1;
+        end
       end else if (gdc2_left != 5'd0) begin
         gdc2_scr[gdc2_ptr] <= io_din;
         gdc2_ptr  <= gdc2_ptr + 4'd1;   // wraps at 16 with gdc2_left at 0
@@ -647,6 +656,7 @@ module pc9821_gdc2_ref (
       pend_code1 <= (gdc2_recv_ptr[0] == 1'b0) ? gdc2_code[1] : io_din;
       pend_csrw0 <= gdc2_csrw[0];
       pend_csrw1 <= gdc2_csrw[1];
+      pend_csrw2 <= gdc2_csrw[2][2:0];   // mirrored
       pend_mask0 <= gdc2_mask[0];
       pend_mask1 <= gdc2_mask[1];
       pend_dir   <= gdc2_vect[0][2:0];
@@ -676,10 +686,11 @@ module pc9821_gdc2_ref (
         d_ope        <= pend_dir;
         d_color      <= pend_col_w;
         d_mask       <= pend_msk_w;
-        d_waddr      <= {pend_csrw1[5:0], pend_csrw0};
+        d_waddr      <= {pend_csrw2, pend_csrw1, pend_csrw0};   // mirrored
+        d_gd         <= pend_vect2[6];   // mirrored
         d_route_egc  <= pend_egc;
         d_route_grcg <= pend_grcg;
-        d_left       <= {1'b0, pend_vect2, pend_vect1} + 17'd1;   // NP2kai's leng
+        d_left       <= {3'd0, pend_vect2[5:0], pend_vect1} + 17'd1;   // mirrored: DC is 14 bits
         mem_valid      <= 1'b1;
         mem_write      <= !pend_need_rd_w;
         mem_route_egc  <= pend_egc;
@@ -713,7 +724,8 @@ module pc9821_gdc2_ref (
           d_state <= D_IDLE;
           if (!d_csrw_touch && !wb_csrw_w) begin
             gdc2_csrw[0] <= adv_waddr_w[7:0];
-            gdc2_csrw[1] <= {gdc2_csrw[1][7:6], adv_waddr_w[13:8]};
+            gdc2_csrw[1] <= adv_waddr_w[15:8];   // mirrored
+            gdc2_csrw[2][2:0] <= adv_waddr_w[18:16];   // mirrored
           end
           if (!d_mask_touch && !wb_mask_w) begin
             gdc2_mask[0] <= adv_mask_w[7:0];
@@ -736,7 +748,8 @@ module pc9821_gdc2_ref (
         mem_write  <= !d_need_rd_w;
         mem_be     <= d_be_w;
         mem_din    <= d_need_rd_w ? 32'd0 : d_din_w;
-        mem_offset <= {d_waddr, 1'b0};
+        mem_plane  <= d_waddr[15:14] - 2'd1;   // mirrored
+        mem_offset <= {d_waddr[13:0], 1'b0};   // mirrored
         d_state    <= d_need_rd_w ? D_RD : D_WR;
       end
       default: d_state <= D_IDLE;

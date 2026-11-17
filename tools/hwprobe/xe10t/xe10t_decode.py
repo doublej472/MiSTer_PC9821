@@ -36,6 +36,7 @@ What it does with a capture:
 Exit status: 0 clean, 1 an integrity/trust flag was raised, 2 usage or a refused comparison.
 A `--legacy` parser for the superseded timing probes' captures is future work.
 """
+import functools
 import hashlib
 import re
 import statistics
@@ -50,7 +51,7 @@ STAMP_MARK = b"XE10T-STAMP-V1:#"
 STAMP_LEN = 24                       # 16 sha hex + 8 crc hex
 
 SECTIONS = ("SELFTEST DRY ID CAL CPU GVRAM GRCG EGC PEGC TEXT IO PAL IRQ OPNA PCM86 IDE FDC FDC2 "
-            "CD OPNA2 BIOS RASTER OPNA3 AUDIT OPNA4 AUDIT2 RESTORE").split()
+            "CD OPNA2 BIOS RASTER OPNA3 AUDIT OPNA4 AUDIT2 MISAL MISAL2 RDLAT PKAB CELLS K3M RESTORE").split()
 # /RASTER's raster geometry: the 24 kHz SYNC block is 400 active lines + 7 front porch + 8
 # VSYNC + 25 back porch = 440 lines, VSYNC rising after line 406 (NP2kai io/gdc.c defsyncm24
 # {0x10,0x4e,0x07,0x25,0x07,0x07,0x90,0x65}: VS 8, VFP 7, AL 400, VBP 25), and an 848-dot
@@ -176,12 +177,40 @@ class Capture:
         self.done = None
         self.cal = {}
         self.untrusted = False
+        self.analysed = {}         # analyser name -> its (text, expect) result, see analyser()
 
     def flag(self, no, code, detail=""):
         self.flags.append((no, code, detail))
 
     def errors(self):
         return [f for f in self.flags if f[1] in ERRORS]
+
+
+ANALYSER_ERRORS = (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError)
+
+
+def analyser(fn):
+    """A section analyser runs ONCE per capture: report(), expect_lines() and compare() each ask
+    for its result, and the flags it raises (PAST-BLANK, SYNC-TIMEOUT, REP-SPREAD, ...) must land
+    once, not once per caller. A malformed row it cannot read (a field missing or not a number,
+    in a hung or noisy capture) costs that section only: GRAMMAR is flagged at the section's
+    BEGIN and the analyser yields no text and no expect tuples, instead of aborting the whole
+    report."""
+    name = fn.__name__
+
+    @functools.wraps(fn)
+    def run(cap):
+        memo = cap.analysed
+        if name not in memo:
+            try:
+                memo[name] = fn(cap)
+            except ANALYSER_ERRORS as e:
+                sec = next((x for x in cap.sections if x["name"].lower() == name), None)
+                cap.flag(sec["begin"].no if sec else 0, "GRAMMAR",
+                         "%s analyser: %s: %s (section not decoded)" % (name, type(e).__name__, e))
+                memo[name] = ([], [])
+        return memo[name]
+    return run
 
 
 def split_lines(data):
@@ -290,7 +319,8 @@ def parse(data, name="capture"):
             nm = text[6:]
             if nm not in SECTIONS:
                 cap.flag(no, "GRAMMAR", "unknown section " + nm)
-            cur = {"name": nm, "begin": ln, "lines": [], "closed": False, "fault": False}
+            cur = {"name": nm, "begin": ln, "lines": [], "closed": False, "fault": False,
+                   "pass": sum(1 for x in cap.sections if x["name"] == nm)}   # XE10Y /REP n
             cap.sections.append(cur)
             continue
         if text.startswith("END:"):
@@ -326,6 +356,7 @@ def parse(data, name="capture"):
         if row is None:
             continue
         row["section"] = cur
+        row["pass"] = cur["pass"]
         cap.rows.append(row)
         if kind == "FAULT":
             cur["fault"] = True
@@ -352,6 +383,10 @@ def parse(data, name="capture"):
     elif cap.header["crc"].upper() != cap.header["imgcrc"].upper():
         cap.flag(cap.header["line"], "IMAGE-CORRUPT",
                  "crc=%s imgcrc=%s" % (cap.header["crc"], cap.header["imgcrc"]))
+    # /REP n (XE10Y): every analysis reads the first pass (cap.rows); cap.all_rows keeps every
+    # pass for the spread table (rep_spread) and the sections that read across passes
+    cap.all_rows = cap.rows
+    cap.rows = [r for r in cap.all_rows if r["pass"] == 0]
     if cap.done is None:
         cap.flag(0, "DONE-MISSING", "no XE10T DONE line: the run was truncated")
     else:
@@ -368,7 +403,7 @@ def parse(data, name="capture"):
 # ----------------------------------------------------------------------------- analysis
 def analyse(cap):
     cal_calibrate(cap)
-    for r in cap.rows:
+    for r in getattr(cap, "all_rows", cap.rows):
         if r["kind"] == "R":
             r_row(cap, r)
         if r["kind"] in ("R", "T"):
@@ -458,6 +493,7 @@ def r_row(cap, r):
     # are sequential), a constant offset that cancels in the difference. Tolerance: 0.1 %
     # of a long window, else 2 ARTIC ticks (each column quantizes to one tick).
     pc = unwrap(cap, c[1], r["ctl_pit"][1])
+    r["ctl_pit_ns"] = pc * 1e9 / (ratio * ARTIC_HZ) / n
     d_art, d_pit = a[1] - c[1], pu - pc
     exp = d_art * ratio
     tol = max(0.001 * abs(exp), 2 * ratio)
@@ -664,6 +700,7 @@ def busy_class(sec, tag, r, xs, us, txt, exp, hsel=None):
     txt.append(line)
 
 
+@analyser
 def opna2(cap):
     """-> (text lines, expect tuples (name, value, unit, line, method)) for the OPNA2 rows."""
     rows = [r for r in cap.rows if r["sec"] == "OPNA2" and r["kind"] in ("X", "T")]
@@ -855,6 +892,7 @@ def _ints(v):
         return []
 
 
+@analyser
 def opna3(cap):
     """-> (text lines, expect tuples (name, value, unit, line, method)) for the OPNA3 rows."""
     rows = [r for r in cap.rows if r["sec"] == "OPNA3" and r["kind"] in ("X", "T")]
@@ -1047,6 +1085,7 @@ def au_down(a, b):
     return (a - b) & 0xFFFF
 
 
+@analyser
 def audit(cap):
     """-> (text lines, expect tuples (name, value, unit, line, method)) for the AUDIT rows."""
     rows = [r for r in cap.rows if r["sec"] == "AUDIT" and r["kind"] == "X"]
@@ -1294,6 +1333,7 @@ def fdc2_expect(tag, d):
     return E
 
 
+@analyser
 def fdc2(cap):
     """-> (text lines, expect tuples) for the /FDC2 rows."""
     rows = [r for r in cap.rows if r["sec"] == "FDC2" and r["kind"] in ("X", "STATE", "I", "SKIP")]
@@ -1332,12 +1372,14 @@ def fdc2(cap):
 # docs/probes/XE10T-XE10-OPNA2.TXT `T OPNA2 TMRA_3FF trials=8 start_pit=70/78/101` and
 # `T OPNA2 TMRB_FF trials=8 start_pit=101/105/751`.
 O4_BOUNDS = {"A": (70, 101), "B": (101, 751)}
+O4_BOUNDS_SRC = ("docs/probes/XE10T-XE10-OPNA2.TXT", {"A": "TMRA_3FF", "B": "TMRB_FF"})
 
 
 def pit_us(cap, counts):
     return counts / (ratio_of(cap) * ARTIC_HZ) * 1e6
 
 
+@analyser
 def opna4(cap):
     """-> (text lines, expect tuples) for the /OPNA4 T rows (item 155)."""
     T = {r["tag"]: r for r in cap.rows if r["sec"] == "OPNA4" and r["kind"] == "T"}
@@ -1442,6 +1484,7 @@ def a2_cal_rows(cap):
     return out
 
 
+@analyser
 def audit2(cap):
     """-> (text lines, expect tuples) for the /AUDIT2 X rows (items 114, 42)."""
     rows = [r for r in cap.rows if r["sec"] == "AUDIT2" and r["kind"] == "X"]
@@ -1530,6 +1573,693 @@ def audit2(cap):
     return txt, exp
 
 
+# ----------------------------------------------------------------------------- XE10V: /MISAL
+# /MISAL's windows (sec_misal.inc): _A starts MS_ADELAY ARTIC ticks after the VSYNC fall, _V at
+# the VSYNC rise. The raster is the 24 kHz SYNC block RASTER_LINES cites: from the rise, 8 lines
+# of VSYNC and the 25-line back porch are blank (33 lines); from the fall, 25 blank lines, then
+# the 400 active ones. The core's Xe10 store table (pc9821_gvram_arb.sv) prices a misaligned
+# word one period inside a dword and two across a dword boundary: MS_TABLE is that prediction,
+# printed beside the measured ratio; the capture, not this constant, is the evidence.
+MS_ADELAY = 614
+MS_VBLANK_LINES = 8 + 25
+MS_ACTIVE_END_LINES = 25 + 400
+MS_MODES = ("RMW", "TDW", "PLN")
+MS_PHASES = (("O", "graphics display stopped"), ("A", "graphics on, active lines"),
+             ("V", "graphics on, vertical blank"))
+MS_TABLE = {"W1": 1.0, "W3": 2.0}
+
+
+def ms_ns(cap, r):
+    """Per unit ns of a /MISAL R row from the PIT median (0.41 us per count, unwrapped with the
+    ARTIC): a 1024-store window is about 100-1000 PIT counts, the ARTIC only 30-200 ticks."""
+    return r["pit_ns"]
+
+
+@analyser
+def misal(cap):
+    """-> (text lines, expect tuples) for /MISAL (the misaligned-word charge, graphics on/off)."""
+    R = [r for r in cap.rows if r["sec"] == "MISAL" and r["kind"] == "R" and not r.get("refused")]
+    P = {r["tag"]: r for r in cap.rows if r["sec"] == "MISAL" and r["kind"] == "P"}
+    if not R and not P:
+        return [], []
+    txt, exp = [], []
+    by = {}
+    for r in R:
+        by.setdefault(r["tag"], {})[r["nop"]] = r
+    tpf, lt = cap.cal.get("vsync_ticks", NOM_FRAMES[0]), None
+    for t in ("RASTER_O", "RASTER_G"):
+        r = P.get(t)
+        if not r:
+            continue
+        d = r["kv"]
+        fr, art, hi, to = (num(d.get(k)) or 0 for k in ("frames", "art", "hi", "to"))
+        if fr and art:
+            lt = art / fr / RASTER_LINES
+            txt.append("%s: %.1f ARTIC ticks/frame, VSYNC high %.1f ticks = %.1f lines%s" % (
+                t, art / fr, hi / fr, hi / fr / lt, "" if not to else "  ** %d poll timeouts" % to))
+            exp.append(("MISAL.%s.frame_ticks" % t, "%.1f" % (art / fr), "ticks", r["line"], "mean"))
+            exp.append(("MISAL.%s.vsync_lines" % t, "%.2f" % (hi / fr / lt), "lines", r["line"], "mean"))
+            if to:
+                cap.flag(r["line"], "SYNC-TIMEOUT", "%s to=%d" % (t, to))
+    if lt is None:
+        lt = tpf / RASTER_LINES
+    for r in cap.rows:
+        if r["sec"] == "MISAL" and r["kind"] == "I" and "sync_to" in r["kv"]:
+            if (num(r["kv"]["sync_to"]) or 0) > 0:
+                cap.flag(r["line"], "SYNC-TIMEOUT", "sync_to=%s: some windows started unsynced" %
+                         r["kv"]["sync_to"])
+    # the windows against the raster
+    for r in R:
+        ph = r["tag"].rsplit("_", 1)[-1]
+        longest = max(r["art"][2], r["ctl_art"][2])
+        if ph == "V" and longest > MS_VBLANK_LINES * lt:
+            r["flags"].append("PAST-BLANK")
+            cap.flag(r["line"], "PAST-BLANK", "%s: a %d-tick window from the VSYNC rise outlasts "
+                     "the %d-line blank (%.0f ticks)" % (r["tag"], longest, MS_VBLANK_LINES,
+                                                          MS_VBLANK_LINES * lt))
+        if ph == "A" and MS_ADELAY + longest > MS_ACTIVE_END_LINES * lt:
+            r["flags"].append("PAST-ACTIVE")
+            cap.flag(r["line"], "PAST-ACTIVE", "%s: window ends past the active lines" % r["tag"])
+
+    def val(tag):
+        x = by.get(tag, {}).get(0)
+        return None if x is None else (ms_ns(cap, x), x["line"])
+
+    for mode in MS_MODES:
+        for ph, what in MS_PHASES:
+            sfx = "_" + ph
+            w = {k: val("%s_%s%s" % (mode, k, sfx)) for k in
+                 ("W0", "W1", "W2", "W3", "WA", "B0", "D0", "SW0", "SW1", "SW3", "MW0", "MW1",
+                  "MW3", "BL0", "BL1")}
+            if w["W0"] is None:
+                continue
+            c0, ln = w["W0"]
+            base = "MISAL.%s.%s" % (mode, ph)
+            parts = []
+            for k in ("W0", "W1", "W2", "W3", "WA", "B0", "D0"):
+                if w[k]:
+                    parts.append("%s %.1f" % (k, w[k][0]))
+                    exp.append(("%s.%s_ns" % (base, k.lower()), "%.1f" % w[k][0], "ns", w[k][1],
+                                "pit nop=0"))
+            txt.append("%s %s (%s): mov per store, ns: %s" % (mode, ph, what, ", ".join(parts)))
+            if w["W1"] and w["W3"] and c0 > 0:
+                r1, r3 = w["W1"][0] / c0, w["W3"][0] / c0
+                txt.append("%s %s: W1/W0 = %.3f (inside a dword; the core table %.0f), W3/W0 = %.3f "
+                           "(across a dword; the table %.0f); excess %+.1f / %+.1f ns" % (
+                               mode, ph, r1, MS_TABLE["W1"], r3, MS_TABLE["W3"],
+                               w["W1"][0] - c0, w["W3"][0] - c0))
+                exp.append(("%s.w1_over_w0" % base, "%.3f" % r1, "ratio", w["W1"][1], "pit nop=0"))
+                exp.append(("%s.w3_over_w0" % base, "%.3f" % r3, "ratio", w["W3"][1], "pit nop=0"))
+                mix = (w["W1"][0] + w["W3"][0]) / 2
+                for k in ("WA", "SW1", "SW3", "MW1", "MW3"):
+                    if w[k]:
+                        txt.append("%s %s: %s %.1f ns/word against the W1/W3 mean %.1f (%+.1f%%)" % (
+                            mode, ph, k, w[k][0], mix, 100 * (w[k][0] / mix - 1)))
+            for k in ("SW0", "SW1", "SW3", "MW0", "MW1", "MW3"):
+                if w[k]:
+                    exp.append(("%s.%s_ns" % (base, k.lower()), "%.1f" % w[k][0], "ns", w[k][1],
+                                "pit gross"))
+            if w["BL0"] and w["BL1"]:
+                b0, b1 = w["BL0"][0] / 20, w["BL1"][0] / 20
+                txt.append("%s %s: Rusty's row (20 words): %.1f ns/word aligned, %.1f odd (x%.3f)" % (
+                    mode, ph, b0, b1, b1 / b0))
+                exp.append(("%s.bl0_ns_per_word" % base, "%.1f" % b0, "ns", w["BL0"][1], "pit/20"))
+                exp.append(("%s.bl1_ns_per_word" % base, "%.1f" % b1, "ns", w["BL1"][1], "pit/20"))
+    # graphics on against off, per shape
+    for mode in MS_MODES:
+        for k in ("W0", "W1", "W3", "B0", "D0", "SW1", "MW1"):
+            o, a, v = (val("%s_%s_%s" % (mode, k, ph)) for ph in ("O", "A", "V"))
+            if o and a and v:
+                txt.append("%s %s: off %.1f, active %.1f (x%.3f), blank %.1f (x%.3f) ns" % (
+                    mode, k, o[0], a[0], a[0] / o[0], v[0], v[0] / o[0]))
+    return txt, exp
+
+
+
+# ----------------------------------------------------------------------------- XE10W: /MISAL2
+# /MISAL2's tags are <FAMILY>_<K>[_<PHASE>] (sec_misal2.inc): K is the access's byte offset, the
+# K = 0 row (IOOW: K = 4, the aligned word OUT) is the family's base. What the core charges for
+# each class is the same row of a core capture of this binary: in a comparison both are printed.
+M2_TAG = re.compile(r"^([A-Z]+)_(\d+)(?:_([OAV]))?$")
+M2_BASE = {"IOOW": 4, "IOOB": None, "IOIB": None, "BLSS": None}
+M2_WHAT = {
+    "RLWH": "RAM word load, warm", "RLWM": "RAM word load, missing", "RLDH": "RAM dword load, warm",
+    "RLDM": "RAM dword load, missing", "RSWH": "RAM word store, warm", "RSWM": "RAM word store, missing",
+    "RSDH": "RAM dword store, warm", "RSDM": "RAM dword store, missing", "RLBH": "RAM byte load",
+    "RSBH": "RAM byte store", "RMSW": "RAM rep movsw, dst +K", "RMSS": "RAM rep movsw, src +K",
+    "RMSD": "RAM rep movsd, dst +K", "GRW": "GVRAM word load", "GRD": "GVRAM dword load",
+    "GRB": "GVRAM byte load", "GLSW": "GVRAM rep lodsw", "GLSD": "GVRAM rep lodsd",
+    "GMVR": "rep movsw GVRAM->RAM", "GMVV": "rep movsw GVRAM->GVRAM", "TCRW": "GRCG TCR word",
+    "TCRB": "GRCG TCR byte", "BLSS": "wipe row RAM src+1 -> GVRAM (K: dst; 9 = src 0 dst 1)",
+    "XCW": "text code word store", "XCB": "text code byte store", "XCR": "text code word load",
+    "XAW": "text attr word store", "XAR": "text attr word load", "PKW": "PEGC word store",
+    "PKD": "PEGC dword store", "PKR": "PEGC word load", "IOIW": "in ax at 0x30+K",
+    "IOIB": "in al 0x33 + in al 0x34", "IOOW": "out ax at 0xA0+K (K=3: 0xA3)",
+    "IOOB": "out al 0xA3 + out al 0xA4"}
+
+
+def misal2_values(cap):
+    """{(family, phase): {K: (ns per unit from the PIT at nop=0, line)}}"""
+    out = {}
+    for r in cap.rows:
+        if r["sec"] != "MISAL2" or r["kind"] != "R" or r.get("refused") or r["nop"] != 0:
+            continue
+        m = M2_TAG.match(r["tag"])
+        if not m:
+            continue
+        out.setdefault((m.group(1), m.group(3) or "-"), {})[int(m.group(2))] = (r["pit_ns"], r["line"])
+    return out
+
+
+@analyser
+def misal2(cap):
+    """-> (text lines, expect tuples): per family and phase the ns per unit at each offset and
+    the ratio to the family's base offset."""
+    v = misal2_values(cap)
+    if not v:
+        return [], []
+    txt, exp = [], []
+    ras = [r for r in cap.rows if r["sec"] == "MISAL2" and r["kind"] == "P" and r["tag"] == "RASTER_G"]
+    lt = cap.cal.get("vsync_ticks", NOM_FRAMES[0]) / RASTER_LINES
+    if ras and num(ras[0]["kv"].get("frames")) and num(ras[0]["kv"].get("art")):
+        lt = num(ras[0]["kv"]["art"]) / num(ras[0]["kv"]["frames"]) / RASTER_LINES
+    for r in cap.rows:
+        if r["sec"] != "MISAL2" or r["kind"] != "R" or "PAST-" in ",".join(r["flags"]):
+            continue
+        ph = r["tag"].rsplit("_", 1)[-1]
+        longest = max(r["art"][2], r["ctl_art"][2])
+        if ph == "V" and longest > MS_VBLANK_LINES * lt:
+            r["flags"].append("PAST-BLANK")
+            cap.flag(r["line"], "PAST-BLANK", "%s: %d ticks from the VSYNC rise" % (r["tag"], longest))
+        if ph == "A" and MS_ADELAY + longest > MS_ACTIVE_END_LINES * lt:
+            r["flags"].append("PAST-ACTIVE")
+            cap.flag(r["line"], "PAST-ACTIVE", "%s: window ends past the active lines" % r["tag"])
+    for r in cap.rows:
+        if (r["sec"] == "MISAL2" and r["kind"] == "I" and (num(r["kv"].get("sync_to")) or 0) > 0
+                and not r.get("m2_flagged")):
+            r["m2_flagged"] = True
+            cap.flag(r["line"], "SYNC-TIMEOUT", "sync_to=%s" % r["kv"]["sync_to"])
+    for (fam, ph) in sorted(v):
+        ks = v[(fam, ph)]
+        bk = M2_BASE.get(fam, 0)
+        base = ks.get(bk) if bk is not None else None
+        parts = []
+        for k in sorted(ks):
+            ns, ln = ks[k]
+            rat = "" if not base or k == bk else " (x%.3f)" % (ns / base[0])
+            parts.append("K%d %.1f%s" % (k, ns, rat))
+            exp.append(("MISAL2.%s.%s.k%d_ns" % (fam, ph, k), "%.1f" % ns, "ns", ln, "pit nop=0"))
+            if base and k != bk:
+                exp.append(("MISAL2.%s.%s.k%d_over_k%d" % (fam, ph, k, bk), "%.3f" % (ns / base[0]),
+                            "ratio", ln, "pit nop=0"))
+        txt.append("%-5s %s %-46s %s" % (fam, ph, M2_WHAT.get(fam, ""), ", ".join(parts)))
+    return txt, exp
+
+
+# ----------------------------------------------------------------------------- XE10X: /RDLAT
+# /RDLAT's tags are <FAMILY>_<MODE><PHASE> (sec_rdlat.inc): MODE 24 = 640x400 at 24 kHz, 31 = 640x400
+# at 31 kHz, 48 = the 640x480 256-colour mode; PHASE as /MISAL. Every swept row is a nop sweep; the
+# question is whether the CPU work between two accesses ADDS to the access (latency: the CPU waits
+# for each access) or HIDES inside it (rate: the next access waits out a period the work overlaps).
+# With g(k) the ns per access at nop k (PIT median) and c(k) the control's, the work added by the
+# nops is c(k) - c(0) and the part of it the access hid is h(k) = (c(k) - c(0)) - (g(k) - g(0)).
+# A latency access hides nothing (h = 0 at every k); a rate access hides the work up to its period
+# (h climbs with k until the knee, then stays at the period less the shell and the issue cost).
+# hidden_frac is the largest h over the access's own cost a0 = g(0) - c(0): about 0 for latency,
+# towards 1 for rate. The verdict bands are wide on purpose: the two models differ by the whole
+# access (hundreds of ns against a PIT resolution of 0.8 ns per access at n = 512).
+RD_TAG = re.compile(r"^([A-Z]+)_(24|31|48)([OAV])$")
+# Raster geometry per mode: (lines per frame, blank lines from the VSYNC rise = VS + VBP, lines
+# from the VSYNC fall to the last active line = VBP + AL), from the BIOS's GDC SYNC blocks as
+# NP2kai bios/bios18.c carries them (P3/P4 VS, P6 VFP, P7/P8 AL and VBP):
+#   24  gdcmastersync "24" {0x10,0x4e,0x07,0x25,0x07,0x07,0x90,0x65}: VS 8, VFP 7, AL 400, VBP 25
+#   31  gdcmastersync "31" {0x10,0x4e,0x47,0x0c,0x07,0x0d,0x90,0x89}: VS 2, VFP 13, AL 400, VBP 34
+#   48  gdcslavesync "31-H" {0x02,0x4e,0x4b,0x0c,0x83,0x06,0xe0,0x95}: VS 2, VFP 6, AL 480, VBP 37
+#       (the master's "31-480:25" block, AL 475 VFP 11 VBP 37, ends its VSYNC on the same line)
+RD_GEOM = {"24": (440, 33, 425), "31": (449, 36, 434), "48": (525, 39, 517)}
+# ARTIC ticks per frame: the measured 24 and 31 kHz frames (NOM_FRAMES), 525 lines at the 31 kHz
+# line rate for 48.
+RD_FRAME = {"24": NOM_FRAMES[0], "31": NOM_FRAMES[1], "48": NOM_FRAMES[1] * 525 / 449}
+RD_WHAT = {
+    "GRW": "GVRAM word load", "GRD": "GVRAM dword load", "GW": "GVRAM word store",
+    "GLSW": "GVRAM rep lodsw", "GMVR": "rep movsw GVRAM->RAM", "TCRW": "GRCG TCR word read",
+    "TDW": "GRCG TDW word store", "RMW": "GRCG RMW word store", "XCR": "text code load, off-screen",
+    "XCW": "text code store, off-screen", "XCRS": "text code load, on screen",
+    "XCWS": "text code store, on screen", "XARS": "text attr load, on screen",
+    "XAWS": "text attr store, on screen", "PKR": "PEGC packed word load", "PKW": "PEGC packed word store"}
+RD_LAT, RD_RATE = 0.2, 0.5            # hidden_frac at or below: LATENCY; at or above: RATE
+
+
+def rd_shape(pts):
+    """pts: [(k, g, c)] sorted by k -> dict(g0, a0, kmax, gmax, h, hk, frac, verdict)."""
+    k0, g0, c0 = pts[0]
+    a0 = g0 - c0
+    hs = [((c - c0) - (g - g0), k) for k, g, c in pts[1:]]
+    h, hk = max(hs) if hs else (0.0, 0)
+    frac = h / a0 if a0 > 0 else 0.0
+    verdict = "LATENCY" if frac <= RD_LAT else "RATE" if frac >= RD_RATE else "MIXED"
+    return {"g0": g0, "a0": a0, "kmax": pts[-1][0], "gmax": pts[-1][1], "cmax": pts[-1][2] - c0,
+            "h": h, "hk": hk, "frac": frac, "verdict": verdict}
+
+
+@analyser
+def rdlat(cap):
+    """-> (text lines, expect tuples) for /RDLAT."""
+    R = [r for r in cap.rows if r["sec"] == "RDLAT" and r["kind"] == "R" and not r.get("refused")]
+    P = {r["tag"]: r for r in cap.rows if r["sec"] == "RDLAT" and r["kind"] == "P"}
+    if not R and not P:
+        return [], []
+    txt, exp = [], []
+    lt = {}
+    for t, r in sorted(P.items()):
+        d = r["kv"]
+        fr, art, hi, to = (num(d.get(k)) or 0 for k in ("frames", "art", "hi", "to"))
+        m = t[len("RASTER_"):len("RASTER_") + 2]
+        if not (fr and art) or m not in RD_GEOM:
+            continue
+        tpf = art / fr
+        lines = RD_GEOM[m][0]
+        if not t.endswith("O"):
+            lt[m] = tpf / lines
+        txt.append("%s: %.1f ARTIC ticks/frame (mode %s nominal %.1f), VSYNC high %.2f lines%s" % (
+            t, tpf, m, RD_FRAME[m], hi / fr / (tpf / lines), "" if not to else "  ** %d poll timeouts" % to))
+        exp.append(("RDLAT.%s.frame_ticks" % t, "%.1f" % tpf, "ticks", r["line"], "mean"))
+        exp.append(("RDLAT.%s.vsync_lines" % t, "%.2f" % (hi / fr / (tpf / lines)), "lines", r["line"], "mean"))
+        if abs(tpf / RD_FRAME[m] - 1) > 0.03:
+            cap.flag(r["line"], "MODE-NOT-SET", "%s: %.1f ticks/frame, mode %s is %.1f" % (t, tpf, m, RD_FRAME[m]))
+        if to:
+            cap.flag(r["line"], "SYNC-TIMEOUT", "%s to=%d" % (t, to))
+    for r in cap.rows:
+        if r["sec"] == "RDLAT" and r["kind"] == "I" and (num(r["kv"].get("sync_to")) or 0) > 0:
+            cap.flag(r["line"], "SYNC-TIMEOUT", "sync_to=%s: some windows started unsynced" % r["kv"]["sync_to"])
+        if r["sec"] == "RDLAT" and r["kind"] == "SKIP":
+            txt.append("skipped: %s" % r["text"])
+    groups = {}
+    for r in R:
+        m = RD_TAG.match(r["tag"])
+        if not m:
+            continue
+        fam, mode, ph = m.groups()
+        g = RD_GEOM[mode]
+        l_t = lt.get(mode, RD_FRAME[mode] / g[0])
+        longest = max(r["art"][2], r["ctl_art"][2])
+        if ph == "V" and longest > g[1] * l_t:
+            r["flags"].append("PAST-BLANK")
+            cap.flag(r["line"], "PAST-BLANK", "%s nop=%d: %d ticks from the VSYNC rise, the blank is "
+                     "%.0f" % (r["tag"], r["nop"], longest, g[1] * l_t))
+        if ph == "A" and MS_ADELAY + longest > g[2] * l_t:
+            r["flags"].append("PAST-ACTIVE")
+            cap.flag(r["line"], "PAST-ACTIVE", "%s nop=%d: window ends past the active lines" % (r["tag"], r["nop"]))
+        groups.setdefault((fam, mode, ph), []).append(r)
+    g0s = {}
+    for key in sorted(groups, key=lambda x: (list(RD_WHAT).index(x[0]) if x[0] in RD_WHAT else 99, x[1], "OAV".index(x[2]))):
+        fam, mode, ph = key
+        rows = sorted(groups[key], key=lambda r: r["nop"])
+        base = "RDLAT.%s.%s%s" % (fam, mode, ph)
+        if rows[0]["nop"] != 0:
+            continue
+        ln = rows[0]["line"]
+        g0s[key] = rows[0]["pit_ns"]
+        exp.append((base + ".k0_ns", "%.1f" % rows[0]["pit_ns"], "ns", ln, "pit nop=0"))
+        if len(rows) < 2:
+            txt.append("%-5s %s%s %-28s %7.1f ns (one point)" % (fam, mode, ph, RD_WHAT.get(fam, ""),
+                                                              rows[0]["pit_ns"]))
+            continue
+        sh = rd_shape([(r["nop"], r["pit_ns"], r["ctl_pit_ns"]) for r in rows])
+        for r in rows[1:]:
+            if r["nop"] in (32, 64):
+                exp.append((base + ".k%d_ns" % r["nop"], "%.1f" % r["pit_ns"], "ns", r["line"], "pit"))
+        exp.append((base + ".hidden_ns", "%.1f" % sh["h"], "ns", ln, "sweep"))
+        exp.append((base + ".hidden_frac", "%.3f" % sh["frac"], "ratio", ln, "sweep"))
+        exp.append((base + ".shape", sh["verdict"], "class", ln, "sweep"))
+        txt.append("%-5s %s%s %-28s k0 %7.1f ns (access %6.1f); k%d %7.1f (+%6.1f ns of work): "
+                   "hid %6.1f ns at k%d, %.2f of the access -> %s" % (
+                       fam, mode, ph, RD_WHAT.get(fam, ""), sh["g0"], sh["a0"], sh["kmax"], sh["gmax"],
+                       sh["cmax"], sh["h"], sh["hk"], sh["frac"], sh["verdict"]))
+    # the raster penalty: on the active lines against the blank, per mode; each mode against 24
+    for fam in RD_WHAT:
+        parts = []
+        for mode in ("24", "31", "48"):
+            a, v = g0s.get((fam, mode, "A")), g0s.get((fam, mode, "V"))
+            if a and v:
+                parts.append("%s: A %.1f V %.1f (x%.3f)" % (mode, a, v, a / v))
+                ln = groups[(fam, mode, "A")][0]["line"]
+                exp.append(("RDLAT.%s.%s.a_over_v" % (fam, mode), "%.3f" % (a / v), "ratio", ln, "pit nop=0"))
+        if parts:
+            txt.append("%-5s raster at nop 0: %s" % (fam, "; ".join(parts)))
+    return txt, exp
+
+
+# ----------------------------------------------------------------------------- XE10Y (kit 3)
+REP_BAND = 0.03                      # a row whose passes spread more than this is flagged
+
+
+@analyser
+def rep_spread(cap):
+    """/REP n: per (section, tag, nop) R row the pit ns of every pass, the spread (max - min)
+    over the median; REP-SPREAD past REP_BAND. -> (text lines, expect tuples)."""
+    rows = getattr(cap, "all_rows", cap.rows)
+    if not any(r.get("pass") for r in rows):
+        return [], []
+    g = {}
+    for r in rows:
+        if r["kind"] == "R" and not r.get("refused") and "pit_ns" in r:
+            g.setdefault((r["sec"], r["tag"], r["nop"]), {})[r["pass"]] = r
+    txt, exp, nflag = [], [], 0
+    for (sec, tag, nop), by in g.items():
+        if len(by) < 2:
+            continue
+        v = [by[p]["pit_ns"] for p in sorted(by)]
+        med = statistics.median(v)
+        spr = (max(v) - min(v)) / med if med > 0 else 0.0
+        mark = ""
+        if spr > REP_BAND:
+            nflag += 1
+            mark = "  ** REP-SPREAD"
+            cap.flag(by[min(by)]["line"], "REP-SPREAD", "%s %s nop=%d %.1f%% over %d passes" % (
+                sec, tag, nop, 100 * spr, len(v)))
+        if nop == 0 or mark:
+            txt.append("%-7s %-14s nop=%-3d %s  spread %5.2f%%%s" % (
+                sec, tag, nop, " ".join("%7.1f" % x for x in v), 100 * spr, mark))
+        exp.append(("REP.%s.%s.k%d.spread" % (sec, tag, nop), "%.4f" % spr, "ratio", by[min(by)]["line"], "pit"))
+    txt.insert(0, "%d rows over %d passes; %d past %.0f %%" % (
+        len(exp), 1 + max(r.get("pass", 0) for r in rows), nflag, 100 * REP_BAND))
+    return txt, exp
+
+
+def _state_rows(cap, sec):
+    """STATE row=<tag> lines of a section (every pass) -> {tag: [kv dict per occurrence]}"""
+    out = {}
+    for r in getattr(cap, "all_rows", cap.rows):
+        if r["sec"] == sec and r["kind"] == "STATE" and r["kv"].get("row"):
+            out.setdefault(r["kv"]["row"], []).append(r["kv"])
+    return out
+
+
+PK_FACTOR_BAND = 0.05                # two figures that differ by more than this differ
+
+
+def _k0(cap, sec, tag):
+    """the nop-0 pit ns of every R row tagged tag in sec (every pass)"""
+    return [r["pit_ns"] for r in getattr(cap, "all_rows", cap.rows)
+            if r["sec"] == sec and r["kind"] == "R" and r["tag"] == tag and r["nop"] == 0
+            and not r.get("refused")]
+
+
+def _mean(v):
+    return sum(v) / len(v) if v else None
+
+
+def _differ(a, b):
+    return a is not None and b is not None and abs(a - b) / min(a, b) > PK_FACTOR_BAND
+
+
+@analyser
+def pkab(cap):
+    """/PKAB: the PEGC store A/B. Every PKW figure by sequence (M = /MISAL2's, R = /RDLAT's),
+    factor row and cache/drain pass, round by round, and the factor that moves the figure."""
+    R = [r for r in getattr(cap, "all_rows", cap.rows) if r["sec"] == "PKAB" and r["kind"] == "R"]
+    if not R:
+        return [], []
+    rounds = sorted({int(m.group(1)) for r in R for m in [re.search(r"_[A-Z]+(\d)$", r["tag"])] if m})
+    fam = [("M  PKW_0 (MISAL2's row)", "PKW_0_M%d"), ("M  PKW_1 (DI=1)", "PKW_1_M%d"),
+           ("M  PKD_0 (dword)", "PKD_0_M%d"), ("R  PKW (RDLAT's row)", "PKW_R%d"),
+           ("F  PKW1ST after pegc on", "PKW1ST_FA%d"), ("F  PKWAFT after PKR", "PKWAFT_FA%d"),
+           ("F  PKWLATE 60 frames on", "PKWLATE_FA%d"), ("F  PKWODD DI=1", "PKWODD_FA%d"),
+           ("F  PKWHI DI=4000", "PKWHI_FA%d"), ("F  PKDF dword", "PKDF_FA%d"),
+           ("FV PKW1ST (blank)", "PKW1ST_FV%d"), ("FV PKWLATE (blank)", "PKWLATE_FV%d"),
+           ("C  PKW cache as found", "PKW_C%d"), ("N  PKW cache off", "PKW_N%d"),
+           ("D  PKW drain read", "PKW_D%d"), ("C  GW plane B", "GW_C%d"), ("N  GW cache off", "GW_N%d"),
+           ("C  GRW (read, DI+=4)", "GRW_C%d"), ("C  GRS (one address)", "GRS_C%d"),
+           ("N  GRS cache off", "GRS_N%d"), ("C  RLWH main memory", "RLWH_C%d"),
+           ("N  RLWH cache off", "RLWH_N%d"), ("C  PKR", "PKR_C%d"), ("C  PKRS (one address)", "PKRS_C%d"),
+           ("N  PKRS cache off", "PKRS_N%d")]
+    txt, exp, m = [], [], {}
+    txt.append("ns per access at nop 0, round %s" % " ".join(str(x) for x in rounds))
+    for name, pat in fam:
+        per = [_mean(_k0(cap, "PKAB", pat % rd)) for rd in rounds]
+        if not any(per):
+            continue
+        key = pat.replace("%d", "")
+        m[key] = _mean([x for x in per if x])
+        txt.append("%-28s %s  mean %7.1f" % (name, " ".join("%7.1f" % x if x else "      -" for x in per), m[key]))
+        exp.append(("PKAB.%s.k0_ns" % key, "%.1f" % m[key], "ns", R[0]["line"], "pit nop=0 mean of rounds"))
+    st = _state_rows(cap, "PKAB")
+
+    def sfield(tag, f):
+        return [d.get(f) for d in st.get(tag, [])]
+    for tag in ("PKW_0_M1", "PKW_R1", "PKW1ST_FA1", "PKWLATE_FA1"):
+        if tag in st:
+            d = st[tag][0]
+            txt.append("state before %-12s %s" % (tag, " ".join("%s=%s" % (k, d[k]) for k in (
+                "q04", "q07", "q0A", "bda054C", "bda054D", "e0100", "e0102", "since_pegc", "dst", "al4",
+                "drain", "cr0") if k in d)))
+    if "PKW_0_M1" in st and "PKW_R1" in st:
+        a, b = st["PKW_0_M1"][0], st["PKW_R1"][0]
+        dif = [k for k in a if k not in ("row", "since_pegc") and a.get(k) != b.get(k)]
+        txt.append("M and R state before their PKW rows differs in: %s" % (", ".join(dif) or "nothing"))
+    # the verdict
+    v = []
+    pm, pr = m.get("PKW_0_M"), m.get("PKW_R")
+    if pm and pr:
+        if _differ(pm, pr):
+            v.append("SEQUENCE: in one binary the MISAL2 sequence reads %.1f and the RDLAT one %.1f" % (pm, pr))
+        else:
+            v.append("NOT THE SEQUENCE: in one binary both sequences read %.1f / %.1f (the two "
+                     "captures' difference is their binary or boot)" % (pm, pr))
+    f1, fa, fl = m.get("PKW1ST_FA"), m.get("PKWAFT_FA"), m.get("PKWLATE_FA")
+    if f1 and fl:
+        if _differ(f1, fl):
+            v.append("TIME SINCE THE 256-COLOUR MODE TURNED ON: %.1f straight after, %.1f 60 frames later" % (f1, fl))
+        else:
+            v.append("not the time since the 256-colour mode turned on (%.1f / %.1f)" % (f1, fl))
+    if f1 and fa and fl and _differ(fa, f1) and not _differ(f1, fl):
+        v.append("A PRECEDING PKR row: %.1f after it, %.1f without" % (fa, f1))
+    fo, fh = m.get("PKWODD_FA"), m.get("PKWHI_FA")
+    if fl and fh and _differ(fl, fh):
+        v.append("THE DESTINATION: DI=0 %.1f, DI=4000 %.1f" % (fl, fh))
+    c, n, d = m.get("PKW_C"), m.get("PKW_N"), m.get("PKW_D")
+    # with CR0.CD set the loop's own code is fetched uncached too and shares the bus with the
+    # stores, so the cache-off figure is compared on the net (the row less its control) as well
+    def k0net(tag):
+        return _mean([r["pit_ns"] - r["ctl_pit_ns"] for r in getattr(cap, "all_rows", cap.rows)
+                      if r["sec"] == "PKAB" and r["kind"] == "R" and re.fullmatch(tag + r"\d", r["tag"])
+                      and r["nop"] == 0 and not r.get("refused")])
+    cn, nn = k0net("PKW_C"), k0net("PKW_N")
+    if c and n and cn and nn:
+        if _differ(cn, nn):
+            v.append("THE L1 CACHE: %.1f on, %.1f off (net of the loop %.1f / %.1f)" % (c, n, cn, nn))
+        else:
+            v.append("not the L1 cache: %.1f on, %.1f off, but net of the loop %.1f / %.1f (the "
+                     "uncached loop's own fetches)" % (c, n, cn, nn))
+    if c and d:
+        v.append(("THE WRITE BUFFER: %.1f, %.1f with a drain read" if _differ(c, d) else
+                  "not the write buffer (%.1f, %.1f with a drain read)") % (c, d))
+    rc, rn = m.get("RLWH_C"), m.get("RLWH_N")
+    if rc and rn:
+        v.append("cache off %s: main memory %.1f ns on, %.1f off" % (
+            "TOOK EFFECT" if rn > 1.5 * rc else "DID NOT TAKE EFFECT", rc, rn))
+    gs, gw = m.get("GRS_C"), m.get("GRW_C")
+    if gs and gw:
+        cached = gs < 0.5 * gw
+        v.append("GVRAM reads are %s: one address %.1f ns, DI+=4 %.1f" % (
+            "CACHED" if cached else "NOT CACHED", gs, gw))
+        exp.append(("PKAB.gvram_read_cached", "yes" if cached else "no", "class", R[0]["line"], "GRS vs GRW"))
+    ps, pr_ = m.get("PKRS_C"), m.get("PKR_C")
+    if ps and pr_:
+        v.append("PEGC reads are %s: one address %.1f ns, DI+=4 %.1f" % (
+            "CACHED" if ps < 0.5 * pr_ else "NOT CACHED", ps, pr_))
+    for x in v:
+        txt.append("VERDICT " + x)
+    return txt, exp
+
+
+CELLS_TAG = re.compile(r"^([A-Z]+)_(31|2P|3P|48)([AV])$")
+CELLS_MODE = {"31": "31", "2P": "24", "3P": "31", "48": "48"}     # the raster geometry each runs on
+
+
+@analyser
+def cells(cap):
+    """/CELLS (item 197): per row FAM_<MODE><PH> the nop-0 ns, the net and the sweep's shape
+    (rd_shape, as /RDLAT), the X B8 and X APER rows."""
+    R = [r for r in cap.rows if r["sec"] == "CELLS" and r["kind"] == "R" and not r.get("refused")]
+    X = [r for r in cap.rows if r["sec"] == "CELLS" and r["kind"] in ("X", "P")]
+    if not R and not X:
+        return [], []
+    txt, exp = [], []
+    for r in X:
+        d = r["kv"]
+        if r["tag"] == "B8":
+            txt.append("B8 (0xB8000 with the 256-colour mode on): written A55A off, read %s on; "
+                       "written 3CC3 on, read %s on and %s off -> %s" % (
+                           d.get("on_rb"), d.get("on_rb2"), d.get("off_rb2"),
+                           "- (row incomplete: no on_rb2)" if d.get("on_rb2") is None else
+                           "the plane is reachable" if d.get("on_rb2") == "3CC3" else
+                           "no plane store lands"))
+        elif r["tag"] == "APER":
+            ok = d.get("f0_rb") == "1357" and d.get("a8_rb") == "2468"
+            okw = d.get("f0_rbw", d.get("f0_rb")) == "1357" and d.get("a8_rbw", d.get("a8_rb")) == "2468"
+            txt.append("APER: 0x043B %s -> %s, A20 masked %s, E0102 was %s: 0xF00000 reads %s (%s after WBINVD; "
+                       "A8000 wrote 1357), 0xA8002 reads %s (%s after WBINVD; F00002 wrote 2468, which reads %s "
+                       "back there) -> %s" % (
+                           d.get("43b"), d.get("43b_now"), d.get("a20_masked"), d.get("e0102_was"),
+                           d.get("f0_rb"), d.get("f0_rbw", "-"), d.get("a8_rb"), d.get("a8_rbw", "-"),
+                           d.get("f0_rb2", "-"), "the aperture is the packed VRAM" if ok else
+                           "the aperture is the packed VRAM once the L1 is emptied (the aperture is cached)"
+                           if okw else "** the aperture does NOT map the packed VRAM: the PA rows time something else"))
+            exp.append(("CELLS.aperture_maps", "yes" if ok else "no", "class", r["line"], "X APER"))
+        elif r["kind"] == "P" and r["tag"].startswith("RASTER_"):
+            fr, art = num(d.get("frames")) or 0, num(d.get("art")) or 0
+            if fr:
+                txt.append("%s: %.1f ARTIC ticks/frame" % (r["tag"], art / fr))
+    groups = {}
+    for r in R:
+        mt = CELLS_TAG.match(r["tag"])
+        if mt:
+            groups.setdefault(mt.groups(), []).append(r)
+    for key in sorted(groups):
+        fam, mode, ph = key
+        rows = sorted(groups[key], key=lambda r: r["nop"])
+        if rows[0]["nop"] != 0:
+            continue
+        r0 = rows[0]
+        base = "CELLS.%s.%s%s" % (fam, mode, ph)
+        net = r0["pit_ns"] - r0["ctl_pit_ns"]
+        exp.append((base + ".k0_ns", "%.1f" % r0["pit_ns"], "ns", r0["line"], "pit nop=0"))
+        exp.append((base + ".net_ns", "%.1f" % net, "ns", r0["line"], "pit - ctl_pit nop=0"))
+        if len(rows) >= 2:
+            sh = rd_shape([(r["nop"], r["pit_ns"], r["ctl_pit_ns"]) for r in rows])
+            exp.append((base + ".shape", sh["verdict"], "class", r0["line"], "sweep"))
+            txt.append("%-6s %s%s k0 %7.1f ns net %7.1f: hid %6.1f ns at k%d, %.2f -> %-7s (line %d)" % (
+                fam, mode, ph, r0["pit_ns"], net, sh["h"], sh["hk"], sh["frac"], sh["verdict"], r0["line"]))
+        else:
+            txt.append("%-6s %s%s k0 %7.1f ns net %7.1f (one point, line %d)" % (fam, mode, ph, r0["pit_ns"], net, r0["line"]))
+    return txt, exp
+
+
+def hbl_decode(runs, polls, art):
+    """runs: [(state, len)], state bit 0 = VSYNC (status bit 5), bit 1 = HBLANK (bit 6), from the
+    VSYNC rise. -> dict(period polls, high fraction, phase of the first H rise after the start
+    in lines, the VSYNC fall's position and the H phase relative to it, poll_ns)."""
+    pos, rises, falls, vfall, hruns = 0, [], [], None, []
+    prev = None
+    for st, n in runs:
+        if prev is not None:
+            if (st & 2) and not (prev & 2):
+                rises.append(pos)
+            if not (st & 2) and (prev & 2):
+                falls.append(pos)
+            if (prev & 1) and not (st & 1) and vfall is None:
+                vfall = pos
+        if st & 2:
+            hruns.append(n)
+        prev, pos = st, pos + n
+    res = {"poll_ns": art * TICK_NS / polls if polls else 0.0, "rises": len(rises)}
+    if len(rises) >= 3:
+        d = [b - a for a, b in zip(rises, rises[1:])]
+        per = statistics.median(d)
+        res["period"] = per
+        hi = [b - a for a in rises for b in falls if b > a][:1]
+        full = [n for n in hruns[1:-1]]
+        res["high_frac"] = (statistics.median(full) / per) if full else None
+        res["phase0"] = (rises[0] % per) / per
+        if vfall is not None:
+            after = [x for x in rises if x >= vfall]
+            if after:
+                res["vfall"] = vfall
+                res["phase_vfall"] = ((after[0] - vfall) % per) / per
+        res["line_us"] = per * res["poll_ns"] / 1000
+    return res
+
+
+@analyser
+def k3m(cap):
+    """/K3M: IDIV, E0000, PIT one-byte writes, the GDC blank in the line, IDENTIFY read-back."""
+    X = [r for r in cap.rows if r["sec"] == "K3M" and r["kind"] == "X"]
+    if not X:
+        return [], []
+    txt, exp = [], []
+    pit = {}
+    for r in X:
+        d = r["kv"]
+        if r["tag"] == "IDIV":
+            ax = d.get("ax", "")
+            txt.append("IDIV B0F8h/1Eh: de=%s AX=%s -> %s" % (d.get("de"), ax,
+                       "#DE" if d.get("de") == "1" else "AL=%s AH=%s (z486 / the silicon rule: AL=80 AH=F8; "
+                       "the patent's printed AH=36)" % (ax[2:], ax[:2])))
+            exp.append(("K3M.IDIV.ax", ax if d.get("de") == "0" else "DE", "hex", r["line"], "X IDIV"))
+        elif r["tag"] == "E0000":
+            plane = d.get("m16_rb") == "AA55FF00"
+            txt.append("E0000: as found (q04=%s) %s; 16-colour mode read %s, wrote AA55FF00 read %s -> %s; put back %s" % (
+                d.get("q04"), d.get("asfound"), d.get("m16"), d.get("m16_rb"),
+                "the E plane answers" if plane else "NOT a plane", d.get("m16_put")))
+            exp.append(("K3M.E0000.m16_plane", "yes" if plane else "no", "class", r["line"], "X E0000"))
+        elif r["tag"] == "PIT":
+            c = d.get("case")
+            pit[c] = num(d.get("out_art")), num(d.get("irr_art")), d.get("st0"), r["line"]
+            txt.append("PIT %-9s st0=%s irr0=%s to OUT %s ticks, to IRR %s ticks" % (
+                c, d.get("st0"), d.get("irr0"), d.get("out_art"), d.get("irr_art")))
+        elif r["tag"] == "HBL":
+            runs = []
+            for t in d.get("runs", "").strip(",").split(","):
+                if len(t) >= 2 and t[0].isdigit():
+                    runs.append((int(t[0]), int(t[1:])))
+            h = hbl_decode(runs, num(d.get("polls")) or 0, num(d.get("art")) or 0)
+            if "period" in h:
+                txt.append("HBL port %s: poll %.0f ns, line %.1f polls (%.2f us), blank high %.3f of a line, "
+                           "first blank rise %.3f of a line after the VSYNC rise%s" % (
+                               d.get("port"), h["poll_ns"], h["period"], h["line_us"],
+                               h["high_frac"] or 0, h["phase0"],
+                               ", %.3f after the VSYNC fall (poll %d)" % (h["phase_vfall"], h["vfall"])
+                               if "phase_vfall" in h else ""))
+                pfx = "K3M.HBL.%s" % d.get("port")
+                exp.append((pfx + ".high_frac", "%.3f" % (h["high_frac"] or 0), "ratio", r["line"], "runs"))
+                exp.append((pfx + ".phase_vrise", "%.3f" % h["phase0"], "line", r["line"], "runs"))
+                if "phase_vfall" in h:
+                    exp.append((pfx + ".phase_vfall", "%.3f" % h["phase_vfall"], "line", r["line"], "runs"))
+            else:
+                txt.append("HBL port %s: fewer than three blank rises in %s polls" % (d.get("port"), d.get("polls")))
+        elif r["tag"] == "IDEINIT":
+            txt.append("IDEINIT (INITIALIZE DEVICE PARAMETERS, the BIOS geometry back): %s" %
+                       " ".join("%s=%s" % i for i in d.items()))
+        elif r["tag"] == "IDENT":
+            nid = sum(1 for x in X if x["tag"] == "IDENT" and x["line"] < r["line"] and x["kv"].get("cmd") == d.get("cmd"))
+            f = {}
+            for k in ("tf0", "tf1", "tf2"):
+                b = d.get(k, "").split(".")
+                f[k] = dict(zip("er sc sn cl ch dh alt r433 st".split(), b)) if len(b) == 9 else {}
+            t2 = f["tf2"]
+            txt.append("IDENT cmd=%s bank=%s: loaded sc=%s sn=%s cl=%s ch=%s; at DRQ/BSY-clear st=%s er=%s "
+                       "sc=%s; after the block st=%s er=%s sc=%s sn=%s cl=%s ch=%s dh=%s (words=%s crc=%s)" % (
+                           d.get("cmd"), d.get("bank"), f["tf0"].get("sc"), f["tf0"].get("sn"),
+                           f["tf0"].get("cl"), f["tf0"].get("ch"), f["tf1"].get("st"), f["tf1"].get("er"),
+                           f["tf1"].get("sc"), t2.get("st"), t2.get("er"), t2.get("sc"), t2.get("sn"),
+                           t2.get("cl"), t2.get("ch"), t2.get("dh"), d.get("words"), d.get("crc")))
+            for k in ("er", "sc", "sn", "cl", "ch", "dh", "st"):
+                if k in t2:
+                    exp.append(("K3M.IDENT_%s%s.after.%s" % (d.get("cmd"), "" if not nid else "_%d" % (nid + 1), k),
+                                t2[k], "hex", r["line"], "X IDENT tf2"))
+            if d.get("w54"):
+                txt.append("IDENT cmd=%s: current geometry (words 53-56) %s cyl %d heads %d sectors %d" % (
+                    d.get("cmd"), d.get("w53"), int(d["w54"], 16), int(d["w55"], 16), int(d["w56"], 16)))
+    # PIT retention: the one-byte write's time against its two candidate counts' controls
+    for case, keep, zero, what in (("L1234_56", "C1256", "C0056", "an LSB-only write"),
+                                   ("M12F0_01", "C01F0", "C0100", "an MSB-only write")):
+        if case in pit and keep in pit and zero in pit:
+            # the read-back status's OUT bit when the PIT answers the read-back command, else
+            # the master IRR bit 0 (both polled in the same loop; 65535 = not seen in 10 ms)
+            src = 0 if all(pit[c][0] not in (None, 0xFFFF) for c in (case, keep, zero)) else 1
+            t, k, z = pit[case][src], pit[keep][src], pit[zero][src]
+            if None in (t, k, z) or 0xFFFF in (t, k, z):
+                verdict = "UNDECIDED (OUT and IRR not seen)"
+            else:
+                verdict = "KEEPS the other byte" if abs(t - k) < abs(t - z) else "ZEROES the other byte"
+            txt.append("PIT %s: %s ticks (%s) against %s (kept) and %s (zeroed) -> %s" % (
+                what, t, "OUT" if src == 0 else "IRR", k, z, verdict))
+            exp.append(("K3M.PIT.%s" % case, verdict.split()[0], "class", pit[case][3], "X PIT"))
+    return txt, exp
+
+
 def x_compare(a, b, sec, out):
     """Machine (a) vs core (b): every X row of section sec, field by field."""
     def keyed(cap):
@@ -1593,7 +2323,19 @@ def fmt_t(cap, name, v):
     return "%s=%d/%d/%d" % (name, v[0], v[1], v[2])
 
 
-def report(cap, out=sys.stdout):
+# The per-section analysers: name -> fn(cap) -> (text lines, expect tuples). report() prints each
+# one's text under its section and expect_lines() merges every one's tuples, in this order, from
+# this one list (they were a report() if-chain and a hand-kept expect list that had lost PKAB,
+# CELLS and K3M). rep_spread (the /REP passes, not a section) is added after them.
+SECTION_ANALYSERS = (
+    ("OPNA2", opna2), ("OPNA3", opna3), ("AUDIT", audit), ("FDC2", fdc2), ("OPNA4", opna4),
+    ("AUDIT2", audit2), ("MISAL", misal), ("MISAL2", misal2), ("RDLAT", rdlat), ("PKAB", pkab),
+    ("CELLS", cells), ("K3M", k3m),
+)
+
+
+def report(cap, out=None):
+    out = out or sys.stdout
     w = out.write
     h = cap.header or {}
     w("== %s: XE10T v%s sha=%s args=%s tag=%s\n" % (cap.name, h.get("ver", "?"), h.get("sha", "?"),
@@ -1609,7 +2351,10 @@ def report(cap, out=sys.stdout):
               "%.2f" % c["tsc_mhz"] if "tsc_mhz" in c else "-",
               c.get("verdict", "-"), c.get("why", "-"), c.get("strap0501", "-")))
     for s in cap.sections:
-        w("-- %s%s\n" % (s["name"], "" if s["closed"] else "  ** TRUNCATED (no END) **"))
+        w("-- %s%s%s\n" % (s["name"], " (pass %d)" % (s["pass"] + 1) if s.get("pass") else "",
+                           "" if s["closed"] else "  ** TRUNCATED (no END) **"))
+        if s.get("pass"):
+            continue                        # a later /REP pass: the spread table below reads it
         rs = [r for r in cap.rows if r["section"] is s]
         if any(r["kind"] == "R" for r in rs):
             w("   %-14s %4s %6s %10s %10s %10s %10s  %s\n" %
@@ -1629,24 +2374,10 @@ def report(cap, out=sys.stdout):
                 w("   %s %-12s %s\n" % (k, r["tag"], " ".join("%s=%s" % i for i in r["kv"].items())))
             else:
                 w("   %s\n" % r["text"])
-        if s["name"] == "OPNA2":
-            for t in opna2(cap)[0]:
-                w("   OPNA2 %s\n" % t)
-        if s["name"] == "OPNA3":
-            for t in opna3(cap)[0]:
-                w("   OPNA3 %s\n" % t)
-        if s["name"] == "AUDIT":
-            for t in audit(cap)[0]:
-                w("   AUDIT %s\n" % t)
-        if s["name"] == "FDC2":
-            for t in fdc2(cap)[0]:
-                w("   FDC2 %s\n" % t)
-        if s["name"] == "OPNA4":
-            for t in opna4(cap)[0]:
-                w("   OPNA4 %s\n" % t)
-        if s["name"] == "AUDIT2":
-            for t in audit2(cap)[0]:
-                w("   AUDIT2 %s\n" % t)
+        for nm, fn in SECTION_ANALYSERS:
+            if s["name"] == nm:
+                for t in fn(cap)[0]:
+                    w("   %s %s\n" % (nm, t))
         for (sec, tag), res in cap.sweeps.items():
             if sec == s["name"]:
                 w("   SWEEP %-10s period %s%.1f ns  shell %.1f ns  issue %s ns  knee nop=%s  "
@@ -1654,6 +2385,11 @@ def report(cap, out=sys.stdout):
                     tag, res["bound"], res["period"], res["shell"],
                     "-" if res["issue"] is None else "%.1f" % res["issue"], res["knee"],
                     res["residual"], res["flag"]))
+    sp = rep_spread(cap)[0]
+    if sp:
+        w("-- REP: the spread of every row across the /REP passes\n")
+        for t in sp:
+            w("   %s\n" % t)
     ras = raster_rows(cap)
     if ras:
         w("-- RASTER (visual: compare these with the photograph / capture of each phase)\n")
@@ -1725,9 +2461,10 @@ def expect_lines(cap):
             for fname, v in r["fields"].items():
                 add("%s.%s_med" % (base, fname), v[1], fname.rsplit("_", 1)[-1] if "_" in fname
                     else "count", r["line"], "median")
-    for e in opna2(cap)[1] + opna3(cap)[1]:
-        add(*e)
-    for e in audit(cap)[1] + fdc2(cap)[1] + opna4(cap)[1] + audit2(cap)[1]:
+    for _, fn in SECTION_ANALYSERS:
+        for e in fn(cap)[1]:
+            add(*e)
+    for e in rep_spread(cap)[1]:
         add(*e)
     return out
 
@@ -1752,7 +2489,8 @@ def row_values(cap):
     return vals
 
 
-def compare(a, b, band, force, out=sys.stdout):
+def compare(a, b, band, force, out=None):
+    out = out or sys.stdout
     ha, hb = a.header or {}, b.header or {}
     for f in ("sha", "args"):
         if ha.get(f) != hb.get(f) and not force:
@@ -1777,6 +2515,15 @@ def compare(a, b, band, force, out=sys.stdout):
     x_compare(a, b, "AUDIT2", out)
     for t in opna4(a)[0] + opna4(b)[0]:
         out.write("OPNA4 %s\n" % t)
+    ma, mb = misal(a), misal(b)
+    m2a, m2b = misal2(a), misal2(b)
+    rda, rdb = rdlat(a), rdlat(b)
+    ma, mb = (ma[0], ma[1] + m2a[1] + rda[1]), (mb[0], mb[1] + m2b[1] + rdb[1])
+    if ma[1] or mb[1]:
+        ea, eb = dict((e[0], e[1]) for e in ma[1]), dict((e[0], e[1]) for e in mb[1])
+        out.write("MISAL %-40s %10s %10s\n" % ("quantity", "A", "B"))
+        for k in list(ea) + [k for k in eb if k not in ea]:
+            out.write("MISAL %-40s %10s %10s\n" % (k, ea.get(k, "-"), eb.get(k, "-")))
     return 0
 
 
@@ -2273,6 +3020,173 @@ def selftest():
     check("AUDIT2: in ax,7Ch two cycles, in ax,60h one",
           a2e.get("AUDIT2.T007C.cycles") == "two-cycles" and a2e.get("AUDIT2.T0060.cycles") == "one-cycle")
     check("AUDIT2: 0x72 word read AH=00 is NP2kai's minus_term", a2e.get("AUDIT2.W0072.class") == "AH=00")
+    # /MISAL (XE10V): the misaligned-word ratios, the odd-DI string row against the W1/W3
+    # mean, Rusty's row per word, and a vertical-blank window that outlasts the blank
+    ms = ["STATE MISAL as_found bda054C=4F bda054D=50 p31=FF adelay=614",
+          "P MISAL RASTER_G frames=8 art=43560 hi=792 to=0"]
+    for tag, ns in (("RMW_W0_O", 256.0), ("RMW_W1_O", 384.0), ("RMW_W2_O", 256.0),
+                    ("RMW_W3_O", 512.0), ("RMW_SW1_O", 450.0), ("RMW_BL0_O", 20 * 260.0),
+                    ("RMW_BL1_O", 20 * 390.0), ("RMW_W0_A", 300.0)):
+        ms.append(rrow("MISAL", tag, 50 if "BL" in tag else 1024, 0, ns, 20.0))
+    ms.append(rrow("MISAL", "RMW_W3_V", 4096, 0, 512.0, 20.0))   # 644 ticks > 33 lines
+    ms.append("I MISAL sync_to=0")
+    mc = parse(synth([("CAL", CAL_OK), ("MISAL", ms)]), "XE10V.TXT")
+    mtxt, mexp = misal(mc)
+    me = dict((e[0], str(e[1])) for e in mexp)
+    def near_(k, want, tol):
+        try:
+            return abs(float(me.get(k, "nan")) - want) <= tol
+        except ValueError:
+            return False
+    # rrow quantizes each window to whole ARTIC ticks: 1024 stores give 3.2 ns per tick
+    check("MISAL: W1/W0 and W3/W0 in periods", near_("MISAL.RMW.O.w1_over_w0", 1.5, 0.02) and
+          near_("MISAL.RMW.O.w3_over_w0", 2.0, 0.02))
+    check("MISAL: the odd-DI string row against the W1/W3 mean",
+          any(t.startswith("RMW O: SW1 ") and "against the W1/W3 mean 44" in t for t in mtxt))
+    check("MISAL: Rusty's row per word", near_("MISAL.RMW.O.bl1_ns_per_word", 390.0, 4.0) and
+          near_("MISAL.RMW.O.bl0_ns_per_word", 260.0, 4.0))
+    check("MISAL: the raster row (5445 ticks/frame, 8 VSYNC lines)",
+          me.get("MISAL.RASTER_G.frame_ticks") == "5445.0" and me.get("MISAL.RASTER_G.vsync_lines") == "8.00")
+    check("MISAL: a _V window past the blank is flagged, the others are not",
+          [f[1] for f in mc.flags] == ["PAST-BLANK"])
+    # /MISAL2 (XE10W): the per-family ratio to the base offset, the I/O base (K = 4)
+    m2 = []
+    for tag, n, ns in (("RLWH_0", 4096, 10.0), ("RLWH_1", 4096, 20.0), ("GRW_0_A", 512, 500.0),
+                       ("GRW_3_A", 512, 1000.0), ("IOOW_4", 1024, 800.0), ("IOOW_3", 1024, 1600.0)):
+        m2.append(rrow("MISAL2", tag, n, 0, ns, 5.0))
+    c2 = parse(synth([("CAL", CAL_OK), ("MISAL2", m2)]), "XE10W.TXT")
+    t2, e2 = misal2(c2)
+    d2 = dict((e[0], float(e[1])) for e in e2)
+    check("MISAL2: ratios to the base offset (RAM, GVRAM by phase, word OUT base K=4)",
+          abs(d2.get("MISAL2.RLWH.-.k1_over_k0", 0) - 2.0) < 0.35 and
+          abs(d2.get("MISAL2.GRW.A.k3_over_k0", 0) - 2.0) < 0.05 and
+          abs(d2.get("MISAL2.IOOW.-.k3_over_k4", 0) - 2.0) < 0.05 and c2.flags == [])
+    # /RDLAT (XE10X): a latency-shaped read (the work adds), a rate-shaped one (the work hides
+    # until the knee), a raster row per mode, a mode whose frame is not the mode's, and a _V
+    # window that outlasts the 31 kHz blank
+    rl = ["P RDLAT RASTER_24 frames=8 art=43560 hi=792 to=0",
+          "P RDLAT RASTER_31 frames=8 art=35078 hi=160 to=0",
+          "P RDLAT RASTER_48 frames=8 art=43560 hi=160 to=0"]
+    for k in (0, 2, 4, 8, 16, 32, 64):
+        c = 20.0 + 10.0 * k
+        rl.append(rrow("RDLAT", "GRW_24A", 512, k, c + 700.0, c))
+        rl.append(rrow("RDLAT", "GRW_24V", 512, k, c + 650.0, c))
+        rl.append(rrow("RDLAT", "GW_31A", 512, k, max(650.0, c + 40.0), c))
+    rl.append(rrow("RDLAT", "XCR_31V", 512, 0, 2500.0, 20.0))
+    rl.append(rrow("RDLAT", "XCR_31V", 512, 2, 2520.0, 40.0))
+    rl.append("I RDLAT sync_to=0")
+    rc = parse(synth([("CAL", CAL_OK), ("RDLAT", rl)]), "XE10X.TXT")
+    rtxt, rexp = rdlat(rc)
+    re_ = dict((e[0], str(e[1])) for e in rexp)
+    check("RDLAT: the work adds to a latency read (hidden ~0)",
+          re_.get("RDLAT.GRW.24A.shape") == "LATENCY" and abs(float(re_.get("RDLAT.GRW.24A.hidden_ns", "99"))) < 8)
+    check("RDLAT: the work hides in a rate access up to its period",
+          re_.get("RDLAT.GW.31A.shape") == "RATE" and abs(float(re_.get("RDLAT.GW.31A.hidden_ns", "0")) - 590) < 10)
+    check("RDLAT: the raster penalty A over V", abs(float(re_.get("RDLAT.GRW.24.a_over_v", "0")) - 720 / 670) < 0.02)
+    check("RDLAT: a mode not set and a window past the 31 kHz blank are flagged",
+          sorted(set(f[1] for f in rc.flags) - {"PLATEAU-NOT-FLAT", "KNEE-NOT-FOUND", "NO-PLATEAU"}) ==
+          ["MODE-NOT-SET", "PAST-BLANK"] and any("RASTER_48" in f[2] for f in rc.flags if f[1] == "MODE-NOT-SET"))
+    # XE10Y (kit 3): /REP passes, the /PKAB verdict, /CELLS shapes, /K3M rows
+    pk = []
+    for rd in (1, 2, 3):
+        pk += [rrow("PKAB", "PKW_0_M%d" % rd, 512, 0, 145.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKW_R%d" % rd, 512, 0, 183.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKW1ST_FA%d" % rd, 512, 0, 145.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKWAFT_FA%d" % rd, 512, 0, 183.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKWLATE_FA%d" % rd, 512, 0, 183.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKW_C%d" % rd, 512, 0, 183.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKW_N%d" % rd, 512, 0, 183.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "PKW_D%d" % rd, 512, 0, 183.0, 13.0, shell="BDFC"),
+               rrow("PKAB", "RLWH_C%d" % rd, 4096, 0, 10.0, 5.0),
+               rrow("PKAB", "RLWH_N%d" % rd, 4096, 0, 60.0, 5.0),
+               rrow("PKAB", "GRW_C%d" % rd, 512, 0, 700.0, 13.0),
+               rrow("PKAB", "GRS_C%d" % rd, 512, 0, 690.0, 13.0)]
+    pk.append("STATE PKAB row=PKW_0_M1 q04=01 q0A=01 since_pegc=467 dst=A800:00000000 al4=0")
+    pk.append("STATE PKAB row=PKW_R1 q04=01 q0A=01 since_pegc=267140 dst=A800:00000000 al4=0")
+    pc = parse(synth([("CAL", CAL_OK), ("PKAB", pk)]), "PKAB.TXT")
+    vt = [t for t in pkab(pc)[0] if t.startswith("VERDICT")]
+    check("PKAB: the sequence and the time since the 256-colour mode are named",
+          any(t.startswith("VERDICT SEQUENCE") for t in vt) and
+          any(t.startswith("VERDICT TIME SINCE") for t in vt) and
+          any("not the L1 cache" in t for t in vt) and any("TOOK EFFECT" in t for t in vt) and
+          any("NOT CACHED" in t for t in vt))
+    rp = [rrow("RDLAT", "GRW_24A", 512, 0, 700.0, 20.0)]
+    rp2 = [rrow("RDLAT", "GRW_24A", 512, 0, 760.0, 20.0)]
+    rc2 = parse(synth([("CAL", CAL_OK), ("RDLAT", rp), ("RDLAT", rp2)], args="/RDLAT /REP 2"), "REP.TXT")
+    st, se = rep_spread(rc2)
+    check("REP: the first pass is analysed, the spread flagged across passes",
+          len([r for r in rc2.rows if r["kind"] == "R"]) == 1 and "REP-SPREAD" in codes(rc2) and
+          abs(float(dict((e[0], e[1]) for e in se)["REP.RDLAT.GRW_24A.k0.spread"]) - 60 / 730) < 0.01)
+    cl = [rrow("CELLS", "TCRWM_31A", 512, k, 1000.0 + 10.0 * k, 20.0 + 10.0 * k) for k in (0, 2, 4, 8, 16, 32, 64)]
+    cl.append("X CELLS APER 43b=FB 43b_now=FF a20_masked=1 e0102_was=00 a8_wr=1357 f0_rb=1357 f0_wr=2468 a8_rb=2468")
+    cc = parse(synth([("CAL", CAL_OK), ("CELLS", cl)]), "CELLS.TXT")
+    ce = dict((e[0], e[1]) for e in cells(cc)[1])
+    check("CELLS: a two-word 31 kHz read is LATENCY, the aperture proof read",
+          ce.get("CELLS.TCRWM.31A.shape") == "LATENCY" and ce.get("CELLS.aperture_maps") == "yes")
+    hb = "X K3M HBL port=0060 polls=2048 art=503 runs=" + "".join("1%d,3%d," % (38, 12) for _ in range(40))
+    km = ["X K3M IDIV ax_in=B0F8 bl=1E de=0 ax=F880 flags=0046",
+          "X K3M PIT case=C0056 st0=30 irr0=0 out_art=11 irr_art=11",
+          "X K3M PIT case=C1256 st0=30 irr0=0 out_art=588 irr_art=588",
+          "X K3M PIT case=L1234_56 st0=10 irr0=0 out_art=587 irr_art=588", hb]
+    kc = parse(synth([("CAL", CAL_OK), ("K3M", km)]), "K3M.TXT")
+    ke = dict((e[0], e[1]) for e in k3m(kc)[1])
+    check("K3M: IDIV AX, the LSB-only write kept, the blank fraction",
+          ke.get("K3M.IDIV.ax") == "F880" and ke.get("K3M.PIT.L1234_56") == "KEEPS" and
+          abs(float(ke.get("K3M.HBL.0060.high_frac", "0")) - 0.24) < 0.01)
+    # --emit-expect carries every analyser's tuples (PKAB, CELLS, K3M and the /REP spread were
+    # computed and dropped), from the one SECTION_ANALYSERS list report() also prints from
+    def expect_has(c, prefix):
+        return any(l.startswith(prefix) for l in expect_lines(c))
+    check("expect: PKAB, CELLS, K3M and REP rows reach the .expect file",
+          expect_has(pc, "PKAB.") and expect_has(cc, "CELLS.TCRWM.31A.shape LATENCY ") and
+          expect_has(kc, "K3M.IDIV.ax F880 ") and expect_has(rc2, "REP.RDLAT.GRW_24A.k0.spread "))
+    check("every report() section analyser is in SECTION_ANALYSERS",
+          {n for n, _ in SECTION_ANALYSERS} == {"OPNA2", "OPNA3", "AUDIT", "FDC2", "OPNA4", "AUDIT2",
+                                                "MISAL", "MISAL2", "RDLAT", "PKAB", "CELLS", "K3M"})
+    # an analyser runs once per capture: report() then expect_lines() must not flag twice
+    import io as _io
+    report(mc, _io.StringIO())
+    expect_lines(mc)
+    check("MISAL: report + expect_lines flag PAST-BLANK once", [f[1] for f in mc.flags] == ["PAST-BLANK"])
+    # a malformed row costs its section, not the report
+    bad = parse(synth([("CAL", CAL_OK), ("K3M", ["X K3M HBL port=0060 polls=2048 art=503 runs=1x,"]),
+                       ("CELLS", cl)]), "BAD.TXT")
+    buf = _io.StringIO()
+    report(bad, buf)
+    check("a malformed K3M row: GRAMMAR on that section, CELLS still decoded",
+          any(f[1] == "GRAMMAR" and "k3m analyser" in f[2] for f in bad.flags) and
+          "CELLS TCRWM" in buf.getvalue() and expect_has(bad, "CELLS.TCRWM.31A.shape"))
+    b8 = parse(synth([("CAL", CAL_OK), ("CELLS", ["X CELLS B8 on_rb=A55A off_rb2=FFFF"])]), "B8.TXT")
+    check("CELLS B8: a row without on_rb2 is incomplete, not 'no plane store lands'",
+          any("row incomplete" in t for t in cells(b8)[0]) and
+          not any("no plane store lands" in t for t in cells(b8)[0]))
+    # two captures: an integrity flag on either side is exit 1; one-capture options refused
+    import os as _os
+    import tempfile as _tf
+    good = synth([("CAL", CAL_OK), ("CELLS", cl)])
+    torn = synth([("CAL", CAL_OK), ("CELLS", cl)], done=False)
+    with _tf.TemporaryDirectory() as td:
+        pa, pb = _os.path.join(td, "A.TXT"), _os.path.join(td, "B.TXT")
+        open(pa, "wb").write(good)
+        open(pb, "wb").write(torn)
+        import contextlib as _cl
+        with _cl.redirect_stdout(_io.StringIO()):
+            r_same = main([pa, pa])
+            r_torn = main([pa, pb])
+            r_opt = main([pa, pa, "--emit-expect", _os.path.join(td, "x.expect")])
+    check("two captures: clean 0, a torn one 1, --emit-expect refused 2",
+          (r_same, r_torn, r_opt) == (0, 1, 2))
+    # O4_BOUNDS are copied from a capture: they must still be its T rows' min and max
+    import pathlib as _pl
+    src_path = _pl.Path(__file__).resolve().parents[3] / O4_BOUNDS_SRC[0]
+    got = {}
+    if src_path.exists():
+        for k, tag in O4_BOUNDS_SRC[1].items():
+            m = re.search(r"^T OPNA2 %s trials=\d+ start_pit=(\d+)/\d+/(\d+)" % tag,
+                          src_path.read_text(errors="replace"), re.M)
+            if m:
+                got[k] = (int(m.group(1)), int(m.group(2)))
+    check("O4_BOUNDS match %s's start_pit min/max" % O4_BOUNDS_SRC[0], got == O4_BOUNDS)
     print("SELFTEST %s" % ("PASS" if not fails else "FAIL (%d)" % len(fails)))
     return 0 if not fails else 1
 
@@ -2344,12 +3258,17 @@ def main(argv):
     if not args or len(args) > 2:
         print(__doc__)
         return 2
+    if len(args) == 2 and ("emit-expect" in opts or "binary" in opts):
+        print("--emit-expect and --binary take ONE capture (two captures are compared)")
+        return 2
     caps = [parse(open(p, "rb").read(), p) for p in args]
     if len(caps) == 2:
         for c in caps:
             for f in c.errors():
                 print("%s: line %d %s %s" % (c.name, *f))
-        return compare(caps[0], caps[1], float(opts["band"]), opts.get("force", False))
+        rc = compare(caps[0], caps[1], float(opts["band"]), opts.get("force", False))
+        # an integrity or trust flag on either side is exit 1, as for one capture
+        return rc if rc else (1 if any(c.errors() for c in caps) else 0)
     cap = caps[0]
     if "binary" in opts:
         _, sha, crc = stamp_fields(open(opts["binary"], "rb").read())

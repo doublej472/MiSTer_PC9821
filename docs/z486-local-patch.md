@@ -7,7 +7,7 @@ reason. The fork's `docs/fork-rebase-policy.md` (inside `src/z486/docs/`) record
 series is kept: a correction is folded into the commit it corrects, and a fork fix is dropped
 when upstream's own implementation passes its fail-first test.
 
-**Vendored commit:** the fork's `d5cf5bd` (branch `xe10-reset-dtr`: the IDTR/GDTR reset limit FFFFh, one commit on `bbe0e95`), which carries its `main` at `bbe0e95` (one testbench-only commit on `8b8fceb`,
+**Vendored commit:** the fork's `fc27b19` (branch `code-review-fixes`: nine commits of the 2026-11 code review on `d5cf5bd`, among them `fc5b4a0`, SAL (group-2 /6) by a count of one writes OF as SHL does, which the Xe10 confirms in all 200 rows of `docs/probes/XE10Z-XE10.TXT`'s SAL section), which carries `d5cf5bd` (the IDTR/GDTR reset limit FFFFh, one commit on `bbe0e95`), which carries the fork's earlier `main` at `bbe0e95` (one testbench-only commit on `8b8fceb`,
 the CPU fixes on `d5d0974`, and the performance series on `6833250`), a plain copy. The tree carries no local patch: the diff map below is the explicit `(none)` row.
 What each fork commit changes, and why, is in the fork's own log.
 
@@ -107,9 +107,9 @@ CPU changes are made in the fork **first**, then re-vendored. Nothing lives only
   in the diff map. It is owed to the fork, and the next re-vendor should leave the map empty
   again.
 - The contract a change must keep or re-report with per-change attribution:
-  `bash tests/pc9821/run_z486_suite.sh` (335/335 at this vendoring; the runner floor is 309), Dhrystone
+  `bash tests/pc9821/run_z486_suite.sh` (338/338 at this vendoring; the runner floor is 309), Dhrystone
   `242611 cy / 121837 instr / CPI 1.991` (`docs/dhrystone-numbers.md`) and the boot golden
-  (`CYCLES used=930528`). A latency-visible change that costs cycles is raised in
+  (`CYCLES used=1706091`). A latency-visible change that costs cycles is raised in
   `docs/trade-candidates.md`.
 
 ## Re-vendoring

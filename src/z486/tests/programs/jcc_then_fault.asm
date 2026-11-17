@@ -28,7 +28,7 @@ gdt:
     dq 0
     dq 0x00cf9b010000ffff    ; 0x08: code,  base 0x00010000, limit 0xFFFFF
     dq 0x00cf93000000ffff    ; 0x10: data,  base 0x00000000, limit 0xFFFFF
-    dq 0x30cf93000001ffff    ; 0x18: stack, base 0x00010000, limit 0xFFFFF
+    dq 0x00cf93010000ffff    ; 0x18: data,  base 0x00010000, limit 0xFFFFF (DS: the image)
     dq 0                     ; 0x20
     dq 0                     ; 0x28
     dq 0                     ; 0x30: the selector under test -- ABSENT
@@ -69,10 +69,13 @@ start:
     cli
     lgdt [cs:gdt_desc]
     lidt [cs:idt_desc]
-    mov ax, 0x10
+    mov ax, 0x18                     ; DS addresses the variables in the image
     mov ds, ax
+    mov ax, 0x10
     mov ss, ax
     mov esp, 0x2ff0
+    mov dword [zero], 0
+    mov dword [cases_ok], 0
 
     ; --- case 1: Jcc NOT taken, fault on the fall-through instruction ---
     mov ax, ES_SELECTOR

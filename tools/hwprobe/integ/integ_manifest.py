@@ -11,7 +11,7 @@ buffer filled with the CD's CD-DA words) shows up as a BAD row with the file off
     integ_manifest.py --image MAIN.img --partition 0 --drive C: --under GAMES --largest 12 \
         --max-bytes 4194304 --out C_INTEG.MAN
 
-    # a floppy image (raw .hdm/.img; convert a D88 first with tools/vfdd2raw.py)
+    # a floppy image (raw .hdm/.img; convert a D88 or Virtual98 .fdd first with tools/fdconv.py)
     integ_manifest.py --image GAME.hdm --drive A: --all --out A_INTEG.MAN
 
     # a CD: an ISO, a PCD (tools/cue2pcd.py) or a raw 2352-byte MODE1 data track
@@ -163,6 +163,39 @@ def selftest() -> int:
                     print(f"FAIL: {name}: {p} read back differently")
                     rc = 1
             print(f"{name}: {'OK' if rc == 0 else 'FAIL'} ({len(found)} files, {'FAT16' if fs.fat16 else 'FAT12'})")
+    # --cd with --cat and with a manifest: the Iso reader through the CLI
+    from fatimg import iso_test_image
+    import contextlib
+    import io
+    iso, iso_files = iso_test_image()
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, 't.iso')
+        with open(p, 'wb') as o:
+            o.write(iso)
+        buf = io.BytesIO()
+
+        class _Out:
+            buffer = buf
+
+            @staticmethod
+            def write(t):
+                buf.write(t.encode())
+        with contextlib.redirect_stdout(_Out):
+            r1 = main(['--cd', p, '--cat', 'sub/b.txt'])
+        got_cat = buf.getvalue()
+        buf.seek(0)
+        buf.truncate()
+        with contextlib.redirect_stdout(_Out):
+            r2 = main(['--cd', p, '--all', '--drive', 'Q'])
+        got_man = buf.getvalue().decode()
+    if r1 != 0 or got_cat != iso_files['SUB\\B.TXT']:
+        print("FAIL: --cd --cat", r1, got_cat[:40])
+        rc = 1
+    want_a = zlib.crc32(iso_files['A.BIN']) & 0xFFFFFFFF
+    if r2 != 0 or f"F {len(iso_files['A.BIN']):08X} {want_a:08X} Q:\\A.BIN" not in got_man:
+        print("FAIL: --cd manifest", r2, got_man[:200])
+        rc = 1
+    print(f"iso: {'OK' if rc == 0 else 'FAIL'}")
     text = manifest_text([('X.BIN', bytes(range(256)) * 5 + b'abc')], 'C:')
     lines = text.split('\r\n')
     want = zlib.crc32(bytes(range(256)) * 5 + b'abc') & 0xFFFFFFFF

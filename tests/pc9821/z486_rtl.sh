@@ -27,6 +27,7 @@ PC9821_Z486_RTL=(
   src/pc9821/core/pc9821_disk_led.sv
   src/pc9821/storage/pc9821_fdc.sv src/pc9821/storage/pc9821_fdd_media.sv
   src/pc9821/common/pc9821_dpram.sv
+  src/pc9821/common/pc9821_static_stage.sv
   src/pc9821/video/pc9821_crtc.sv src/pc9821/core/pc9821_text_mem.sv src/pc9821/video/pc9821_gdc2.sv
   src/pc9821/video/pc9821_cg.sv src/pc9821/video/pc9821_grcg.sv
   src/pc9821/video/pc9821_egc_mem_gate.sv
@@ -39,14 +40,17 @@ PC9821_Z486_RTL=(
   src/pc9821/core/pc9821_dmac.sv
   src/pc9821/core/pc9821_iobus.sv
   src/pc9821/core/pc9821_cpu_reset_gate.sv
+  src/pc9821/core/pc9821_reset_tree.sv
   src/pc9821/core/pc9821_cpu_clk.sv src/pc9821/core/pc9821_cpu_bus_bridge.sv
   src/pc9821/input/pc9821_kbd.sv src/pc9821/input/pc9821_mouse.sv src/pc9821/interrupts/pc9821_pic.sv
   src/pc9821/timers/pc9821_pit.sv src/pc9821/rtc/pc9821_calendar.sv
+  src/pc9821/core/pc9821_xe10_timing_pkg.sv
   src/pc9821/core/pc9821_window_responder.sv
   src/pc9821/core/pc9821_memory_map.sv src/pc9821/core/pc9821_open_bus.sv
   src/pc9821/video/pc9821_pegc.sv
   src/pc9821/core/pc9821_rom_loader.sv src/pc9821/core/pc9821_memory_subsystem.sv
   src/pc9821/core/pc9821_pegc_storebuf.sv
+  src/pc9821/core/pc9821_pegc_xe10_pace.sv
   src/pc9821/core/pc9821_rhythm_loader.sv
   src/pc9821/core/pc9821_egc.sv
   src/pc9821/core/pc9821_device_select.sv
@@ -55,6 +59,7 @@ PC9821_Z486_RTL=(
   src/pc9821/core/pc9821_perf_msg.sv
   src/pc9821/core/pc9821_gfx_msg.sv
   src/pc9821/core/pc9821_wdg_trigger.sv
+  src/pc9821/core/pc9821_trace_trig.sv
   src/pc9821/core/pc9821_dbg_record.sv
   src/pc9821/core/pc9821_dbg_ring.sv
   src/pc9821/core/pc9821_dbg_mux.sv
@@ -64,7 +69,9 @@ PC9821_Z486_RTL=(
   src/pc9821/core/pc9821_gvram_arb.sv src/pc9821/core/pc9821_gvram_share.sv src/pc9821/core/pc9821_gvram_scan.sv
   src/pc9821/core/pc9821_pegc_scan.sv
   src/pc9821/core/pc9821_gvram_mem.sv
+  src/pc9821/core/pc9821_raster_reseed.sv
   src/pc9821/core/pc9821_system.sv
+  src/pc9821/audio/pc9821_snd86_join.sv
   # PC-9801-86 sound (vendored YM2608 OPNA + glue).
   src/opna/pc9821_opna.sv
   # PC-9801-86 sound: the 86-PCM block, the card's other device.

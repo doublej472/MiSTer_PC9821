@@ -35,6 +35,8 @@
 # (/media/fat/screenshots/PC9821). MISTER_CAPTURE_LOCAL=DIR runs the same remote script on THIS
 # machine with DIR as the card's /tmp - the selftest, and a way to try a change without the card.
 set -euo pipefail
+# the header comment up to its first non-comment line (a fixed line range rots)
+usage() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${MISTER_HOST:-root@MiSTer}"
@@ -205,9 +207,9 @@ case "${1:-}" in
   status) run_remote status "${2:-cap}" ;;
   fetch)  cmd_fetch "${2:-cap}" "${3:-$OUT_DIR}" ;;
   decode) shift; cmd_decode "$@" ;;
-  shots)  [ $# -eq 4 ] || { sed -n '2,32p' "$0"; exit 2; }; cmd_shots "$2" "$3" "$4" ;;
-  run)    [ $# -eq 3 ] || { sed -n '2,32p' "$0"; exit 2; }
+  shots)  [ $# -eq 4 ] || { usage; exit 2; }; cmd_shots "$2" "$3" "$4" ;;
+  run)    [ $# -eq 3 ] || { usage; exit 2; }
           run_remote start "$2"; sleep "$3"; run_remote stop "$2"; cmd_fetch "$2"; cmd_decode "$2" --summary ;;
   --selftest) selftest ;;
-  *)      sed -n '2,32p' "$0"; exit 2 ;;
+  *)      usage; exit 2 ;;
 esac

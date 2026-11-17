@@ -2,13 +2,22 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_THROTTLE:
-// The OSD CPU Speed throttle slows the CPU and only the CPU, through the real CPU, bridge, memory and I/O path: at 8 MHz and at 1 MHz a 4096-iteration DEC/JNZ takes the clock ratio times its full-speed time (within 3%), a 12288-dword REP STOSD takes at least one throttled CPU edge per dword (the throttle acts inside the REP, which an instruction-boundary throttle cannot), every timed interval is its CPU-edge count at the selected rate, and the guest's architectural results - a data-dependent checksum over the region re-read after a whole-L1 flush, and the region itself - are identical at every setting, with a CPU reset, an I/O read, burst line fills, the 0x043F flush and an INTA all crossing the gated-clock bridge on the way; and at every setting an IRQ0 the 8259 raises a few platform cycles after it acknowledges IRQ2 (its INT low for less than one throttled CPU clock) is still taken once the IRQ2 handler's IRET sets IF (a 486 samples INTR as a level, so INTR need not be seen low between two requests).
+// The OSD CPU Speed throttle slows the CPU and only the CPU, through the real CPU, bridge, memory and I/O path: at 8 MHz and at 1 MHz a 4096-iteration DEC/JNZ takes the clock ratio times its full-speed time (within 3%), a 12288-dword REP STOSD takes at least one throttled CPU edge per dword (the throttle acts inside the REP, which an instruction-boundary throttle cannot), every timed interval (the REP STOSD and the DEC/JNZ) is its CPU-edge count at the rate the OSD label names (8000 and 1000 kHz, hard-coded from CONF_STR, not read from cpu_throttle's rate table), and the guest's architectural results - a data-dependent checksum over the region re-read after a whole-L1 flush, and the region itself - are identical at every setting, with a CPU reset, an I/O read, burst line fills, the 0x043F flush and an INTA all crossing the gated-clock bridge on the way; and at every setting an IRQ0 the 8259 raises a few platform cycles after it acknowledges IRQ2 (its INT low for less than one throttled CPU clock) is still taken once the IRQ2 handler's IRET sets IF (a 486 samples INTR as a level, so INTR need not be seen low between two requests).
 
 // The guest is tests/pc9821/throttle_guest.s (its POST codes are listed there). Each run is a
 // platform reset with a new cpu_speed_sel; RAM survives it, as on an OSD reset. The expected
-// ratios come from the platform clock and cpu_throttle's own rate table (the RTL's rate_khz(),
-// which tools/check_osd_contract.py ties to the OSD labels), not from a measurement of this
-// RTL; the architectural results are compared against the full-speed run of the same guest.
+// ratios come from the platform clock and the rate each OSD label names (8 MHz, 1 MHz:
+// hard-coded below from CONF_STR, not read from cpu_throttle's rate table), not from a
+// measurement of this RTL; the architectural results are compared against the full-speed run
+// of the same guest.
+//
+// CAN FAIL, proven by hand: this tier is outside tools/bench.py, so tools/mutate_bench.py cannot
+// run it and tests/pc9821/mutations.json holds no entry for it. The proof was a copy of the tree
+// (`git archive HEAD` into .build/) with src/z486/cpu_throttle.sv's `4'd11: rate_khz = 1000;`
+// changed to 1250, run through tests/pc9821/run_throttle.sh: it FAILS with three errors (the
+// 1 MHz DEC/JNZ ran 39.971x its full-speed time against the label's 50.000x, and both the REP
+// STOSD and the DEC/JNZ edge counts miss the requested rate). Repeat it the same way after
+// changing this bench: one build plus about 130 s of simulation.
 
 module tb_pc9821_throttle;
   localparam integer SYS_HZ  = 50_000_000;
@@ -161,8 +170,15 @@ module tb_pc9821_throttle;
   end
 
   function automatic integer rate_khz(input [3:0] sel);
-    // The RTL's own table, read back out of the instance (cpu_throttle.rate_khz).
-    rate_khz = dut.u_cpu_throttle.rate_khz(sel);
+    // The rate each OSD list position NAMES, hard-coded from its label in z486_mister.sv's
+    // CONF_STR (`"O[17:14],CPU Speed,Full,33 MHz,25 MHz,16 MHz,12 MHz,8 MHz,...,1 MHz,..."`:
+    // position 5 = "8 MHz", position 11 = "1 MHz") - NOT read out of cpu_throttle's own
+    // rate_khz table, so a wrong entry there fails here instead of moving the expectation.
+    case (sel)
+      4'd5:    rate_khz = 8000;
+      4'd11:   rate_khz = 1000;
+      default: rate_khz = SYS_KHZ;   // Full (the only other position this bench runs)
+    endcase
   endfunction
 
   // The architectural results of a run.
@@ -283,6 +299,11 @@ module tb_pc9821_throttle;
       edge_t = real'(rep_e[run_i]) * want;
       if (edge_t < real'(rep_t[run_i]) * 0.99 || edge_t > real'(rep_t[run_i]) * 1.01) begin
         $display("FAIL: speed %0d: %0d CPU edges in %0d clk is not the requested rate", sel_of[run_i], rep_e[run_i], rep_t[run_i]);
+        errors = errors + 1;
+      end
+      edge_t = real'(loop_e[run_i]) * want;
+      if (edge_t < real'(loop_t[run_i]) * 0.99 || edge_t > real'(loop_t[run_i]) * 1.01) begin
+        $display("FAIL: speed %0d: the DEC/JNZ's %0d CPU edges in %0d clk is not the requested rate", sel_of[run_i], loop_e[run_i], loop_t[run_i]);
         errors = errors + 1;
       end
       if (checksum[run_i] !== checksum[0] || region_hash[run_i] !== region_hash[0]) begin

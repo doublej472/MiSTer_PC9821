@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_KBD_RESET:
-// The 8251 command register's bit 3 resets the keyboard on its 1-to-0 transition: the receive status, the IRQ, the pending command responses and the queued key bytes are all discarded, which is the transition the ITF's own POST performs and which NP2kai implements as keyboard_resetsignal().
+// The 8251 command register's bit 3 resets the keyboard on its 1-to-0 transition: the receive status, the IRQ, the pending command responses (an unread 0x9F answer and the bytes still owed after it) and the queued key bytes are all discarded, while a bit-3-clear write after a bit-3-clear command discards nothing, which is the transition the ITF's own POST performs and which NP2kai implements as keyboard_resetsignal().
 //
 // ---- the bench's own account of where this expectation comes from ----
 // [source 1: the firmware dump, BANK4.BIN]
@@ -173,6 +173,17 @@ module tb_pc9821_kbd_reset;
       errors = errors + 1;
     end
 
+    // A command write with bit 3 clear that FOLLOWS one with bit 3 clear is no transition
+    // (NP2kai keyboard_o43 tests `!(dat & 0x08) && (keybrd.cmd & 0x08)`): nothing is discarded.
+    write_port(1'b1, 8'h05);
+    if (!dut.status_reg[1]) fail("RXRDY cleared by a bit-3-clear write after a bit-3-clear command");
+    @(posedge clk); #1;
+    if (dut.fifo_cnt !== 5'd3) begin
+      $display("FAIL: a bit-3-clear write after a bit-3-clear command left %0d queued bytes, want 3",
+               dut.fifo_cnt);
+      errors = errors + 1;
+    end
+
     // THE TRANSITION. 0x3A has bit 3 set; 0x32 clears it. They differ in no
     // other bit, which is why the firmware writes both.
     write_port(1'b1, 8'h3A);
@@ -194,6 +205,33 @@ module tb_pc9821_kbd_reset;
     send_key(1'b1, 1'b0, 8'h76);   // Esc
     read_byte(8'h00);              // NEC make code for Escape
 
+    // A pending command response is discarded too (keyboard_resetsignal clears keybrd.ctrls):
+    // 0x9F answers FA A0 80; the FA is left unread and the reset is performed behind it, so
+    // neither the FA nor the A0 80 still owed may reach the guest.
+    write_port(1'b0, 8'h9F);
+    repeat (8) @(posedge clk); #1;
+    if (!dut.status_reg[1]) fail("0x9F: its first response byte was not delivered");
+    write_port(1'b1, 8'h3A);
+    write_port(1'b1, 8'h32);
+    write_port(1'b1, 8'h05);
+    if (dut.status_reg[1]) fail("RXRDY of the 0x9F response survived the bit-3 transition");
+    // NP2kai paces responses at one byte per transfer tick (50 MHz / 1280 = 39063 clk here):
+    // wait three ticks for any surviving response byte
+    timeout_count = 0;
+    while (!irq && timeout_count < 120_000) begin
+      @(posedge clk);
+      timeout_count = timeout_count + 1;
+    end
+    if (irq) begin
+      @(negedge clk); a0 = 0; cs = 1; rd = 1;
+      #1 value = dout;
+      @(posedge clk); @(negedge clk); cs = 0; rd = 0;
+      $display("FAIL: the guest got %02x after the reset: a pending 0x9F response survived", value);
+      errors = errors + 1;
+    end
+    send_key(1'b0, 1'b0, 8'h76);   // Esc released: the next byte is its break
+    read_byte(8'h80);
+
     // ==== VERDICT ====
     if (errors == 0) begin
       $display("TB_PC9821_KBD_RESET: PASS");
@@ -202,7 +240,7 @@ module tb_pc9821_kbd_reset;
   end
 
   initial begin
-    #100_000;
+    #3_000_000;
     $fatal(1, "TB_PC9821_KBD_RESET: TIMEOUT");
   end
 

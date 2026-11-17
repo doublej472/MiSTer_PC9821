@@ -45,12 +45,12 @@
 //     source has to be measured rather than assumed. A sweep drives a distinct value every P
 //     clk_sys and counts the destination's transitions: P = 38 (the OPNA's own rate) must deliver
 //     every value, P = 4 (10x over) must drop, and the smallest P that still delivers them all is
-//     printed as the ceiling. [source: the module's new_value/ack loop; AUDIO_OUTPUT_AUDIT.md (b)]
+//     printed as the ceiling. [source: the module's new_value/ack loop]
 //
 // THE WIDTH IS THE SHIPPED ONE. W below is 20, the bus z486_mister.sv crosses since a194031e
-// widened the -86 chain (A-1): an audit of the crossing against the framework's audio output
-// contract (AUDIO_OUTPUT_AUDIT.md, D2) found this bench still exercising 16x2, which is the
-// pre-A-1 instance. The module is width-generic, so the contract checks were never wrong, but
+// widened the -86 chain: an audit of the crossing against the framework's audio output
+// contract found this bench still exercising 16x2, which is the
+// pre-widening instance. The module is width-generic, so the contract checks were never wrong, but
 // the evidence now spans every bit of the vector the design actually crosses.
 //
 // Nothing here asserts a magnitude taken from a capture; the checks are the module's stated

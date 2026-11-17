@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SPRITE_SCENE: models a busy Touhou-frame graphics scene - many EGC 0x3100 sprite put units per frame plus the plain plane-window restores - against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, and profiles the write path end to end: the EGC units per clk_sys, the GVRAM plane-byte rate in MB/s, the backend transaction mix (the partial-byte RMW the DQM-less module would need, the full-word write-backs, the fill reads), the write-combining buffer's hit rate, and the scanout line fetch's worst latency against the 2014 clk_sys raster budget while the scene saturates the client. It ASSERTS the scene's writes land by value (the EGC 0x3100 read-then-write copies the source plane bytes to the destination, a plain restore reads back), that NO partial-byte write reaches the controller (the buffer's whole point), and that the scanout still meets its deadline under the load.
+// TB_PC9821_SPRITE_SCENE: models a busy Touhou-frame graphics scene - many EGC 0x3100 sprite put units per frame plus the plain plane-window restores - against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, and profiles the write path end to end: the EGC units per clk_sys, the GVRAM plane-byte rate in MB/s, and the scanout line fetch's worst latency against the 2014 clk_sys raster budget while the scene saturates the client. It ASSERTS the scene's writes land by value (the EGC 0x3100 read-then-write copies the source plane bytes to the destination, a plain restore reads back), that the EGC put reads its source dword ONCE (no more than 320 GVRAM reads accepted from the EGC for 64 puts: four column reads each, where the old re-read doubled them), and that the scanout still meets its deadline under the load.
 //
 // WHY THIS EXISTS is the profile the claim describes: the instrument that decides whether the
 // plain-path client's per-lane C_NEXT/C_VAL/C_WAIT walk, the
@@ -30,6 +30,12 @@ module tb_pc9821_sprite_scene;
   // whole time.
   localparam integer HEAVY_PUTS         = 128;
   localparam integer HEAVY_RESTORES     = 512;
+  localparam integer PUT_SPAN           = FRAMES * PUTS_PER_FRAME;   // phases A-C's put columns
+
+  // The put source: distinct per plane and per dword, equal in a dword's two 16-bit halves.
+  function automatic [7:0] src_byte(input integer plane, input [14:0] col);
+    src_byte = 8'((col >> 2) * 8'h1D + plane * 8'h47 + (col & 1) * 8'h80);
+  endfunction
 
   reg clk = 0;
   always #(CYCLE_NS/2) clk = ~clk;
@@ -103,19 +109,14 @@ module tb_pc9821_sprite_scene;
   endfunction
 
   integer client_accesses = 0;    // every CPU access the backend accepted (cc_valid & cc_ready)
-  integer wcb_hits        = 0;    // the buffer's coalesced hits (a lane merged with NO SDRAM access)
-  integer wcb_fills       = 0;    // the buffer's lane misses (a read fill had to fetch the word)
-  integer cb_txns         = 0;    // backend transactions the controller accepted
-  integer cb_rmw          = 0;    // ... that were PARTIAL-byte writes: the DQM-less RMW
-  integer cb_fullwr       = 0;    // ... that were full-word write-backs
-  integer cb_reads        = 0;    // ... that were reads (fills / line fetches / through reads)
   integer plane_bytes     = 0;    // plane bytes the GVRAM actually committed
   integer egc_read_units  = 0;
   integer egc_write_units = 0;
+  integer egc_arb_reads   = 0;    // EGC READ requests the arbiter accepted (its GVRAM reads)
 
   always @(posedge clk) begin
     // The GVRAM is block RAM now: there is no backend transaction and no write-combining
-    // buffer, so the cb_/wcb_ counters stay at zero and the split column reads simply.
+    // buffer to count, so the profile observes the arbiter's own client handshakes.
     if (dut.u_arb.cc_valid && dut.u_arb.cc_ready) client_accesses <= client_accesses + 1;
     // Plane bytes the plain path commits: one byte per enabled lane of the access. The
     // direction is the client's own LATCHED `c_write_q`, not the live `cpu_write`: the core
@@ -131,6 +132,7 @@ module tb_pc9821_sprite_scene;
     // the direction it latched for that unit. It used to read two private state numbers, which is
     // why the sequencer's state renumbering broke it: observe the
     // handshake, not the encoding.
+    if (dut.u_arb.cc_egc_ready && !dut.u_egc.cl_write) egc_arb_reads <= egc_arb_reads + 1;
     if (dut.u_egc.cpu_ready) begin
       if (dut.u_egc.unit_write) egc_write_units <= egc_write_units + 1;
       else                    egc_read_units  <= egc_read_units + 1;
@@ -339,24 +341,27 @@ module tb_pc9821_sprite_scene;
     repeat (20) @(posedge clk);
 
 
-    // ---- Seed 64 columns of BOTH pages and all four planes with distinct values, so the EGC
-    // copy below has something to move and the destination can be checked by value. Page 1
-    // (the source) carries 0xA0+plane; page 0 (the destination) carries 0x50+plane. ----
-    for (i = 0; i < 64; i = i + 1) begin
+    // ---- Seed the WHOLE put range of phases A-C (0x1000..0x13FF, 1024 columns) on BOTH pages
+    // and all four planes, so every put the scene issues has something to move and every
+    // destination can be checked by value. Page 1 (the source) carries src_byte(), which differs
+    // per plane and per dword but is the SAME in a dword's two 16-bit halves (a 32-bit 0x3100
+    // put stores the pattern register its LAST unit latched to both units - see
+    // tb_pc9821_egc_post_walk - so only such a source makes the copy a dword-for-dword
+    // expectation); page 0 (the destination) carries its complement. ----
+    for (i = 0; i < PUT_SPAN; i = i + 1) begin
       off = 15'h1000 + i[14:0];
       for (s = 0; s < 4; s = s + 1) begin
         // Lane = off[1:0], so the byte enable names the word the store lands in and the data
         // replicates the byte across the four lanes.
-        plain_store_pg(1'b0, s[1:0], off, 4'h1 << off[1:0], {4{8'h50 + s[7:0]}});
-        plain_store_pg(1'b1, s[1:0], off, 4'h1 << off[1:0], {4{8'hA0 + s[7:0]}});
+        plain_store_pg(1'b0, s[1:0], off, 4'h1 << off[1:0], {4{~src_byte(s, off)}});
+        plain_store_pg(1'b1, s[1:0], off, 4'h1 << off[1:0], {4{src_byte(s, off)}});
       end
     end
 
     // ============================================================
     // CORRECTNESS FIRST: an EGC 0x3100 put copies the source plane bytes to the destination.
-    // The region is clean here (the scene below overwrites it afterwards). The unit is a
-    // 16-bit (2-column) copy over the dword at 0x1000, so page 0's columns 0x1000/0x1001 must
-    // take the source values and 0x1002/0x1003 must be untouched.
+    // The put is a 32-bit (4-column) copy of the dword at 0x1000, so page 0's whole dword must
+    // take the source values on every plane.
     // ============================================================
     begin : check_copy
       sprite_put(15'h1000);
@@ -365,10 +370,10 @@ module tb_pc9821_sprite_scene;
       // 0x1000 must take the source values.
       for (s = 0; s < 4; s = s + 1) begin
         plain_load_pg(1'b0, s[1:0], 15'h1000, d0);
-        if (d0[7:0]   !== (8'hA0 + s[7:0])) mism = mism + 1;
-        if (d0[15:8]  !== (8'hA0 + s[7:0])) mism = mism + 1;
-        if (d0[23:16] !== (8'hA0 + s[7:0])) mism = mism + 1;
-        if (d0[31:24] !== (8'hA0 + s[7:0])) mism = mism + 1;
+        if (d0[7:0]   !== src_byte(s, 15'h1000)) mism = mism + 1;
+        if (d0[15:8]  !== src_byte(s, 15'h1001)) mism = mism + 1;
+        if (d0[23:16] !== src_byte(s, 15'h1002)) mism = mism + 1;
+        if (d0[31:24] !== src_byte(s, 15'h1003)) mism = mism + 1;
       end
       if (mism != 0)
         fail("the EGC 0x3100 put did not put the source plane bytes at the destination");
@@ -379,33 +384,31 @@ module tb_pc9821_sprite_scene;
     // ---- PHASE A: EGC puts alone. Measures the EGC's own unit rate and the write path it
     // drives - the sprite blit. ----
     repeat (200) @(posedge clk);
-    client_accesses = 0; wcb_hits = 0; wcb_fills = 0; cb_txns = 0; cb_rmw = 0;
-    cb_fullwr = 0; cb_reads = 0; plane_bytes = 0; egc_read_units = 0; egc_write_units = 0;
+    client_accesses = 0;
+    plane_bytes = 0; egc_read_units = 0; egc_write_units = 0;
+    egc_arb_reads = 0;
     c0 = cyc;
     for (i = 0; i < 64; i = i + 1) sprite_put(15'h1000 + i[14:0]);
     c1 = cyc;
     $display("NOTE sprite_scene: A EGC 0x3100 puts alone: %0d read units + %0d write units in %0d clk_sys",
              egc_read_units, egc_write_units, c1 - c0);
+    $display("NOTE sprite_scene:   EGC GVRAM read requests accepted: %0d", egc_arb_reads);
     $display("NOTE sprite_scene:   EGC units/cycle = %0.4f (%0d units), plane bytes %0d, %0.1f MB/s",
              (egc_read_units + egc_write_units) * 1.0 / (c1 - c0),
              egc_read_units + egc_write_units, plane_bytes,
              plane_bytes * 1.0 * (FREQ/1_000_000.0) / (c1 - c0));
-    $display("NOTE sprite_scene:   client accesses %0d, WCB lane hits %0d / misses %0d (%0d%% hit rate)",
-             client_accesses, wcb_hits, wcb_fills,
-             ((wcb_hits + wcb_fills) == 0) ? 0 : (wcb_hits * 100) / (wcb_hits + wcb_fills));
-    $display("NOTE sprite_scene:   backend: %0d read(s), %0d full-word write(s), %0d RMW (partial) write(s)",
-             cb_reads, cb_fullwr, cb_rmw);
+    $display("NOTE sprite_scene:   client accesses %0d", client_accesses);
     // The EGC 0x3100 put fetches its source dword ONCE (4 column reads) and reuses it
     // for the two 16-bit units. The pre-fix re-read doubled this to ~472; bound it well
     // below that so a reintroduced re-read fails here.
-    if (cb_reads > 320)
-      fail("the EGC put re-read its source dword (backend reads > 320 for 64 puts)");
+    if (egc_arb_reads > 320)
+      fail("the EGC put re-read its source dword (GVRAM reads from the EGC > 320 for 64 puts)");
 
     // ---- PHASE B: plain plane-window restores alone. Four planes of one column, 16-bit
     // stores, which is TH01's egc_copy_rect_1_to_0_16 restore shape. ----
     repeat (200) @(posedge clk);
-    client_accesses = 0; wcb_hits = 0; wcb_fills = 0; cb_txns = 0; cb_rmw = 0;
-    cb_fullwr = 0; cb_reads = 0; plane_bytes = 0;
+    client_accesses = 0;
+    plane_bytes = 0;
     c0 = cyc;
     for (i = 0; i < 256; i = i + 1) begin
       off = 15'h2000 + i[14:0];
@@ -415,19 +418,15 @@ module tb_pc9821_sprite_scene;
     c1 = cyc;
     $display("NOTE sprite_scene: B plain 16-bit restores alone: %0d plane bytes in %0d clk_sys = %0.1f MB/s",
              plane_bytes, c1 - c0, plane_bytes * 1.0 * (FREQ/1_000_000.0) / (c1 - c0));
-    $display("NOTE sprite_scene:   client accesses %0d, WCB lane hits %0d / misses %0d (%0d%% hit rate)",
-             client_accesses, wcb_hits, wcb_fills,
-             ((wcb_hits + wcb_fills) == 0) ? 0 : (wcb_hits * 100) / (wcb_hits + wcb_fills));
-    $display("NOTE sprite_scene:   backend: %0d read(s), %0d full-word write(s), %0d RMW (partial) write(s)",
-             cb_reads, cb_fullwr, cb_rmw);
+    $display("NOTE sprite_scene:   client accesses %0d", client_accesses);
 
     // ---- PHASE C: the busy scene - puts + restores + the scanout contending ----
     repeat (200) @(posedge clk);
     scan_enable    = 1'b1;
     scan_page      = 1'b0;
     scan_line_base = 15'h1000;
-    client_accesses = 0; wcb_hits = 0; wcb_fills = 0; cb_txns = 0; cb_rmw = 0;
-    cb_fullwr = 0; cb_reads = 0; plane_bytes = 0; egc_read_units = 0; egc_write_units = 0;
+    client_accesses = 0;
+    plane_bytes = 0; egc_read_units = 0; egc_write_units = 0;
     scan_lines = 0; scan_misses = 0; scan_worst = 0; scan_inflight = 0;
     c0 = cyc;
     for (f = 0; f < FRAMES; f = f + 1) begin
@@ -448,11 +447,7 @@ module tb_pc9821_sprite_scene;
     $display("NOTE sprite_scene:   GVRAM plane-write rate = %0.1f MB/s, EGC units/cycle = %0.4f",
              plane_bytes * 1.0 * (FREQ/1_000_000.0) / (c1 - c0),
              (egc_read_units + egc_write_units) * 1.0 / (c1 - c0));
-    $display("NOTE sprite_scene:   client accesses %0d, WCB lane hits %0d / misses %0d (%0d%% hit rate)",
-             client_accesses, wcb_hits, wcb_fills,
-             ((wcb_hits + wcb_fills) == 0) ? 0 : (wcb_hits * 100) / (wcb_hits + wcb_fills));
-    $display("NOTE sprite_scene:   backend: %0d read(s), %0d full-word write(s), %0d RMW (partial) write(s)",
-             cb_reads, cb_fullwr, cb_rmw);
+    $display("NOTE sprite_scene:   client accesses %0d", client_accesses);
     $display("NOTE sprite_scene:   scanout: %0d line(s) completed, worst %0d clk_sys of the %0d budget, %0d missed",
              scan_lines, scan_worst, LINE_BUDGET, scan_misses);
     $display("NOTE sprite_scene:   flush: max %0d clk_sys, total %0d clk_sys; scanout fetch-start worst %0d clk_sys",
@@ -463,6 +458,28 @@ module tb_pc9821_sprite_scene;
     plain_load(2'd0, 15'h2000 + vo[14:0], rd);
     if ((rd & 32'h0000_00FF) !== 8'hA5)
       fail("a busy-scene plain restore did not read back the byte it stored");
+    // ---- CORRECTNESS: EVERY put of phases A-C landed. Their destinations (0x1000 + vo, vo <
+    // FRAMES * PUTS_PER_FRAME = PUT_SPAN) are disjoint from the restores (0x2000 and up), so
+    // page 0 there must equal the page-1 source on every plane and column, whatever the
+    // scanout contention did to the order. ----
+    mism = 0;
+    for (i = 0; i < PUT_SPAN; i = i + 4) begin
+      off = 15'h1000 + i[14:0];
+      for (s = 0; s < 4; s = s + 1) begin
+        plain_load_pg(1'b0, s[1:0], off, d0);
+        for (integer bk = 0; bk < 4; bk = bk + 1)
+          if (d0[8*bk +: 8] !== src_byte(s, off + 15'(bk))) begin
+            if (mism < 6)
+              $display("FAIL sprite_scene: put destination plane %0d col %04x = %02x, want %02x",
+                       s, off + 15'(bk), d0[8*bk +: 8], src_byte(s, off + 15'(bk)));
+            mism = mism + 1;
+          end
+      end
+    end
+    if (mism != 0)
+      fail("a busy-scene EGC put did not land its source bytes at the destination");
+    else
+      $display("NOTE sprite_scene: all %0d put destination columns x 4 planes carry the source", PUT_SPAN);
 
     // ---- PHASE D: the HEAVIER scene - the real first level's sprite load, continuous. The
     // put and restore counts are multiplied and the inter-frame gaps are gone, so the client
@@ -471,8 +488,8 @@ module tb_pc9821_sprite_scene;
     scan_enable    = 1'b1;
     scan_page      = 1'b0;
     scan_line_base = 15'h1000;
-    client_accesses = 0; wcb_hits = 0; wcb_fills = 0; cb_txns = 0; cb_rmw = 0;
-    cb_fullwr = 0; cb_reads = 0; plane_bytes = 0; egc_read_units = 0; egc_write_units = 0;
+    client_accesses = 0;
+    plane_bytes = 0; egc_read_units = 0; egc_write_units = 0;
     scan_lines = 0; scan_misses = 0; scan_worst = 0; scan_inflight = 0;
     flush_t0 = 0; flush_cycles = 0; flush_max = 0; scan_start_lat = 0; scan_start_worst = 0;
     c0 = cyc;
@@ -494,8 +511,6 @@ module tb_pc9821_sprite_scene;
     $display("NOTE sprite_scene:   GVRAM plane-write rate = %0.1f MB/s, EGC units/cycle = %0.4f",
              plane_bytes * 1.0 * (FREQ/1_000_000.0) / (c1 - c0),
              (egc_read_units + egc_write_units) * 1.0 / (c1 - c0));
-    $display("NOTE sprite_scene:   backend: %0d read(s), %0d full-word write(s), %0d RMW (partial) write(s)",
-             cb_reads, cb_fullwr, cb_rmw);
     $display("NOTE sprite_scene:   scanout: %0d line(s), worst %0d clk_sys of %0d, %0d missed; flush max %0d clk_sys; fetch-start worst %0d clk_sys",
              scan_lines, scan_worst, LINE_BUDGET, scan_misses, flush_max, scan_start_worst);
 
@@ -508,19 +523,14 @@ module tb_pc9821_sprite_scene;
     if (client_accesses == 0)
       fail("the busy scene accepted no client access");
 
-    // The write-combining buffer's whole point: no partial-byte write may reach the DQM-less
-    // controller (it would be a read-modify-write). Everything is merged first or written full.
-    if (cb_rmw != 0)
-      fail("a partial-byte write reached the controller: the write-combining buffer did not merge it");
-
     // The scanout still meets its deadline under the busy scene.
     if (scan_lines == 0)
       fail("the scanout completed no line while the scene ran");
     if (scan_misses != 0)
       fail("a scanout line missed its deadline under the busy scene");
 
-    $display("NOTE sprite_scene: scanout lines %0d, worst %0d, misses %0d; cb_txns %0d",
-             scan_lines, scan_worst, scan_misses, cb_txns);
+    $display("NOTE sprite_scene: scanout lines %0d, worst %0d, misses %0d",
+             scan_lines, scan_worst, scan_misses);
 
     // ==== VERDICT ====
     if (errors == 0) begin

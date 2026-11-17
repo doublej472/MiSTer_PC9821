@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PCM86:
-// The PC-9801-86's 86-PCM block through the real I/O bus: 0xA460 answering the board sound ID 0x40 with the extension latch in bit 0 and the ID nibble read-only, 0xA468 and 0xA46A reading back what was written with 0xA46A multiplexed between the IRQ threshold and the DAC control and the reset values 0x00 and 0x32, 0xA466 full/empty/phase status whose full bit only a real 32 KiB buffer can set, the drain stopping while playback is disabled and then consuming one sample frame per sample period at the selected rate, the 16-bit big-endian (mono and the reset format's stereo, left word first) and 8-bit left-justified sample decode as an exact audio level, and the buffer-low interrupt at 0xA468 bit 4 as a LEVEL that is gated by the IRQ enable (bit 5), that re-asserts on a bit-4-clear write while the buffer is still below threshold, and that clears only when the level is no longer true. It does NOT cover DMA, which neither reference models, and it does not assert the analogue output.
+// The PC-9801-86's 86-PCM block through the real I/O bus: 0xA460 answering the board sound ID 0x40 with the extension latch in bit 0 and the ID nibble read-only, 0xA468 and 0xA46A reading back what was written with 0xA46A multiplexed between the IRQ threshold and the DAC control and the reset values 0x00 and 0x32, 0xA466 full/empty/phase status whose full bit only a real 32 KiB buffer can set, the drain stopping while playback is disabled and then consuming one sample frame per sample period at the selected rate, the 16-bit big-endian (mono and the reset format's stereo, left word first) and 8-bit left-justified sample decode as an exact audio level, the DAC volume law sample * vol / 15 within one LSB at vol5 1 and 7 with a 0xA466 write whose top bits are not 101 ignored, and the buffer-low interrupt at 0xA468 bit 4 as a LEVEL that is gated by the IRQ enable (bit 5), that re-asserts on a bit-4-clear write while the buffer is still below threshold, and that clears only when the level is no longer true. It does NOT cover DMA, which neither reference models, and it does not assert the analogue output.
 
 
 // The DUTs are pc9821_iobus plus pc9821_pcm86 wired exactly as pc9821_system
@@ -138,6 +138,7 @@ module tb_pc9821_pcm86;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -460,6 +461,41 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(100_000_000)) pcm86 (
                pcm_snd_l, dac_scale(16'sh1234));
       errors = errors + 1;
     end
+    // ---- 7a. the VOLUME LAW at intermediate steps, and the 0xA466 write gate ----
+    // The reference law is sample * vol / 15 (qemu pc98-opna.c:361; NP2kai pcm86io.c:50-53
+    // takes vol5 = (~val) & 15 only when (val & 0xE0) == 0xA0 and ignores every other
+    // write). A 0x4000 frame at vol5 = 1 (0xAE) and 7 (0xA8) must come out at
+    // 16384 * vol / 15 within one LSB (1092.3, 7645.9), and a write whose top bits are not
+    // 101 (0x80 | 0x0F = "vol5 0" if it were taken, 0xC1 = "vol5 14") must leave vol5 7.
+    begin : vol_law
+      integer vi, want, got;
+      reg [7:0] vw [0:3];
+      integer   vv [0:3];
+      vw[0] = 8'hAE; vv[0] = 1;
+      vw[1] = 8'hA8; vv[1] = 7;
+      vw[2] = 8'h8F; vv[2] = 7;     // top bits 100: ignored, vol5 stays 7
+      vw[3] = 8'hC1; vv[3] = 7;     // top bits 110: ignored, vol5 stays 7
+      for (vi = 0; vi < 4; vi = vi + 1) begin
+        write_byte(16'h0A466, vw[vi]);
+        write_byte(16'h0A46C, 8'h40);
+        write_byte(16'h0A46C, 8'h00);
+        seen = 1'b0;
+        for (n = 0; n < 20000 && !seen; n = n + 1) begin
+          @(posedge clk);
+          if (count == 16'd0) seen = 1'b1;
+        end
+        repeat (4) @(posedge clk);
+        want = (16384 * vv[vi]) / 15;
+        got  = pcm_snd_l;
+        if (!seen) fail("a volume-law frame never drained");
+        else if (got < want - 1 || got > want + 1) begin
+          $display("FAIL: 0xA466 <- %02x: a 0x4000 frame came out at %0d, expected %0d +/- 1 (16384 * %0d / 15)",
+                   vw[vi], got, want, vv[vi]);
+          errors = errors + 1;
+        end
+      end
+      write_byte(16'h0A466, 8'hA0);   // back to full volume for what follows
+    end
     // 16-bit STEREO (0xA46A format 3, the card's reset format 0x32): the frame is
     // the LEFT word then the RIGHT word, each high byte first - NP2kai
     // pcm86stereo16 (sound/pcm86g.c:127-133) takes `PCM86GET16(pcm86, dat);
@@ -500,6 +536,13 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(100_000_000)) pcm86 (
     //         buffer-low interrupt -------------------------------------
     // Stop playback and clear the interrupt, then fill the whole logical buffer
     // with playback off: the count must saturate at 0x8000 and the full bit set.
+    // Bit 3 low first and bytes in the buffer, so the reset below is a real 0->1 edge on a
+    // non-empty buffer (the write above already had bit 3 set and left it empty).
+    write_byte(16'h0A468, 8'h00);      // bit 3 low, playback off
+    write_byte(16'h0A46C, 8'h11);
+    write_byte(16'h0A46C, 8'h22);
+    if (count !== 16'd2)
+      fail("two bytes written with playback off did not leave the count at 2");
     write_byte(16'h0A468, 8'h08);      // buffer reset (bit 3, 0->1 edge)
     if (count !== 16'd0)
       fail("the 0xA468 bit-3 buffer reset did not empty the count");
@@ -571,7 +614,7 @@ pc9821_pcm86 #(.SYS_CLOCK_HZ(100_000_000)) pcm86 (
     // the latched flag on read even though the flag and the level are still true
     // (NP2kai pcm86gen_intrq returns FALSE when !(fifo & 0x20), pcm86c.c:472).
     // The irq WIRE is that same query, not the raw latched flag: the wire must
-    // follow bit 4 low here, because the edge-latched PIC (pc9821_pic.sv:168)
+    // follow bit 4 low here, because the edge-latched PIC (pc9821_pic.sv:178)
     // gets no re-enable edge from a wire held high through the mask
     // (tb_pc9821_pcm86_irqmask owns the re-edge behaviour).
     write_byte(16'h0A468, 8'h90);   // playback on, bit 4 set (no clear), bit 5 clear

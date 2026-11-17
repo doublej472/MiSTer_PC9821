@@ -15,7 +15,7 @@
 // recorded divergence).
 //
 // WHAT IS MODELLED. MMD never enters UART mode (a scan of all 7,071 bytes finds no `mov al,3F`;
-// REPORT sec.2), so it speaks the intelligent-mode byte-injection subset: `0xD0` (want to send
+// the scan itself is not kept in the tree), so it speaks the intelligent-mode byte-injection subset: `0xD0` (want to send
 // data) + data-port bytes for a channel message, `0xDF` + `0xF0..0xF7` for system exclusive,
 // `0xE0/0xE1/0xE2/0xE7` + one follow byte, and it requires an ACK (0xFE) for EVERY command
 // (NP2kai mpu98ii.c:1054 `setrecvdata(MPUMSG_ACK);`) plus an H.CLK byte (0xFD) on the card's IRQ
@@ -93,7 +93,7 @@ module pc9821_mpu #(
   // matter l is 1000 - the card's power-up default (tempo 100, inttimebase 120/24 = 5, reltempo
   // 0x40) and MMD's own (0xE0 250, 0xC2 2, reltempo 0x40) - so stepclock is SYS_CLOCK_HZ/200 in
   // both, and that is the static rate built here. The general tempo law is [OPEN]
-  // (REPORT sec.7.4.3: the true law is capture-pending and no capture exists), so this is
+  // (capture-pending: no capture of it exists), so this is
   // deliberately the rate the reference gives for the driver that would use it.
   localparam integer HCLK_STEP_CYCLES_I = SYS_CLOCK_HZ / 200;
   localparam [19:0]  HCLK_STEP_CYCLES   = HCLK_STEP_CYCLES_I[19:0];
@@ -148,7 +148,7 @@ module pc9821_mpu #(
   reg  [6:0]  hclk_tick;         // stepclocks within the current 0xE7 step
   reg  [6:0]  hclk_quarter;      // 1..64, from the 0xE7 follow byte
   reg  [1:0]  hclk_dither;       // the same byte's low two bits (hclk_step1's row)
-  reg  [2:0]  hclk_phase;        // the four-phase dither's index
+  reg  [1:0]  hclk_phase;        // the four-phase dither's index (NP2kai hclk_cnt & 3)
   reg         hclk_kick;         // one immediate tick on 0x95; see the note at its arm
 
   integer i;
@@ -224,13 +224,21 @@ module pc9821_mpu #(
   // hclk_step1[data & 3][i];`, the table at :127-128), and midiint (:353-376) emits one 0xFD
   // per hclk_step stepclocks.
   // MMD sends 0xE7 04, whose quarter is 1 and whose dither row is all zeroes.
+  // THE DITHER IS FOUR-PHASE, the table's rows {1,0,0,0}, {1,0,1,0}, {1,1,1,0} indexed by a
+  // counter that wraps at 4 (`mpu98.hclk_step[mpu98.hclk_cnt & 3]`, :359): a mean of q + f/4.
+  // The MPU-PC98 on the Xe10 shows exactly that on every dithered rate: with tempo 100 and
+  // timebase 120 (a 5 ms clock), E7 05..07 and 09..0B give the 32-interval sequences (extra
+  // clocks per FD) 1000..., 0101..., 0111..., 0100..., 1010..., 1011..., each 4-periodic and
+  // each a rotation of its row (docs/probes/XE10Z-XE10.TXT:224-230, e.g. `MPU v=06 ...
+  // d=05F4,0C31,05B9,0BF3,...` = 1, 2, 1, 2 clocks of 1524 ARTIC ticks). A 3-bit phase with
+  // `<=` rows was an eight-phase dither (q + f/8, row 2 as 1,1,0,0) and is refuted there.
   reg [6:0] hclk_step_eff;
   always @(*) begin
     case (hclk_dither)
       2'd0:    hclk_step_eff = hclk_quarter;
-      2'd1:    hclk_step_eff = hclk_quarter + ((hclk_phase == 3'd0) ? 7'd1 : 7'd0);
-      2'd2:    hclk_step_eff = hclk_quarter + ((hclk_phase <= 3'd1) ? 7'd1 : 7'd0);
-      default: hclk_step_eff = hclk_quarter + ((hclk_phase <= 3'd2) ? 7'd1 : 7'd0);
+      2'd1:    hclk_step_eff = hclk_quarter + ((hclk_phase == 2'd0) ? 7'd1 : 7'd0);
+      2'd2:    hclk_step_eff = hclk_quarter + ((hclk_phase[0] == 1'b0) ? 7'd1 : 7'd0);
+      default: hclk_step_eff = hclk_quarter + ((hclk_phase != 2'd3) ? 7'd1 : 7'd0);
     endcase
   end
 
@@ -293,7 +301,7 @@ module pc9821_mpu #(
       burst_on <= 1'b0; burst_ch <= 4'd0; burst_ph <= 2'd0;
       pend_valid <= 1'b0; pend_byte <= 8'd0;
       hclk_on <= 1'b0; hclk_sub <= 20'd0; hclk_tick <= 7'd0;
-      hclk_quarter <= 7'd1; hclk_dither <= 2'd0; hclk_phase <= 3'd0; hclk_kick <= 1'b0;
+      hclk_quarter <= 7'd1; hclk_dither <= 2'd0; hclk_phase <= 2'd0; hclk_kick <= 1'b0;
       // mpu98ii_reset (:1178 `mpu98.data = MPUMSG_ACK;`) leaves the DATA register holding an
       // ACK, which is the byte MMD's presence probe reads at 0xE0D0 before it has asked for
       // anything.
@@ -343,14 +351,14 @@ module pc9821_mpu #(
         // THAT IS A DELIBERATE DEVIATION: MMD waits for the 0xFD inside a 4000-iteration
         // `out 0x5F` loop (CS:0x167E), and this core's wait port is the machine's own
         // measured 1621 ns (pc9821_iobus's IO_NS_5F_W / docs/probes/IO.TXT), so the
-        // driver's window is comparable to the machine's
-        // 3.5 ms here against 8-16 ms on the machine - while the stepclock is 5 ms. Leaving the
+        // driver's window is the same order as the machine's - 3.5 ms here against 8-16 ms on
+        // the machine - and shorter than the 5 ms stepclock. Leaving the
         // first tick to the period would make the driver's connection check a race against our
         // own bus speed. The PERIOD afterwards is the reference's rate.
         if (hclk_tick_now) begin
           hclk_sub   <= 20'd0;
           hclk_tick  <= 7'd0;
-          hclk_phase <= hclk_phase + 3'd1;
+          hclk_phase <= hclk_phase + 2'd1;
         end
         else if (hclk_sub + 20'd1 >= HCLK_STEP_CYCLES) begin
           hclk_sub  <= 20'd0;
@@ -429,8 +437,9 @@ module pc9821_mpu #(
               long_first <= 1'b1; long_pos <= 11'd0;
               // setdefaultcondition (:170-196, :184 `mpu98.flag2 = MPUFLAG2_RTAFF;`) clears the
               // CLK-to-host bit, so the reset stops the clock too.
+              // The dither phase is NOT reset: NP2kai's hclk_cnt is zeroed only by the power-on
+              // mpu98ii_reset (:1174 `ZeroMemory(&mpu98, sizeof(mpu98));`), never by a command.
               hclk_on    <= 1'b0; hclk_quarter <= 7'd1; hclk_dither <= 2'd0;
-              hclk_phase <= 3'd0;
             end
             8'h3F: begin                      // UART mode (mpucmd_3f :471-477)
               uart_mode <= 1'b1;
@@ -441,8 +450,7 @@ module pc9821_mpu #(
               hclk_on    <= 1'b1;
               hclk_sub   <= 20'd0;
               hclk_tick  <= 7'd0;
-              hclk_phase <= 3'd0;
-              hclk_kick  <= 1'b1;
+              hclk_kick  <= 1'b1;               // the phase runs on (see the 0xE7 follow byte)
             end
             8'h94: begin                      // clock to host OFF (mpucmd_9x :546 `case 0x04:`)
               hclk_on <= 1'b0;
@@ -555,7 +563,13 @@ module pc9821_mpu #(
         hclk_dither  <= din[1:0];
         hclk_sub     <= 20'd0;
         hclk_tick    <= 7'd0;
-        hclk_phase   <= 3'd0;
+        // The dither phase runs on across 0xE7, 0x95 and 0xFF, as NP2kai's hclk_cnt does (sethclk
+        // resets only hclk_rem, :167). The Xe10's card does not restart it either: its six
+        // dithered rows start at different rotations of their 4-phase rows (v=05 at phase 0, v=07
+        // and v=09 at 3, v=0B at 2: docs/probes/XE10Z-XE10.TXT:224-230), which a phase reset at
+        // 0xE7 or 0x95 cannot give. Where exactly it stands at each row (NP2kai's one phase per
+        // interval begun, or something that runs while the clock is off) the capture does not
+        // settle: todo item 200.
       end
     end
   end

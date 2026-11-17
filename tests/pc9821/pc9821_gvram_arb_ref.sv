@@ -1,4 +1,4 @@
-// TEST REFERENCE: pc9821_gvram_arb as of 3b134fe4 (before an area-reduction pass), renamed. Never edited; tb_pc9821_gvram_arb_equiv proves the shipped module against it.
+// TEST REFERENCE: pc9821_gvram_arb as of 3b134fe4 (before an area-reduction pass), renamed. Its code is never edited (tools/check_ref_copies.py); tb_pc9821_gvram_arb_equiv proves the shipped module against it.
 // PC-9821 GVRAM arbiter: one owner latch, one client mux, and the CPU's array datapath.
 //
 // This is the thin arbiter: its job is to pick which client owns the
@@ -972,7 +972,7 @@ module pc9821_gvram_arb_ref #(
         // GVRAM path in NP2kai wraps the offset at 15 bits (LOW15,
         // mem/memvram.c:42,114,136 and mem/memegc.c:1131,1327) and this
         // module's own column walk c_col already wraps the same way
-        // (aliases.md A8).
+        //.
         gma_addr = {b_addr_q[15], (b_addr_q[14:0] + 15'd1)};
         gma_din  = b_w2_hi_q;
         gma_be   = 4'hF;

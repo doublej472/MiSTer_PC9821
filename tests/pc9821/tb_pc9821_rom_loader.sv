@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ROM_LOADER:
-// The ROM loader: it holds the first word, accepts the write sequence, and signals completion; its registered cpu_run equals rom_ready && !load_error in every cycle.
+// The ROM loader: it holds the first word, accepts the write sequence, and signals completion; a malformed download fails closed and a good download after it recovers (ready, error clear); the last word of the 1 MiB reserve, 0xFFFFE, is accepted and the first word past it refused; its registered cpu_run equals rom_ready && !load_error in every cycle.
 
 
 module tb_pc9821_rom_loader;
@@ -39,6 +39,7 @@ module tb_pc9821_rom_loader;
     if (cpu_run !== (rom_ready && !load_error)) run_mismatch = run_mismatch + 1;
   end
   integer accepted = 0;
+  integer acc_before_last;
   reg [31:0] got_addr[0:7];
   reg [31:0] got_data[0:7];
   reg [3:0] got_be[0:7];
@@ -205,8 +206,26 @@ module tb_pc9821_rom_loader;
     // Hold the download until the loader's WHOLE sequence is accepted: ioctl_wait is the
     // release, and it must not drop between the pack write and the shadow write.
     while (ioctl_wait) @(negedge clk);
+    // The reserve's LAST legal word (0xFFFFE, the 1 MiB pack's final word) is accepted - one
+    // backend write, no error - where the first word past it (0x100000, above) is refused.
+    acc_before_last = accepted;
+    send_word(27'h00F_FFFE, 16'hC3C3);
+    while (ioctl_wait) @(negedge clk);
     ioctl_download = 0;
     repeat (4) @(posedge clk);
+    if (accepted != acc_before_last + 1 || load_error) begin
+      $display("FAIL the reserve's last word 0xFFFFE: %0d backend write(s), error=%b (want 1, 0)",
+               accepted - acc_before_last, load_error);
+      errors = errors + 1;
+    end
+    // ...and this good download, after the malformed one, RECOVERS: ready again, error clear.
+    // A loader that stayed failed until a reset would leave the guest unbootable after one bad
+    // pack until a power cycle.
+    if (!rom_ready || load_error) begin
+      $display("FAIL a good download after a malformed one did not recover: ready=%b error=%b",
+               rom_ready, load_error);
+      errors = errors + 1;
+    end
     if (tee_writes != 1 || last_tee_addr !== (shadow_base + 32'h0000_0E90) ||
         last_tee_data !== 32'h0000_5A5A) begin
       $display("FAIL shadow tee count=%0d addr=%08x data=%08x, want 1/%08x/00005A5A",
@@ -234,6 +253,10 @@ module tb_pc9821_rom_loader;
       $display("FAIL unrelated ioctl index was consumed or stalled");
       errors = errors + 1;
     end
+    @(negedge clk);
+    ioctl_wr = 0;
+    ioctl_download = 0;
+    repeat (2) @(negedge clk);
 
     // A download that ends early: the loader does not check how much arrived, so a
     // truncated pack reports ready and the guest boots whatever the SDRAM holds at the

@@ -32,7 +32,7 @@ HOW A USE IS JUDGED (a lexical dataflow, not a proof):
      qualification may sit at the consumer). A pending name with no reader passes (dead logic); one
      that leaves through an output port, or an unqualified use with no name, is a HIT.
   4. Simulation-only code (`$display`/`$fatal` bodies and their conditions, `ifdef VERILATOR`
-     blocks) observes and does not consume; it is skipped.
+     blocks, `// synthesis translate_off` regions) observes and does not consume; it is skipped.
 
 A HIT is `file:line`. A hit that is justified is listed in LEDGER with its reason, keyed by
 (file, family, signal, defined-name). The ledger is SHRINK-ONLY: an entry that no longer matches
@@ -140,6 +140,8 @@ def strip_comments(t):
     """Blank comments (newlines kept, so line numbers survive), and sim-only regions."""
     def blank(m):
         return re.sub(r"[^\n]", " ", m.group(0))
+    # `// synthesis translate_off` .. `translate_on` (the tree's one sim-only fence) observes too.
+    t = re.sub(r"//\s*synthesis\s+translate_off.*?//\s*synthesis\s+translate_on", blank, t, flags=re.S)
     t = re.sub(r"/\*.*?\*/", blank, t, flags=re.S)
     t = re.sub(r"//[^\n]*", blank, t)
     t = re.sub(r"\"(?:[^\"\\\n]|\\.)*\"", lambda m: '"' + " " * (len(m.group(0)) - 2) + '"', t)

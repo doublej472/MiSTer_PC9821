@@ -288,8 +288,11 @@ module tb_pc9821_shadow_romsum;
 
     // ---- PASS 2: the ITF enables the shadow (out 0x43F,0x80) and jumps back to the sums. ----
     // Nothing has been stored since reset, so the map still serves the pack and both sums
-    // stay 0x00/0x00.
+    // stay 0x00/0x00. The pass runs with the 0x053D bit-1 gate SET (BANK4@0x25B `out
+    // 0x53D,0x02` comes before the `jmp` at 0x262), and the shadow read is gated on it
+    // (pc9821_memory_map fw_shadow_read), so only the dirty term keeps the pack here.
     top_shadow_en = 1;
+    bios_ram_gate = 1;
     check_pack_top_pristine(2);
     cpu_read(32'h000F_8E90, rd);
     $display("  COLD 0xF8E90 read (shadow enabled, not yet written) = %02x", rd[7:0]);
@@ -365,6 +368,7 @@ module tb_pc9821_shadow_romsum;
     // the previous boot's 0x04 -- but the dirty flag reset with the platform, so the map
     // serves the pack and the sum stays 0x00/0x00. This is the regression the fix closes.
     top_shadow_en = 1;
+    bios_ram_gate = 1;                     // BANK4@0x25B, before the second pass (above)
     if (backend.peek(FW_SHADOW_BASE + 32'h0000_0E90)[7:0] !== 8'h04) begin
       $display("FAIL the shadow lost the stored byte across the reset: shadow[0x0E90]=%02x",
                backend.peek(FW_SHADOW_BASE + 32'h0000_0E90)[7:0]);
@@ -406,6 +410,7 @@ module tb_pc9821_shadow_romsum;
     repeat (4) @(negedge clk);
     check_pack_top_pristine(5);
     top_shadow_en = 1;                     // the re-POST's own 0x043F = 0x80
+    bios_ram_gate = 1;                     // and its own 0x053D = 0x02 (BANK4@0x25B)
     cpu_read(32'h000F_8E90, rd);
     $display("  REBOOT 0xF8E90 read (shadow enabled, stale 04 present) = %02x", rd[7:0]);
     if (rd[7:0] !== 8'h00) begin

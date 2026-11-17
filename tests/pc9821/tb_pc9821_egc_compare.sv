@@ -50,8 +50,9 @@
 // on the wrong pixels - which is exactly what the capture's own MiSTer column shows (CK00_0's
 // pre-fix DST is 0550,3663,5A0F,BE41 = the masked-write result of that raw-plane mask).
 //
-// The vectors are compared by VALUE only; this bench makes no claim about EGC timing (that is
-// tb_pc9821_egc.sv's sections 12-15).
+// The vectors are compared by VALUE only; this bench makes no claim about EGC timing (the
+// request, column and ordering counts are tb_pc9821_egc.sv's sections 12-14, 16 and 17; the
+// guest-visible pace is tb_pc9821_egc_xe10_pace.sv).
 
 `default_nettype none
 

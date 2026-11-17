@@ -89,8 +89,8 @@ module pc9821_memory_subsystem #(
     // next-state expression and the gate stays cycle-identical.
     output wire      grcg_expand_nx,
 
-    // EGC. `egc_enable` is the chip's real gate (0x6A num 2, the wire
-    // pc9821_gdc_text exports). With it on, a CPU access to a graphics-plane
+    // EGC. `egc_enable` is the chip's real gate (0x6A num 2 AND the GRCG's 0x7C bit 7,
+    // registered by pc9821_system's u_egc_mem_gate). With it on, a CPU access to a graphics-plane
     // window is transformed by the EGC instead of being a plain plane access --
     // safe to turn on, because the EGC issues column accesses on
     // pc9821_gvram's own port rather than a backend route the GRCG could
@@ -146,6 +146,9 @@ module pc9821_memory_subsystem #(
     // gfx_grph_on): pc9821_gvram_arb's Xe10 store table reads them. Both 0 is Fast.
     input  wire        gvram_timing_xe10,
     input  wire        gvram_gfx_scan_on,
+    // 0x09A8 bit 0 (pc9821_iobus crt31k: the 31 kHz dot clock): with pegc_256 it picks the Xe10
+    // table's display-mode column (xe10_mode below). Read only in Xe10 mode.
+    input  wire        gvram_crt31k,
     input  wire        scan_line_tick,
     input  wire        scan_page,
     input  wire [14:0] scan_line_base,
@@ -253,6 +256,9 @@ module pc9821_memory_subsystem #(
     // block), so no address decode sits between the request and its accept.
     input  wire [31:0] dma_addr_nx,
     input  wire        dma_load,
+    // The direction of the byte dma_load loads (pc9821_dmac mem_load_we): the route decode
+    // runs in the load cycle, where dma_write (a request qualifier) is still low.
+    input  wire        dma_load_write,
     input  wire [31:0] dma_din,
     input  wire [3:0]  dma_be,
     input  wire        dma_valid,
@@ -328,6 +334,29 @@ module pc9821_memory_subsystem #(
     output wire         dbg_scan_page_q
 );
 
+  // THE RESET TREE (pc9821_reset_tree): each block in this subsystem gets its own registered copy
+  // of `reset` (the unregistered platform reset, passed straight down from pc9821_system), all
+  // loaded on the same clk_sys edge as every other copy in the machine. A term a consumer adds
+  // (`|| !cpu_run`, `&& !pack_load_hold_r`, `|| soft_reboot`) is applied AFTER its copy.
+  localparam int M_LOAD  = 0;    // the pack-download hold and pc9821_rom_loader
+  localparam int M_WIN   = 1;    // pc9821_window_responder
+  localparam int M_DMA   = 2;    // the DMA access class and the font-fetch counter
+  localparam int M_OPEN  = 3;    // pc9821_open_bus
+  localparam int M_PEGC  = 4;    // pc9821_pegc and its DMA flag
+  localparam int M_VIS   = 5;    // the visible-GVRAM request state
+  localparam int M_SHARE = 6;    // pc9821_gvram_share
+  localparam int M_ARB   = 7;    // pc9821_gvram_arb
+  localparam int M_PSCAN = 8;    // pc9821_pegc_scan
+  localparam int M_GSCAN = 9;    // pc9821_gvram_scan
+  localparam int M_GRCG  = 10;   // pc9821_grcg
+  localparam int M_EGC   = 11;   // pc9821_egc
+  localparam int M_ROUTE = 12;   // the backend owner, the line/beat state and the response route
+  localparam int M_SBUF  = 13;   // pc9821_pegc_storebuf
+  localparam int M_PACE  = 14;   // pc9821_pegc_xe10_pace (OSD I/O timing = Xe10 on the packed bank)
+  localparam int M_N     = 15;
+  wire [M_N-1:0] rst_q;
+  pc9821_reset_tree #(.N(M_N)) u_reset_tree (.clk(clk), .reset(reset), .q(rst_q));
+
   wire load_valid, load_ready;
   wire [31:0] load_addr, load_din;
   wire [3:0] load_be;
@@ -338,11 +367,26 @@ module pc9821_memory_subsystem #(
   wire [31:0] map_addr, map_din, map_cpu_dout;
   wire [3:0] map_be;
   wire [7:0] map_burstcount;
+  // OSD I/O TIMING = XE10's DISPLAY-MODE COLUMN (pc9821_xe10_timing_pkg: 0 = 24 kHz, 1 = 31 kHz,
+  // 2 = 31 kHz with the 256-colour display on, 3 = 24 kHz with it on), read by the three devices
+  // that price CPU accesses
+  // from the table (pc9821_gvram_arb, pc9821_window_responder, pc9821_pegc_xe10_pace), each of
+  // which registers it. XE10X /RDLAT on the machine (docs/probes/XE10X-XE10-RDLAT1.TXT) measures
+  // three display states, and the one that moves the price is the 31 kHz clock and the 256-colour
+  // display, not the line count: its 640x480 mode (31 kHz, 256 colours, 480 lines) prices the text
+  // RAM's active-line read at 705.7 ns net (:535) against 639.0 at 31 kHz 400 lines with 256
+  // colours off (:376), while the PEGC packed read - 256 colours on in both - reads 702.6 (:577)
+  // and 703.4 (:418) in the two. So the column is the 31 kHz select (gvram_crt31k, 0x09A8 bit 0)
+  // and the 256-colour display (pegc_256), both levels a guest changes only on a mode switch.
+  // At 24 kHz the 256-colour display moves the text read too (XE10Y /CELLS on the machine: 759.0 ns
+  // net on a graphics line against the 24 kHz column's 692.2), so it is the fourth column, 24P:
+  //   docs/probes/XE10Y-XE10-CELLS.TXT:31 `R CELLS XCR_2PA unit=w n=512 nop=0`
+  wire [1:0] xe10_mode = !gvram_crt31k ? (pegc_256 ? 2'd3 : 2'd0) : (pegc_256 ? 2'd2 : 2'd1);
   wire map_valid, map_write, map_ready;
   wire map_cpu_ready, map_cpu_resp_valid;
 
-  // THE 15-16 MiB SYSTEM-SPACE WINDOW (port 0x043B bit 2; the guest enables it, reset leaves it
-  // off). With it set the machine puts no SYSTEM RAM at 0xF00000-0xFFFFFF, but it is not all
+  // THE 15-16 MiB SYSTEM-SPACE WINDOW (on while port 0x043B bit 2 is CLEAR; ON at reset, 0x043B
+  // = 0xFB: docs/probes/KIT2-XE10-RISKY-43B.TXT:3 `ASFOUND 043B=FB`). On, 0xF00000-0xFFFFFF holds no SYSTEM RAM, but it is not all
   // hole: 0xFA0000-0xFFFFFF aliases the low 0xA0000-0xFFFFF (NP2kai reduces the address by
   // 0xF00000 and dispatches it through its LOW-memory table, i386c/cpumem.c memsys_rd8/wr8;
   // qemu-pc98 builds the same alias at 0xfa0000 over lowmem[0xa0000..0x100000], hw/i386/pc98-mem.c
@@ -422,6 +466,10 @@ module pc9821_memory_subsystem #(
   // d_addr/win0_moved, which this file reads, so route_addr equals the mapper's d_addr by
   // construction. tools/check_cpu_addr_front_equiv.py proves the exported pair equal to the
   // window-0 bias expressions, over every 32-bit address and both window-0 flag values.
+  // The ONE window-0 bias: the mapper's post-window-0 address and the flag that made it,
+  // consumed here as route_addr/win0_moved.
+  wire [31:0] map_d_addr;
+  wire        map_win0_moved;
   /* verilator lint_off UNUSEDSIGNAL */   // route_addr[11:0]: the >= guest_ram_bytes compare moved to the map (addr_ge_ram)
   wire [31:0] route_addr = map_d_addr;
   /* verilator lint_on UNUSEDSIGNAL */
@@ -450,10 +498,6 @@ module pc9821_memory_subsystem #(
   wire gvram_select = map_gvram_window;
   wire map_pegc_reg_win, map_pegc_nc, map_pegc_packed, map_e_plane_nc;
   wire map_addr_ge_ram;
-  // The ONE window-0 bias: the mapper's post-window-0 address and the flag that made it,
-  // consumed above as route_addr/win0_moved.
-  wire [31:0] map_d_addr;
-  wire        map_win0_moved;
   wire peg_reg_select = map_pegc_reg_win;
   wire [1:0]  map_gvram_plane;
   wire [14:0] map_gvram_offset;
@@ -475,8 +519,8 @@ module pc9821_memory_subsystem #(
   // The memory-mapped CG window at 0xA4000-0xA4FFF: not RAM, but a 32-byte repeating view of the selected glyph,
   // sharing the writable user-CG store with port 0xA9. Serving it from guest
   // RAM would make the authentic ITF's switch-image verify fail at
-  // BANK4@0xFC681. 0xE0000-0xE7FFF is still served from the GVRAM bias; that
-  // separate open-bus question is untouched here.
+  // BANK4@0xFC681. 0xE0000-0xE7FFF is a separate route: the intensity plane in analog mode, open
+  // bus in digital mode (map_e_plane_nc in open_select below), the PEGC registers in 256-colour mode (pc9821_memory_map's e_plane_nc).
   wire cg_win_select = !win0_moved && tram_window && route_addr[14] &&
                        !route_addr[13] && !route_addr[12];
   // THE 12 KiB GAP BETWEEN THE TEXT RAM AND THE PLANES, 0xA5000-0xA7FFF: the machine reads
@@ -508,7 +552,7 @@ module pc9821_memory_subsystem #(
   // path (which wedges z486). The map DECODES both (on the same post-window-0 address as its
   // other regions) and this file only routes them - the absent-ROM area's shape.
   // ems_page_base sits one PACK_BYTES above the pack, in the 256 KiB the SDRAM budget
-  // already reserves above it, so it costs no new budget (see the GVRAM instance's note).
+  // already reserves above it, so it costs no new budget (the region list is at peg_base).
   /* verilator lint_off WIDTHEXPAND */ // PACK_BYTES (27b) zero-extends to 32b exactly; the page base is bounded inside the SDRAM reserve
   wire [31:0] ems_page_base = pack_base + PACK_BYTES + 32'h0004_8000;
   /* verilator lint_on WIDTHEXPAND */
@@ -520,9 +564,14 @@ module pc9821_memory_subsystem #(
   /* verilator lint_off WIDTHEXPAND */ // PACK_BYTES (27b) zero-extends to 32b exactly; the base is bounded inside the SDRAM reserve
   wire [31:0] fw_shadow_base = pack_base + PACK_BYTES + 32'h0005_8000;
   /* verilator lint_on WIDTHEXPAND */
-  // The PEGC extended VRAM: 512 KiB of one-byte-wide RAM (not the four-plane fold)
-  // placed above the 32 KiB PCM buffer at pack_base + 0x140000 so it adds no M10K and takes only
-  // the SDRAM the budget already reserves (docs/pc9821-port-status.md).
+  // The PEGC extended VRAM: 512 KiB of one-byte-wide RAM (not the four-plane fold) at
+  // pack_base + PACK_BYTES + 0x80000 (pack_base + 0x180000 at the default 1 MiB pack), so it adds
+  // no M10K and takes only the SDRAM the budget already reserves (docs/pc9821-port-status.md).
+  // The regions above the pack, as offsets from pack_base + PACK_BYTES at the default pack:
+  //   +0x40000 the -86 PCM buffer, 32 KiB (pc9821_system's `.buf_base(pack_base + 32'h0014_0000)`)
+  //   +0x48000 the EMS page, 64 KiB (ems_page_base)
+  //   +0x58000 the top-window shadow, 32 KiB (fw_shadow_base)
+  //   +0x80000 the PEGC extended VRAM, 512 KiB (peg_base)
   /* verilator lint_off WIDTHEXPAND */ // PACK_BYTES (27b) zero-extends to 32b exactly; the base is bounded inside the SDRAM reserve
   wire [31:0] peg_base = pack_base + PACK_BYTES + 32'h0008_0000;
   /* verilator lint_on WIDTHEXPAND */
@@ -611,9 +660,12 @@ module pc9821_memory_subsystem #(
   //
   // The hold SETS on a selected download while the OSD Reset level is up and CLEARS once the
   // platform reset has gone low; set wins (R3), one next-state expression. Keeping it through
-  // the whole reset rather than dropping it with status[0] matters: `reset` falls three
-  // clk_sys after status[0] does (z486_mister.sv's reset_sync_r), and a hold that fell first
-  // would hand the SDRAM controller a two-cycle reset, which re-runs its JEDEC initialisation.
+  // the whole reset rather than dropping it with status[0] matters: the reset copies fall four
+  // clk_sys after status[0] does (three in z486_mister.sv's reset_sync_r, one in the reset
+  // trees), and a hold that fell first would hand the SDRAM controller a short reset, which
+  // re-runs its JEDEC initialisation. The hold reads this subsystem's M_LOAD copy and the
+  // controller's term is its own copy from z486_mister.sv's tree; both copies fall on the same
+  // edge, so the hold falls one clk_sys after the controller's copy has.
   // Only the loader and the backend leave the reset; the CPU and the rest of the machine stay
   // in it until status[0] falls, and pc9821_cpu_reset_gate also holds the CPU on
   // hps_apply_reset and on cpu_run. With no download under status[0] (an OSD Reset) the hold
@@ -623,14 +675,14 @@ module pc9821_memory_subsystem #(
   /* verilator lint_on PROCASSINIT */
   wire pack_dl_selected = ioctl_download && (ioctl_index == IOCTL_INDEX);
   always @(posedge clk)
-    pack_load_hold_r <= (hps_apply_reset && pack_dl_selected) || (pack_load_hold_r && reset);
+    pack_load_hold_r <= (hps_apply_reset && pack_dl_selected) || (pack_load_hold_r && rst_q[M_LOAD]);
   assign pack_load_hold = pack_load_hold_r;
 
   pc9821_rom_loader #(
       .IOCTL_INDEX(IOCTL_INDEX),
       .PACK_BYTES(PACK_BYTES)
   ) loader (
-      .clk(clk), .reset(reset && !pack_load_hold_r), .pack_base(pack_base),
+      .clk(clk), .reset(rst_q[M_LOAD] && !pack_load_hold_r), .pack_base(pack_base),
       .shadow_base(fw_shadow_base),
       .ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
       .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
@@ -678,8 +730,9 @@ module pc9821_memory_subsystem #(
   wire        dma_valid_tv  = dma_valid && (dma_tvram || dma_cgw);
   wire       dma_tv_ready, dma_tv_resp;
   wire [7:0] dma_tv_dout;
-  pc9821_window_responder u_window (
-      .clk(clk), .reset(reset || !cpu_run),
+  pc9821_window_responder #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_window (
+      .clk(clk), .reset(rst_q[M_WIN] || !cpu_run),
+      .timing_xe10(gvram_timing_xe10), .gfx_scan_on(gvram_gfx_scan_on), .xe10_mode(xe10_mode),
       .route_cg(cg_win_select),
       .cpu_addr(eff_addr[13:0]), .cpu_din(cpu_din), .cpu_be(cpu_be),
       .cpu_line_read(cpu_line_read),
@@ -773,7 +826,12 @@ module pc9821_memory_subsystem #(
       // Always presented: mem_valid is then the map's "a backend request is owed" decode
       // (no out-of-range, absent, unmapped-EMS or discarded-ROM-store arm), qualified below.
       .cpu_valid(1'b1),
-      .cpu_write(dma_write),
+      // The direction AT THE LOAD, not dma_write: the class is registered on dma_load, and the
+      // DMAC raises its write qualifier only with the request (S_MEM), after both load cycles
+      // (pc9821_dmac mem_load_we). Decoding dma_write classed every port-to-memory byte as a
+      // read, so a store into a ROM window reached the pack and a gated 0xF8000 store missed
+      // the shadow - unlike the CPU's store at that address, which the DMA's must match (above).
+      .cpu_write(dma_load_write),
       .cpu_ready(), .cpu_resp_valid(),
       .absent_area(dma_map_absent), .addr_ge_ram(dma_map_ge_ram), .ems_open_bus(dma_map_ems_ob),
       .d_addr(dma_d), .win0_moved(dma_w0),
@@ -829,7 +887,7 @@ module pc9821_memory_subsystem #(
   reg   [1:0] dma_gv_plane;
   reg  [31:0] dma_addr_ld;   // the address the class describes (checked against dma_addr below)
   always @(posedge clk) begin
-    if (reset) begin
+    if (rst_q[M_DMA]) begin
       dma_cls      <= 6'd0;
       dma_be_addr  <= 32'd0;
       dma_gv_plane <= 2'd0;
@@ -862,7 +920,7 @@ module pc9821_memory_subsystem #(
 `ifdef VERILATOR
   // The registered route describes the presented address: the DMAC loads both on one edge.
   always @(posedge clk)
-    if (!reset && dma_valid && (dma_addr_ld !== dma_addr))
+    if (!rst_q[M_DMA] && dma_valid && (dma_addr_ld !== dma_addr))
       $fatal(1, "PC9821 DMA route registered for %08x but the request is at %08x", dma_addr_ld, dma_addr);
 `endif
 
@@ -873,7 +931,7 @@ module pc9821_memory_subsystem #(
   wire dma_nl_ready = dma_valid_nl;
   reg  dma_nl_resp_q;
   always @(posedge clk) begin
-    if (reset) dma_nl_resp_q <= 1'b0;
+    if (rst_q[M_DMA]) dma_nl_resp_q <= 1'b0;
     else       dma_nl_resp_q <= dma_valid_nl && !dma_write;
   end
 
@@ -899,7 +957,7 @@ module pc9821_memory_subsystem #(
   assign font_word_data  = fmem_dout;
 
   always @(posedge clk) begin
-    if (reset) font_left <= 4'd0;
+    if (rst_q[M_DMA]) font_left <= 4'd0;
     else if (font_left != 4'd0) begin
       if (fmem_resp_valid) font_left <= font_left - 4'd1;
     end else if (font_issue && fmem_ready) begin
@@ -908,7 +966,7 @@ module pc9821_memory_subsystem #(
   end
 
   pc9821_open_bus open_bus (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_OPEN] || !cpu_run),
       .cpu_valid(cpu_valid && cpu_run && open_select),
       .cpu_write(cpu_write), .cpu_line_read(cpu_line_read),
       .cpu_dout(open_cpu_dout),
@@ -935,7 +993,7 @@ module pc9821_memory_subsystem #(
   wire        peg_cpu_req = cpu_valid && cpu_run && peg_reg_select;
   wire        peg_req     = peg_dma_q ? dma_valid_pr : peg_cpu_req;
   always @(posedge clk) begin
-    if (reset || !cpu_run) peg_dma_q <= 1'b0;
+    if (rst_q[M_PEGC] || !cpu_run) peg_dma_q <= 1'b0;
     else if (peg_idle && !peg_req) peg_dma_q <= dma_valid_pr;
   end
   assign peg_cpu_ready      = peg_rdy && !peg_dma_q;
@@ -943,7 +1001,7 @@ module pc9821_memory_subsystem #(
   wire   dma_pr_ready       = peg_rdy && peg_dma_q;
   wire   dma_pr_resp        = peg_rv && peg_dma_q;
   pc9821_pegc u_pegc (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_PEGC] || !cpu_run),
       .cpu_valid(peg_req),
       .cpu_write(peg_dma_q ? dma_write : cpu_write),
       .cpu_line_read(peg_dma_q ? 1'b0 : cpu_line_read),
@@ -1068,6 +1126,7 @@ module pc9821_memory_subsystem #(
   wire        grcg_cl_ready, grcg_cl_done;
   wire [31:0] grcg_cpu_dout;
   wire        grcg_cpu_ready, grcg_cpu_resp_valid;
+  wire        grcg_rd_hold;   // pc9821_gvram_arb -> pc9821_grcg: Xe10's TCR read latency
   wire        grcg_dbg_busy, grcg_dbg_rmw, grcg_dbg_write;
   wire        egc_cl_valid, egc_cl_write;
   wire [15:0] egc_cl_addr;
@@ -1139,7 +1198,7 @@ module pc9821_memory_subsystem #(
   wire [31:0] vis_rdata;
   wire        vis_done = vis_write ? vis_ready : vis_resp;
   always @(posedge clk) begin
-    if (reset || !cpu_run) begin
+    if (rst_q[M_VIS] || !cpu_run) begin
       vis_lock_q <= 1'b0;
       vis_dma_q  <= 1'b0;
     end else if (!vis_lock_q) begin
@@ -1158,7 +1217,7 @@ module pc9821_memory_subsystem #(
   wire   dma_gv_resp    = vis_resp && vis_pick_dma;
 
   pc9821_gvram_share u_gvr_share (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_SHARE] || !cpu_run),
       .cpu_req(cpu_valid && cpu_run && gvram_select),
       .cpu_write(cpu_write),
       .cpu_line_read(cpu_line_read),
@@ -1206,9 +1265,9 @@ module pc9821_memory_subsystem #(
   );
 
   pc9821_gvram_arb #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_gvram_arb (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_ARB] || !cpu_run),
       .access_page(gvr_page),
-      .timing_xe10(gvram_timing_xe10), .gfx_scan_on(gvram_gfx_scan_on),
+      .timing_xe10(gvram_timing_xe10), .gfx_scan_on(gvram_gfx_scan_on), .xe10_mode(xe10_mode),
       .win_plane(gvr_plane), .win_offset(gvr_offset),
       .cpu_din(gvr_din), .cpu_din_z(gvr_din_z), .cpu_din_f(gvr_din_f),
       .cpu_be(gvr_be), .cpu_line_read(gvr_line_read),
@@ -1234,6 +1293,7 @@ module pc9821_memory_subsystem #(
       .grcg_cl_tile(grcg_cl_tile),
       .grcg_cl_ready(grcg_cl_ready),
       .grcg_cpu_dout(grcg_cpu_dout), .grcg_cpu_ready(grcg_cpu_ready),
+      .grcg_rd_hold(grcg_rd_hold),
       .grcg_cpu_resp_valid(grcg_cpu_resp_valid),
       .grcg_dbg_busy(grcg_dbg_busy), .grcg_dbg_rmw(grcg_dbg_rmw),
       .grcg_dbg_write(grcg_dbg_write),
@@ -1260,7 +1320,7 @@ module pc9821_memory_subsystem #(
   // reading the SAME SDRAM store the packed windows write (peg_base). It runs
   // only in 256-colour mode; the planar fetch keeps its own module untouched.
   pc9821_pegc_scan u_pegc_scan (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_PSCAN] || !cpu_run),
       .scan_enable(scan_enable && pegc_256),
       .scan_line_tick(scan_line_tick),
       .scan_page(scan_page), .page_force_zero(pegc_256e),
@@ -1277,7 +1337,7 @@ module pc9821_memory_subsystem #(
   );
 
   pc9821_gvram_scan u_gvram_scan (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_GSCAN] || !cpu_run),
       .scan_enable(scan_enable), .scan_line_tick(scan_line_tick),
       .scan_page(scan_page), .scan_line_base(scan_line_base),
       .gfx_odd_line(gfx_odd_line),
@@ -1300,7 +1360,7 @@ module pc9821_memory_subsystem #(
   // matches the strobe to its one pending read (memory.sv dcache_read_pending). The
   // plane-window case is bit-identical: gvram_select is 1 there, so the term is a no-op.
   pc9821_grcg u_grcg (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_GRCG] || !cpu_run),
       .port_we(grcg_we), .port_addr(grcg_addr), .port_din(grcg_din),
       .expand_gate(grcg_expand_gate),
       .expand_gate_nx(grcg_expand_nx_gate),
@@ -1328,7 +1388,7 @@ module pc9821_memory_subsystem #(
       .cl_hold_burst(grcg_cl_hold_burst), .cl_hold_addr(grcg_cl_hold_addr),
       .cl_hold_wbe(grcg_cl_hold_wbe), .cl_hold_wdata(grcg_cl_hold_wdata),
       .cl_hold_wdata2(grcg_cl_hold_wdata2),
-      .cl_rdata(gvram_cl_rdata), .cl_done(grcg_cl_done),
+      .cl_rdata(gvram_cl_rdata), .cl_done(grcg_cl_done), .rd_hold(grcg_rd_hold),
       .dbg_busy(grcg_dbg_busy), .dbg_rmw(grcg_dbg_rmw), .dbg_write(grcg_dbg_write),
       .dbg_grcg_store(dbg_grcg_store)  );
 
@@ -1338,7 +1398,7 @@ module pc9821_memory_subsystem #(
   assign grcg_expand_nx = grcg_expand_nx_gate;
 
   pc9821_egc u_egc (
-      .clk(clk), .reset(reset || !cpu_run),
+      .clk(clk), .reset(rst_q[M_EGC] || !cpu_run),
       .reg_access(egc_access), .reg_fgbg(egc_fgbg), .reg_ope(egc_ope),
       .reg_fg(egc_fg), .reg_mask(egc_mask), .reg_bg(egc_bg),
       .reg_sft(egc_sft), .reg_leng(egc_leng), .reg_shift_we(egc_shift_we),
@@ -1409,7 +1469,7 @@ module pc9821_memory_subsystem #(
   reg  [1:0] map_line_beat_r;
   reg        map_line_active_r;
   always @(posedge clk) begin
-    if (reset) begin
+    if (rst_q[M_ROUTE]) begin
       map_line_beat_r <= 2'd0;
       map_line_active_r <= 1'b0;
     end else if (!map_line_active_r) begin
@@ -1432,7 +1492,7 @@ module pc9821_memory_subsystem #(
   reg [1:0] beat_seen_r;
   reg       beat_src_r;
   always @(posedge clk) begin
-    if (reset) begin
+    if (rst_q[M_ROUTE]) begin
       beat_seen_r <= 2'd0;
     end else if (win_line_beat || gvram_line_beat) begin
       if (beat_seen_r == 2'd0) begin
@@ -1459,15 +1519,10 @@ module pc9821_memory_subsystem #(
                     map_cpu_dout;
 
   wire [31:0] load_pack_offset = load_addr - pack_base;
-  // ONLY the 4 KiB ANK table is teed into M10K (pc9821_gdc_text's u_ank). The JIS grid
-  // is NOT loaded into block RAM: it stays in the pack's SDRAM copy at pack
-  // 0x80000 + FONT.ROM byte, and the GDC's fmem reader fetches glyphs from there into its
-  // The JIS region's bounds are named here because
-  // tb_pc9821_gdc_text pins them against the pack.
-  /* verilator lint_off UNUSEDPARAM */  // kept as the region's named bounds
-  localparam [31:0] JIS_PACK_BASE  = 32'h0008_0000 + 32'h0000_1800;
-  localparam [31:0] JIS_PACK_BYTES = 32'd92 * 32'h0C00;
-  /* verilator lint_on UNUSEDPARAM */
+  // ONLY the 4 KiB ANK table is teed into M10K (pc9821_cg's u_ank). The JIS grid is NOT
+  // loaded into block RAM: it stays in the pack's SDRAM copy at pack 0x80000 + FONT.ROM byte,
+  // and pc9821_cg's glyph fetch (fmem_*/font_req_*) reads glyphs from there into its JIS row
+  // cache.
   wire load_ank_word = (load_pack_offset >= 32'h0003_0000) &&
                        (load_pack_offset <  32'h0003_1000);
   wire load_upper_half = |load_be[3:2];
@@ -1514,7 +1569,7 @@ module pc9821_memory_subsystem #(
   wire owner_is_dma  = (owner_sel == OWN_DMA);
   wire owner_is_map  = (owner_sel == OWN_MAP);
   always @(posedge clk) begin
-    if (reset) begin
+    if (rst_q[M_ROUTE]) begin
       owner_locked <= 1'b0;
       owner_r      <= OWN_MAP;
     end else if (mem_ready || !mem_valid) begin
@@ -1571,16 +1626,30 @@ module pc9821_memory_subsystem #(
   // A postable store: the PEGC route's one-dword write (the CPU's stores are burstcount 1).
   wire map_peg_store  = map_peg_route && map_write && (map_burstcount[7:1] == 7'd0);
 
+  // OSD I/O timing = Xe10 on the PEGC packed bank (pc9821_pegc_xe10_pace): the stage gates the map's handshake
+  // in front of the buffer - a packed store no sooner than the table's period after the last, a
+  // packed read held to the table's latency - and passes everything else (and all of Fast) as is.
+  // The open 0xF00000 aperture is the packed bank 0 on the Xe10 and is priced as it (the pace
+  // module's header; docs/probes/XE10Y-XE10-RUN3-APER2.TXT).
+  wire map_sb_valid, map_sb_ready;
+  wire map_pace_packed = map_pegc_packed || (peg_window && pegc_vram_en);
+  pc9821_pegc_xe10_pace #(.SYS_CLOCK_HZ(SYS_CLOCK_HZ)) u_pegc_pace (
+      .clk(clk), .reset(rst_q[M_PACE] || !cpu_run),
+      .timing_xe10(gvram_timing_xe10), .gfx_scan_on(gvram_gfx_scan_on), .xe10_mode(xe10_mode),
+      .in_valid(map_valid), .in_write(map_write), .in_packed(map_pace_packed),
+      .in_ready(map_ready),
+      .out_valid(map_sb_valid), .out_ready(map_sb_ready));
+
   pc9821_pegc_storebuf #(
       .HOLD_CYCLES(SYS_CLOCK_HZ / 1_000_000),
       .GATHER_K(GATHER_K)
   ) u_storebuf (
-      .clk(clk), .reset(reset || !cpu_run),
-      .in_valid(map_valid), .in_write(map_write),
+      .clk(clk), .reset(rst_q[M_SBUF] || !cpu_run),
+      .in_valid(map_sb_valid), .in_write(map_write),
       .in_addr(map_addr), .in_din(map_din), .in_be(map_be),
       .in_burstcount(map_burstcount),
       .in_peg_route(map_peg_route),
-      .in_ready(map_ready),
+      .in_ready(map_sb_ready),
       .in_rd_block(rt_full),
       .sdram_size(sdram_size),
       .mem_addr(buf_mem_addr), .mem_din(buf_mem_din), .mem_din_hi(buf_mem_din_hi),
@@ -1643,7 +1712,7 @@ module pc9821_memory_subsystem #(
                           : rt_beats[rt_rd[1:0] + 2'd1];
 
   always @(posedge clk) begin
-    if (reset) begin
+    if (rst_q[M_ROUTE]) begin
       rt_wr   <= 3'd0;
       rt_rd   <= 3'd0;
       rt_left <= 8'd0;
@@ -1676,12 +1745,12 @@ module pc9821_memory_subsystem #(
   wire fw_shadow_set = (fw_shadow_store && map_valid && map_ready) ||
                        (dma_fw_store && dma_owns && backend_accept);
   always @(posedge clk) begin
-    if (reset || soft_reboot) fw_shadow_dirty <= 1'b0;
+    if (rst_q[M_ROUTE] || soft_reboot) fw_shadow_dirty <= 1'b0;
     else if (fw_shadow_set)       fw_shadow_dirty <= 1'b1;
   end
 `ifdef VERILATOR
   always @(posedge clk)
-    if (!reset && soft_reboot && fw_shadow_set)
+    if (!rst_q[M_ROUTE] && soft_reboot && fw_shadow_set)
       $error("pc9821_memory_subsystem: a top-window shadow store met the reboot's shadow reset");
 `endif
 
@@ -1739,7 +1808,7 @@ module pc9821_memory_subsystem #(
               //     read accept pushes its beat count and the response beats pop it, so an early `ready` cannot steal it.
               //  3. NEVER wait for cpu_valid to drop to leave the accept/response state: z486 keeps the
               //     request up while finalizing the previous one, so waiting for the deassert deadlocks.
-  always @(posedge clk) if (!reset) begin
+  always @(posedge clk) if (!rst_q[M_ROUTE]) begin
     if ((tram_select && open_select) || (cg_win_select && open_select) ||
         (tram_select && cg_win_select) || (gvram_select && open_select) ||
         (gvram_select && tram_select) || (gvram_select && cg_win_select) ||

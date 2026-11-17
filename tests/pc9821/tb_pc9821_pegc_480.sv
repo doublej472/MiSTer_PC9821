@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PEGC_480: the PC-9821 256-colour 640x480 mode the Windows 95 PC-9821 display driver sets displays a packed 640x480x8 frame correctly on the 31 kHz raster: with clk_sys at 90 MHz (the shipped clock), the real pc9821_dot_ce (31 kHz dot clock), pc9821_crtc, pc9821_gdc2, pc9821_pegc_scan behind the real sdram_sync_bridge and src/memory/sdram.v (port 3) and pc9821_video_mixer wired as pc9821_system wires them, programmed through the GDC and mode ports with the firmware's 640x480 rows (INT 18h AH=30h BH=0x31: master SYNC 10 4E 4B 0C 03 0B DB 95 = 800 x 525 with AL 475, slave SYNC 02 4E 4B 0C 83 06 E0 95 = AL 480, slave PITCH 80, SCROLL 00 00 F0 7F, the 5 MHz clock 0x6A 0x83/0x85 - Xe10 BANK3@0x1E25-0x1E4D and 0x1F8E-0x1FA7, the same bytes as NP2kai bios/bios18.c gdcmastersync[4]/gdcslavesync[1]) and then the driver's own sequence (PEGCV8.DRV: 0x6A 07/21/69, slave PITCH 0x80, START), every one of the 307,200 active dots of a whole frame - all 480 lines - is the 256-colour palette entry of the packed byte at line*1024 + dot of the store (NP2kai vram/makegrex.c: the stride is PITCH words of 8 bytes at 5 MHz, `if (!(gdc.clock & 0x80)) mg.pitch <<= 1; mg.pitch &= 0xfe`, and the driver's own 0x0400-byte pitch), the displayed area is 480 lines a frame although the master's block has 475 (NP2kai dispsync_renewalvertical `scrnymax = MAX(grphymax, textymax)`) with the VSYNC still at the master's line 486 and 525 lines a frame, the frame holds while a saturating CPU cache-line stream competes for the SDRAM, and every packed line fetch completes inside the 31 kHz line (800 dots, 2860 clk_sys at 90 MHz), with every port-3 request held, payload unchanged, until the controller takes it (the bridge's contract, which a line tick during the mode set broke at 90 MHz before pc9821_pegc_scan deferred its restart); the read-backs of the state touched answer: the 0x9A0 query bits of the FF2 clock/256/256E latches (pc9821_crtc's gdc_ff2_state) and the slave's 0xA2 after PITCH (0xFF: PITCH queues no read-back, NP2kai gdc_ia2). FAIL-FIRST (each a recorded mutant of the shipped change): with the packed stride taken from the SCROLL im bit over a constant 40-word PITCH (the pre-change walk) 304,832 of the 307,200 dots are wrong, and so with the PITCH byte dropped; with the 5 MHz clock ignored (PITCH 0x80 doubled and masked to a stride of 0) 305,920; with the walker stepping on the line parity alone it misses the wrap of this ODD 525-line frame and shows every line below row 1 one raster line late (305,920 wrong - the 31 kHz 449-line block has the same odd wrap); and with the displayed lines limited to the master's window the frame shows 475 lines (304,000 dots).
+// TB_PC9821_PEGC_480: the PC-9821 256-colour 640x480 mode the Windows 95 PC-9821 display driver sets displays a packed 640x480x8 frame correctly on the 31 kHz raster: with clk_sys at 90 MHz (the shipped clock), the real pc9821_dot_ce (31 kHz dot clock), pc9821_crtc, pc9821_gdc2, pc9821_pegc_scan behind the real sdram_sync_bridge and src/memory/sdram.v (port 3) and pc9821_video_mixer wired as pc9821_system wires them, programmed through the GDC and mode ports with the firmware's 640x480 rows (INT 18h AH=30h BH=0x31: master SYNC 10 4E 4B 0C 03 0B DB 95 = 800 x 525 with AL 475, slave SYNC 02 4E 4B 0C 83 06 E0 95 = AL 480, slave PITCH 80, SCROLL 00 00 F0 7F, the 5 MHz clock 0x6A 0x83/0x85 - Xe10 BANK3@0x1E25-0x1E4D and 0x1F8E-0x1FA7, the same bytes as NP2kai bios/bios18.c gdcmastersync[4]/gdcslavesync[1]) and then the driver's own sequence (PEGCV8.DRV: 0x6A 07/21/69, slave PITCH 0x80, START), every one of the 307,200 active dots of a whole frame - all 480 lines - is the 256-colour palette entry of the packed byte at line*1024 + dot of the store (NP2kai vram/makegrex.c: the stride is PITCH words of 8 bytes at 5 MHz, `if (!(gdc.clock & 0x80)) mg.pitch <<= 1; mg.pitch &= 0xfe`, and the driver's own 0x0400-byte pitch), the displayed area is 480 lines a frame although the master's block has 475 (NP2kai dispsync_renewalvertical `scrnymax = MAX(grphymax, textymax)`) with the VSYNC still at the master's line 486 and 525 lines a frame, the frame holds while a saturating CPU cache-line stream competes for the SDRAM, and every packed line fetch completes inside the 31 kHz line (800 dots, 2860 clk_sys at 90 MHz), with every port-3 request held, payload unchanged, until the controller takes it (the bridge's contract, which a line tick during the mode set broke at 90 MHz before pc9821_pegc_scan deferred its restart); then, with the GDC clock returned to 2.5 MHz (0x6A 0x82/0x84) and slave PITCH 0x28, the doubled stride (0x50 units of 8 bytes, NP2kai makegrex.c) shows every one of the 307,200 dots of a frame re-stored at line*640 + dot; the read-backs of the state touched answer: the FF2 clock/256/256E latch bits on pc9821_crtc's gdc_ff2_state bus (the bits the 0x9A0 query reads; the query's own decode is not in this bench), and the slave's 0xA2 after PITCH (0xFF: PITCH queues no read-back, NP2kai gdc_ia2). FAIL-FIRST (each a recorded mutant of the shipped change): with the packed stride taken from the SCROLL im bit over a constant 40-word PITCH (the pre-change walk) 304,832 of the 307,200 dots are wrong, and so with the PITCH byte dropped; with the 5 MHz clock ignored (PITCH 0x80 doubled and masked to a stride of 0) 305,920; with the 2.5 MHz PITCH left undoubled the second leg shows 304,960 wrong; with the walker stepping on the line parity alone it misses the wrap of this ODD 525-line frame and shows every line below row 1 one raster line late (305,920 wrong - the 31 kHz 449-line block has the same odd wrap); and with the displayed lines limited to the master's window the frame shows 475 lines (304,000 dots).
 
 `default_nettype none
 
@@ -322,13 +322,15 @@ module tb_pc9821_pegc_480;
   end
 
   // ==== THE FETCH'S LINE TIME: tick to the line's last response beat ====
-  integer fetch_start = 0, worst_fetch = 0, fetches = 0, cyc = 0;
+  // Counted on port 3's own response beats (a line is 640 bytes = 160 dword beats), not on the
+  // scan FSM's private state: the line is complete at the 160th beat after its tick.
+  integer fetch_start = 0, worst_fetch = 0, fetches = 0, cyc = 0, line_beats = 0;
   reg     measuring = 1'b0;
   always @(posedge clk) begin
     cyc = cyc + 1;
-    if (scan_line_tick) fetch_start = cyc;
-    if (measuring && u_scan.fetch_active && p3_resp_valid && (u_scan.beats_left == 4'd1) &&
-        (u_scan.wr_idx == 9'd159)) begin
+    if (scan_line_tick) begin fetch_start = cyc; line_beats = 0; end
+    else if (p3_resp_valid) line_beats = line_beats + 1;
+    if (measuring && !scan_line_tick && p3_resp_valid && (line_beats == 160)) begin
       fetches = fetches + 1;
       if (cyc - fetch_start > worst_fetch) worst_fetch = cyc - fetch_start;
     end
@@ -406,7 +408,13 @@ module tb_pc9821_pegc_480;
     sampling = 1'b0;
     measuring = 1'b0;
     if (de_seen_line) de_lines = de_lines + 1;
+    // Stop the stream at an ACCEPT: port 0 may not drop a presented request before its ready
+    // (sdram_sync_bridge's same-clock contract), and the 2.5 MHz leg below stores on it again.
+    @(negedge clk);
+    while (!(c_valid && p0_ready)) @(negedge clk);
+    @(posedge clk); #1;
     p0_mode = 0;
+    repeat (20) @(negedge clk);
 
     // ==== VERDICT ====
     $display("MEASURED pegc_480: %0d active dots sampled, %0d wrong; %0d displayed lines (last line %0d) in a %0d-line frame (VTOTAL %0d), VSYNC from line %0d",
@@ -424,6 +432,38 @@ module tb_pc9821_pegc_480;
     if (fetches < 480) fail($sformatf("only %0d packed line fetches completed in the frame", fetches));
     if (worst_fetch >= LINE31_SYS) fail($sformatf("a packed line fetch took %0d clk_sys, past the 31 kHz line (%0d)", worst_fetch, LINE31_SYS));
     if (cpu_accepts < 1000) fail("the CPU stream was not served (the contention leg is vacuous)");
+
+    // ---- THE 2.5 MHz LEG: the doubled stride. With the GDC clock back at 2.5 MHz (0x6A 0x82 /
+    // 0x84 clear both gdc.clock bits, NP2kai io/gdc.c gdc_o6a) the packed walk steps by PITCH
+    // DOUBLED (NP2kai vram/makegrex.c `if (!(gdc.clock & 0x80)) mg.pitch <<= 1; mg.pitch &=
+    // 0xfe`, in units of 8 bytes: `vramex + (vc * 8)`), so slave PITCH 0x28 is a 0x50-unit,
+    // 640-byte line - the 640x400 packed games' stride. The frame is re-stored at 640 bytes a
+    // line and one whole frame sampled again against the same per-dot pattern. ----
+    for (y = 0; y < 480; y = y + 1)
+      for (x = 0; x < 640; x = x + 4)
+        store(PEG_BASE + 32'(y * 640 + x),
+              {pix(x + 3, y), pix(x + 2, y), pix(x + 1, y), pix(x, y)});
+    out8(8'h6A, 8'h82); out8(8'h6A, 8'h84);              // the 2.5 MHz GDC clock
+    cmd(8'hA2, 8'h47, 1, 64'h28);                        // slave PITCH 0x28: 0x50 x 8 = 640 bytes
+    if (gdc_ff2_state[7] !== 1'b0 || gdc_ff2_state[8] !== 1'b0)
+      fail($sformatf("the FF2 GDC clock bits read %b%b after 0x6A 0x82 / 0x84, want 00", gdc_ff2_state[8], gdc_ff2_state[7]));
+    for (g = 0; g < 3; g = g + 1) begin
+      @(posedge clk);
+      while (!(pixel_ce && o_frame_end)) @(posedge clk);
+    end
+    samples = 0; bad = 0; shown = 0;
+    @(posedge clk);
+    last_vline = o_vline;
+    sampling = 1'b1;
+    @(posedge clk);
+    while (!(pixel_ce && o_frame_end)) @(posedge clk);
+    @(posedge clk);
+    sampling = 1'b0;
+    $display("MEASURED pegc_480 at 2.5 MHz, PITCH 0x28: %0d active dots sampled, %0d wrong", samples, bad);
+    if (samples != 640 * 480)
+      fail($sformatf("2.5 MHz leg: %0d active dots in the frame, want 307200", samples));
+    if (bad != 0)
+      fail($sformatf("2.5 MHz leg: %0d of %0d dots are not the packed byte at line*640 + dot (PITCH 0x28 doubled)", bad, samples));
     if (errors == 0) begin
       $display("TB_PC9821_PEGC_480: PASS");
       $finish;

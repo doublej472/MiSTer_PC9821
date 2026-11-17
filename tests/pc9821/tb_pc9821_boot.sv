@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_BOOT:
-  // The diagnostic pack boots through the real CPU, memory and I/O path and reaches its own result marker. The cycle count is ASSERTED, not printed: the real backend must reach the marker at exactly 930528 clk_sys (or 875218 with the deliberately-selected +FAST_MEM stub), so a timing regression fails the tier instead of moving a line nothing reads. REGRESSION PIN, NOT CONFORMANCE: the two counts are tripwires fitted to this tree's own runs - non-regression evidence, never correctness evidence - and a DELIBERATE timing change is blessed by re-running with +REBASE_CYCLES (which prints the new measured count instead of asserting the old one) and editing the two constants once in the same change, so a timing change cannot be laundered through by re-measuring silently (review benches N9).
+  // The diagnostic pack boots through the real CPU, memory and I/O path and reaches its own result marker. The cycle count is ASSERTED, not printed: the real backend must reach the marker at exactly 1706091 clk_sys (or 1706074 with the deliberately-selected +FAST_MEM stub), so a timing regression fails the tier instead of moving a line nothing reads. REGRESSION PIN, NOT CONFORMANCE: the two counts are tripwires fitted to this tree's own runs - non-regression evidence, never correctness evidence - and a DELIBERATE timing change is blessed by re-running with +REBASE_CYCLES (which prints the new measured count instead of asserting the old one) and editing the two constants once in the same change, so a timing change cannot be laundered through by re-measuring silently (review benches N9).
 
 
 module tb_pc9821_boot;
@@ -14,18 +14,36 @@ module tb_pc9821_boot;
   // than discovering when the next change is added.
   integer tb_cycles = 0;
   always @(posedge clk_sys) tb_cycles = tb_cycles + 1;
+  // The wait cpu_run's rise takes for the raster's frame end (pc9821_raster_reseed): the loader's
+  // cpu_run and the one the system releases the CPU with, stamped, so a moved count can be split
+  // into that wait and everything else.
+  integer run_ld_at = -1, run_at = -1;
+  always @(posedge clk_sys) begin
+    if (run_ld_at < 0 && dut.cpu_run_ld) begin run_ld_at = tb_cycles; $display("CPU_RUN loader at %0d", tb_cycles); end
+    if (run_at < 0 && dut.cpu_run) begin
+      run_at = tb_cycles;
+      $display("CPU_RUN released at %0d (the frame-end wait %0d clk_sys)", tb_cycles, run_at - run_ld_at);
+    end
+  end
   // The boot's deterministic cycle count IS the regression guard. The
   // production tier (real backend, no plusargs -- what run_boot.sh and gate.py boot) reaches
   // its own result marker at exactly BOOT_CYCLES_REAL clk_sys; the deliberately-selected
   // +FAST_MEM immediate stub (see the BACKEND block) reaches it at BOOT_CYCLES_FAST. Both are
   // asserted where the count is reported below, so a timing change of ANY size is a fatal
   // failure rather than a printed note the gate never reads. Each number was MEASURED on this
-    // tree, not chosen. The current pair (930528 / 875218) includes post.s's explicit GDT/IDT
+    // tree, not chosen. The current pair (1706091 / 1706074) includes post.s's explicit GDT/IDT
     // initialization, which retimed the boot by +12 / +5 when it made the triple-fault stage
     // independent of low-RAM power-up state; moving it again means
     // re-measuring and moving the literal in tests/pc9821/run_boot.sh and the docs with it.
     //
-    // LAST MOVE 930533 -> 930528 / 875227 -> 875218, the z486 re-vendor at d5d0974 (todo item
+    // LAST MOVE 930528 -> 1706091 / 875218 -> 1706074, the raster's frame-end alignment of cpu_run
+    // (pc9821_raster_reseed, AF-3, trade-candidates T93): the CPU now starts on the power-on raster's
+    // first frame end (clk_sys 886171 here) instead of when the pack lands (110608 / 55315), a wait
+    // of exactly 775563 / 830856 clk_sys; the boot after it is cycle-identical (the counts move by
+    // exactly the wait). The real-controller count moved 942534 -> 1706106: the wait 763571 and +1
+    // from the SDRAM controller's refresh phase, which runs from the reset and not from cpu_run.
+    //
+    // THE MOVE BEFORE: 930533 -> 930528 / 875227 -> 875218, the z486 re-vendor at d5d0974 (todo item
     // 160): 0 / 0 from a misaligned direct load reading both dwords on the probe pipeline
     // (a6805e7), -1 / -11 from CLI/STI and LOOP-not-taken without the 386 refetch (a364a2d),
     // -3 / +3 from the real-mode far-transfer tail without its CS-limit restore (bb273da),
@@ -41,14 +59,14 @@ module tb_pc9821_boot;
     // with it once after a DELIBERATE timing change, take the printed measured count,
     // and edit these two constants in the same change (the run then passes on the new
     // count; without the plusarg every count move stays fatal).
-    localparam integer BOOT_CYCLES_REAL = 930528;
-    localparam integer BOOT_CYCLES_FAST = 875218;
+    localparam integer BOOT_CYCLES_REAL = 1706091;
+    localparam integer BOOT_CYCLES_FAST = 1706074;
     // The REAL-CONTROLLER variant (`BOOT_REAL_SDRAM, tests/pc9821/run_boot_real.sh): the same boot
     // with the core's SDRAM backend (split_sdram_backend over sdram_sync_bridge over sdram.v,
     // ADQM=1, FAST_GRADE=0, at this tier's 50 MHz clk_sys) and sdram_chip_model with every
     // protocol, -7 AC and tREFI check on. Pinned: every other count is fatal, and a controller
     // change that moves it reports the new value with its attribution (0 would only report).
-    localparam integer BOOT_CYCLES_REAL_SDRAM = 942534;
+    localparam integer BOOT_CYCLES_REAL_SDRAM = 1706106;
     reg rebase_cycles = 1'b0;
   reg reset = 1;
   reg hps_apply_reset = 0;
@@ -227,7 +245,7 @@ module tb_pc9821_boot;
   // This tier used to answer the CPU ITSELF: `ext_mem0_ready` hard-wired to 1'b1
   // and a response registered for the next cycle, so every access completed one
   // cycle after it was asked. That is not the machine. src/memory/sdram.v accepts
-  // ONE request at a time and only in IDLE (sdram.v:1169, `IDLE: if (~nce) begin`), and answers a
+  // ONE request at a time and only in IDLE (sdram.v:1193, `IDLE: if (~nce) begin`), and answers a
   // single-word read several cycles later: SIX when this backend was chosen; today
   // tests/pc9821/tb_pc9821_sdram.sv prints "a 1-word read was answered 7 cycles after the
   // accept" at its 50 MHz, and tb_pc9821_sdram_sync MEASUREs valid->data 9 clk (8 after the

@@ -1,7 +1,7 @@
 @ECHO OFF
 REM ============================================================
 REM  PC-9821 OPNA / PC-9801-86 sound-register read-back probe
-REM  (settles ISSUES.md C-5 and the register defect B-1)
+REM  (the 0x18E A/D read and the register read-back: docs/probes/OPNA.TXT)
 REM  Copy OPNAPRO.COM + this file to a DOS disk. Run:  RUNOPNA
 REM  Send back OPNA.TXT (or the last BEGIN: marker on screen).
 REM

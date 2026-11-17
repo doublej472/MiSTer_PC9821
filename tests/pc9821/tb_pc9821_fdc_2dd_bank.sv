@@ -24,12 +24,14 @@
 //     :43-56, pic_setirq(0x0b) vs (0x0a)) and the DMA channel (fdc_dmaready, :85-92,
 //     FDC_DMACH2HD = 2 / FDC_DMACH2DD = 3 at :22-27).
 //
-// ONE OF THE ELEVEN CASES IS CAPTURE-PENDING AND ONE IS CAPTURED, and each is NAMED for the reference it
+// TWO CASES REST ON CAPTURES THE REFERENCES DISAGREE WITH, and each is NAMED for the reference it
 // follows so a capture flips a named assertion rather than silently changing a byte:
-//   * hd_window_dead_under_2dd_strap follows NP2KAI (the unselected window answers 0xFF and
-//     swallows writes). qemu-pc98 and MAME ALIAS instead, and MAME carries a TODO saying it
-//     should be gated - so this is the one behavioural bit the references do not agree on,
-//     and no capture in docs/probes/ reads these ports (PORTS.TXT skips 0x5B-0xEF).
+//   * hd_window_dead_under_2dd_strap: the READS are the machine's - with the strap at 0 the
+//     2HD window reads 0x90=FF and 0x94=FF while 0xC8=80 (docs/probes/FDMODE-XE10-FDMF0.TXT
+//     and -FDMF1.TXT), and with it at 1 the 2DD window reads 0xC8=FF and 0xCC=FF
+//     (FDMODE-XE10-FDMF3.TXT); NP2kai gates the same way, where qemu-pc98 and MAME ALIAS
+//     (MAME with a TODO saying it should be gated). The dropped WRITE to the dead window (no
+//     interrupt, the live MSR unchanged) is NP2KAI's: no capture writes the dead window.
 //   * control_port_byte_2dd is CAPTURED now: the 2DD door reads 0x64 in the 640K I/F mode
 //     (docs/probes/FDMODE-XE10-FDMF0.TXT, -FDMF1.TXT) and the 2HD door 0x44 in the 1M mode
 //     (FDMODE-XE10.TXT). NP2kai's fdc_i94 (0x74 at 0xCC, io/fdc.c:1064-1078) and MAME's live
@@ -45,7 +47,7 @@
 //   6  dma_ch3_2dd                 NP2kai fdc_dmaready picks FDC_DMACH2DD = 3
 //   7  dma_ch2_2hd                 regression guard: FDC_DMACH2HD = 2 still selected at 0x03
 //   8  dma_chann_qualifier         the other channel's strobe cannot move these bytes
-//   9  hd_window_dead_under_2dd_strap   NP2kai's gate (capture-pending; qemu/MAME alias)
+//   9  hd_window_dead_under_2dd_strap   reads: FDMF0/FDMF1/FDMF3; the dropped write: NP2kai's gate
 //  10  control_port_byte_2dd       FDMODE-XE10 captures: 0xCC=64 (640K), 0x94=44 (1M);
 //      reg144_640k                 0x04BE=EE with the strap at 0, FE at 1 (FDMF0/FDMF1/FDM0)
 // 10b  selected_rdy                0xCC bit 4 = the selected drive's RDY (undoc98 io_fdd.txt)
@@ -53,7 +55,7 @@
 //                                  the captured 0 one drive poll later and for an empty unit
 //  11  boot_golden_precondition    chgreg resets to 3 (NP2kai fdc_reset, :1159), so the
 //                                  ITF's own 0xC8 probes are gated out and the boot golden
-//                                  (CYCLES used=930542) cannot move
+//                                  cannot move
 // ==== DUT ====
 
 module tb_pc9821_fdc_2dd_bank;
@@ -169,6 +171,7 @@ module tb_pc9821_fdc_2dd_bank;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire  [3:0] dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   reg         dma_mem_ready = 1'b0;
@@ -435,7 +438,7 @@ module tb_pc9821_fdc_2dd_bank;
     // FIRST, because it is the precondition the boot golden rests on: chgreg resets to 3
     // (NP2kai fdc_reset `fdc.chgreg = 3`, io/fdc.c:1159), so at reset the 2HD window answers
     // and the 2DD one is dead - which is why the ITF's own 0xC8 probes (BANK4 0x66A6/0x66CA/
-    // 0x66F5) take the 0x90 branch and CYCLES used=930542 cannot move.
+    // 0x66F5) take the 0x90 branch and the boot golden cannot move.
     port_rd(P_STRAP);
     // The read: docs/probes/FDMODE-XE10.TXT `PORT 00BE=FF` - bits 7:2 read 1 (bit 2 is the
     // fixed-mode DIP; NP2kai's fdc_ibe answers 0xF8|chgreg, bit 2 clear - outranked).
@@ -611,12 +614,14 @@ module tb_pc9821_fdc_2dd_bank;
     repeat (4) @(negedge clk);
 
     // ------------------------------------------------------------------ 9: the gate
-    // CAPTURE-PENDING, and it follows NP2KAI: the unselected window answers 0xFF and its
-    // writes are dropped (`if (((port >> 4) ^ fdc.chgreg) & 1) return 0xff;`, io/fdc.c:1040/
-    // 1050/1068, and the same test at the top of fdc_o92/fdc_o94 :975/:996). qemu-pc98
-    // ALIASES instead (both windows route to one handler, hw/block/pc98-fdc.c:2808-2818) and
-    // MAME aliases with a TODO saying it should be gated (pc9801.cpp:567-569). A capture
-    // reading 0x90/0xC8 before and after `out 0x00BE,0x02` settles it either way.
+    // THE MACHINE for the reads: the unselected window answers 0xFF - 0x90=FF/0x94=FF beside
+    // 0xC8=80 with the strap at 0 (docs/probes/FDMODE-XE10-FDMF0.TXT, -FDMF1.TXT) and
+    // 0xC8=FF/0xCC=FF with it at 1 (FDMODE-XE10-FDMF3.TXT) - as NP2kai gates it (`if (((port
+    // >> 4) ^ fdc.chgreg) & 1) return 0xff;`, io/fdc.c:1040/1050/1068). NP2KAI alone for the
+    // writes, which it drops (the same test at the top of fdc_o92/fdc_o94 :975/:996); no
+    // capture writes the dead window. qemu-pc98 ALIASES instead (both windows route to one
+    // handler, hw/block/pc98-fdc.c:2808-2818) and MAME aliases with a TODO saying it should be
+    // gated (pc9801.cpp:567-569): both disagree with the capture.
     port_wr(P_STRAP, 8'h02);
     port_rd(P_MSR_2HD);
     if (rd_val !== 8'hFF)
@@ -727,7 +732,7 @@ module tb_pc9821_fdc_2dd_bank;
     // ------------------------------------------------------------------ 11: the reset state again
     // The last word is the golden's: from a cold reset the strap is 3, the 2HD window
     // answers and the 2DD one is dead - so every ITF probe that branches to 0xC8 on this
-    // machine takes the 0x90 branch, and `CYCLES used=930542` cannot move.
+    // machine takes the 0x90 branch, and the boot golden cannot move.
     reset = 1;
     repeat (8) @(negedge clk);
     reset = 0;

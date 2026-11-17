@@ -280,7 +280,7 @@ module tb_pc9821_userdisk;
   // coalescer), so a model that answered ONE beat per REQUEST - which is all this tier
   // needed while cb_burstcount was hard-wired to 1 - leaves the buffer's fill waiting for
   // beats that never come. The rest of the burst walks the address, and the controller is
-  // ONE transaction at a time (sdram.v:1169, `IDLE: if (~nce) begin`), so `ready` stays low until its last beat.
+  // ONE transaction at a time (sdram.v:1193, `IDLE: if (~nce) begin`), so `ready` stays low until its last beat.
   reg [7:0]  rd_left = 8'd0;
   reg [31:0] rd_addr = 32'd0;
   assign ext_mem0_ready = ext_mem0_ready_r && (rd_left == 8'd0);
@@ -601,6 +601,73 @@ module tb_pc9821_userdisk;
                dut.dbg_last_io_wr ? "d" : "q", dut.dbg_last_io_data, cpu_cs, cpu_eip, tb_cycle,
                dut.iobus.p31_lat, dut.iobus.sdip_msw_a);
       sysdip_n = sysdip_n + 1;
+    end
+  end
+
+  // +VIDLOG: the raster the core hands the framework, from reset to a settled picture. Every
+  // write to the display ports (both GDCs 0x60/0x62/0xA0/0xA2, the mode flip-flops 0x68/0x6A,
+  // 0x09A8), the machine and CPU resets, and per frame what the framework's video_calc measures
+  // (sys/hps_io.sv:948-1000: DE pixels and DE lines outside VS, frame closed at the end of VS),
+  // printed whenever a frame differs from the one before, with that block's 15-frame resolution
+  // report (`resto`, vid_nres) and pc9821_aspect's 480-line class replayed beside it.
+  reg vidlog = 1'b0;
+  initial vidlog = $test$plusargs("VIDLOG");
+  reg vl_land_q = 1'b0;
+  reg vl_vs_q = 1'b0, vl_de_q = 1'b0, vl_hs_q = 1'b0, vl_c31_q = 1'b0, vl_mr_q = 1'b0, vl_cr_q = 1'b0;
+  integer vl_hcnt = 0, vl_vcnt = 0, vl_lines = 0, vl_fr = 0;
+  integer vl_p_hcnt = -1, vl_p_vcnt = -1, vl_p_lines = -1;
+  longint unsigned vl_fstart = 0, vl_p_len = 0;
+  integer vl_resto = 0, vl_nres = 0;
+  reg vl_tall = 1'b0;
+  reg vl_calch = 1'b0;
+  always @(posedge clk_sys) if (vidlog) begin
+    vl_land_q <= (dut.iobus.state == dut.iobus.S_BYTE &&
+                  !(dut.iobus.device_port && !dut.iobus.request_write && dut.iobus.device_rd_wait)) ||
+                 dut.iobus.state == dut.iobus.S_DEVWAIT;
+    if (vl_land_q && dut.dbg_last_io_wr &&
+        (dut.dbg_last_io_addr == 16'h0060 || dut.dbg_last_io_addr == 16'h0062 ||
+         dut.dbg_last_io_addr == 16'h00A0 || dut.dbg_last_io_addr == 16'h00A2 ||
+         dut.dbg_last_io_addr == 16'h0068 || dut.dbg_last_io_addr == 16'h006A ||
+         dut.dbg_last_io_addr == 16'h09A8))
+      $display("VIO cyc=%0d boot=%0d OUT %04x %02x at %04x:%08x", tb_cycle, mr_boot,
+               dut.dbg_last_io_addr, dut.dbg_last_io_data, cpu_cs, cpu_eip);
+    vl_c31_q <= dut.crt31k;
+    if (dut.crt31k != vl_c31_q) $display("V31 cyc=%0d %0d", tb_cycle, dut.crt31k);
+    vl_mr_q <= mr_reset;
+    if (mr_reset != vl_mr_q) $display("VRST cyc=%0d machine reset %0d", tb_cycle, mr_reset);
+    vl_cr_q <= dut.cpu_reset_req;
+    if (dut.cpu_reset_req && !vl_cr_q) $display("VRST cyc=%0d cpu_reset_req", tb_cycle);
+    if (video_ce) begin
+      vl_vs_q <= !video_vsync;
+      vl_de_q <= video_blank_n;
+      vl_hs_q <= !video_hsync;
+      if (video_vsync && !vl_de_q && video_blank_n) vl_vcnt = vl_vcnt + 1;
+      if (vl_calch && video_blank_n) vl_hcnt = vl_hcnt + 1;   // the first DE line's width
+      if (vl_de_q && !video_blank_n) vl_calch = 1'b0;
+      if (vl_hs_q && video_hsync) vl_lines = vl_lines + 1;   // hsync leading edge
+      if (vl_vs_q && video_vsync) begin                      // the end of VS: video_calc's frame
+        vl_fr = vl_fr + 1;
+        if (vl_hcnt != 0 && vl_vcnt != 0) begin
+          if (vl_resto != 0) vl_resto = vl_resto + 1;
+          if (vl_hcnt != vl_p_hcnt || vl_vcnt != vl_p_vcnt) vl_resto = 1;
+          if (vl_resto == 15) begin
+            vl_nres = vl_nres + 1;
+            $display("VNRES cyc=%0d nres=%0d %0dx%0d", tb_cycle, vl_nres, vl_hcnt, vl_vcnt);
+            vl_resto = 0;
+          end
+        end
+        if (vl_hcnt != vl_p_hcnt || vl_vcnt != vl_p_vcnt || vl_lines != vl_p_lines ||
+            (tb_cycle - vl_fstart) > vl_p_len + 4 || (tb_cycle - vl_fstart) + 4 < vl_p_len)
+          $display("VFR cyc=%0d fr=%0d de_px=%0d de_lines=%0d lines=%0d len=%0d c31=%0d", tb_cycle, vl_fr,
+                   vl_hcnt, vl_vcnt, vl_lines, tb_cycle - vl_fstart, dut.crt31k);
+        if ((vl_vcnt >= 480) != vl_tall && vl_vcnt != 0) begin
+          vl_tall = (vl_vcnt >= 480);
+          $display("VASP cyc=%0d tall=%0d", tb_cycle, vl_tall);
+        end
+        vl_p_hcnt = vl_hcnt; vl_p_vcnt = vl_vcnt; vl_p_lines = vl_lines;
+        vl_p_len = tb_cycle - vl_fstart; vl_fstart = tb_cycle;
+        vl_hcnt = 0; vl_vcnt = 0; vl_lines = 0; vl_calch = 1'b1;
+      end
     end
   end
 

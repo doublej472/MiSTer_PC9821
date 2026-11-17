@@ -178,6 +178,7 @@ module tb_pc9821_ata_takeover_idle;
     end
   endtask
 
+  reg [7:0] value_hi;
   task expect_idle_then_identify(input [8*24-1:0] tag);
     begin
       repeat (2) @(negedge clk);
@@ -186,8 +187,13 @@ module tb_pc9821_ata_takeover_idle;
       if (dut.xfer_state !== 3'd0) begin $display("%0s: xfer_state %0d", tag, dut.xfer_state); fail("takeover left the drive in a transfer state"); end
       write_byte(16'h064E, 8'hEC);
       repeat (2) @(negedge clk);
+      // word 0 = 0x044A, the Xe10's (docs/probes/IDE.TXT:74): both bytes of the word
       read_byte(16'h0640, value);
-      if (value !== 8'h4A) begin $display("%0s: IDENTIFY word0 lo 0x%02x", tag, value); fail("the next command (IDENTIFY) was not accepted"); end
+      read_byte(16'h0641, value_hi);
+      if (value !== 8'h4A || value_hi !== 8'h04) begin
+        $display("%0s: IDENTIFY word0 0x%02x%02x", tag, value_hi, value);
+        fail("the next command (IDENTIFY) was not accepted (word 0 is not 0x044A)");
+      end
       else $display("ok  %0s", tag);
     end
   endtask
@@ -252,7 +258,7 @@ module tb_pc9821_ata_takeover_idle;
     repeat (3) @(negedge clk);
     fill_sector;
     repeat (3) @(negedge clk);
-    if (dut.xfer_state !== 3'd5) $display("T4 setup: xfer_state %0d", dut.xfer_state);
+    if (dut.xfer_state !== 3'd5) fail("T4 setup: expected X_WAIT_WRITE (a non-final sector committing)");
     cmd_write_with_done(8'h10);
     expect_idle_then_identify("T4 wait_write+0x10");
 
@@ -262,6 +268,13 @@ module tb_pc9821_ata_takeover_idle;
       $finish;
     end
     else $fatal(1, "TB_PC9821_ATA_TAKEOVER_IDLE: FAIL (%0d errors)", errors);
+  end
+
+  // A DUT that never answers (a wait above that never ends) fails with a verdict here rather
+  // than hanging until the runner's outer timeout. Far above the bench's own run time.
+  initial begin
+    #10_000_000;
+    $fatal(1, "TB_PC9821_ATA_TAKEOVER_IDLE: TIMEOUT");
   end
 
 endmodule

@@ -253,7 +253,8 @@ class Loop:
         d.mkdir(exist_ok=True)
         local = []
         for p in paths:
-            assert own_shot_path(p, None, ""), p
+            if not own_shot_path(p, None, ""):         # not an assert: -O strips those
+                raise AssertionError(f"not one of this run's screenshots: {p}")
             self.created_shots.append(p)
             try:
                 self.m.get(p, d / f"{tag}-{Path(p).name}")
@@ -474,7 +475,9 @@ def cleanup(lp: Loop, builds):
         time.sleep(6)
     paths = [remote_rbf(lb) for lb in builds] + [remote_mgl(lb) for lb in builds] + [remote_hdd()]
     for p in lp.created_shots:
-        assert own_shot_path(p, None, ""), p           # only screenshots this run caused
+        # only screenshots this run caused; an explicit raise, since -O strips an assert
+        if not own_shot_path(p, None, ""):
+            raise AssertionError(f"cleanup refuses to remove a screenshot it did not cause: {p}")
     m.sh("rm -f " + " ".join(shlex.quote(p) for p in paths + lp.created_shots) + f"; rm -rf {DBG_KEEP}", check=False)
     left = m.sh("for p in " + " ".join(shlex.quote(p) for p in paths + lp.created_shots + [DBG_KEEP])
                 + "; do [ -e \"$p\" ] && echo \"$p\"; done; true", check=False).split()

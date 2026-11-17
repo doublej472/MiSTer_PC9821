@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_READAHEAD:
-// Sector read-ahead across a modelled HPS round trip: with a block adapter that takes a realistic fetch latency before its 256-word stream, a multi-sector READ SECTORS overlaps sector N+1's fetch with sector N's PIO drain, so the per-sector cost is the longer of the two terms rather than their sum -- 4856 cycles (5.3 MB/s) with the measured 4600-cycle fetch against the current class table's 1536-cycle drain, where the serialized FSM paid 6392 (4.0 MB/s) -- while raising exactly one IRQ per sector and presenting each sector's data with DRQ.
+// Sector read-ahead across a modelled HPS round trip: with a block adapter that takes a realistic fetch latency before its 256-word stream, a multi-sector READ SECTORS overlaps sector N+1's fetch with sector N's PIO drain, so the per-sector cost is the longer of the two terms rather than their sum -- the fetch's 4856 cycles (5.3 MB/s, the measured 4600-cycle round trip plus the 256-word stream) against a 2304-cycle drain (256 words x 9 clk_sys, the data-port word cost tb_pc9821_ata_iowait measures through the real pc9821_iobus), where a serialized FSM pays 7160 (3.6 MB/s); the run must land under 16 x (4856 + 512), between the two regimes -- while raising exactly one IRQ per sector, issuing exactly one fetch per sector, keeping a fetch in flight for at least half of the 15 inner drains' cycles (so a fetch issued after the drain fails), and presenting each sector's data with DRQ.
 
 
 module tb_pc9821_ata_readahead;
@@ -29,24 +29,28 @@ module tb_pc9821_ata_readahead;
   wire [7:0] dbg_state;
   wire [31:0] dbg_cmd;
 
-  // The word rate is the CURRENT class table's, not the superseded 30: pc9821_iobus charges
-  // 0x0640/0x0641 IO_MIN_HOLD = 4, and a 16-bit data word is ONE access that
-  // walks two lanes, so it is 6 clk_sys (tb_pc9821_ata_iowait measures 6 delivered / 5
-  // stalled through the real bus). The bench drives io_rd directly, so it inserts that
-  // cost itself: each of the two byte reads is 2 cycles (read_byte) and PIO_GAP completes
-  // the word. 28 here was the superseded class 30 and made every figure 5x pessimistic.
-  localparam PIO_GAP     = 2;
-  localparam DRAIN_SECTOR = 256 * (4 + PIO_GAP);   // 1,536 cycles = 30.7 us = 16.7 MB/s
+  // The word rate is the one tb_pc9821_ata_iowait MEASURES through the real pc9821_iobus:
+  // 0x0640/0x0641 sit at the class table's floor (IO_MIN_HOLD = 4) and a 16-bit data word
+  // is ONE access that walks two lanes, each lane paying its own class, so the word is
+  // delivered in 9 clk_sys (8 of them stalled) and a sector's data phase is 256 x 9 = 2304.
+  // This bench drives io_rd directly, so it inserts that cost itself: each of the two byte
+  // reads is 2 cycles (read_byte) and PIO_GAP completes the word. Earlier values here (28,
+  // then 2 = a 6-clk word) were superseded class models; iowait is the number to follow.
+  localparam WORD_CYCLES = 9;                      // tb_pc9821_ata_iowait: delivered = 9
+  localparam PIO_GAP     = WORD_CYCLES - 4;
+  localparam DRAIN_SECTOR = 256 * (4 + PIO_GAP);   // 2,304 cycles = 46.1 us = 11.1 MB/s
   // The HPS fetch the read-ahead must hide: sd_rd -> sd_ack -> req_done, up to
   // ~4,600 cycles/sector, then the 256-word stream.
   localparam HPS_LAT   = 4600;
   localparam HPS_FETCH = HPS_LAT + 256;            // 4,856 cycles
   localparam SECTORS   = 16;
   localparam LBA_BASE  = 32'h1000;
-  // The two regimes at the current class: the drain is 1,536 and the fetch 4,856, so the
-  // FETCH is the binding term and the overlap window (one sector's drain) can no longer
-  // hide it. Serialized (the old FSM) the sector costs DRAIN + FETCH = 6,392; overlapped it
-  // costs FETCH. The bound sits between the two, so a lost overlap fails.
+  // The two regimes: the drain is 2,304 and the fetch 4,856, so the FETCH is the binding
+  // term and the overlap window (one sector's drain) cannot fully hide it. Serialized (the
+  // old FSM: fetch N+1 only after sector N drained) a sector costs DRAIN + FETCH = 7,160;
+  // overlapped it costs FETCH plus the FSM's few cycles. The bound gives the overlapped run
+  // 512 cycles of slack per sector and still sits 1,792 under the serialized cost, so a lost
+  // overlap fails.
   localparam SERIAL_BOUND = SECTORS * (HPS_FETCH + 512);
 
   // ==== DUT ====
@@ -105,6 +109,10 @@ module tb_pc9821_ata_readahead;
       @(posedge clk);
       @(negedge clk);
       io_wr = 0;
+      // The guest's next access comes at least five clk_sys after a command's (pc9821_iobus
+      // S_BYTE -> S_REPLY -> S_HOLD -> S_IDLE -> S_IOWAIT -> S_BYTE), and a media command
+      // dispatches pc9821_ata's MEDIA_WAIT cycles after its write: look no sooner than the bus.
+      if (addr == 16'h064E) repeat (4) @(negedge clk);
     end
   endtask
 
@@ -120,8 +128,8 @@ module tb_pc9821_ata_readahead;
     end
   endtask
 
-  // One PIO word: low byte at 0x640, high byte at 0x641, then the I/O class's
-  // remaining wait, so a sector costs the current class table's 1,536 cycles.
+  // One PIO word: low byte at 0x640, high byte at 0x641, then the rest of the measured
+  // word cost, so a sector's drain is DRAIN_SECTOR (2,304) cycles.
   task read_pio_word(output [15:0] data);
     reg [7:0] lo, hi;
     begin
@@ -191,8 +199,8 @@ module tb_pc9821_ata_readahead;
   end
 
   // Count the cycles a fetch is IN FLIGHT while the guest has a sector to drain: this is the
-  // overlap the read-ahead exists to create. At the current class the fetch (4,856) is longer
-  // than the drain (1,536), so the guest finishes the sector before the stream starts -- the
+  // overlap the read-ahead exists to create. The fetch (4,856) is longer
+  // than the drain (2,304), so the guest finishes the sector before the stream starts -- the
   // overlapped term is the fetch's LATENCY, and the counter must accept a still-waiting
   // adapter (ad_wait != 0) as overlapping, or it would read zero in exactly the regime the
   // read-ahead now has to work in.
@@ -248,10 +256,12 @@ module tb_pc9821_ata_readahead;
       fail("one block request per sector expected (a lost or extra fetch)");
     if (irq_count != SECTORS)
       fail("exactly one IRQ per sector expected (per fetch is the defect)");
-    // One sector's drain is 1,536 cycles and the fetch is issued when the sector is
-    // presented, so a working read-ahead overlaps most of that window. Zero (or a few
-    // cycles) means the request goes out after the drain instead of during it.
-    if (overlap_cycles < 1024)
+    // One sector's drain is DRAIN_SECTOR (2,304) cycles and the fetch is issued when the
+    // sector is presented, so a working read-ahead keeps a fetch in flight for (nearly) the
+    // whole of every drain but the last: 15 drains here. Half of that is required: a fetch
+    // issued AFTER each drain overlaps none of them and reads 0, one issued half-way through
+    // each drain reads half, the defect this check exists for.
+    if (overlap_cycles < ((SECTORS - 1) * DRAIN_SECTOR) / 2)
       fail("the HPS fetch barely overlapped the PIO drain (the read-ahead did nothing)");
 
     // The measurement. Serialized, the run would be SECTORS*(DRAIN+FETCH); the
@@ -265,9 +275,9 @@ module tb_pc9821_ata_readahead;
                SECTORS, elapsed, elapsed * 1.0 / SECTORS, mbps_x100 / 100.0);
       $display("READAHEAD overlap=%0d serialized_bound=%0d HPS_FETCH=%0d",
                overlap_cycles, SERIAL_BOUND, HPS_FETCH);
-      // At the current class the fetch (4,856) is the longer term, so the per-sector cost
-      // must be the fetch plus a little of the FSM: 512 cycles of slack sits under the
-      // serialized 6,392 and over the measured value, so a lost overlap fails.
+      // The fetch (4,856) is the longer term, so the per-sector cost must be the fetch plus
+      // a little of the FSM: 512 cycles of slack sits under the serialized 7,160 and over
+      // the measured value, so a lost overlap fails.
       if (elapsed > SERIAL_BOUND)
         fail("throughput is in the serialized regime: the read-ahead did not hide the HPS fetch");
       if (mbps_x100 < 500)

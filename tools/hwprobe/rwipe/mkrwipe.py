@@ -190,6 +190,13 @@ def main() -> int:
             sh('mdeltree', '-i', img, '::/' + name, env=env)
         elif name in ('CONFIG.SYS', 'AUTOEXEC.BAT', 'MENU.TXT'):
             sh('mdel', '-i', img, '::/' + name, env=env)
+    # mdir -b marks a directory with a trailing '/' (mtools 4.0: `::/DOS/`); the long listing's
+    # <DIR> column is the independent check that no folder but DOS is left on the kit.
+    left = [ln.split()[0] for ln in subprocess.run(['mdir', '-i', img, '::/'], env=env, check=True,
+                                                   capture_output=True, text=True).stdout.splitlines()
+            if '<DIR>' in ln and not ln.startswith(' ')]
+    if [d for d in left if d.upper() != 'DOS']:
+        raise SystemExit(f'folders left on the kit after the cleanup: {left} (mdir -b gave {ls})')
     sh('mcopy', '-o', '-i', img, os.path.join(work, 'CONFIG.SYS'), os.path.join(work, 'AUTOEXEC.BAT'),
        '::/', env=env)
     sh('mcopy', '-s', '-i', img, os.path.join(work, 'RWIPE'), '::/', env=env)

@@ -341,7 +341,7 @@ def pp_sv(text):
 
 
 def prove(rel, rev, plant=None, seq=2, with_files=(), old_add="", new_add="", blacklist=(), new_rev=None,
-          gate=(), new_subst=(), abstract_mul=False):
+          gate=(), new_subst=(), abstract_mul=False, old_stage=None):
     old = subprocess.run(["git", "show", "%s:%s" % (rev, rel)], cwd=REPO,
                          capture_output=True, text=True)
     if old.returncode:
@@ -385,7 +385,26 @@ def prove(rel, rev, plant=None, seq=2, with_files=(), old_add="", new_add="", bl
             k = t.index(");", t.index("module %s" % name)) + 2
             t = t[:k] + "".join("\n  wire %s = %s_in && (%s);" % (p_, p_, g) for p_, g in gate) + t[k:]
         return t
-    old_t = env(add(pp_sv(old.stdout), old_add)).replace("module %s" % name, "module eqv_old", 1)
+    def stage(t):
+        # old_stage = (decl, ((name, staged), ...), keep): an INPUT STAGE written into the OLD copy, the
+        # specification a cut that registers an input stream is proven against. `decl` (the stage's
+        # registers and their always block, the same text the new module carries) goes in after the
+        # module's port list, and every whole-word use of each input `name` in the body - except on a
+        # line holding one of the `keep` substrings (a use the cut leaves live) - becomes `staged`.
+        # The proof then says the cut is exactly that stage: no consumer left on the live input, none
+        # moved that should not have been.
+        if not old_stage:
+            return t
+        decl, names, keep = old_stage
+        k = t.index(");", t.index("module %s" % name)) + 2
+        body = t[k:].split("\n")
+        for i, ln in enumerate(body):
+            if any(x in ln for x in keep):
+                continue
+            for n_, st in names:
+                body[i] = re.sub(r"\b%s\b" % n_, st, body[i])
+        return t[:k] + "\n" + decl + "\n".join(body)
+    old_t = env(add(stage(pp_sv(old.stdout)), old_add)).replace("module %s" % name, "module eqv_old", 1)
     new_t = env(add(pp_sv(new), new_add)).replace("module %s" % name, "module eqv_new", 1)
     if abstract_mul:
         # abstract_mul: every `{...} * {...}` product becomes `{...} ^ {...}` in BOTH copies, so the
@@ -414,10 +433,12 @@ def prove(rel, rev, plant=None, seq=2, with_files=(), old_add="", new_add="", bl
             bl = "-blacklist black.txt "
         # `memory` (not `memory -nomap`): equiv's SAT has no model for a $mem cell, and a file with
         # an array (sdram.v's gather slot maps) otherwise dies on "No SAT model available".
-        script = ("read_verilog -sv old.sv new.sv %s; proc; opt_clean; memory; flatten; memory; "
+        # With --with files, `hierarchy` first derives each parameterised instance (a submodule read
+        # with its defaults would be flattened at the default widths, e.g. pc9821_static_stage's W=1).
+        script = ("read_verilog -sv old.sv new.sv %s; %sproc; opt_clean; memory; flatten; memory; "
                   "equiv_make %seqv_old eqv_new eq; hierarchy -top eq; "
                   "equiv_simple -seq %d; equiv_induct -seq %d; equiv_status -assert"
-                  % (" ".join(wnames), bl, seq, seq))
+                  % (" ".join(wnames), "hierarchy; " if wnames else "", bl, seq, seq))
         r = subprocess.run(["yosys", "-p", script], cwd=tmp, capture_output=True, text=True)
     ok = r.returncode == 0 and "Equivalence successfully proven!" in r.stdout
     summary = [ln.strip() for ln in r.stdout.splitlines() if "are proven" in ln]
@@ -435,7 +456,52 @@ DPRAM4 = "tools/equiv/seq/dpram4.sv"   # pc9821_dpram cut to four words, no init
 CRTC_WITH = ("src/pc9821/core/pc9821_text_mem.sv", DPRAM4)
 HDD_OLD_ADD = ("(* keep *) wire [40:0] pq_slo = size_q[40:0]; (* keep *) wire pq_shi = |size_q[63:41]; (* keep *) wire pq_r0 = (hdr_word[0] == 16'd0); (* keep *) wire pq_r1 = (hdr_word[1] == 16'd0); (* keep *) wire [20:0] pq_hs = {hdr_word[5][4:0], hdr_word[4]}; (* keep *) wire pq_hshz = (hdr_word[5][15:5] == 11'd0); (* keep *) wire [31:0] pq_ds = {hdr_word[7], hdr_word[6]}; (* keep *) wire pq_b8 = (hdr_word[8] == 16'd512); (* keep *) wire pq_b9 = (hdr_word[9] == 16'd0); (* keep *) wire [7:0] pq_spt = hdr_word[10][7:0]; (* keep *) wire pq_spth = (hdr_word[10][15:8] == 8'd0); (* keep *) wire pq_s11 = (hdr_word[11] == 16'd0); (* keep *) wire [7:0] pq_hd = hdr_word[12][7:0]; (* keep *) wire pq_hdh = (hdr_word[12][15:8] == 8'd0); (* keep *) wire pq_h13 = (hdr_word[13] == 16'd0); (* keep *) wire [15:0] pq_cy = hdr_word[14]; (* keep *) wire pq_cyh = (hdr_word[15] == 16'd0); (* keep *) wire [3:0] pq_ck = {vhd_word[3] == 16'h7869, vhd_word[2] == 16'h7463, vhd_word[1] == 16'h656E, vhd_word[0] == 16'h6F63}; (* keep *) wire [3:0] pq_dof = {vhd_word[11] == 16'hFFFF, vhd_word[10] == 16'hFFFF, vhd_word[9] == 16'hFFFF, vhd_word[8] == 16'hFFFF}; (* keep *) wire pq_c24 = (vhd_word[24] == 16'd0); (* keep *) wire [6:0] pq_c25h = bswap16(vhd_word[25]) >> 9; (* keep *) wire [40:0] pq_clo = {vhd_word[25][0], vhd_word[25][15:8], vhd_word[26][7:0], vhd_word[26][15:8], vhd_word[27][7:0], vhd_word[27][15:8]}; (* keep *) wire pq_t30 = (vhd_word[30] == 16'd0); (* keep *) wire pq_t31 = (bswap16(vhd_word[31]) == 16'd2); (* keep *) wire [15:0] pq_cs32 = vhd_word[32]; (* keep *) wire [15:0] pq_cs33 = vhd_word[33];")
 HDD_NEW_ADD = ('(* keep *) wire [40:0] pq_slo = size_lo; (* keep *) wire pq_shi = size_hi; (* keep *) wire pq_r0 = h_res0_z; (* keep *) wire pq_r1 = h_res1_z; (* keep *) wire [20:0] pq_hs = h_hsize; (* keep *) wire pq_hshz = h_hsize_hi_z; (* keep *) wire [31:0] pq_ds = h_datasz; (* keep *) wire pq_b8 = h_bps_lo_512; (* keep *) wire pq_b9 = h_bps_hi_z; (* keep *) wire [7:0] pq_spt = h_spt; (* keep *) wire pq_spth = h_spt_hi_z; (* keep *) wire pq_s11 = h_spt_w11_z; (* keep *) wire [7:0] pq_hd = h_heads; (* keep *) wire pq_hdh = h_heads_hi_z; (* keep *) wire pq_h13 = h_heads_w13_z; (* keep *) wire [15:0] pq_cy = h_cyls; (* keep *) wire pq_cyh = h_cyls_hi_z; (* keep *) wire [3:0] pq_ck = v_cookie_w; (* keep *) wire [3:0] pq_dof = v_dof_w; (* keep *) wire pq_c24 = v_cur_w24_z; (* keep *) wire [6:0] pq_c25h = v_cur_w25_hi; (* keep *) wire [40:0] pq_clo = v_cur_lo; (* keep *) wire pq_t30 = v_type_hi_z; (* keep *) wire pq_t31 = v_type_lo_2; (* keep *) wire [15:0] pq_cs32 = v_csum_w32; (* keep *) wire [15:0] pq_cs33 = v_csum_w33;')
+# The HPS word stream's input stage (docs/timing.md, "The HPS word stream, one stage in"): the
+# specification the drive and the block engine are proven against is their parent with exactly this
+# stage written in (old_stage), every body use of the four inputs routed through it.
+HPS_STAGE = ("  reg hs_ack = 1'b0, hs_wr = 1'b0;\n  reg [12:0] hs_addr = 13'd0;\n  reg [15:0] hs_dout = 16'd0;\n"
+             "  always @(posedge clk) begin hs_ack <= sd_ack; hs_wr <= sd_buff_wr; "
+             "hs_addr <= sd_buff_addr; hs_dout <= sd_buff_dout; end\n")
+HPS_NAMES = (("sd_ack", "hs_ack"), ("sd_buff_wr", "hs_wr"), ("sd_buff_addr", "hs_addr"),
+             ("sd_buff_dout", "hs_dout"))
 PROOFS = {
+    # The DMA channel address shadow (docs/timing.md): cur_addr_q == ch_addr[cur] is the induction's
+    # invariant. reset: ch_addr all 0, cur 0, cur_addr_q 0.
+    "dmac_cur_addr": ("src/pc9821/core/pc9821_dmac.sv", "d7d1e37b~", "d7d1e37b",
+                      dict(old_add="(* keep *) wire inv_d = 1'b1;",
+                           new_add="(* keep *) wire inv_d = (cur_addr_q == ch_addr[cur]);"),
+                      [("      cur_addr_nx[30:24] = 7'd0;", "      ;"),
+                       ("    else if (cpu_master)", "    else if (1'b0)"),
+                       ("  wire [1:0] cur_nx = (state == S_IDLE && any_want) ? (want[0] ? 2'd0 : want[1] ? 2'd1 :",
+                        "  wire [1:0] cur_nx = (state == S_IDLE && any_want) ? (want[1] ? 2'd1 : want[0] ? 2'd0 :"),
+                       ("      cur_addr_nx = addr_hit ? addr_cpu_val : addr_base;    // cur_nx == cur here",
+                        "      cur_addr_nx = addr_base;")]),
+    # The drive with exactly the stage on its input; each plant leaves one consumer on the live stream.
+    "atapi_hps_stage": ("src/pc9821/storage/pc9821_atapi.sv", "65bc7dfe~", "65bc7dfe",
+                        dict(with_files=("src/pc9821/common/pc9821_static_stage.sv",),
+                             old_stage=(HPS_STAGE, HPS_NAMES, ())),
+                        [("  wire e_done = (e_st == E_STREAM) && !hs_ack;",
+                          "  wire e_done = (e_st == E_STREAM) && !sd_ack;"),
+                         ("      E_WAIT: if (hs_ack) begin sd_rd <= 1'b0; e_st <= E_STREAM; end",
+                          "      E_WAIT: if (sd_ack) begin sd_rd <= 1'b0; e_st <= E_STREAM; end"),
+                         ("  wire [12:0] e_rel = hs_addr - {4'd0, e_w0};",
+                          "  wire [12:0] e_rel = sd_buff_addr - {4'd0, e_w0};")]),
+    # The block engine with exactly the stage on its input, the write direction's read port live.
+    "block_io_hps_stage": ("src/pc9821/storage/pc9821_block_io.sv", "acc0ffbf~", "acc0ffbf",
+                           dict(old_stage=(HPS_STAGE, HPS_NAMES, ("assign buf_rd_addr = sd_buff_addr[7:0];",))),
+                           [("  wire fetch_ack_done = fetch_active && (fetch_st == F_ACKED) && !hs_ack;",
+                             "  wire fetch_ack_done = fetch_active && (fetch_st == F_ACKED) && !sd_ack;"),
+                            ("  assign buf_data = (serve_st == S_REPLAY) ? cache_q : hs_dout;",
+                             "  assign buf_data = (serve_st == S_REPLAY) ? cache_q : sd_buff_dout;"),
+                            ("  assign buf_rd_addr = sd_buff_addr[7:0];", "  assign buf_rd_addr = hs_addr[7:0];")]),
+    # The PEGC store buffer's pair facts from registers (C5-pair): no strengthening needed.
+    "storebuf_pair_facts": ("src/pc9821/core/pc9821_pegc_storebuf.sv", "c1d3cf97~", "c1d3cf97", dict(),
+                            [("    nx_fresh_i <= 3'(wp - 3'd1);", "    nx_fresh_i <= wp;"),
+                             ("  wire        fresh_adj = ({1'b0, last_addr} == ({1'b0, prev_addr} + 18'd1));   // 18 bits, as at the allocation",
+                              "  wire        fresh_adj = (last_addr == (prev_addr + 17'd1));"),
+                             ("    nx_fresh   <= !reset && alloc_now;", "    nx_fresh   <= alloc_now;"),
+                             ("  wire        fresh_sm  = (last_addr[16:8] == prev_addr[16:8]);",
+                              "  wire        fresh_sm  = (last_addr[16:9] == prev_addr[16:9]);")]),
     # rdptr pairs by name with the old register: the identity is the whole strengthening.
     "pcm86_rdptr": ("src/pcm86/pc9821_pcm86.sv", "849c0e0a~", "849c0e0a",
                     dict(with_files=("src/pcm86/pc9821_pcm86_buf.sv",)),

@@ -51,7 +51,15 @@ python3 tools/cue2pcd.py GAME.ccd              # a CloneCD set (single session; 
 python3 tools/cue2pcd.py --batch FOLDER        # every .cue and .ccd under FOLDER; safe to rerun
 ```
 
-Only the `.pcd` goes on the SD card.
+Only the `.pcd` goes on the SD card. A sheet whose tracks are not numbered from `TRACK 01` in
+order is refused with a one-line message (the drive numbers a disc's tracks from 1); renumber
+its tracks from 01 and convert it again.
+
+Mode 2 data tracks (CUE `MODE2/2352`, `MODE2/2336` or `MODE2/2048`; CloneCD `MODE=2`) are stored
+as Mode 1 sectors carrying the same 2048 bytes of user data a drive returns for them. A Mode 2
+form 2 sector keeps the first 2048 of its 2324 bytes, and the converter reports how many there
+were. A `.pcd` made from a Mode 2 track by an earlier version of the converter returns
+that track's data 8 bytes out of place: convert it again (`--batch` rebuilds it by itself).
 
 ### Converting floppy images
 
@@ -90,6 +98,10 @@ memory (a 2 GB image needs several GB of RAM).
 python3 tools/pc98_hdd_convert.py --new 500 NEW.img      # 500 MB (up to 4351)
 python3 tools/pc98_hdd_convert.py --new 7500c NEW.img    # in cylinders (up to 65535, ~4.25 GiB)
 ```
+
+A name ending in `.hdi` writes an HDI, any other name a raw image. An HDI holds at most 4112 MB
+(61680 cylinders, as its header records the data size in 32 bits); a larger disk is made as a raw
+`.img`.
 
 The new disk is blank: partition and format it with NEC MS-DOS `FORMAT`
 ([Setting up DOS on a new hard disk](dos-windows.md#setting-up-dos-on-a-new-hard-disk)).

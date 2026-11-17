@@ -211,8 +211,8 @@ def check_against_dumps(pack: bytes, dumps: Dumps, rhythm: Path | None,
                          f"expected 8192 or {IDE_SLOT}")
     banks = None
     if dumps.banks is not None:
-        banks = [read(dumps.banks / f"BANK{i}.BIN", BANK_SIZE, f"BANK{i}")
-                 for i in range(8)]
+        banks = [read(path, BANK_SIZE, f"BANK{i}")
+                 for i, path in enumerate(dumps.bank_paths())]
 
     if banks is not None:
         report_diff(itf, banks[pack_layout.ITF_BANK], f"--itf {dumps.itf.name} vs "

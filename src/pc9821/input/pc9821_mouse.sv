@@ -256,7 +256,14 @@ module pc9821_mouse #(
       cnt_x <= 16'sd0; cnt_y <= 16'sd0;
       limitcounter <= 3'd0;
       buttons <= 4'b1110;      // L/M/R released (mousemng.c:54 + the MAME bit 6)
-      ps2_tog <= 1'b0;
+      // The edge register TRACKS the toggle through reset rather than clearing: hps_io holds
+      // the last packet as a level and flips bit 24 only on a new one (sys/hps_io.sv
+      // `if(cmd == 4 && !ps2skip) ps2_mouse[24] <= ~ps2_mouse[24];`), and an OSD reset does not
+      // reset hps_io, so a cleared ps2_tog met a held bit 24 of 1 at the release and replayed
+      // the stale packet's deltas and buttons into the freshly reset counters. Tracking it makes
+      // the first post-reset packet edge the first NEW packet; one arriving during reset is
+      // dropped with the state it would have changed (tb_pc9821_mouse section 9).
+      ps2_tog <= ps2_mouse[24];
       tick_armed <= 1'b0; tick_ctr <= {MOUSE_TICK_W{1'b0}}; irq_r <= 1'b0;
     end else begin
       ps2_tog <= ps2_mouse[24];

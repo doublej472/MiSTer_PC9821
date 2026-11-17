@@ -12,6 +12,7 @@ Usage:
     python3 tools/hwprobe/mputest/mputest_decode.py --check          # includes current?
     python3 tools/hwprobe/mputest/mputest_decode.py --selftest
     python3 tools/hwprobe/mputest/mputest_decode.py MPUTEST.TXT      # check + summarise
+    python3 tools/hwprobe/mputest/mputest_decode.py MPUTEST.TXT --strict   # an ACK unlike the manual fails
     python3 tools/hwprobe/mputest/mputest_decode.py MPUTEST.TXT --wire WIRE.BIN [--model M]
             # compare a raw MIDI-OUT capture (ttyS1 at 31250, `amidi -r`, MidiLink UDP
             # payloads concatenated) with the stream the run must have produced
@@ -526,7 +527,11 @@ def us(ticks):
     return ticks * 1e6 / ARTIC_HZ
 
 
-def summarise(cap, out=print):
+def summarise(cap, out=print, strict=False):
+    """Print the capture's tables; 1 on a structural error, and with strict also when a CMD
+    row's ACK disagrees with the reference (the MPU-401 manual model). The disagreement is
+    always counted in the output; whether it fails the run is the caller's choice, because on
+    a core capture it is the behavioural finding, not a broken capture."""
     h = cap["hdr"] or {}
     out("MPUTEST capture: flow=%s raw=%s tables=%s" % (h.get("flow"), h.get("raw"),
                                                       h.get("tables")))
@@ -554,8 +559,10 @@ def summarise(cap, out=print):
     if len(cap["cmds"]) != len(card.acks):
         out("  WARNING: %d CMD rows, the run has %d commands" % (len(cap["cmds"]),
                                                                len(card.acks)))
+    ack_diff = 0
     for c, want, want_np2 in zip(cap["cmds"], card.acks, np2.acks):
         got = c["ack"] != "--"
+        ack_diff += got != want
         flag = "" if got == want else "   <- reference (MPU-401 manual) %s" % (
             "ACKs" if want else "does not ACK")
         if want_np2 != want:
@@ -576,9 +583,12 @@ def summarise(cap, out=print):
         r = cap["raww"]
         out("  RAW: %d bytes written blind in %.1f us, status after %02X (compare the wire "
             "capture for the bytes that survived)" % (r["n"], us(r["t"]), r["st"]))
+    if ack_diff:
+        out("  ACK: %d CMD row(s) disagree with the reference (MPU-401 manual)%s" % (
+            ack_diff, "" if strict else "; --strict makes that exit 1"))
     for e in cap["errors"]:
         out("  ERROR: " + e)
-    return 1 if cap["errors"] else 0
+    return 1 if cap["errors"] or (strict and ack_diff) else 0
 
 
 # ---- wire comparison -----------------------------------------------------------------------
@@ -746,6 +756,17 @@ def selftest():
     cap = parse_capture(synth_capture("BYTES"))
     out = []
     check(summarise(cap, out.append) == 0 and not cap["errors"], "a clean capture decodes")
+    # an ACK that disagrees with the manual model is counted, and fails under strict
+    exact = parse_capture(synth_capture("DEFAULT", ack_all=False))
+    check(summarise(exact, [].append, strict=True) == 0, "the manual model's own ACKs pass --strict")
+    flip = synth_capture("DEFAULT", ack_all=False)
+    i = flip.index("ack=FE")
+    flip = flip[:i] + "ack=--" + flip[i + 6:]
+    o2 = []
+    check(summarise(parse_capture(flip), o2.append) == 0 and
+          summarise(parse_capture(flip), [].append, strict=True) == 1 and
+          any(ln.startswith("  ACK: 1 CMD row") for ln in o2),
+          "one flipped ACK is counted, and fails only with --strict")
     cap = parse_capture(synth_capture("DEFAULT", truncate=True))
     check(any("TRUNCATED" in e for e in cap["errors"]) and "DONE-MISSING" in cap["errors"],
           "a truncated capture is flagged")
@@ -776,6 +797,8 @@ def main():
     ap.add_argument("--hex", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--pair")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit 1 when an ACK disagrees with the MPU-401 manual model")
     a = ap.parse_args()
     if a.gen:
         for p, text in gen_all().items():
@@ -798,11 +821,12 @@ def main():
         ap.print_usage()
         return 2
     cap = parse_capture(pathlib.Path(a.capture).read_bytes().decode("ascii", "replace"))
-    rc = summarise(cap)
+    rc = summarise(cap, strict=a.strict)
     if a.pair:
         print("--- %s" % a.pair)
         rc |= summarise(parse_capture(pathlib.Path(a.pair).read_bytes().decode("ascii",
-                                                                                "replace")))
+                                                                                "replace")),
+                        strict=a.strict)
     if a.wire:
         rc |= wire_report(cap, pathlib.Path(a.wire).read_bytes(), a.model)
     return rc

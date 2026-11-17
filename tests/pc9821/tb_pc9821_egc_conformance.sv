@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_EGC_CONFORMANCE: a DIFFERENTIAL conformance suite for the EGC. The REAL pc9821_egc (through the REAL pc9821_gvram client and the REAL src/memory/sdram.v controller against the chip model) and the behavioural REFERENCE model tests/pc9821/pc9821_egc_ref.sv - a function-for-function transcription of NP2kai's mem/memegc.c and io/egc.c - are driven through the same matrix of registers and CPU accesses and must agree BYTE FOR BYTE on the resulting GVRAM and on every read datum. Each case gets its own 16-byte window on both pages. The matrix covers the three write modes (WS_CPU 0x0000, WS_ROP 0x0800/0x0B00/0x0CF0, WS_PATREG 0x1000/0x1400), all 256 ROP codes, the read modes (COMPAREREAD 0x2000, SHIFT_CPU 0x0400, RL_MEMREAD 0x0100), the colour-quad selects, the plane-enable register, the mask register, byte/word/dword and odd-word accesses over every byte-enable set, the shift register (both directions, moved and byte-aligned sub-byte shifts, srcbit >= 8), and the two shapes already bit by the optimizations: a 32-bit put with shift 0 over a WCB-dirty destination (the m_mode fallback) and a posted write followed by a same-word read. It does NOT measure timing or column counts; those are tb_pc9821_egc.sv's sections 12-15.
+// TB_PC9821_EGC_CONFORMANCE: a DIFFERENTIAL conformance suite for the EGC. The REAL pc9821_egc (through the REAL pc9821_gvram client and its on-chip plane store, tests/pc9821/pc9821_gvram_dut.sv) and the behavioural REFERENCE model tests/pc9821/pc9821_egc_ref.sv - a function-for-function transcription of NP2kai's mem/memegc.c and io/egc.c - are driven through the same matrix of registers and CPU accesses and must agree BYTE FOR BYTE on the resulting GVRAM and on every read datum. Each case gets its own 16-byte window on both pages. The matrix covers the three write modes (WS_CPU 0x0000, WS_ROP 0x0800/0x0B00/0x0CF0, WS_PATREG 0x1000/0x1400), all 256 ROP codes, the read modes (COMPAREREAD 0x2000, SHIFT_CPU 0x0400, RL_MEMREAD 0x0100), the colour-quad selects, the plane-enable register (each plane disabled alone, and all four enabled), the mask register, byte/word/dword and odd-word accesses over every byte-enable set, the shift register (both directions, moved and byte-aligned sub-byte shifts, srcbit >= 8), and the shape already bit by an optimization: a posted write followed by a same-word read. It does NOT measure timing or column counts; those are tb_pc9821_egc.sv's sections 12-14, 16 and 17 and tb_pc9821_egc_xe10_pace.sv.
 //
 // Two regressions sit outside that matrix: section 0 is the NO-ARM-AFTER-
 // RESET store (F1) - the very first EGC op after reset, with the registers at their
@@ -78,13 +78,6 @@ module tb_pc9821_egc_conformance;
       .line_rd_addr(line_rd_addr), .line_rd_sel(line_rd_sel),
       .line_data(line_data), .line_sel(line_sel), .line_ready(line_ready));
 
-  // The real controller, at the built configuration, against the chip model (as
-  // tb_pc9821_egc_post_walk.sv drives it).
-
-  
-
-  
-
   // The golden. One node per bench invocation; its tasks are called hierarchically.
   pc9821_egc_ref gold();
 
@@ -136,17 +129,17 @@ module tb_pc9821_egc_conformance;
     end
   endtask
 
-  task automatic flush_wcb;
-    begin
-      @(negedge clk);
-      scan_line_tick = 1'b1;
-      @(negedge clk);
-      scan_line_tick = 1'b0;
-      @(posedge clk);
-      while (1'b0) @(posedge clk);
-      @(posedge clk);
-    end
-  endtask
+  // ---- section 1's plane-enable sweep. A SET low-nibble bit of 0x4A0 DISABLES that plane
+  //      (NP2kai mem/memegc.c writes plane p only when !(egc.access & (1 << p)), the rule
+  //      pc9821_egc_ref.sv transcribes), so a = 0..3 disables plane a alone and a = 4 is the
+  //      all-planes-enabled baseline 0xFFF0. ----
+  function [15:0] pe_access(input integer a);
+    pe_access = (a == 4) ? 16'hFFF0 : (16'hFFF0 | 16'(1 << a));
+  endfunction
+  function [15:0] pe_mask(input integer a);
+    pe_mask = ((a == 0) || (a == 4)) ? 16'hFFFF
+            : ((a & 1) ? 16'h5555 : 16'h0F0F);
+  endfunction
 
   // ---- the register file, mirrored into DUT latches and into the reference, in the
   //      io/egc.c order: fgbg before the gated mask, sft then leng with the re-arm pulse ----
@@ -346,10 +339,9 @@ module tb_pc9821_egc_conformance;
       integer b, a, kind, aa;
       cidx = 0;
       for (b = 1; b < 16; b = b + 1) begin
-        for (a = 0; a < 4; a = a + 1) begin
+        for (a = 0; a < 5; a = a + 1) begin
           seed_win(cidx);
-          cfg(16'hFFF0 - (1 << a), 16'h00FF, 16'h0000, 16'h0000,
-              (a == 0) ? 16'hFFFF : 16'h5555 * a[0] + 16'h0F0F * (1 - a[0]), 16'h0000,
+          cfg(pe_access(a), 16'h00FF, 16'h0000, 16'h0000, pe_mask(a), 16'h0000,
               16'h0000, 16'h000F);
           if ((b == 5) || (b == 9) || (b == 10) || (b == 11) || (b == 13)) begin
             // A synthetic hole set: a pin of the lane walk against itself, not a
@@ -369,14 +361,13 @@ module tb_pc9821_egc_conformance;
       // words and crossing words at aa=3 (1000+0001), aligned dwords and the crossing
       // dword at aa=2 (1100+0011), and the unaligned dwords at aa=1 (1110+0001) and
       // aa=3 (1000+0111). One window per shape per plane-enable/mask config.
-      for (a = 0; a < 4; a = a + 1) begin
+      for (a = 0; a < 5; a = a + 1) begin
         for (kind = 0; kind <= 2; kind = kind + 1) begin
           for (aa = 0; aa < 4; aa = aa + 1) begin
             // A byte at aa=3 needs no pair; the sweep above already covered the lone
             // single-beat sets -- these cases are about the DISPATCH split, so all run.
             seed_win(cidx);
-            cfg(16'hFFF0 - (1 << a), 16'h00FF, 16'h0000, 16'h0000,
-                (a == 0) ? 16'hFFFF : 16'h5555 * a[0] + 16'h0F0F * (1 - a[0]), 16'h0000,
+            cfg(pe_access(a), 16'h00FF, 16'h0000, 16'h0000, pe_mask(a), 16'h0000,
                 16'h0000, 16'h000F);
             shape_op(cidx, "ws_cpu shape", kind, aa, 32'hA1B2_C3D4);
             cmp_win(cidx, "ws_cpu shape");

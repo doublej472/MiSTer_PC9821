@@ -461,7 +461,6 @@ wire        mem_write_dly_grace;    // posted write in PG_MEM_TLB: next non-bus 
 wire        mem_write_wait;         // unposted demand write still fault-capable: stall all uops
 wire        mem_opt_wait;           // optimistic read missed: stall all uops until fill done
 wire        mem_accepted;           // memory request accepted (ready pulse)
-wire        mem_complete_now;       // combinational, request completing THIS cycle
 wire        mem_read_complete;      // paging-owned demand read data is valid
 
 // Prefetch ↔ paging unit toggle signals
@@ -2944,7 +2943,6 @@ paging_unit #(.VGA_BASE(VGA_BASE), .VGA_TOP(VGA_TOP)) paging_inst (
     .mem_accepted       (mem_accepted),     // ready: request accepted this cycle
     .mem_servicing      (mem_servicing),
     .demand_idle        (paging_demand_idle),
-    .mem_complete_now   (mem_complete_now), // combinational: bus op completing this cycle
     .mem_read_complete  (mem_read_complete),
     .mem_dly_grace      (mem_dly_grace),
     .mem_write_dly_grace(mem_write_dly_grace),

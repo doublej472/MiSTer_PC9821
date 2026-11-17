@@ -178,18 +178,6 @@ module tb_pc9821_pit_driver_rate;
     end
   endtask
 
-  // A printed, non-asserted measurement: the one-byte-write byte-retention
-  // divergence (see the note at case D).
-  task automatic observe_period(input string label, input integer cycles,
-                                input integer periods, input integer div_lo,
-                                input integer div_hi);
-    begin
-      $display("  OBS  %0s %0d cycles / %0d periods = %0.4f us/period; divisor %0d would be %0.4f us, %0d would be %0.4f us",
-               label, cycles, periods, (cycles * 1.0e6 / SYS_HZ) / periods,
-               div_lo, (div_lo * 1.0e6) / PIT_HZ, div_hi, (div_hi * 1.0e6) / PIT_HZ);
-    end
-  endtask
-
   integer cycles;
   integer high_3, low_3, high_2, low_2;
   integer tick_count;
@@ -258,13 +246,9 @@ module tb_pc9821_pit_driver_rate;
     // ---- 4. LSB-only access - the count register is first set with an explicit
     //         WORD write, so the byte this access mode does NOT write is a ZERO
     //         the guest asked for rather than a leftover from an earlier case: ----
-    // The references disagree about the byte a one-byte write leaves behind -
-    // QEMU zeroes it (`pit_load_count(s, val << 8)` for RW_STATE_MSB,
-    // hw/timer/i8254.c:222-224) and so does NP2kai (`pitch->value = value << 8`,
-    // io/pit.c:275-277), while this RTL retains it - and the machine-side answer
-    // is one of the probe's gated rows (todo/2-probe-corrections.md item 10). So
-    // every ASSERTED one-byte case here is written to be true under either rule,
-    // and the divergence is measured in the OBS line at case 6 instead.
+    // Cases 4 and 5 are true whichever byte a one-byte write leaves behind; case 6
+    // asserts the machine's answer (the other byte is zeroed: XE10Y /K3M on the Xe10,
+    // tb_pc9821_pit_onebyte_zero, which carries the capture rows).
     program_ch0(8'h34, 16'h0000);       // both bytes explicit: count = 0x0000
     pit_write(2'd3, 8'h14);             // ch0, LSB only, mode 2
     pit_write(2'd0, DIV_STRAP5[7:0]);   // 0xF6 -> 0x00F6 under either rule
@@ -279,19 +263,17 @@ module tb_pc9821_pit_driver_rate;
     measure_periods(100, cycles);
     check_period("mode 2  MSB  0x0100:", cycles, 100, DIV_MSB);
 
-    // ---- 6. OBSERVED, NOT ASSERTED: the byte a one-byte write leaves behind ----
-    // A known non-zero low byte goes in first (an LSB-only write of 0xF6), then
-    // an MSB-only write of 0x00 either leaves it alone (this RTL: 0x00F6 = 246)
-    // or zeroes the whole count (QEMU and NP2kai: 0x0000 = 65536). The OBS line
-    // prints the measurement and both candidate periods; nothing asserts which.
+    // ---- 6. the byte a one-byte write leaves behind is zero ----
+    // A known non-zero low byte goes in first (an LSB-only write of 0xF6), then an
+    // MSB-only write of 0x00 zeroes the whole count (0x0000 = 65536, as the Xe10,
+    // QEMU and NP2kai load it), not 0x00F6 = 246 with the low byte kept.
     program_ch0(8'h34, 16'h0000);
     pit_write(2'd3, 8'h14);             // LSB only
     pit_write(2'd0, 8'hF6);             // low byte = 0xF6
     pit_write(2'd3, 8'h24);             // MSB only
     pit_write(2'd0, 8'h00);             // high byte = 0x00
-    measure_periods(50, cycles);
-    observe_period("MSB-only write with a 0xF6 low byte:", cycles, 50,
-                   DIV_STRAP5, 65536);
+    measure_periods(4, cycles);
+    check_period("mode 2  MSB 0x00 after LSB 0xF6:", cycles, 4, 65536);
 
     // ---- 7. a mid-flight reprogram, the way the drivers do it ----
     // PDR.COM's install path (file 0x0B4A) and its per-playback path (the helper

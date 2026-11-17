@@ -11,9 +11,16 @@
 // WHERE THE EXPECTATIONS COME FROM. First the machine: docs/probes/DMAROUTE-XE10.TXT
 // (tools/hwprobe/dmaroute, decoded by dmaroute_decode.py) runs each case with a CPU copy and a
 // floppy DMA and reads every view after both; in all 11 cases the views are byte-identical
-// (DMA=CPU yes). Its cases E1/E2 (the EMS page and the unmapped state), P1-P4 (the packed banks,
-// B8000, the register file), W1-W3 (window 0 at 0x0A and 0x10) and G1 (the CG window) are the
-// sections below of the same names; the exact bytes are cited where a section checks them.
+// (DMA=CPU yes). Its cases E1 (the EMS page), P1-P4 (the packed banks, B8000, the register
+// file), W1-W3 (window 0 at 0x0A and 0x10) and G1 (the CG window) are the sections below of the
+// same names; the exact bytes are cited where a section checks them. Its case E2 is NOT the
+// unmapped state: it writes 0x043F = 0x24 from the identity, and the DMA store lands in the
+// planes (V1 NORMAL and V2 EMS24 both read the sector), so it is the identity state, which
+// tb_pc9821_ems holds on the CPU side. The section below named E2 drives the UNMAPPED state
+// (0x24 written from the page). No DMA capture drives that state: its evidence is the CPU-only
+// docs/probes/EMS.TXT (`B0000 under 20/22/24: 1111 2222 FFFF`), which tb_pc9821_ems asserts,
+// and the DMA side here rests on DMA = CPU, which every one of DMAROUTE-XE10.TXT's 11 cases
+// shows.
 // Then NP2kai's transfer loop (mem/dmax86.c `MEMP_WRITE8(ch->adrs.d,
 // ...)`, `MEMP_READ8(ch->adrs.d)`) calls memp_write8/memp_read8, whose first-MiB arm is the CPU's
 // handler table (i386c/cpumem.c `memfn0.wr8[address >> 15](address, value);`); with VOPBIT_VGA set
@@ -173,7 +180,7 @@ module tb_pc9821_dma_route;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg [14:0] scan_line_base = 0;
@@ -217,6 +224,7 @@ module tb_pc9821_dma_route;
   reg   [3:0] dma_be   = 4'd0;
   reg         dma_valid = 1'b0;
   reg         dma_write = 1'b0;
+  wire        dma_load_write = dma_write;   // the loading byte's direction (pc9821_dmac mem_load_we): set with the address
   wire        dma_ready, dma_resp_valid;
   wire [31:0] dma_dout;
   // The GDC draw engine's visit (the GDC2 WRITE slice) is not this bench's subject: tied
@@ -233,7 +241,7 @@ module tb_pc9821_dma_route;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's. A reg
   // because the in-flight mode-change cases below write it (port 0x6A) while a DMA byte waits.
   reg  pegc_256 = 1'b0;
@@ -241,7 +249,7 @@ module tb_pc9821_dma_route;
   // mode the machine resets to, where 0xE0000-0xE7FFF is open bus (pc9821_memory_map
   // e_plane_nc). A reg because case I switches it.
   reg  mode2_16color = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -571,7 +579,9 @@ module tb_pc9821_dma_route;
     expect_commits("E1 CPU store B0043 -> the EMS page", cb, 1, EMS_PAGE + 32'h40, 4'b1000);
     dma_byte(32'h000B_0043, 1'b0, 8'h00, rd);
     expect_byte("E1 DMA read B0043 under the page", rd, 2'd3, 8'h7A);
-    // ---- E2: the unmapped state (0x043F 0x2x other): reads 0xFF, stores dropped ----
+    // ---- E2: the unmapped state (0x24 written from the EMS page; the CPU side is EMS.TXT's,
+    //      the DMA side DMA = CPU): reads 0xFF, stores dropped. Not the
+    //      capture's case E2, which is the identity state (see the header). ----
     ems_state = 2'd2;
     repeat (2) @(negedge clk);
     cb = b_commits;

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """tools/timing/census.py: classify every endpoint's worst clk_sys (general[0]) setup path into cones.
 
-usage: census.py table  ENDS_RPT...        per fit: per cone worst slack, gap to WNS, endpoints <=0.3/<=1.0 ns
-       census.py ladder ENDS_RPT...        WNS as cone groups are removed in order (per fit + mean)
-       census.py skew   ENDS_RPT...        clock skew by launch/latch domain (gated CPU clock vs platform)
-       census.py show   ENDS_RPT CONE [K]  the K worst paths of a cone with the node chain
+usage: census.py table    ENDS_RPT...        per fit: per cone worst slack, gap to WNS, endpoints <=0.3/<=1.0 ns
+       census.py ladder   ENDS_RPT...        WNS as cone groups are removed in order (per fit + mean)
+       census.py skew     ENDS_RPT...        clock skew by launch/latch domain (gated CPU clock vs platform)
+       census.py show     ENDS_RPT CONE [K]  the K worst paths of a cone with the node chain
+       census.py families CONE ENDS_RPT...   per fit, the 4 worst distinct endpoint families of a cone
+       census.py md       ENDS_RPT...        the table as markdown (gap per fit, mean, limiter count)
+       census.py warm     ENDS_RPT           parse one report into its cache and exit
+
+A parsed report is cached beside it (ENDS_RPT.pkl), keyed on the report's mtime and on
+pathchain.py's own text, so a parser change re-parses instead of serving old fields.
 
 Cones (docs/timing.md describes them): C1-C7 are the CPU and platform cones of the earlier
 split-clock path study; the families added since then:
@@ -93,14 +99,34 @@ def label(fn):
     return f"{m.group(1)}-s{m.group(2)}" if m else fn
 
 
+def parser_key():
+    """The parser's identity: a cache written by another pathchain.py is stale."""
+    import hashlib
+    with open(pc.__file__, 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def load(fn):
     import os, pickle
     pk = fn + '.pkl'   # parse cache beside the (git-ignored) report
+    ps, key = None, parser_key()
     if os.path.exists(pk) and os.path.getmtime(pk) > os.path.getmtime(fn):
-        ps = pickle.load(open(pk, 'rb'))
-    else:
+        try:
+            with open(pk, 'rb') as f:
+                cached = pickle.load(f)
+            if isinstance(cached, dict) and cached.get('parser') == key:
+                ps = cached['paths']
+        except (OSError, EOFError, pickle.UnpicklingError):
+            ps = None
+    if ps is None:
         ps = pc.parse(fn)
-        pickle.dump(ps, open(pk, 'wb'))
+        try:
+            with open(pk, 'wb') as f:
+                pickle.dump({'parser': key, 'paths': ps}, f)
+        except OSError:
+            pass    # a read-only report directory: parse every time
+    if not ps:
+        raise SystemExit(f"census: {fn} holds no timing paths")
     for p in ps:
         p['cone'] = cone(p)
     return ps
@@ -117,7 +143,7 @@ def table(fns):
             c = p['cone']; best[c] = min(best.get(c, 99), p['slack'])
             if p['slack'] <= w + 0.3: n03[c] += 1
             if p['slack'] <= w + 1.0: n10[c] += 1
-        print(f"\n{label(fn)}: WNS {w:.3f}  (4000 endpoints, last {ps[-1]['slack']:.3f}; P0 ext_addr_r->map label: {p0_03} <=0.3, {p0_10} <=1.0)")
+        print(f"\n{label(fn)}: WNS {w:.3f}  ({len(ps)} endpoints, last {ps[-1]['slack']:.3f}; P0 ext_addr_r->map label: {p0_03} <=0.3, {p0_10} <=1.0)")
         print(f"  {'cone':32s} {'worst':>8s} {'gap':>7s} {'<=0.3':>6s} {'<=1.0':>6s}")
         for c in GROUP_ORDER:
             if c in best:
@@ -125,7 +151,7 @@ def table(fns):
                 agg[c].append(best[c] - w)
             else:
                 print(f"  {c:32s} {'-':>8s} {'(>'+format(ps[-1]['slack']-w, '.1f')+')':>7s}")
-    print("\nmean gap to WNS over fits (fits where the cone is in the 4000):")
+    print("\nmean gap to WNS over fits (fits where the cone is among the report's endpoints):")
     for c in GROUP_ORDER:
         if agg[c]:
             L = agg[c]
@@ -179,17 +205,9 @@ def show(fn, cname, k):
                 prev = inc
 
 
-if __name__ == '__main__':
-    cmd = sys.argv[1]
-    if cmd == 'table': table(sys.argv[2:])
-    elif cmd == 'ladder': ladder(sys.argv[2:])
-    elif cmd == 'skew': skew(sys.argv[2:])
-    elif cmd == 'show': show(sys.argv[2], sys.argv[3], int(sys.argv[4]) if len(sys.argv) > 4 else 1)
-
-
 def brief(p, k=9):
     cells = [re.sub(r'\|(combout|cout|sumout|q)$', '', pc.short(el)).replace('cpu|', '')
-             for *_, ty, fo, loc, el in [(0, 0) + c[2:] for c in p['chain']] if ty == 'CELL']
+             for _tot, _inc, ty, _fo, _loc, el in p['chain'] if ty == 'CELL']
     mid = [c.split('~')[0] for c in cells]
     mid = [m for i, m in enumerate(mid) if i == 0 or m != mid[i - 1]]
     step = max(1, len(mid) // k)
@@ -199,7 +217,6 @@ def brief(p, k=9):
 def families(fns, cname, n=4):
     for fn in fns:
         ps = [p for p in load(fn) if p['cone'].startswith(cname)]
-        w = pc.parse.__defaults__ if False else None
         print(f"\n== {label(fn)} [{cname}]")
         seen = set()
         for p in ps:
@@ -208,13 +225,6 @@ def families(fns, cname, n=4):
             seen.add(key)
             print(f"  {p['slack']:.3f} lv{p['levels']} ic{p['ic']:.1f}/cell{p['cell']:.1f} skew{p['skew']:+.2f}: {brief(p)}")
             if len(seen) >= n: break
-
-
-if __name__ == '__main__' and sys.argv[1] == 'families':
-    families(sys.argv[3:], sys.argv[2], 4)
-
-if __name__ == '__main__' and sys.argv[1] == 'warm':
-    load(sys.argv[2])
 
 
 def mdtable(fns):
@@ -242,5 +252,25 @@ def mdtable(fns):
         print(f"| {cn} | " + ' | '.join(cells) + f" | +{sum(gaps)/len(gaps):.2f} | {sum(1 for g in gaps if g == 0)}/{len(cols)} | {n03} | {n10} |")
 
 
-if __name__ == '__main__' and sys.argv[1] == 'md':
-    mdtable(sys.argv[2:])
+COMMANDS = {
+    # name: (minimum arguments after the command, runner)
+    'table': (1, lambda a: table(a)),
+    'ladder': (1, lambda a: ladder(a)),
+    'skew': (1, lambda a: skew(a)),
+    'show': (2, lambda a: show(a[0], a[1], int(a[2]) if len(a) > 2 else 1)),
+    'families': (2, lambda a: families(a[1:], a[0], 4)),
+    'md': (1, lambda a: mdtable(a)),
+    'warm': (1, lambda a: [load(fn) for fn in a]),
+}
+
+
+def main(argv):
+    if not argv or argv[0] not in COMMANDS or len(argv) - 1 < COMMANDS[argv[0]][0]:
+        print(__doc__[__doc__.index('usage:'):].split('\n\n')[0], file=sys.stderr)
+        return 2
+    COMMANDS[argv[0]][1](argv[1:])
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

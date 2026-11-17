@@ -62,11 +62,13 @@
 //     core's banks: the disk answers at channel bit 0 CLEAR and the float is at bit 0 set. The
 //     port 0xF0 strap follows the same layout (pc9821_iobus), so the ITF's bitmap above then
 //     selects slot 0 - bank 0 - for the disk.
-//   * Banks 0x02 and 0x03 are UNMEASURED. Under the channel bit they are the two
-//     channels again: 0x02 (bit 0 clear) answers with the disk and 0x03 (bit 0
-//     set) floats. The probe that settles them
-//     drives 0x0432 over {0x00, 0x01, 0x02, 0x03, 0x2A, 0x80} and prints the
-//     task file for each (hwprobe open question 1).
+//   * Banks 0x02 and 0x03 ARE measured, and the core does not follow them: the probe that
+//     drives 0x0432 over {0x00, 0x01, 0x02, 0x03, 0x2A, 0x80} reads `w=02 r432=00 st=00
+//     ast=00` and `w=03 r432=01 st=04` (docs/probes/KIT1-XE10-IDE1.TXT:8,10), a task file
+//     of their own on that machine. The core answers them under its channel bit instead,
+//     the two channels again: 0x02 (bit 0 clear) answers with the disk and 0x03 (bit 0 set)
+//     floats. That is a core design choice of the fixed layout above, not a measured value;
+//     only the 0x0432 read-back (02 reads 00) is the capture's.
 //
 // What this bench asserts, all of it through ports:
 //   1. 0x0432 latches the byte it is given and reads it back; a write with bit 7
@@ -265,7 +267,8 @@ module tb_pc9821_ata_blockmap;
     expect_bank_floats(8'h01, "bank 0x01 floats (R10.TXT values)");
 
     // 3. Banks 0x02/0x03 read a task file of their own on the machine (status 00 / 04,
-    //    docs/probes/KIT1-XE10-IDE1.TXT:8,10), which is not modelled; they differ under
+    //    docs/probes/KIT1-XE10-IDE1.TXT:8,10), which is not modelled (a core design choice,
+    //    see the header); they differ under
     //    the channel rule: 0x03 has bit 0 set (the empty channel) and 0x02 has
     //    bit 0 clear, i.e. the disk's channel. Byte equality
     //    floated both. QEMU models the channel select as `val & 1` and masks
@@ -323,6 +326,16 @@ module tb_pc9821_ata_blockmap;
     expect_port(16'h064E, 8'h50, "RECALIBRATE completed READY|DSC");
     expect_port(16'h0642, 8'h00, "0x642 ERROR clear after a completed command");
     expect_port(16'h0433, 8'h00, "0x0433 clears with the status ack");
+    // 6b. The bit-7 no-op seen from the floating bank, where it is distinguishable: with the
+    //     window at 0x01, a write of 0x80 must leave it there (NP2kai ideio_o430
+    //     `if (!(dat & 0x80))`; QEMU pc98_ide_chsel_write). A latching model would take 0x80,
+    //     whose bit 0 is clear, and connect the disk.
+    write_byte(16'h0432, 8'h01);
+    write_byte(16'h0432, 8'h80);
+    expect_port(16'h0432, 8'h01, "0x80 written at bank 0x01 is a no-op: the readback stays 01");
+    expect_port(16'h064E, 8'h0E, "bank 0x01 still floats after the 0x80 no-op");
+    write_byte(16'h0432, 8'h00);
+
     // 7. The ROM's own ISR bracket, in its own order (BANK3 file offset 0x1A0C):
     //      `mov dx,0x432 / mov al,0x80 / out dx,al / in al,dx / mov es:0x2075,al`
     //    then the drive's bank byte, then the ERROR/STATUS reads, then the ack to

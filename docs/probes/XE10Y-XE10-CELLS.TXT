@@ -1,0 +1,679 @@
+XE10T v1 sha=1ae8793520ce4dc9 crc=E5351F35 imgcrc=E5351F35 size=37508 build=gas-xe10y args= /CELLS /NOAPER /O CELLS.TXT tag=-
+BEGIN:ID
+I ID cpuid=0
+I ID msw=0032 cr0=00000032 v86=0
+I ID bios_fff0=EA000080FD000000000000000000B451 bios_date=........
+I ID port_f0=89 bda0401=70 bda0458=02 bda045C=40 bda0480=DB bda0481=62 bda0500=03 bda0501=24 bda053C=80 bda054C=4F bda054D=58 bda0594=10 bda0595=00
+I ID dos=6.20 bufseg=26D1 bufparas=4000 sel=10000000 rep=5 da=00 unknown_args=0
+STATE ID imr_m=7D imr_s=75 p6a=00 q04=00 q07=00 q08=00 q0A=00
+END:ID rows=0 sum=C6F6
+BEGIN:CAL
+I CAL pit_order=0 strap0501=24
+P CAL PITWIN i=0 art=6144 pit=49156
+P CAL PITWIN i=1 art=6145 pit=49160
+P CAL PITWIN i=2 art=6146 pit=49161
+P CAL PITWIN i=3 art=6145 pit=49159
+P CAL PITWIN i=4 art=6144 pit=49152
+P CAL PITWIN i=5 art=6146 pit=49162
+P CAL PITWIN i=6 art=6145 pit=49160
+P CAL PITWIN i=7 art=6146 pit=49161
+P CAL PITEDGE edges=19 art=155647 vmax=65534 vmin=1
+P CAL VSYNC edges=60 art=326698 pit=2589885 tsc=-
+I CAL pit_mod=65536 ratio_x1000=7999 vsync_x10=54449 tsc_khz=- verdict=OK why=-
+END:CAL rows=10 sum=FEAD
+BEGIN:CELLS
+STATE CELLS egc=off grcg=off a6=0 q07=00 q04=00 q0A=00
+STATE CELLS as_found al=09 bh=01 p9a8=00 q0A=00 bda054C=4F bda054D=58 cr0=00000032 bufparas=4000
+X CELLS B8 off_wr=A55A off_rb=A55A on_rb=FFFF on_wr=3CC3 on_rb2=FFFF off_rb2=A55A
+STATE CELLS mode=2P pegc=256 packed al=09 bh=01 p9a8=00 q0A=01 bda054C=CF bda054D=58
+P CELLS RASTER_2P frames=8 art=43560 hi=791 to=0
+ROW CELLS XCR_2PA
+R CELLS XCR_2PA unit=w n=512 nop=0 rep=5 art=126/126/127 pit=985/989/996 ctl_art=7/7/8 ctl_pit=34/34/45 shell=5B3A bshell=5B3A if1=125
+R CELLS XCR_2PA unit=w n=512 nop=2 rep=5 art=125/126/127 pit=988/992/998 ctl_art=9/10/11 ctl_pit=59/61/67 shell=DA36 bshell=DA36 if1=126
+R CELLS XCR_2PA unit=w n=512 nop=4 rep=5 art=131/131/134 pit=1029/1032/1048 ctl_art=12/13/14 ctl_pit=84/84/94 shell=8666 bshell=8666 if1=130
+R CELLS XCR_2PA unit=w n=512 nop=8 rep=5 art=138/139/139 pit=1087/1094/1099 ctl_art=19/19/21 ctl_pit=135/135/144 shell=6A49 bshell=6A49 if1=140
+R CELLS XCR_2PA unit=w n=512 nop=16 rep=5 art=159/159/160 pit=1247/1258/1271 ctl_art=31/32/33 ctl_pit=236/238/248 shell=6398 bshell=6398 if1=159
+R CELLS XCR_2PA unit=w n=512 nop=32 rep=5 art=172/173/174 pit=1358/1365/1379 ctl_art=56/57/59 ctl_pit=437/438/450 shell=3F45 bshell=3F45 if1=170
+R CELLS XCR_2PA unit=w n=512 nop=64 rep=5 art=233/234/237 pit=1849/1854/1875 ctl_art=108/108/110 ctl_pit=841/842/862 shell=C07F bshell=C07F if1=234
+ROW CELLS XCW_2PA
+R CELLS XCW_2PA unit=w n=512 nop=0 rep=5 art=25/26/27 pit=182/186/193 ctl_art=6/7/7 ctl_pit=34/34/42 shell=5B3A bshell=5B3A if1=25
+R CELLS XCW_2PA unit=w n=512 nop=2 rep=5 art=25/25/27 pit=185/186/195 ctl_art=9/10/11 ctl_pit=59/59/69 shell=DA36 bshell=DA36 if1=25
+R CELLS XCW_2PA unit=w n=512 nop=4 rep=5 art=30/31/32 pit=230/231/238 ctl_art=12/13/14 ctl_pit=84/84/92 shell=8666 bshell=8666 if1=31
+R CELLS XCW_2PA unit=w n=512 nop=8 rep=5 art=30/31/33 pit=228/232/243 ctl_art=19/19/21 ctl_pit=135/136/147 shell=6A49 bshell=6A49 if1=30
+R CELLS XCW_2PA unit=w n=512 nop=16 rep=5 art=35/35/37 pit=261/263/273 ctl_art=31/32/33 ctl_pit=236/238/245 shell=6398 bshell=6398 if1=35
+R CELLS XCW_2PA unit=w n=512 nop=32 rep=5 art=60/60/62 pit=462/463/480 ctl_art=56/57/58 ctl_pit=437/438/451 shell=3F45 bshell=3F45 if1=61
+R CELLS XCW_2PA unit=w n=512 nop=64 rep=5 art=110/111/114 pit=866/868/887 ctl_art=107/108/111 ctl_pit=840/842/862 shell=C07F bshell=C07F if1=110
+ROW CELLS XCRS_2PA
+R CELLS XCRS_2PA unit=w n=512 nop=0 rep=5 art=125/126/127 pit=987/989/1000 ctl_art=7/7/8 ctl_pit=33/36/41 shell=FD80 bshell=FD80 if1=127
+R CELLS XCRS_2PA unit=w n=512 nop=2 rep=5 art=126/126/127 pit=988/993/1003 ctl_art=9/10/10 ctl_pit=59/59/66 shell=B9F8 bshell=B9F8 if1=125
+R CELLS XCRS_2PA unit=w n=512 nop=4 rep=5 art=130/132/133 pit=1024/1032/1046 ctl_art=12/13/14 ctl_pit=83/85/93 shell=2B22 bshell=2B22 if1=133
+R CELLS XCRS_2PA unit=w n=512 nop=8 rep=5 art=138/139/140 pit=1090/1094/1100 ctl_art=18/19/21 ctl_pit=134/135/142 shell=F5A6 bshell=F5A6 if1=138
+R CELLS XCRS_2PA unit=w n=512 nop=16 rep=5 art=157/159/160 pit=1245/1254/1261 ctl_art=31/32/33 ctl_pit=236/236/247 shell=218D bshell=218D if1=159
+R CELLS XCRS_2PA unit=w n=512 nop=32 rep=5 art=171/172/175 pit=1356/1359/1382 ctl_art=56/56/59 ctl_pit=437/437/454 shell=7A1F bshell=7A1F if1=172
+R CELLS XCRS_2PA unit=w n=512 nop=64 rep=5 art=233/234/237 pit=1847/1858/1877 ctl_art=107/107/110 ctl_pit=840/840/859 shell=CC4B bshell=CC4B if1=234
+ROW CELLS XCWS_2PA
+R CELLS XCWS_2PA unit=w n=512 nop=0 rep=5 art=24/25/26 pit=182/185/192 ctl_art=6/6/8 ctl_pit=33/34/41 shell=FD80 bshell=FD80 if1=25
+R CELLS XCWS_2PA unit=w n=512 nop=2 rep=5 art=30/31/31 pit=227/230/235 ctl_art=9/10/10 ctl_pit=58/59/68 shell=B9F8 bshell=B9F8 if1=31
+R CELLS XCWS_2PA unit=w n=512 nop=4 rep=5 art=25/25/26 pit=184/184/194 ctl_art=12/12/13 ctl_pit=83/84/91 shell=2B22 bshell=2B22 if1=25
+R CELLS XCWS_2PA unit=w n=512 nop=8 rep=5 art=31/31/33 pit=230/232/241 ctl_art=18/19/20 ctl_pit=134/136/144 shell=F5A6 bshell=F5A6 if1=32
+R CELLS XCWS_2PA unit=w n=512 nop=16 rep=5 art=35/35/36 pit=262/264/273 ctl_art=31/32/33 ctl_pit=235/235/245 shell=218D bshell=218D if1=35
+R CELLS XCWS_2PA unit=w n=512 nop=32 rep=5 art=59/61/62 pit=462/465/479 ctl_art=56/57/59 ctl_pit=437/437/450 shell=7A1F bshell=7A1F if1=60
+R CELLS XCWS_2PA unit=w n=512 nop=64 rep=5 art=110/110/113 pit=865/867/887 ctl_art=107/107/109 ctl_pit=840/842/859 shell=CC4B bshell=CC4B if1=110
+ROW CELLS XARS_2PA
+R CELLS XARS_2PA unit=w n=512 nop=0 rep=5 art=125/126/127 pit=986/992/999 ctl_art=7/7/7 ctl_pit=33/34/45 shell=D3BC bshell=D3BC if1=125
+R CELLS XARS_2PA unit=w n=512 nop=2 rep=5 art=125/126/127 pit=987/992/998 ctl_art=9/10/11 ctl_pit=59/59/66 shell=41BB bshell=41BB if1=125
+R CELLS XARS_2PA unit=w n=512 nop=4 rep=5 art=129/131/134 pit=1022/1029/1049 ctl_art=12/13/14 ctl_pit=83/84/93 shell=12CC bshell=12CC if1=130
+R CELLS XARS_2PA unit=w n=512 nop=8 rep=5 art=139/139/140 pit=1094/1097/1103 ctl_art=19/19/21 ctl_pit=134/135/143 shell=4B77 bshell=4B77 if1=140
+R CELLS XARS_2PA unit=w n=512 nop=16 rep=5 art=158/160/161 pit=1251/1256/1269 ctl_art=31/32/33 ctl_pit=236/238/247 shell=531B bshell=531B if1=159
+R CELLS XARS_2PA unit=w n=512 nop=32 rep=5 art=172/172/173 pit=1358/1363/1368 ctl_art=56/57/59 ctl_pit=437/437/449 shell=7DF9 bshell=7DF9 if1=172
+R CELLS XARS_2PA unit=w n=512 nop=64 rep=5 art=233/234/237 pit=1849/1857/1877 ctl_art=107/108/110 ctl_pit=840/841/860 shell=17ED bshell=17ED if1=236
+ROW CELLS XAWS_2PA
+R CELLS XAWS_2PA unit=w n=512 nop=0 rep=5 art=30/31/32 pit=229/229/237 ctl_art=6/7/7 ctl_pit=33/34/40 shell=D3BC bshell=D3BC if1=30
+R CELLS XAWS_2PA unit=w n=512 nop=2 rep=5 art=30/31/32 pit=229/230/235 ctl_art=9/10/11 ctl_pit=59/59/68 shell=41BB bshell=41BB if1=30
+R CELLS XAWS_2PA unit=w n=512 nop=4 rep=5 art=25/25/27 pit=183/185/194 ctl_art=12/13/14 ctl_pit=83/84/91 shell=12CC bshell=12CC if1=24
+R CELLS XAWS_2PA unit=w n=512 nop=8 rep=5 art=31/31/33 pit=230/233/241 ctl_art=18/19/21 ctl_pit=134/134/145 shell=4B77 bshell=4B77 if1=30
+R CELLS XAWS_2PA unit=w n=512 nop=16 rep=5 art=34/35/37 pit=262/262/272 ctl_art=31/32/34 ctl_pit=235/237/245 shell=531B bshell=531B if1=34
+R CELLS XAWS_2PA unit=w n=512 nop=32 rep=5 art=59/60/61 pit=462/463/477 ctl_art=56/57/58 ctl_pit=437/439/451 shell=7DF9 bshell=7DF9 if1=61
+R CELLS XAWS_2PA unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/867/887 ctl_art=107/108/109 ctl_pit=840/841/859 shell=17ED bshell=17ED if1=111
+ROW CELLS XCRM_2PA
+R CELLS XCRM_2PA unit=w n=512 nop=0 rep=5 art=162/163/165 pit=1280/1287/1302 ctl_art=6/6/8 ctl_pit=33/34/44 shell=7E0F bshell=7E0F if1=163
+R CELLS XCRM_2PA unit=w n=512 nop=2 rep=5 art=163/164/165 pit=1286/1291/1298 ctl_art=9/10/11 ctl_pit=59/59/66 shell=5204 bshell=5204 if1=164
+R CELLS XCRM_2PA unit=w n=512 nop=4 rep=5 art=164/165/165 pit=1297/1301/1307 ctl_art=12/13/14 ctl_pit=84/84/94 shell=01D5 bshell=01D5 if1=165
+R CELLS XCRM_2PA unit=w n=512 nop=8 rep=5 art=169/169/170 pit=1329/1334/1338 ctl_art=19/20/20 ctl_pit=135/137/144 shell=B805 bshell=B805 if1=167
+R CELLS XCRM_2PA unit=w n=512 nop=16 rep=5 art=184/185/187 pit=1455/1468/1487 ctl_art=31/32/34 ctl_pit=236/237/247 shell=F279 bshell=F279 if1=188
+R CELLS XCRM_2PA unit=w n=512 nop=32 rep=5 art=220/222/223 pit=1742/1753/1765 ctl_art=56/57/59 ctl_pit=437/438/453 shell=A9B1 bshell=A9B1 if1=220
+R CELLS XCRM_2PA unit=w n=512 nop=64 rep=5 art=243/243/245 pit=1928/1929/1945 ctl_art=107/108/110 ctl_pit=841/841/859 shell=2F57 bshell=2F57 if1=243
+ROW CELLS XCWM_2PA
+R CELLS XCWM_2PA unit=w n=512 nop=0 rep=5 art=57/58/58 pit=440/442/450 ctl_art=6/7/8 ctl_pit=34/35/44 shell=7E0F bshell=7E0F if1=58
+R CELLS XCWM_2PA unit=w n=512 nop=2 rep=5 art=27/27/28 pit=195/199/207 ctl_art=9/10/12 ctl_pit=59/60/68 shell=5204 bshell=5204 if1=26
+R CELLS XCWM_2PA unit=w n=512 nop=4 rep=5 art=57/58/58 pit=441/442/451 ctl_art=12/13/14 ctl_pit=84/84/92 shell=01D5 bshell=01D5 if1=57
+R CELLS XCWM_2PA unit=w n=512 nop=8 rep=5 art=27/27/29 pit=197/199/210 ctl_art=19/19/20 ctl_pit=135/137/144 shell=B805 bshell=B805 if1=27
+R CELLS XCWM_2PA unit=w n=512 nop=16 rep=5 art=57/58/59 pit=439/444/452 ctl_art=31/32/33 ctl_pit=236/236/245 shell=F279 bshell=F279 if1=57
+R CELLS XCWM_2PA unit=w n=512 nop=32 rep=5 art=60/61/62 pit=463/465/479 ctl_art=57/57/58 ctl_pit=437/438/452 shell=A9B1 bshell=A9B1 if1=59
+R CELLS XCWM_2PA unit=w n=512 nop=64 rep=5 art=110/110/113 pit=865/866/887 ctl_art=107/107/110 ctl_pit=840/840/860 shell=2F57 bshell=2F57 if1=110
+ROW CELLS PKR_2PA
+R CELLS PKR_2PA unit=w n=512 nop=0 rep=5 art=126/126/127 pit=985/990/995 ctl_art=6/7/8 ctl_pit=34/35/46 shell=BDFC bshell=BDFC if1=126
+R CELLS PKR_2PA unit=w n=512 nop=2 rep=5 art=126/126/127 pit=986/991/998 ctl_art=9/9/11 ctl_pit=58/61/66 shell=70B0 bshell=70B0 if1=126
+R CELLS PKR_2PA unit=w n=512 nop=4 rep=5 art=131/132/133 pit=1027/1041/1051 ctl_art=12/13/14 ctl_pit=84/85/92 shell=1B96 bshell=1B96 if1=131
+R CELLS PKR_2PA unit=w n=512 nop=8 rep=5 art=139/139/140 pit=1088/1101/1103 ctl_art=19/19/20 ctl_pit=135/136/146 shell=3825 bshell=3825 if1=138
+R CELLS PKR_2PA unit=w n=512 nop=16 rep=5 art=159/159/160 pit=1253/1254/1265 ctl_art=31/32/33 ctl_pit=236/237/247 shell=19F2 bshell=19F2 if1=157
+R CELLS PKR_2PA unit=w n=512 nop=32 rep=5 art=172/173/174 pit=1361/1370/1376 ctl_art=57/57/59 ctl_pit=438/439/451 shell=D40C bshell=D40C if1=172
+R CELLS PKR_2PA unit=w n=512 nop=64 rep=5 art=233/235/237 pit=1847/1863/1873 ctl_art=107/108/109 ctl_pit=841/841/859 shell=D552 bshell=D552 if1=234
+ROW CELLS PKW_2PA
+R CELLS PKW_2PA unit=w n=512 nop=0 rep=5 art=24/25/27 pit=183/186/193 ctl_art=6/7/9 ctl_pit=34/34/44 shell=BDFC bshell=BDFC if1=25
+R CELLS PKW_2PA unit=w n=512 nop=2 rep=5 art=30/31/32 pit=229/229/236 ctl_art=9/10/11 ctl_pit=59/59/66 shell=70B0 bshell=70B0 if1=31
+R CELLS PKW_2PA unit=w n=512 nop=4 rep=5 art=30/31/32 pit=229/230/239 ctl_art=12/13/14 ctl_pit=84/85/94 shell=1B96 bshell=1B96 if1=31
+R CELLS PKW_2PA unit=w n=512 nop=8 rep=5 art=31/32/32 pit=230/233/243 ctl_art=18/19/20 ctl_pit=135/136/144 shell=3825 bshell=3825 if1=31
+R CELLS PKW_2PA unit=w n=512 nop=16 rep=5 art=35/36/36 pit=261/262/275 ctl_art=31/32/33 ctl_pit=236/238/248 shell=19F2 bshell=19F2 if1=35
+R CELLS PKW_2PA unit=w n=512 nop=32 rep=5 art=59/60/61 pit=463/463/476 ctl_art=57/57/58 ctl_pit=437/438/450 shell=D40C bshell=D40C if1=59
+R CELLS PKW_2PA unit=w n=512 nop=64 rep=5 art=110/111/112 pit=866/867/887 ctl_art=107/108/110 ctl_pit=840/843/860 shell=D552 bshell=D552 if1=110
+ROW CELLS BRW_2PA
+R CELLS BRW_2PA unit=w n=512 nop=0 rep=5 art=68/69/70 pit=533/535/542 ctl_art=6/6/7 ctl_pit=31/31/39 shell=4956 bshell=4956 if1=69
+R CELLS BRW_2PA unit=w n=512 nop=2 rep=5 art=69/69/70 pit=539/540/548 ctl_art=9/10/11 ctl_pit=56/57/64 shell=B2BF bshell=B2BF if1=69
+R CELLS BRW_2PA unit=w n=512 nop=4 rep=5 art=74/75/75 pit=576/578/587 ctl_art=12/13/14 ctl_pit=81/81/91 shell=8074 bshell=8074 if1=74
+R CELLS BRW_2PA unit=w n=512 nop=8 rep=5 art=79/79/80 pit=619/619/627 ctl_art=18/19/21 ctl_pit=132/133/144 shell=C217 bshell=C217 if1=79
+R CELLS BRW_2PA unit=w n=512 nop=16 rep=5 art=93/94/96 pit=734/735/746 ctl_art=31/32/33 ctl_pit=233/236/245 shell=4B10 bshell=4B10 if1=93
+R CELLS BRW_2PA unit=w n=512 nop=32 rep=5 art=118/118/120 pit=928/929/946 ctl_art=57/57/59 ctl_pit=435/435/450 shell=ECE1 bshell=ECE1 if1=118
+R CELLS BRW_2PA unit=w n=512 nop=64 rep=5 art=169/169/172 pit=1334/1335/1354 ctl_art=106/107/109 ctl_pit=838/838/858 shell=5385 bshell=5385 if1=168
+ROW CELLS BRD_2PA
+R CELLS BRD_2PA unit=d n=512 nop=0 rep=5 art=123/124/126 pit=974/977/985 ctl_art=6/6/7 ctl_pit=31/31/39 shell=4956 bshell=4956 if1=125
+R CELLS BRD_2PA unit=d n=512 nop=2 rep=5 art=124/125/125 pit=977/978/986 ctl_art=9/10/11 ctl_pit=56/57/64 shell=B2BF bshell=B2BF if1=125
+R CELLS BRD_2PA unit=d n=512 nop=4 rep=5 art=129/129/130 pit=1015/1017/1028 ctl_art=12/13/14 ctl_pit=82/84/94 shell=8074 bshell=8074 if1=130
+R CELLS BRD_2PA unit=d n=512 nop=8 rep=5 art=134/135/135 pit=1055/1055/1063 ctl_art=19/19/20 ctl_pit=132/133/142 shell=C217 bshell=C217 if1=134
+R CELLS BRD_2PA unit=d n=512 nop=16 rep=5 art=149/150/151 pit=1176/1178/1190 ctl_art=31/32/33 ctl_pit=233/233/246 shell=4B10 bshell=4B10 if1=150
+R CELLS BRD_2PA unit=d n=512 nop=32 rep=5 art=172/172/173 pit=1357/1358/1371 ctl_art=56/57/58 ctl_pit=435/437/448 shell=ECE1 bshell=ECE1 if1=172
+R CELLS BRD_2PA unit=d n=512 nop=64 rep=5 art=228/229/232 pit=1813/1813/1834 ctl_art=107/107/110 ctl_pit=838/840/857 shell=5385 bshell=5385 if1=228
+ROW CELLS BW_2PA
+R CELLS BW_2PA unit=w n=512 nop=0 rep=5 art=58/59/59 pit=449/452/459 ctl_art=6/7/7 ctl_pit=31/32/39 shell=4956 bshell=4956 if1=58
+R CELLS BW_2PA unit=w n=512 nop=2 rep=5 art=58/58/59 pit=449/451/460 ctl_art=9/9/11 ctl_pit=56/56/66 shell=B2BF bshell=B2BF if1=59
+R CELLS BW_2PA unit=w n=512 nop=4 rep=5 art=58/58/59 pit=449/452/461 ctl_art=12/12/13 ctl_pit=81/82/90 shell=8074 bshell=8074 if1=59
+R CELLS BW_2PA unit=w n=512 nop=8 rep=5 art=58/59/60 pit=453/453/464 ctl_art=18/19/21 ctl_pit=133/134/144 shell=C217 bshell=C217 if1=59
+R CELLS BW_2PA unit=w n=512 nop=16 rep=5 art=58/59/60 pit=451/453/466 ctl_art=31/32/33 ctl_pit=233/233/243 shell=4B10 bshell=4B10 if1=59
+R CELLS BW_2PA unit=w n=512 nop=32 rep=5 art=60/61/63 pit=461/463/482 ctl_art=56/57/58 ctl_pit=435/436/449 shell=ECE1 bshell=ECE1 if1=59
+R CELLS BW_2PA unit=w n=512 nop=64 rep=5 art=110/111/114 pit=864/866/889 ctl_art=107/107/109 ctl_pit=838/840/858 shell=5385 bshell=5385 if1=109
+ROW CELLS BD_2PA
+R CELLS BD_2PA unit=d n=512 nop=0 rep=5 art=113/114/115 pit=891/892/899 ctl_art=6/7/8 ctl_pit=31/34/41 shell=4956 bshell=4956 if1=114
+R CELLS BD_2PA unit=d n=512 nop=2 rep=5 art=114/114/114 pit=891/891/900 ctl_art=9/10/10 ctl_pit=56/57/64 shell=B2BF bshell=B2BF if1=114
+R CELLS BD_2PA unit=d n=512 nop=4 rep=5 art=113/114/115 pit=892/892/903 ctl_art=13/13/13 ctl_pit=81/82/92 shell=8074 bshell=8074 if1=113
+R CELLS BD_2PA unit=d n=512 nop=8 rep=5 art=114/114/115 pit=894/895/903 ctl_art=18/18/20 ctl_pit=132/133/144 shell=C217 bshell=C217 if1=114
+R CELLS BD_2PA unit=d n=512 nop=16 rep=5 art=113/113/116 pit=893/893/908 ctl_art=31/32/33 ctl_pit=233/233/245 shell=4B10 bshell=4B10 if1=114
+R CELLS BD_2PA unit=d n=512 nop=32 rep=5 art=113/114/116 pit=893/894/912 ctl_art=56/57/58 ctl_pit=434/435/447 shell=ECE1 bshell=ECE1 if1=113
+R CELLS BD_2PA unit=d n=512 nop=64 rep=5 art=114/114/118 pit=897/898/926 ctl_art=107/107/110 ctl_pit=838/840/858 shell=5385 bshell=5385 if1=114
+ROW CELLS XCR_2PV
+R CELLS XCR_2PV unit=w n=512 nop=0 rep=5 art=104/105/106 pit=817/819/828 ctl_art=6/7/7 ctl_pit=33/34/44 shell=5B3A bshell=5B3A if1=104
+R CELLS XCR_2PV unit=w n=512 nop=2 rep=5 art=104/106/107 pit=821/824/832 ctl_art=9/10/10 ctl_pit=59/61/67 shell=DA36 bshell=DA36 if1=105
+R CELLS XCR_2PV unit=w n=512 nop=4 rep=5 art=110/110/112 pit=863/865/874 ctl_art=12/13/15 ctl_pit=84/85/94 shell=8666 bshell=8666 if1=111
+R CELLS XCR_2PV unit=w n=512 nop=8 rep=5 art=115/116/116 pit=903/906/914 ctl_art=18/19/20 ctl_pit=134/135/144 shell=6A49 bshell=6A49 if1=115
+R CELLS XCR_2PV unit=w n=512 nop=16 rep=5 art=129/129/131 pit=1017/1018/1029 ctl_art=31/32/33 ctl_pit=236/237/248 shell=6398 bshell=6398 if1=129
+R CELLS XCR_2PV unit=w n=512 nop=32 rep=5 art=153/154/155 pit=1208/1209/1224 ctl_art=56/57/59 ctl_pit=437/437/451 shell=3F45 bshell=3F45 if1=153
+R CELLS XCR_2PV unit=w n=512 nop=64 rep=5 art=208/208/208 pit=1644/1648/1654 ctl_art=107/108/110 ctl_pit=840/841/859 shell=C07F bshell=C07F if1=208
+ROW CELLS XCW_2PV
+R CELLS XCW_2PV unit=w n=512 nop=0 rep=5 art=24/25/26 pit=177/180/187 ctl_art=6/7/7 ctl_pit=34/34/41 shell=5B3A bshell=5B3A if1=24
+R CELLS XCW_2PV unit=w n=512 nop=2 rep=5 art=24/24/26 pit=177/180/188 ctl_art=9/10/11 ctl_pit=59/59/69 shell=DA36 bshell=DA36 if1=25
+R CELLS XCW_2PV unit=w n=512 nop=4 rep=5 art=24/25/26 pit=176/179/191 ctl_art=12/12/14 ctl_pit=84/84/92 shell=8666 bshell=8666 if1=25
+R CELLS XCW_2PV unit=w n=512 nop=8 rep=5 art=24/25/27 pit=178/180/192 ctl_art=19/20/21 ctl_pit=134/135/146 shell=6A49 bshell=6A49 if1=24
+R CELLS XCW_2PV unit=w n=512 nop=16 rep=5 art=34/35/37 pit=260/262/276 ctl_art=31/32/33 ctl_pit=236/236/246 shell=6398 bshell=6398 if1=35
+R CELLS XCW_2PV unit=w n=512 nop=32 rep=5 art=59/60/61 pit=462/464/479 ctl_art=56/57/59 ctl_pit=437/437/451 shell=3F45 bshell=3F45 if1=60
+R CELLS XCW_2PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/868/887 ctl_art=107/108/110 ctl_pit=840/841/860 shell=C07F bshell=C07F if1=110
+ROW CELLS XCRS_2PV
+R CELLS XCRS_2PV unit=w n=512 nop=0 rep=5 art=104/104/106 pit=817/819/825 ctl_art=6/6/8 ctl_pit=33/34/43 shell=FD80 bshell=FD80 if1=105
+R CELLS XCRS_2PV unit=w n=512 nop=2 rep=5 art=104/105/106 pit=820/823/828 ctl_art=9/10/11 ctl_pit=59/60/66 shell=B9F8 bshell=B9F8 if1=105
+R CELLS XCRS_2PV unit=w n=512 nop=4 rep=5 art=110/111/112 pit=864/864/875 ctl_art=12/13/13 ctl_pit=83/84/93 shell=2B22 bshell=2B22 if1=111
+R CELLS XCRS_2PV unit=w n=512 nop=8 rep=5 art=115/116/116 pit=904/907/913 ctl_art=19/19/20 ctl_pit=134/134/145 shell=F5A6 bshell=F5A6 if1=115
+R CELLS XCRS_2PV unit=w n=512 nop=16 rep=5 art=129/130/130 pit=1015/1018/1029 ctl_art=31/32/33 ctl_pit=235/236/246 shell=218D bshell=218D if1=130
+R CELLS XCRS_2PV unit=w n=512 nop=32 rep=5 art=153/154/155 pit=1206/1210/1223 ctl_art=56/57/58 ctl_pit=437/439/453 shell=7A1F bshell=7A1F if1=153
+R CELLS XCRS_2PV unit=w n=512 nop=64 rep=5 art=207/208/209 pit=1635/1642/1655 ctl_art=107/107/110 ctl_pit=840/841/859 shell=CC4B bshell=CC4B if1=207
+ROW CELLS XCWS_2PV
+R CELLS XCWS_2PV unit=w n=512 nop=0 rep=5 art=23/24/24 pit=170/171/180 ctl_art=6/7/7 ctl_pit=33/34/40 shell=FD80 bshell=FD80 if1=23
+R CELLS XCWS_2PV unit=w n=512 nop=2 rep=5 art=24/24/26 pit=178/179/186 ctl_art=9/10/10 ctl_pit=58/61/67 shell=B9F8 bshell=B9F8 if1=25
+R CELLS XCWS_2PV unit=w n=512 nop=4 rep=5 art=23/24/25 pit=171/173/182 ctl_art=12/12/14 ctl_pit=83/84/92 shell=2B22 bshell=2B22 if1=24
+R CELLS XCWS_2PV unit=w n=512 nop=8 rep=5 art=24/25/26 pit=177/180/191 ctl_art=18/19/21 ctl_pit=134/135/144 shell=F5A6 bshell=F5A6 if1=25
+R CELLS XCWS_2PV unit=w n=512 nop=16 rep=5 art=35/35/37 pit=261/262/274 ctl_art=31/32/33 ctl_pit=236/236/245 shell=218D bshell=218D if1=34
+R CELLS XCWS_2PV unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/462/476 ctl_art=56/56/59 ctl_pit=436/439/451 shell=7A1F bshell=7A1F if1=61
+R CELLS XCWS_2PV unit=w n=512 nop=64 rep=5 art=110/111/112 pit=865/866/886 ctl_art=107/108/110 ctl_pit=840/842/859 shell=CC4B bshell=CC4B if1=110
+ROW CELLS XARS_2PV
+R CELLS XARS_2PV unit=w n=512 nop=0 rep=5 art=104/105/106 pit=817/820/823 ctl_art=6/6/7 ctl_pit=33/33/43 shell=D3BC bshell=D3BC if1=104
+R CELLS XARS_2PV unit=w n=512 nop=2 rep=5 art=104/105/105 pit=821/821/830 ctl_art=9/9/11 ctl_pit=58/60/65 shell=41BB bshell=41BB if1=105
+R CELLS XARS_2PV unit=w n=512 nop=4 rep=5 art=110/111/111 pit=864/867/875 ctl_art=12/12/14 ctl_pit=83/84/91 shell=12CC bshell=12CC if1=111
+R CELLS XARS_2PV unit=w n=512 nop=8 rep=5 art=114/115/116 pit=903/905/914 ctl_art=19/19/20 ctl_pit=135/135/142 shell=4B77 bshell=4B77 if1=115
+R CELLS XARS_2PV unit=w n=512 nop=16 rep=5 art=129/130/131 pit=1018/1018/1027 ctl_art=31/32/34 ctl_pit=235/236/247 shell=531B bshell=531B if1=129
+R CELLS XARS_2PV unit=w n=512 nop=32 rep=5 art=153/154/155 pit=1205/1209/1224 ctl_art=56/57/59 ctl_pit=436/437/450 shell=7DF9 bshell=7DF9 if1=153
+R CELLS XARS_2PV unit=w n=512 nop=64 rep=5 art=206/208/211 pit=1635/1647/1668 ctl_art=107/108/110 ctl_pit=840/841/862 shell=17ED bshell=17ED if1=207
+ROW CELLS XAWS_2PV
+R CELLS XAWS_2PV unit=w n=512 nop=0 rep=5 art=23/24/25 pit=171/173/180 ctl_art=6/7/7 ctl_pit=33/34/40 shell=D3BC bshell=D3BC if1=24
+R CELLS XAWS_2PV unit=w n=512 nop=2 rep=5 art=24/25/25 pit=177/180/190 ctl_art=9/10/11 ctl_pit=58/60/66 shell=41BB bshell=41BB if1=25
+R CELLS XAWS_2PV unit=w n=512 nop=4 rep=5 art=23/23/25 pit=171/172/182 ctl_art=12/13/15 ctl_pit=83/84/96 shell=12CC bshell=12CC if1=24
+R CELLS XAWS_2PV unit=w n=512 nop=8 rep=5 art=24/25/27 pit=178/180/190 ctl_art=19/20/21 ctl_pit=134/135/145 shell=4B77 bshell=4B77 if1=24
+R CELLS XAWS_2PV unit=w n=512 nop=16 rep=5 art=35/35/36 pit=261/261/274 ctl_art=31/32/34 ctl_pit=235/236/247 shell=531B bshell=531B if1=35
+R CELLS XAWS_2PV unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/462/479 ctl_art=56/57/59 ctl_pit=437/437/448 shell=7DF9 bshell=7DF9 if1=60
+R CELLS XAWS_2PV unit=w n=512 nop=64 rep=5 art=110/111/112 pit=865/866/887 ctl_art=107/108/110 ctl_pit=840/840/859 shell=17ED bshell=17ED if1=111
+ROW CELLS XCRM_2PV
+R CELLS XCRM_2PV unit=w n=512 nop=0 rep=5 art=136/136/137 pit=1071/1073/1081 ctl_art=6/6/8 ctl_pit=33/36/42 shell=7E0F bshell=7E0F if1=136
+R CELLS XCRM_2PV unit=w n=512 nop=2 rep=5 art=137/137/138 pit=1079/1080/1086 ctl_art=9/10/11 ctl_pit=59/61/68 shell=5204 bshell=5204 if1=137
+R CELLS XCRM_2PV unit=w n=512 nop=4 rep=5 art=141/142/143 pit=1111/1113/1124 ctl_art=12/13/13 ctl_pit=84/84/92 shell=01D5 bshell=01D5 if1=141
+R CELLS XCRM_2PV unit=w n=512 nop=8 rep=5 art=147/147/147 pit=1151/1153/1163 ctl_art=19/20/21 ctl_pit=134/135/145 shell=B805 bshell=B805 if1=147
+R CELLS XCRM_2PV unit=w n=512 nop=16 rep=5 art=159/160/161 pit=1256/1261/1274 ctl_art=31/32/33 ctl_pit=236/236/245 shell=F279 bshell=F279 if1=160
+R CELLS XCRM_2PV unit=w n=512 nop=32 rep=5 art=182/182/185 pit=1440/1444/1457 ctl_art=56/57/59 ctl_pit=437/437/452 shell=A9B1 bshell=A9B1 if1=183
+R CELLS XCRM_2PV unit=w n=512 nop=64 rep=5 art=233/234/236 pit=1849/1851/1875 ctl_art=107/107/111 ctl_pit=840/841/863 shell=2F57 bshell=2F57 if1=233
+ROW CELLS XCWM_2PV
+R CELLS XCWM_2PV unit=w n=512 nop=0 rep=5 art=44/45/46 pit=340/341/349 ctl_art=6/7/8 ctl_pit=34/36/44 shell=7E0F bshell=7E0F if1=44
+R CELLS XCWM_2PV unit=w n=512 nop=2 rep=5 art=23/24/24 pit=171/173/180 ctl_art=9/10/10 ctl_pit=59/60/67 shell=5204 bshell=5204 if1=23
+R CELLS XCWM_2PV unit=w n=512 nop=4 rep=5 art=45/45/45 pit=340/340/350 ctl_art=12/13/14 ctl_pit=84/84/94 shell=01D5 bshell=01D5 if1=45
+R CELLS XCWM_2PV unit=w n=512 nop=8 rep=5 art=23/24/25 pit=172/174/184 ctl_art=19/19/21 ctl_pit=134/136/142 shell=B805 bshell=B805 if1=23
+R CELLS XCWM_2PV unit=w n=512 nop=16 rep=5 art=34/35/37 pit=260/263/275 ctl_art=31/32/34 ctl_pit=235/236/247 shell=F279 bshell=F279 if1=35
+R CELLS XCWM_2PV unit=w n=512 nop=32 rep=5 art=60/60/61 pit=462/463/476 ctl_art=56/57/59 ctl_pit=437/437/449 shell=A9B1 bshell=A9B1 if1=59
+R CELLS XCWM_2PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/868/888 ctl_art=107/108/111 ctl_pit=842/842/861 shell=2F57 bshell=2F57 if1=110
+ROW CELLS PKR_2PV
+R CELLS PKR_2PV unit=w n=512 nop=0 rep=5 art=104/104/105 pit=817/819/825 ctl_art=6/6/7 ctl_pit=34/34/42 shell=BDFC bshell=BDFC if1=105
+R CELLS PKR_2PV unit=w n=512 nop=2 rep=5 art=104/105/105 pit=821/823/831 ctl_art=9/9/11 ctl_pit=59/61/68 shell=70B0 bshell=70B0 if1=105
+R CELLS PKR_2PV unit=w n=512 nop=4 rep=5 art=110/111/111 pit=863/865/872 ctl_art=12/13/14 ctl_pit=84/84/92 shell=1B96 bshell=1B96 if1=110
+R CELLS PKR_2PV unit=w n=512 nop=8 rep=5 art=115/115/117 pit=904/906/913 ctl_art=19/19/20 ctl_pit=134/135/146 shell=3825 bshell=3825 if1=115
+R CELLS PKR_2PV unit=w n=512 nop=16 rep=5 art=129/130/131 pit=1016/1017/1029 ctl_art=31/32/34 ctl_pit=236/237/245 shell=19F2 bshell=19F2 if1=130
+R CELLS PKR_2PV unit=w n=512 nop=32 rep=5 art=153/153/155 pit=1209/1210/1222 ctl_art=56/57/59 ctl_pit=437/437/451 shell=D40C bshell=D40C if1=153
+R CELLS PKR_2PV unit=w n=512 nop=64 rep=5 art=206/207/212 pit=1638/1639/1673 ctl_art=107/108/110 ctl_pit=841/842/862 shell=D552 bshell=D552 if1=207
+ROW CELLS PKW_2PV
+R CELLS PKW_2PV unit=w n=512 nop=0 rep=5 art=24/25/25 pit=177/178/188 ctl_art=6/7/8 ctl_pit=33/34/41 shell=BDFC bshell=BDFC if1=24
+R CELLS PKW_2PV unit=w n=512 nop=2 rep=5 art=24/25/26 pit=177/179/189 ctl_art=9/10/11 ctl_pit=59/59/67 shell=70B0 bshell=70B0 if1=24
+R CELLS PKW_2PV unit=w n=512 nop=4 rep=5 art=24/25/25 pit=177/179/189 ctl_art=12/13/14 ctl_pit=84/85/96 shell=1B96 bshell=1B96 if1=25
+R CELLS PKW_2PV unit=w n=512 nop=8 rep=5 art=24/25/27 pit=179/181/193 ctl_art=18/19/21 ctl_pit=135/135/146 shell=3825 bshell=3825 if1=24
+R CELLS PKW_2PV unit=w n=512 nop=16 rep=5 art=34/35/36 pit=261/262/275 ctl_art=31/32/34 ctl_pit=235/237/247 shell=19F2 bshell=19F2 if1=34
+R CELLS PKW_2PV unit=w n=512 nop=32 rep=5 art=60/60/62 pit=462/464/478 ctl_art=56/57/59 ctl_pit=437/437/449 shell=D40C bshell=D40C if1=60
+R CELLS PKW_2PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/868/887 ctl_art=107/108/109 ctl_pit=840/840/860 shell=D552 bshell=D552 if1=111
+ROW CELLS BRW_2PV
+R CELLS BRW_2PV unit=w n=512 nop=0 rep=5 art=68/69/69 pit=533/535/541 ctl_art=6/6/7 ctl_pit=31/32/39 shell=4956 bshell=4956 if1=69
+R CELLS BRW_2PV unit=w n=512 nop=2 rep=5 art=69/70/71 pit=537/539/547 ctl_art=9/9/10 ctl_pit=56/56/67 shell=B2BF bshell=B2BF if1=70
+R CELLS BRW_2PV unit=w n=512 nop=4 rep=5 art=74/75/76 pit=578/578/587 ctl_art=12/12/14 ctl_pit=81/82/92 shell=8074 bshell=8074 if1=74
+R CELLS BRW_2PV unit=w n=512 nop=8 rep=5 art=79/80/81 pit=618/618/628 ctl_art=19/19/20 ctl_pit=132/132/141 shell=C217 bshell=C217 if1=80
+R CELLS BRW_2PV unit=w n=512 nop=16 rep=5 art=93/94/95 pit=734/734/745 ctl_art=31/32/33 ctl_pit=233/233/243 shell=4B10 bshell=4B10 if1=94
+R CELLS BRW_2PV unit=w n=512 nop=32 rep=5 art=118/119/120 pit=927/929/943 ctl_art=56/57/59 ctl_pit=434/435/450 shell=ECE1 bshell=ECE1 if1=118
+R CELLS BRW_2PV unit=w n=512 nop=64 rep=5 art=168/169/171 pit=1332/1333/1355 ctl_art=107/107/110 ctl_pit=838/839/859 shell=5385 bshell=5385 if1=168
+ROW CELLS BRD_2PV
+R CELLS BRD_2PV unit=d n=512 nop=0 rep=5 art=123/124/125 pit=974/975/984 ctl_art=6/7/8 ctl_pit=31/32/39 shell=4956 bshell=4956 if1=125
+R CELLS BRD_2PV unit=d n=512 nop=2 rep=5 art=124/125/126 pit=977/978/986 ctl_art=9/9/10 ctl_pit=56/57/64 shell=B2BF bshell=B2BF if1=124
+R CELLS BRD_2PV unit=d n=512 nop=4 rep=5 art=129/130/131 pit=1016/1017/1027 ctl_art=12/13/14 ctl_pit=81/82/92 shell=8074 bshell=8074 if1=130
+R CELLS BRD_2PV unit=d n=512 nop=8 rep=5 art=133/134/135 pit=1054/1054/1063 ctl_art=18/19/21 ctl_pit=131/132/143 shell=C217 bshell=C217 if1=133
+R CELLS BRD_2PV unit=d n=512 nop=16 rep=5 art=149/150/151 pit=1176/1176/1189 ctl_art=31/32/34 ctl_pit=233/233/246 shell=4B10 bshell=4B10 if1=150
+R CELLS BRD_2PV unit=d n=512 nop=32 rep=5 art=171/172/173 pit=1357/1358/1372 ctl_art=56/57/59 ctl_pit=434/435/447 shell=ECE1 bshell=ECE1 if1=171
+R CELLS BRD_2PV unit=d n=512 nop=64 rep=5 art=229/229/232 pit=1810/1812/1833 ctl_art=107/107/110 ctl_pit=837/839/858 shell=5385 bshell=5385 if1=228
+ROW CELLS BW_2PV
+R CELLS BW_2PV unit=w n=512 nop=0 rep=5 art=58/59/59 pit=449/451/459 ctl_art=6/6/7 ctl_pit=31/33/39 shell=4956 bshell=4956 if1=58
+R CELLS BW_2PV unit=w n=512 nop=2 rep=5 art=58/59/60 pit=450/452/461 ctl_art=9/10/11 ctl_pit=56/57/66 shell=B2BF bshell=B2BF if1=59
+R CELLS BW_2PV unit=w n=512 nop=4 rep=5 art=58/59/59 pit=449/451/461 ctl_art=12/13/14 ctl_pit=81/82/91 shell=8074 bshell=8074 if1=58
+R CELLS BW_2PV unit=w n=512 nop=8 rep=5 art=58/59/60 pit=450/452/463 ctl_art=18/19/21 ctl_pit=132/134/144 shell=C217 bshell=C217 if1=59
+R CELLS BW_2PV unit=w n=512 nop=16 rep=5 art=58/59/60 pit=450/452/466 ctl_art=31/32/33 ctl_pit=233/234/243 shell=4B10 bshell=4B10 if1=58
+R CELLS BW_2PV unit=w n=512 nop=32 rep=5 art=60/60/63 pit=461/462/482 ctl_art=56/57/59 ctl_pit=434/436/450 shell=ECE1 bshell=ECE1 if1=59
+R CELLS BW_2PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=864/865/889 ctl_art=107/107/109 ctl_pit=837/838/859 shell=5385 bshell=5385 if1=109
+ROW CELLS BD_2PV
+R CELLS BD_2PV unit=d n=512 nop=0 rep=5 art=113/114/115 pit=892/892/901 ctl_art=6/6/8 ctl_pit=31/32/41 shell=4956 bshell=4956 if1=114
+R CELLS BD_2PV unit=d n=512 nop=2 rep=5 art=113/114/114 pit=891/892/900 ctl_art=9/10/10 ctl_pit=56/58/64 shell=B2BF bshell=B2BF if1=113
+R CELLS BD_2PV unit=d n=512 nop=4 rep=5 art=113/114/115 pit=891/892/901 ctl_art=12/13/15 ctl_pit=81/82/95 shell=8074 bshell=8074 if1=114
+R CELLS BD_2PV unit=d n=512 nop=8 rep=5 art=113/114/115 pit=892/893/903 ctl_art=18/19/21 ctl_pit=132/133/140 shell=C217 bshell=C217 if1=114
+R CELLS BD_2PV unit=d n=512 nop=16 rep=5 art=114/114/116 pit=892/893/908 ctl_art=31/32/34 ctl_pit=233/236/248 shell=4B10 bshell=4B10 if1=113
+R CELLS BD_2PV unit=d n=512 nop=32 rep=5 art=114/114/116 pit=892/893/912 ctl_art=56/57/58 ctl_pit=434/435/448 shell=ECE1 bshell=ECE1 if1=113
+R CELLS BD_2PV unit=d n=512 nop=64 rep=5 art=114/115/118 pit=897/897/926 ctl_art=106/107/110 ctl_pit=838/838/859 shell=5385 bshell=5385 if1=114
+STATE CELLS mode=31 ah30=05 al=0C bh=21 p9a8=01 q0A=00 bda054C=EF bda054D=58
+P CELLS RASTER_31 frames=8 art=35077 hi=155 to=0
+ROW CELLS TCRWM_31A
+R CELLS TCRWM_31A unit=w n=512 nop=0 rep=5 art=148/150/151 pit=1167/1180/1190 ctl_art=6/7/7 ctl_pit=34/34/41 shell=EFCC bshell=EFCC if1=149
+R CELLS TCRWM_31A unit=w n=512 nop=2 rep=5 art=149/150/152 pit=1179/1186/1191 ctl_art=10/10/11 ctl_pit=59/59/68 shell=4C65 bshell=4C65 if1=150
+R CELLS TCRWM_31A unit=w n=512 nop=4 rep=5 art=155/156/158 pit=1223/1228/1242 ctl_art=12/13/14 ctl_pit=84/84/95 shell=EA00 bshell=EA00 if1=156
+R CELLS TCRWM_31A unit=w n=512 nop=8 rep=5 art=159/160/161 pit=1260/1264/1269 ctl_art=19/20/20 ctl_pit=135/136/146 shell=023A bshell=023A if1=160
+R CELLS TCRWM_31A unit=w n=512 nop=16 rep=5 art=170/171/173 pit=1348/1354/1363 ctl_art=31/32/34 ctl_pit=236/236/247 shell=B143 bshell=B143 if1=171
+R CELLS TCRWM_31A unit=w n=512 nop=32 rep=5 art=198/199/200 pit=1569/1574/1583 ctl_art=57/57/59 ctl_pit=437/439/452 shell=E065 bshell=E065 if1=198
+R CELLS TCRWM_31A unit=w n=512 nop=64 rep=5 art=245/246/247 pit=1938/1949/1955 ctl_art=107/108/110 ctl_pit=840/842/862 shell=4EE5 bshell=4EE5 if1=244
+ROW CELLS TCRD_31A
+R CELLS TCRD_31A unit=d n=512 nop=0 rep=5 art=149/150/150 pit=1173/1179/1187 ctl_art=6/7/8 ctl_pit=33/34/43 shell=BDFC bshell=BDFC if1=149
+R CELLS TCRD_31A unit=d n=512 nop=2 rep=5 art=149/150/153 pit=1175/1189/1204 ctl_art=9/10/11 ctl_pit=59/59/69 shell=70B0 bshell=70B0 if1=150
+R CELLS TCRD_31A unit=d n=512 nop=4 rep=5 art=155/156/157 pit=1230/1231/1239 ctl_art=12/12/14 ctl_pit=84/86/92 shell=1B96 bshell=1B96 if1=156
+R CELLS TCRD_31A unit=d n=512 nop=8 rep=5 art=158/158/160 pit=1250/1254/1268 ctl_art=19/19/20 ctl_pit=135/136/144 shell=3825 bshell=3825 if1=159
+R CELLS TCRD_31A unit=d n=512 nop=16 rep=5 art=170/171/173 pit=1350/1352/1361 ctl_art=31/32/34 ctl_pit=238/238/246 shell=19F2 bshell=19F2 if1=172
+R CELLS TCRD_31A unit=d n=512 nop=32 rep=5 art=198/199/200 pit=1568/1577/1584 ctl_art=56/57/59 ctl_pit=437/438/451 shell=D40C bshell=D40C if1=199
+R CELLS TCRD_31A unit=d n=512 nop=64 rep=5 art=245/246/248 pit=1939/1947/1968 ctl_art=107/107/109 ctl_pit=842/843/860 shell=D552 bshell=D552 if1=246
+ROW CELLS TDWM_31A
+R CELLS TDWM_31A unit=w n=512 nop=0 rep=5 art=36/37/38 pit=274/283/285 ctl_art=6/7/8 ctl_pit=33/36/44 shell=EFCC bshell=EFCC if1=38
+R CELLS TDWM_31A unit=w n=512 nop=2 rep=5 art=36/37/38 pit=274/283/287 ctl_art=9/10/10 ctl_pit=59/59/68 shell=4C65 bshell=4C65 if1=38
+R CELLS TDWM_31A unit=w n=512 nop=4 rep=5 art=37/38/39 pit=271/280/294 ctl_art=12/13/14 ctl_pit=84/86/92 shell=EA00 bshell=EA00 if1=39
+R CELLS TDWM_31A unit=w n=512 nop=8 rep=5 art=37/38/38 pit=277/283/293 ctl_art=19/19/21 ctl_pit=135/136/147 shell=023A bshell=023A if1=36
+R CELLS TDWM_31A unit=w n=512 nop=16 rep=5 art=38/39/39 pit=286/292/294 ctl_art=31/32/34 ctl_pit=236/236/248 shell=B143 bshell=B143 if1=37
+R CELLS TDWM_31A unit=w n=512 nop=32 rep=5 art=60/60/63 pit=463/464/479 ctl_art=57/57/59 ctl_pit=437/438/454 shell=E065 bshell=E065 if1=60
+R CELLS TDWM_31A unit=w n=512 nop=64 rep=5 art=110/110/113 pit=865/866/887 ctl_art=107/108/110 ctl_pit=840/843/860 shell=4EE5 bshell=4EE5 if1=110
+ROW CELLS TDD_31A
+R CELLS TDD_31A unit=d n=512 nop=0 rep=5 art=37/38/38 pit=276/280/286 ctl_art=6/7/7 ctl_pit=33/34/41 shell=BDFC bshell=BDFC if1=37
+R CELLS TDD_31A unit=d n=512 nop=2 rep=5 art=35/38/38 pit=268/282/289 ctl_art=9/10/11 ctl_pit=59/59/67 shell=70B0 bshell=70B0 if1=37
+R CELLS TDD_31A unit=d n=512 nop=4 rep=5 art=36/37/38 pit=277/279/291 ctl_art=12/13/14 ctl_pit=84/85/94 shell=1B96 bshell=1B96 if1=38
+R CELLS TDD_31A unit=d n=512 nop=8 rep=5 art=37/38/39 pit=274/281/294 ctl_art=19/20/20 ctl_pit=135/136/146 shell=3825 bshell=3825 if1=37
+R CELLS TDD_31A unit=d n=512 nop=16 rep=5 art=39/39/41 pit=290/295/306 ctl_art=31/32/34 ctl_pit=236/236/247 shell=19F2 bshell=19F2 if1=39
+R CELLS TDD_31A unit=d n=512 nop=32 rep=5 art=61/62/63 pit=475/476/492 ctl_art=57/57/59 ctl_pit=438/439/451 shell=D40C bshell=D40C if1=62
+R CELLS TDD_31A unit=d n=512 nop=64 rep=5 art=112/112/115 pit=879/881/902 ctl_art=107/108/110 ctl_pit=840/841/862 shell=D552 bshell=D552 if1=113
+ROW CELLS RMWM_31A
+R CELLS RMWM_31A unit=w n=512 nop=0 rep=5 art=81/82/83 pit=633/636/647 ctl_art=6/7/7 ctl_pit=33/34/44 shell=EFCC bshell=EFCC if1=82
+R CELLS RMWM_31A unit=w n=512 nop=2 rep=5 art=80/82/82 pit=626/631/645 ctl_art=9/10/11 ctl_pit=58/59/68 shell=4C65 bshell=4C65 if1=82
+R CELLS RMWM_31A unit=w n=512 nop=4 rep=5 art=81/82/83 pit=632/638/639 ctl_art=12/13/14 ctl_pit=84/85/93 shell=EA00 bshell=EA00 if1=80
+R CELLS RMWM_31A unit=w n=512 nop=8 rep=5 art=80/81/83 pit=630/634/642 ctl_art=19/20/21 ctl_pit=135/137/146 shell=023A bshell=023A if1=81
+R CELLS RMWM_31A unit=w n=512 nop=16 rep=5 art=81/82/84 pit=632/637/649 ctl_art=31/32/33 ctl_pit=236/236/247 shell=B143 bshell=B143 if1=83
+R CELLS RMWM_31A unit=w n=512 nop=32 rep=5 art=80/81/83 pit=627/636/651 ctl_art=56/57/59 ctl_pit=437/437/451 shell=E065 bshell=E065 if1=82
+R CELLS RMWM_31A unit=w n=512 nop=64 rep=5 art=110/110/112 pit=866/867/887 ctl_art=107/108/110 ctl_pit=840/841/860 shell=4EE5 bshell=4EE5 if1=111
+ROW CELLS RMD_31A
+R CELLS RMD_31A unit=d n=512 nop=0 rep=5 art=81/81/82 pit=632/636/640 ctl_art=6/6/8 ctl_pit=34/35/44 shell=BDFC bshell=BDFC if1=82
+R CELLS RMD_31A unit=d n=512 nop=2 rep=5 art=81/81/82 pit=631/636/645 ctl_art=9/9/10 ctl_pit=59/59/69 shell=70B0 bshell=70B0 if1=83
+R CELLS RMD_31A unit=d n=512 nop=4 rep=5 art=81/81/83 pit=628/630/644 ctl_art=12/12/14 ctl_pit=84/85/92 shell=1B96 bshell=1B96 if1=81
+R CELLS RMD_31A unit=d n=512 nop=8 rep=5 art=81/82/82 pit=632/637/640 ctl_art=19/20/21 ctl_pit=135/136/144 shell=3825 bshell=3825 if1=81
+R CELLS RMD_31A unit=d n=512 nop=16 rep=5 art=80/82/83 pit=628/639/643 ctl_art=31/32/33 ctl_pit=236/238/245 shell=19F2 bshell=19F2 if1=82
+R CELLS RMD_31A unit=d n=512 nop=32 rep=5 art=81/82/84 pit=633/636/653 ctl_art=56/57/59 ctl_pit=437/439/451 shell=D40C bshell=D40C if1=82
+R CELLS RMD_31A unit=d n=512 nop=64 rep=5 art=112/113/115 pit=879/881/900 ctl_art=107/108/111 ctl_pit=842/842/860 shell=D552 bshell=D552 if1=112
+ROW CELLS GWM_31A
+R CELLS GWM_31A unit=w n=512 nop=0 rep=5 art=46/46/48 pit=351/356/367 ctl_art=6/7/8 ctl_pit=33/36/41 shell=EFCC bshell=EFCC if1=47
+R CELLS GWM_31A unit=w n=512 nop=2 rep=5 art=46/47/48 pit=358/358/359 ctl_art=9/10/10 ctl_pit=58/59/66 shell=4C65 bshell=4C65 if1=47
+R CELLS GWM_31A unit=w n=512 nop=4 rep=5 art=46/47/48 pit=351/359/361 ctl_art=12/13/15 ctl_pit=84/84/94 shell=EA00 bshell=EA00 if1=46
+R CELLS GWM_31A unit=w n=512 nop=8 rep=5 art=46/47/48 pit=353/360/369 ctl_art=19/19/21 ctl_pit=136/137/146 shell=023A bshell=023A if1=47
+R CELLS GWM_31A unit=w n=512 nop=16 rep=5 art=46/47/49 pit=354/358/372 ctl_art=31/32/33 ctl_pit=236/238/245 shell=B143 bshell=B143 if1=48
+R CELLS GWM_31A unit=w n=512 nop=32 rep=5 art=60/61/63 pit=463/465/479 ctl_art=57/57/58 ctl_pit=438/439/449 shell=E065 bshell=E065 if1=60
+R CELLS GWM_31A unit=w n=512 nop=64 rep=5 art=111/111/114 pit=866/867/889 ctl_art=107/108/110 ctl_pit=841/842/860 shell=4EE5 bshell=4EE5 if1=110
+ROW CELLS GD_31A
+R CELLS GD_31A unit=d n=512 nop=0 rep=5 art=34/34/36 pit=252/258/262 ctl_art=6/6/8 ctl_pit=33/34/44 shell=BDFC bshell=BDFC if1=33
+R CELLS GD_31A unit=d n=512 nop=2 rep=5 art=46/47/48 pit=355/359/365 ctl_art=9/10/11 ctl_pit=58/60/68 shell=70B0 bshell=70B0 if1=47
+R CELLS GD_31A unit=d n=512 nop=4 rep=5 art=34/34/36 pit=246/255/264 ctl_art=12/13/14 ctl_pit=84/85/92 shell=1B96 bshell=1B96 if1=35
+R CELLS GD_31A unit=d n=512 nop=8 rep=5 art=34/34/36 pit=250/254/270 ctl_art=18/20/21 ctl_pit=135/137/146 shell=3825 bshell=3825 if1=34
+R CELLS GD_31A unit=d n=512 nop=16 rep=5 art=46/48/49 pit=354/359/372 ctl_art=31/32/34 ctl_pit=236/238/250 shell=19F2 bshell=19F2 if1=46
+R CELLS GD_31A unit=d n=512 nop=32 rep=5 art=61/61/64 pit=475/477/491 ctl_art=56/57/58 ctl_pit=437/437/451 shell=D40C bshell=D40C if1=62
+R CELLS GD_31A unit=d n=512 nop=64 rep=5 art=111/113/115 pit=878/881/900 ctl_art=107/108/110 ctl_pit=842/843/860 shell=D552 bshell=D552 if1=111
+ROW CELLS XCRM_31A
+R CELLS XCRM_31A unit=w n=512 nop=0 rep=5 art=135/136/137 pit=1060/1065/1080 ctl_art=5/6/7 ctl_pit=31/31/39 shell=7E0F bshell=7E0F if1=135
+R CELLS XCRM_31A unit=w n=512 nop=2 rep=5 art=135/136/137 pit=1059/1071/1076 ctl_art=9/10/11 ctl_pit=56/58/66 shell=5204 bshell=5204 if1=135
+R CELLS XCRM_31A unit=w n=512 nop=4 rep=5 art=140/143/143 pit=1103/1125/1126 ctl_art=12/13/13 ctl_pit=82/83/92 shell=01D5 bshell=01D5 if1=143
+R CELLS XCRM_31A unit=w n=512 nop=8 rep=5 art=144/144/146 pit=1129/1138/1149 ctl_art=18/19/21 ctl_pit=133/133/144 shell=B805 bshell=B805 if1=144
+R CELLS XCRM_31A unit=w n=512 nop=16 rep=5 art=160/161/163 pit=1268/1272/1286 ctl_art=32/32/32 ctl_pit=233/233/243 shell=F279 bshell=F279 if1=161
+R CELLS XCRM_31A unit=w n=512 nop=32 rep=5 art=178/181/182 pit=1406/1427/1439 ctl_art=56/57/58 ctl_pit=435/435/448 shell=A9B1 bshell=A9B1 if1=181
+R CELLS XCRM_31A unit=w n=512 nop=64 rep=5 art=231/234/238 pit=1834/1857/1882 ctl_art=106/107/110 ctl_pit=838/840/858 shell=2F57 bshell=2F57 if1=234
+ROW CELLS XCWM_31A
+R CELLS XCWM_31A unit=w n=512 nop=0 rep=5 art=33/34/36 pit=248/252/265 ctl_art=6/6/8 ctl_pit=31/34/41 shell=7E0F bshell=7E0F if1=34
+R CELLS XCWM_31A unit=w n=512 nop=2 rep=5 art=46/47/47 pit=349/357/365 ctl_art=9/9/11 ctl_pit=56/58/64 shell=5204 bshell=5204 if1=47
+R CELLS XCWM_31A unit=w n=512 nop=4 rep=5 art=33/34/35 pit=247/254/258 ctl_art=12/13/13 ctl_pit=82/85/92 shell=01D5 bshell=01D5 if1=34
+R CELLS XCWM_31A unit=w n=512 nop=8 rep=5 art=47/48/48 pit=352/360/364 ctl_art=18/19/20 ctl_pit=132/132/142 shell=B805 bshell=B805 if1=47
+R CELLS XCWM_31A unit=w n=512 nop=16 rep=5 art=35/37/37 pit=271/276/287 ctl_art=31/32/33 ctl_pit=233/234/247 shell=F279 bshell=F279 if1=36
+R CELLS XCWM_31A unit=w n=512 nop=32 rep=5 art=60/60/62 pit=460/462/476 ctl_art=56/56/59 ctl_pit=434/435/450 shell=A9B1 bshell=A9B1 if1=60
+R CELLS XCWM_31A unit=w n=512 nop=64 rep=5 art=110/111/112 pit=864/865/884 ctl_art=107/107/109 ctl_pit=838/839/858 shell=2F57 bshell=2F57 if1=110
+ROW CELLS TCRWM_31V
+R CELLS TCRWM_31V unit=w n=512 nop=0 rep=5 art=136/137/137 pit=1072/1076/1085 ctl_art=6/7/7 ctl_pit=33/35/41 shell=EFCC bshell=EFCC if1=136
+R CELLS TCRWM_31V unit=w n=512 nop=2 rep=5 art=137/138/139 pit=1082/1083/1096 ctl_art=9/10/11 ctl_pit=58/59/68 shell=4C65 bshell=4C65 if1=137
+R CELLS TCRWM_31V unit=w n=512 nop=4 rep=5 art=142/142/143 pit=1124/1125/1130 ctl_art=12/13/15 ctl_pit=84/86/95 shell=EA00 bshell=EA00 if1=143
+R CELLS TCRWM_31V unit=w n=512 nop=8 rep=5 art=146/147/148 pit=1155/1155/1166 ctl_art=19/19/20 ctl_pit=134/135/144 shell=023A bshell=023A if1=147
+R CELLS TCRWM_31V unit=w n=512 nop=16 rep=5 art=160/160/161 pit=1263/1264/1278 ctl_art=31/32/33 ctl_pit=235/236/246 shell=B143 bshell=B143 if1=160
+R CELLS TCRWM_31V unit=w n=512 nop=32 rep=5 art=183/184/186 pit=1449/1451/1469 ctl_art=56/57/59 ctl_pit=436/437/451 shell=E065 bshell=E065 if1=186
+R CELLS TCRWM_31V unit=w n=512 nop=64 rep=5 art=231/232/234 pit=1832/1833/1853 ctl_art=107/108/111 ctl_pit=840/842/860 shell=4EE5 bshell=4EE5 if1=231
+ROW CELLS TCRD_31V
+R CELLS TCRD_31V unit=d n=512 nop=0 rep=5 art=136/137/137 pit=1074/1076/1082 ctl_art=6/6/8 ctl_pit=34/36/41 shell=BDFC bshell=BDFC if1=137
+R CELLS TCRD_31V unit=d n=512 nop=2 rep=5 art=136/138/138 pit=1079/1085/1090 ctl_art=9/10/11 ctl_pit=59/60/66 shell=70B0 bshell=70B0 if1=138
+R CELLS TCRD_31V unit=d n=512 nop=4 rep=5 art=142/143/144 pit=1122/1123/1132 ctl_art=12/13/14 ctl_pit=84/84/93 shell=1B96 bshell=1B96 if1=142
+R CELLS TCRD_31V unit=d n=512 nop=8 rep=5 art=146/147/148 pit=1153/1157/1168 ctl_art=18/19/20 ctl_pit=134/134/146 shell=3825 bshell=3825 if1=147
+R CELLS TCRD_31V unit=d n=512 nop=16 rep=5 art=160/160/161 pit=1263/1265/1277 ctl_art=31/32/34 ctl_pit=235/238/247 shell=19F2 bshell=19F2 if1=161
+R CELLS TCRD_31V unit=d n=512 nop=32 rep=5 art=183/183/185 pit=1448/1453/1464 ctl_art=56/57/59 ctl_pit=436/437/451 shell=D40C bshell=D40C if1=183
+R CELLS TCRD_31V unit=d n=512 nop=64 rep=5 art=231/232/233 pit=1831/1833/1851 ctl_art=107/108/110 ctl_pit=840/842/860 shell=D552 bshell=D552 if1=231
+ROW CELLS TDWM_31V
+R CELLS TDWM_31V unit=w n=512 nop=0 rep=5 art=30/31/33 pit=228/230/237 ctl_art=6/7/7 ctl_pit=33/34/41 shell=EFCC bshell=EFCC if1=31
+R CELLS TDWM_31V unit=w n=512 nop=2 rep=5 art=30/31/32 pit=230/231/239 ctl_art=9/10/11 ctl_pit=59/59/68 shell=4C65 bshell=4C65 if1=31
+R CELLS TDWM_31V unit=w n=512 nop=4 rep=5 art=30/32/32 pit=225/230/239 ctl_art=12/12/15 ctl_pit=84/86/97 shell=EA00 bshell=EA00 if1=31
+R CELLS TDWM_31V unit=w n=512 nop=8 rep=5 art=31/32/32 pit=230/231/242 ctl_art=19/19/20 ctl_pit=136/136/145 shell=023A bshell=023A if1=31
+R CELLS TDWM_31V unit=w n=512 nop=16 rep=5 art=34/36/36 pit=261/263/273 ctl_art=31/32/33 ctl_pit=236/238/247 shell=B143 bshell=B143 if1=35
+R CELLS TDWM_31V unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/464/479 ctl_art=56/57/59 ctl_pit=437/437/451 shell=E065 bshell=E065 if1=61
+R CELLS TDWM_31V unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/866/887 ctl_art=107/108/111 ctl_pit=842/842/860 shell=4EE5 bshell=4EE5 if1=110
+ROW CELLS TDD_31V
+R CELLS TDD_31V unit=d n=512 nop=0 rep=5 art=31/31/32 pit=228/230/238 ctl_art=6/6/7 ctl_pit=33/34/41 shell=BDFC bshell=BDFC if1=31
+R CELLS TDD_31V unit=d n=512 nop=2 rep=5 art=31/31/32 pit=230/230/238 ctl_art=9/10/11 ctl_pit=59/61/68 shell=70B0 bshell=70B0 if1=31
+R CELLS TDD_31V unit=d n=512 nop=4 rep=5 art=31/31/32 pit=227/230/239 ctl_art=12/12/14 ctl_pit=84/84/94 shell=1B96 bshell=1B96 if1=33
+R CELLS TDD_31V unit=d n=512 nop=8 rep=5 art=31/31/32 pit=231/231/245 ctl_art=19/19/20 ctl_pit=134/134/146 shell=3825 bshell=3825 if1=32
+R CELLS TDD_31V unit=d n=512 nop=16 rep=5 art=36/37/38 pit=274/274/290 ctl_art=31/32/34 ctl_pit=236/236/246 shell=19F2 bshell=19F2 if1=37
+R CELLS TDD_31V unit=d n=512 nop=32 rep=5 art=61/61/63 pit=475/475/492 ctl_art=56/57/59 ctl_pit=437/437/451 shell=D40C bshell=D40C if1=61
+R CELLS TDD_31V unit=d n=512 nop=64 rep=5 art=112/113/115 pit=877/880/902 ctl_art=107/107/111 ctl_pit=840/840/862 shell=D552 bshell=D552 if1=112
+ROW CELLS RMWM_31V
+R CELLS RMWM_31V unit=w n=512 nop=0 rep=5 art=68/68/70 pit=527/533/540 ctl_art=6/7/8 ctl_pit=34/34/46 shell=EFCC bshell=EFCC if1=69
+R CELLS RMWM_31V unit=w n=512 nop=2 rep=5 art=68/68/70 pit=530/532/541 ctl_art=10/10/11 ctl_pit=59/61/66 shell=4C65 bshell=4C65 if1=69
+R CELLS RMWM_31V unit=w n=512 nop=4 rep=5 art=68/69/70 pit=529/532/538 ctl_art=12/13/14 ctl_pit=84/84/92 shell=EA00 bshell=EA00 if1=69
+R CELLS RMWM_31V unit=w n=512 nop=8 rep=5 art=68/69/69 pit=529/530/539 ctl_art=19/19/20 ctl_pit=134/135/144 shell=023A bshell=023A if1=68
+R CELLS RMWM_31V unit=w n=512 nop=16 rep=5 art=68/68/70 pit=529/533/542 ctl_art=31/31/33 ctl_pit=235/236/247 shell=B143 bshell=B143 if1=69
+R CELLS RMWM_31V unit=w n=512 nop=32 rep=5 art=69/69/71 pit=531/532/548 ctl_art=56/57/58 ctl_pit=436/439/452 shell=E065 bshell=E065 if1=69
+R CELLS RMWM_31V unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/867/888 ctl_art=107/108/110 ctl_pit=840/842/860 shell=4EE5 bshell=4EE5 if1=110
+ROW CELLS RMD_31V
+R CELLS RMD_31V unit=d n=512 nop=0 rep=5 art=68/69/69 pit=531/533/535 ctl_art=6/7/8 ctl_pit=34/36/41 shell=BDFC bshell=BDFC if1=69
+R CELLS RMD_31V unit=d n=512 nop=2 rep=5 art=68/69/69 pit=531/532/540 ctl_art=9/10/11 ctl_pit=59/59/67 shell=70B0 bshell=70B0 if1=68
+R CELLS RMD_31V unit=d n=512 nop=4 rep=5 art=68/69/70 pit=529/534/539 ctl_art=12/12/14 ctl_pit=84/84/94 shell=1B96 bshell=1B96 if1=69
+R CELLS RMD_31V unit=d n=512 nop=8 rep=5 art=68/69/70 pit=530/532/542 ctl_art=19/19/21 ctl_pit=134/136/147 shell=3825 bshell=3825 if1=69
+R CELLS RMD_31V unit=d n=512 nop=16 rep=5 art=68/69/70 pit=530/534/540 ctl_art=31/32/33 ctl_pit=235/236/245 shell=19F2 bshell=19F2 if1=68
+R CELLS RMD_31V unit=d n=512 nop=32 rep=5 art=68/69/70 pit=531/532/548 ctl_art=56/57/59 ctl_pit=437/439/450 shell=D40C bshell=D40C if1=68
+R CELLS RMD_31V unit=d n=512 nop=64 rep=5 art=111/112/115 pit=878/880/900 ctl_art=107/107/110 ctl_pit=840/840/860 shell=D552 bshell=D552 if1=113
+ROW CELLS GWM_31V
+R CELLS GWM_31V unit=w n=512 nop=0 rep=5 art=40/40/41 pit=304/305/313 ctl_art=6/6/7 ctl_pit=33/34/44 shell=EFCC bshell=EFCC if1=40
+R CELLS GWM_31V unit=w n=512 nop=2 rep=5 art=39/41/41 pit=300/304/313 ctl_art=9/10/10 ctl_pit=59/60/69 shell=4C65 bshell=4C65 if1=40
+R CELLS GWM_31V unit=w n=512 nop=4 rep=5 art=40/41/41 pit=304/305/312 ctl_art=12/13/13 ctl_pit=84/84/91 shell=EA00 bshell=EA00 if1=40
+R CELLS GWM_31V unit=w n=512 nop=8 rep=5 art=40/41/41 pit=303/304/315 ctl_art=19/19/20 ctl_pit=134/135/146 shell=023A bshell=023A if1=40
+R CELLS GWM_31V unit=w n=512 nop=16 rep=5 art=34/35/37 pit=262/264/273 ctl_art=31/32/34 ctl_pit=235/236/247 shell=B143 bshell=B143 if1=35
+R CELLS GWM_31V unit=w n=512 nop=32 rep=5 art=59/60/63 pit=462/462/481 ctl_art=56/56/58 ctl_pit=436/439/451 shell=E065 bshell=E065 if1=60
+R CELLS GWM_31V unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/867/887 ctl_art=107/107/110 ctl_pit=840/840/860 shell=4EE5 bshell=4EE5 if1=111
+ROW CELLS GD_31V
+R CELLS GD_31V unit=d n=512 nop=0 rep=5 art=40/40/41 pit=304/305/310 ctl_art=6/7/7 ctl_pit=34/34/41 shell=BDFC bshell=BDFC if1=40
+R CELLS GD_31V unit=d n=512 nop=2 rep=5 art=29/30/31 pit=212/215/223 ctl_art=9/10/11 ctl_pit=59/61/67 shell=70B0 bshell=70B0 if1=28
+R CELLS GD_31V unit=d n=512 nop=4 rep=5 art=40/40/42 pit=304/305/313 ctl_art=12/13/14 ctl_pit=84/85/94 shell=1B96 bshell=1B96 if1=40
+R CELLS GD_31V unit=d n=512 nop=8 rep=5 art=29/29/31 pit=214/216/229 ctl_art=19/19/21 ctl_pit=134/135/146 shell=3825 bshell=3825 if1=30
+R CELLS GD_31V unit=d n=512 nop=16 rep=5 art=40/40/42 pit=305/305/319 ctl_art=31/32/33 ctl_pit=236/237/244 shell=19F2 bshell=19F2 if1=40
+R CELLS GD_31V unit=d n=512 nop=32 rep=5 art=61/62/64 pit=474/477/492 ctl_art=56/57/58 ctl_pit=437/439/451 shell=D40C bshell=D40C if1=61
+R CELLS GD_31V unit=d n=512 nop=64 rep=5 art=112/112/114 pit=878/880/902 ctl_art=107/108/109 ctl_pit=839/841/859 shell=D552 bshell=D552 if1=112
+ROW CELLS XCRM_31V
+R CELLS XCRM_31V unit=w n=512 nop=0 rep=5 art=122/123/124 pit=964/966/974 ctl_art=6/6/8 ctl_pit=31/32/40 shell=7E0F bshell=7E0F if1=122
+R CELLS XCRM_31V unit=w n=512 nop=2 rep=5 art=123/123/124 pit=964/967/974 ctl_art=9/10/11 ctl_pit=56/57/66 shell=5204 bshell=5204 if1=122
+R CELLS XCRM_31V unit=w n=512 nop=4 rep=5 art=128/128/129 pit=1009/1010/1016 ctl_art=12/13/13 ctl_pit=82/83/89 shell=01D5 bshell=01D5 if1=128
+R CELLS XCRM_31V unit=w n=512 nop=8 rep=5 art=132/133/135 pit=1043/1044/1056 ctl_art=19/19/21 ctl_pit=132/133/142 shell=B805 bshell=B805 if1=132
+R CELLS XCRM_31V unit=w n=512 nop=16 rep=5 art=146/146/149 pit=1156/1157/1168 ctl_art=31/32/33 ctl_pit=233/234/245 shell=F279 bshell=F279 if1=146
+R CELLS XCRM_31V unit=w n=512 nop=32 rep=5 art=169/171/172 pit=1342/1342/1360 ctl_art=56/56/59 ctl_pit=434/435/450 shell=A9B1 bshell=A9B1 if1=170
+R CELLS XCRM_31V unit=w n=512 nop=64 rep=5 art=228/229/230 pit=1810/1813/1830 ctl_art=106/107/109 ctl_pit=837/839/858 shell=2F57 bshell=2F57 if1=228
+ROW CELLS XCWM_31V
+R CELLS XCWM_31V unit=w n=512 nop=0 rep=5 art=28/28/30 pit=212/214/223 ctl_art=6/6/8 ctl_pit=31/32/40 shell=7E0F bshell=7E0F if1=28
+R CELLS XCWM_31V unit=w n=512 nop=2 rep=5 art=39/40/41 pit=298/302/310 ctl_art=9/10/11 ctl_pit=57/57/66 shell=5204 bshell=5204 if1=40
+R CELLS XCWM_31V unit=w n=512 nop=4 rep=5 art=28/28/31 pit=211/214/224 ctl_art=12/13/14 ctl_pit=81/84/89 shell=01D5 bshell=01D5 if1=28
+R CELLS XCWM_31V unit=w n=512 nop=8 rep=5 art=28/29/30 pit=212/214/225 ctl_art=18/18/21 ctl_pit=132/132/142 shell=B805 bshell=B805 if1=28
+R CELLS XCWM_31V unit=w n=512 nop=16 rep=5 art=39/40/41 pit=302/303/311 ctl_art=31/32/32 ctl_pit=233/233/242 shell=F279 bshell=F279 if1=40
+R CELLS XCWM_31V unit=w n=512 nop=32 rep=5 art=59/60/61 pit=459/460/476 ctl_art=56/56/58 ctl_pit=434/435/447 shell=A9B1 bshell=A9B1 if1=59
+R CELLS XCWM_31V unit=w n=512 nop=64 rep=5 art=110/111/114 pit=863/865/886 ctl_art=106/107/110 ctl_pit=838/838/859 shell=2F57 bshell=2F57 if1=110
+STATE CELLS mode=3P pegc=256 packed al=0C bh=21 p9a8=01 q0A=01 bda054C=EF bda054D=58
+P CELLS RASTER_3P frames=8 art=35077 hi=156 to=0
+ROW CELLS XCR_3PA
+R CELLS XCR_3PA unit=w n=512 nop=0 rep=5 art=116/118/118 pit=907/923/927 ctl_art=6/6/8 ctl_pit=33/34/44 shell=5B3A bshell=5B3A if1=118
+R CELLS XCR_3PA unit=w n=512 nop=2 rep=5 art=117/118/119 pit=916/930/930 ctl_art=9/10/11 ctl_pit=59/60/68 shell=DA36 bshell=DA36 if1=118
+R CELLS XCR_3PA unit=w n=512 nop=4 rep=5 art=130/130/132 pit=1018/1025/1034 ctl_art=12/13/13 ctl_pit=84/84/92 shell=8666 bshell=8666 if1=131
+R CELLS XCR_3PA unit=w n=512 nop=8 rep=5 art=133/135/135 pit=1055/1064/1069 ctl_art=20/20/20 ctl_pit=135/135/144 shell=6A49 bshell=6A49 if1=135
+R CELLS XCR_3PA unit=w n=512 nop=16 rep=5 art=140/140/141 pit=1099/1102/1105 ctl_art=31/32/34 ctl_pit=236/237/248 shell=6398 bshell=6398 if1=139
+R CELLS XCR_3PA unit=w n=512 nop=32 rep=5 art=167/167/169 pit=1317/1321/1327 ctl_art=56/57/59 ctl_pit=437/438/451 shell=3F45 bshell=3F45 if1=165
+R CELLS XCR_3PA unit=w n=512 nop=64 rep=5 art=207/208/210 pit=1637/1650/1664 ctl_art=107/107/110 ctl_pit=841/842/860 shell=C07F bshell=C07F if1=210
+ROW CELLS XCW_3PA
+R CELLS XCW_3PA unit=w n=512 nop=0 rep=5 art=28/28/29 pit=202/204/212 ctl_art=7/7/7 ctl_pit=34/36/42 shell=5B3A bshell=5B3A if1=27
+R CELLS XCW_3PA unit=w n=512 nop=2 rep=5 art=27/28/29 pit=203/206/216 ctl_art=9/10/10 ctl_pit=58/59/66 shell=DA36 bshell=DA36 if1=28
+R CELLS XCW_3PA unit=w n=512 nop=4 rep=5 art=27/28/29 pit=201/206/212 ctl_art=12/12/15 ctl_pit=84/85/95 shell=8666 bshell=8666 if1=28
+R CELLS XCW_3PA unit=w n=512 nop=8 rep=5 art=28/28/30 pit=206/210/218 ctl_art=19/20/21 ctl_pit=135/137/147 shell=6A49 bshell=6A49 if1=28
+R CELLS XCW_3PA unit=w n=512 nop=16 rep=5 art=34/35/37 pit=262/264/276 ctl_art=31/31/33 ctl_pit=236/236/245 shell=6398 bshell=6398 if1=34
+R CELLS XCW_3PA unit=w n=512 nop=32 rep=5 art=59/60/63 pit=462/463/479 ctl_art=57/57/59 ctl_pit=437/439/451 shell=3F45 bshell=3F45 if1=60
+R CELLS XCW_3PA unit=w n=512 nop=64 rep=5 art=110/111/114 pit=866/867/888 ctl_art=107/108/111 ctl_pit=840/842/859 shell=C07F bshell=C07F if1=111
+ROW CELLS XCRM_3PA
+R CELLS XCRM_3PA unit=w n=512 nop=0 rep=5 art=143/144/145 pit=1130/1136/1141 ctl_art=6/7/7 ctl_pit=34/36/44 shell=7E0F bshell=7E0F if1=145
+R CELLS XCRM_3PA unit=w n=512 nop=2 rep=5 art=143/144/145 pit=1129/1133/1149 ctl_art=9/9/11 ctl_pit=59/61/68 shell=5204 bshell=5204 if1=143
+R CELLS XCRM_3PA unit=w n=512 nop=4 rep=5 art=149/149/151 pit=1175/1177/1192 ctl_art=12/13/14 ctl_pit=84/86/92 shell=01D5 bshell=01D5 if1=150
+R CELLS XCRM_3PA unit=w n=512 nop=8 rep=5 art=155/156/157 pit=1225/1232/1239 ctl_art=19/19/21 ctl_pit=135/138/146 shell=B805 bshell=B805 if1=155
+R CELLS XCRM_3PA unit=w n=512 nop=16 rep=5 art=173/175/176 pit=1362/1379/1388 ctl_art=31/32/34 ctl_pit=236/236/247 shell=F279 bshell=F279 if1=174
+R CELLS XCRM_3PA unit=w n=512 nop=32 rep=5 art=196/198/200 pit=1555/1569/1576 ctl_art=57/57/58 ctl_pit=438/438/452 shell=A9B1 bshell=A9B1 if1=197
+R CELLS XCRM_3PA unit=w n=512 nop=64 rep=5 art=238/239/243 pit=1888/1894/1927 ctl_art=107/108/111 ctl_pit=840/840/860 shell=2F57 bshell=2F57 if1=244
+ROW CELLS XCWM_3PA
+R CELLS XCWM_3PA unit=w n=512 nop=0 rep=5 art=25/25/26 pit=184/187/192 ctl_art=6/7/7 ctl_pit=33/34/41 shell=7E0F bshell=7E0F if1=26
+R CELLS XCWM_3PA unit=w n=512 nop=2 rep=5 art=51/52/52 pit=394/396/401 ctl_art=9/9/10 ctl_pit=59/60/69 shell=5204 bshell=5204 if1=51
+R CELLS XCWM_3PA unit=w n=512 nop=4 rep=5 art=25/26/27 pit=184/186/195 ctl_art=12/12/15 ctl_pit=84/84/97 shell=01D5 bshell=01D5 if1=26
+R CELLS XCWM_3PA unit=w n=512 nop=8 rep=5 art=25/26/28 pit=184/187/200 ctl_art=19/19/21 ctl_pit=135/135/144 shell=B805 bshell=B805 if1=26
+R CELLS XCWM_3PA unit=w n=512 nop=16 rep=5 art=51/51/53 pit=393/395/407 ctl_art=31/32/34 ctl_pit=236/236/245 shell=F279 bshell=F279 if1=52
+R CELLS XCWM_3PA unit=w n=512 nop=32 rep=5 art=60/60/62 pit=463/465/479 ctl_art=56/57/58 ctl_pit=437/439/449 shell=A9B1 bshell=A9B1 if1=59
+R CELLS XCWM_3PA unit=w n=512 nop=64 rep=5 art=110/110/114 pit=866/867/888 ctl_art=107/108/110 ctl_pit=840/841/860 shell=2F57 bshell=2F57 if1=111
+ROW CELLS PKR_3PA
+R CELLS PKR_3PA unit=w n=512 nop=0 rep=5 art=117/117/118 pit=914/918/923 ctl_art=6/7/8 ctl_pit=33/34/44 shell=BDFC bshell=BDFC if1=117
+R CELLS PKR_3PA unit=w n=512 nop=2 rep=5 art=117/118/119 pit=920/922/932 ctl_art=10/10/10 ctl_pit=59/61/66 shell=70B0 bshell=70B0 if1=117
+R CELLS PKR_3PA unit=w n=512 nop=4 rep=5 art=128/131/132 pit=1014/1025/1036 ctl_art=13/13/14 ctl_pit=85/85/92 shell=1B96 bshell=1B96 if1=131
+R CELLS PKR_3PA unit=w n=512 nop=8 rep=5 art=134/135/136 pit=1055/1063/1068 ctl_art=19/19/21 ctl_pit=135/135/147 shell=3825 bshell=3825 if1=135
+R CELLS PKR_3PA unit=w n=512 nop=16 rep=5 art=139/140/142 pit=1098/1100/1116 ctl_art=32/32/34 ctl_pit=236/238/250 shell=19F2 bshell=19F2 if1=140
+R CELLS PKR_3PA unit=w n=512 nop=32 rep=5 art=167/168/170 pit=1314/1331/1341 ctl_art=56/57/59 ctl_pit=437/438/454 shell=D40C bshell=D40C if1=168
+R CELLS PKR_3PA unit=w n=512 nop=64 rep=5 art=207/208/211 pit=1637/1646/1668 ctl_art=107/108/109 ctl_pit=840/842/860 shell=D552 bshell=D552 if1=207
+ROW CELLS PKW_3PA
+R CELLS PKW_3PA unit=w n=512 nop=0 rep=5 art=24/25/25 pit=176/178/185 ctl_art=6/7/7 ctl_pit=33/34/42 shell=BDFC bshell=BDFC if1=25
+R CELLS PKW_3PA unit=w n=512 nop=2 rep=5 art=24/24/26 pit=175/177/185 ctl_art=9/10/10 ctl_pit=59/59/69 shell=70B0 bshell=70B0 if1=25
+R CELLS PKW_3PA unit=w n=512 nop=4 rep=5 art=24/24/25 pit=176/178/186 ctl_art=12/13/15 ctl_pit=84/86/95 shell=1B96 bshell=1B96 if1=24
+R CELLS PKW_3PA unit=w n=512 nop=8 rep=5 art=24/25/25 pit=178/180/190 ctl_art=19/19/20 ctl_pit=135/136/145 shell=3825 bshell=3825 if1=24
+R CELLS PKW_3PA unit=w n=512 nop=16 rep=5 art=35/35/36 pit=262/264/273 ctl_art=31/32/34 ctl_pit=236/238/248 shell=19F2 bshell=19F2 if1=35
+R CELLS PKW_3PA unit=w n=512 nop=32 rep=5 art=59/60/62 pit=463/463/477 ctl_art=56/57/58 ctl_pit=438/439/451 shell=D40C bshell=D40C if1=60
+R CELLS PKW_3PA unit=w n=512 nop=64 rep=5 art=110/111/112 pit=866/868/887 ctl_art=107/107/110 ctl_pit=840/841/861 shell=D552 bshell=D552 if1=110
+ROW CELLS BRW_3PA
+R CELLS BRW_3PA unit=w n=512 nop=0 rep=5 art=68/69/70 pit=535/535/542 ctl_art=5/6/8 ctl_pit=31/31/40 shell=4956 bshell=4956 if1=68
+R CELLS BRW_3PA unit=w n=512 nop=2 rep=5 art=69/69/70 pit=539/539/547 ctl_art=9/10/10 ctl_pit=57/59/64 shell=B2BF bshell=B2BF if1=70
+R CELLS BRW_3PA unit=w n=512 nop=4 rep=5 art=74/74/75 pit=578/579/586 ctl_art=12/12/14 ctl_pit=82/86/93 shell=8074 bshell=8074 if1=74
+R CELLS BRW_3PA unit=w n=512 nop=8 rep=5 art=79/80/80 pit=618/619/628 ctl_art=18/19/21 ctl_pit=132/134/144 shell=C217 bshell=C217 if1=80
+R CELLS BRW_3PA unit=w n=512 nop=16 rep=5 art=93/94/96 pit=735/735/744 ctl_art=31/32/34 ctl_pit=233/235/245 shell=4B10 bshell=4B10 if1=94
+R CELLS BRW_3PA unit=w n=512 nop=32 rep=5 art=118/119/120 pit=928/928/944 ctl_art=56/57/58 ctl_pit=435/437/449 shell=ECE1 bshell=ECE1 if1=118
+R CELLS BRW_3PA unit=w n=512 nop=64 rep=5 art=168/169/172 pit=1333/1336/1356 ctl_art=106/107/110 ctl_pit=838/838/860 shell=5385 bshell=5385 if1=168
+ROW CELLS BW_3PA
+R CELLS BW_3PA unit=w n=512 nop=0 rep=5 art=58/59/59 pit=451/451/458 ctl_art=5/6/8 ctl_pit=31/32/43 shell=4956 bshell=4956 if1=58
+R CELLS BW_3PA unit=w n=512 nop=2 rep=5 art=58/58/60 pit=449/451/460 ctl_art=9/9/11 ctl_pit=56/57/66 shell=B2BF bshell=B2BF if1=59
+R CELLS BW_3PA unit=w n=512 nop=4 rep=5 art=59/59/59 pit=449/452/461 ctl_art=12/13/13 ctl_pit=82/82/90 shell=8074 bshell=8074 if1=58
+R CELLS BW_3PA unit=w n=512 nop=8 rep=5 art=58/59/60 pit=451/453/463 ctl_art=19/19/20 ctl_pit=132/134/144 shell=C217 bshell=C217 if1=59
+R CELLS BW_3PA unit=w n=512 nop=16 rep=5 art=59/59/60 pit=453/453/467 ctl_art=31/32/32 ctl_pit=233/234/245 shell=4B10 bshell=4B10 if1=58
+R CELLS BW_3PA unit=w n=512 nop=32 rep=5 art=60/60/63 pit=462/463/481 ctl_art=56/57/59 ctl_pit=435/437/449 shell=ECE1 bshell=ECE1 if1=60
+R CELLS BW_3PA unit=w n=512 nop=64 rep=5 art=110/111/114 pit=863/865/889 ctl_art=107/107/109 ctl_pit=838/840/858 shell=5385 bshell=5385 if1=110
+ROW CELLS XCR_3PV
+R CELLS XCR_3PV unit=w n=512 nop=0 rep=5 art=96/96/98 pit=751/755/762 ctl_art=6/7/7 ctl_pit=33/33/41 shell=5B3A bshell=5B3A if1=97
+R CELLS XCR_3PV unit=w n=512 nop=2 rep=5 art=97/98/99 pit=763/765/774 ctl_art=9/10/10 ctl_pit=59/60/66 shell=DA36 bshell=DA36 if1=97
+R CELLS XCR_3PV unit=w n=512 nop=4 rep=5 art=103/104/105 pit=809/811/823 ctl_art=12/12/14 ctl_pit=84/84/94 shell=8666 bshell=8666 if1=106
+R CELLS XCR_3PV unit=w n=512 nop=8 rep=5 art=108/108/109 pit=846/848/851 ctl_art=19/19/20 ctl_pit=134/135/147 shell=6A49 bshell=6A49 if1=108
+R CELLS XCR_3PV unit=w n=512 nop=16 rep=5 art=122/123/124 pit=963/964/973 ctl_art=32/32/34 ctl_pit=236/236/245 shell=6398 bshell=6398 if1=122
+R CELLS XCR_3PV unit=w n=512 nop=32 rep=5 art=146/147/148 pit=1150/1156/1169 ctl_art=56/57/59 ctl_pit=437/439/450 shell=3F45 bshell=3F45 if1=146
+R CELLS XCR_3PV unit=w n=512 nop=64 rep=5 art=195/195/197 pit=1543/1547/1564 ctl_art=107/108/111 ctl_pit=840/841/863 shell=C07F bshell=C07F if1=196
+ROW CELLS XCW_3PV
+R CELLS XCW_3PV unit=w n=512 nop=0 rep=5 art=23/23/25 pit=171/174/181 ctl_art=6/6/8 ctl_pit=34/34/46 shell=5B3A bshell=5B3A if1=24
+R CELLS XCW_3PV unit=w n=512 nop=2 rep=5 art=23/23/25 pit=171/172/183 ctl_art=9/10/11 ctl_pit=59/60/67 shell=DA36 bshell=DA36 if1=24
+R CELLS XCW_3PV unit=w n=512 nop=4 rep=5 art=23/24/25 pit=171/173/183 ctl_art=13/13/14 ctl_pit=84/85/92 shell=8666 bshell=8666 if1=23
+R CELLS XCW_3PV unit=w n=512 nop=8 rep=5 art=23/24/26 pit=171/174/183 ctl_art=19/19/21 ctl_pit=134/134/145 shell=6A49 bshell=6A49 if1=23
+R CELLS XCW_3PV unit=w n=512 nop=16 rep=5 art=34/35/36 pit=261/263/275 ctl_art=31/32/34 ctl_pit=236/236/247 shell=6398 bshell=6398 if1=35
+R CELLS XCW_3PV unit=w n=512 nop=32 rep=5 art=59/60/63 pit=462/463/479 ctl_art=56/56/58 ctl_pit=437/439/452 shell=3F45 bshell=3F45 if1=59
+R CELLS XCW_3PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=866/867/887 ctl_art=107/108/110 ctl_pit=841/842/860 shell=C07F bshell=C07F if1=111
+ROW CELLS XCRM_3PV
+R CELLS XCRM_3PV unit=w n=512 nop=0 rep=5 art=123/123/124 pit=967/969/972 ctl_art=7/7/7 ctl_pit=33/34/41 shell=7E0F bshell=7E0F if1=122
+R CELLS XCRM_3PV unit=w n=512 nop=2 rep=5 art=123/124/125 pit=969/971/980 ctl_art=9/10/12 ctl_pit=58/59/66 shell=5204 bshell=5204 if1=124
+R CELLS XCRM_3PV unit=w n=512 nop=4 rep=5 art=128/129/130 pit=1011/1014/1023 ctl_art=12/13/15 ctl_pit=84/84/94 shell=01D5 bshell=01D5 if1=130
+R CELLS XCRM_3PV unit=w n=512 nop=8 rep=5 art=132/134/135 pit=1044/1050/1056 ctl_art=18/19/21 ctl_pit=134/134/146 shell=B805 bshell=B805 if1=132
+R CELLS XCRM_3PV unit=w n=512 nop=16 rep=5 art=147/148/148 pit=1161/1162/1171 ctl_art=32/32/33 ctl_pit=236/238/245 shell=F279 bshell=F279 if1=147
+R CELLS XCRM_3PV unit=w n=512 nop=32 rep=5 art=170/171/172 pit=1344/1346/1361 ctl_art=56/57/59 ctl_pit=437/439/451 shell=A9B1 bshell=A9B1 if1=171
+R CELLS XCRM_3PV unit=w n=512 nop=64 rep=5 art=229/229/231 pit=1813/1816/1836 ctl_art=108/108/110 ctl_pit=840/841/860 shell=2F57 bshell=2F57 if1=229
+ROW CELLS XCWM_3PV
+R CELLS XCWM_3PV unit=w n=512 nop=0 rep=5 art=38/39/39 pit=288/289/296 ctl_art=6/7/8 ctl_pit=34/34/43 shell=7E0F bshell=7E0F if1=39
+R CELLS XCWM_3PV unit=w n=512 nop=2 rep=5 art=23/23/25 pit=171/174/183 ctl_art=9/9/10 ctl_pit=59/59/67 shell=5204 bshell=5204 if1=23
+R CELLS XCWM_3PV unit=w n=512 nop=4 rep=5 art=38/39/39 pit=288/290/296 ctl_art=13/13/14 ctl_pit=84/85/92 shell=01D5 bshell=01D5 if1=38
+R CELLS XCWM_3PV unit=w n=512 nop=8 rep=5 art=23/24/25 pit=171/174/187 ctl_art=18/20/21 ctl_pit=135/137/144 shell=B805 bshell=B805 if1=24
+R CELLS XCWM_3PV unit=w n=512 nop=16 rep=5 art=38/39/39 pit=287/291/303 ctl_art=31/32/33 ctl_pit=235/236/247 shell=F279 bshell=F279 if1=39
+R CELLS XCWM_3PV unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/464/478 ctl_art=56/57/58 ctl_pit=437/438/453 shell=A9B1 bshell=A9B1 if1=60
+R CELLS XCWM_3PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/868/887 ctl_art=107/107/110 ctl_pit=840/842/860 shell=2F57 bshell=2F57 if1=110
+ROW CELLS PKR_3PV
+R CELLS PKR_3PV unit=w n=512 nop=0 rep=5 art=96/97/97 pit=753/756/762 ctl_art=6/7/8 ctl_pit=34/35/41 shell=BDFC bshell=BDFC if1=96
+R CELLS PKR_3PV unit=w n=512 nop=2 rep=5 art=97/98/99 pit=763/766/773 ctl_art=9/10/11 ctl_pit=59/59/69 shell=70B0 bshell=70B0 if1=98
+R CELLS PKR_3PV unit=w n=512 nop=4 rep=5 art=103/103/104 pit=809/811/818 ctl_art=12/13/14 ctl_pit=84/85/93 shell=1B96 bshell=1B96 if1=104
+R CELLS PKR_3PV unit=w n=512 nop=8 rep=5 art=107/108/109 pit=843/845/853 ctl_art=19/19/20 ctl_pit=134/134/143 shell=3825 bshell=3825 if1=107
+R CELLS PKR_3PV unit=w n=512 nop=16 rep=5 art=122/123/123 pit=961/964/974 ctl_art=31/31/34 ctl_pit=235/236/245 shell=19F2 bshell=19F2 if1=122
+R CELLS PKR_3PV unit=w n=512 nop=32 rep=5 art=146/147/148 pit=1152/1155/1172 ctl_art=56/57/59 ctl_pit=437/437/451 shell=D40C bshell=D40C if1=147
+R CELLS PKR_3PV unit=w n=512 nop=64 rep=5 art=195/195/198 pit=1541/1543/1562 ctl_art=107/108/110 ctl_pit=840/842/860 shell=D552 bshell=D552 if1=196
+ROW CELLS PKW_3PV
+R CELLS PKW_3PV unit=w n=512 nop=0 rep=5 art=23/24/25 pit=171/171/181 ctl_art=6/6/7 ctl_pit=33/35/41 shell=BDFC bshell=BDFC if1=24
+R CELLS PKW_3PV unit=w n=512 nop=2 rep=5 art=23/24/25 pit=171/173/182 ctl_art=9/10/11 ctl_pit=59/59/66 shell=70B0 bshell=70B0 if1=24
+R CELLS PKW_3PV unit=w n=512 nop=4 rep=5 art=23/24/25 pit=172/174/182 ctl_art=12/12/14 ctl_pit=84/85/93 shell=1B96 bshell=1B96 if1=23
+R CELLS PKW_3PV unit=w n=512 nop=8 rep=5 art=24/24/25 pit=172/175/186 ctl_art=18/19/20 ctl_pit=134/135/147 shell=3825 bshell=3825 if1=24
+R CELLS PKW_3PV unit=w n=512 nop=16 rep=5 art=35/35/37 pit=261/261/275 ctl_art=31/32/34 ctl_pit=236/237/248 shell=19F2 bshell=19F2 if1=35
+R CELLS PKW_3PV unit=w n=512 nop=32 rep=5 art=59/60/63 pit=462/463/479 ctl_art=56/57/58 ctl_pit=437/437/449 shell=D40C bshell=D40C if1=60
+R CELLS PKW_3PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/866/888 ctl_art=107/108/110 ctl_pit=840/841/861 shell=D552 bshell=D552 if1=110
+ROW CELLS BRW_3PV
+R CELLS BRW_3PV unit=w n=512 nop=0 rep=5 art=69/69/70 pit=532/535/542 ctl_art=5/6/7 ctl_pit=31/32/40 shell=4956 bshell=4956 if1=70
+R CELLS BRW_3PV unit=w n=512 nop=2 rep=5 art=69/69/70 pit=539/540/548 ctl_art=9/10/10 ctl_pit=57/58/66 shell=B2BF bshell=B2BF if1=70
+R CELLS BRW_3PV unit=w n=512 nop=4 rep=5 art=74/75/76 pit=576/578/587 ctl_art=12/13/14 ctl_pit=81/82/90 shell=8074 bshell=8074 if1=75
+R CELLS BRW_3PV unit=w n=512 nop=8 rep=5 art=79/79/80 pit=617/618/627 ctl_art=18/19/20 ctl_pit=131/133/142 shell=C217 bshell=C217 if1=80
+R CELLS BRW_3PV unit=w n=512 nop=16 rep=5 art=93/94/95 pit=732/733/745 ctl_art=31/32/33 ctl_pit=233/233/245 shell=4B10 bshell=4B10 if1=94
+R CELLS BRW_3PV unit=w n=512 nop=32 rep=5 art=118/119/120 pit=927/928/944 ctl_art=56/57/59 ctl_pit=434/435/450 shell=ECE1 bshell=ECE1 if1=118
+R CELLS BRW_3PV unit=w n=512 nop=64 rep=5 art=169/169/171 pit=1333/1335/1352 ctl_art=106/107/110 ctl_pit=837/838/858 shell=5385 bshell=5385 if1=169
+ROW CELLS BW_3PV
+R CELLS BW_3PV unit=w n=512 nop=0 rep=5 art=58/59/59 pit=450/451/459 ctl_art=6/6/7 ctl_pit=31/31/39 shell=4956 bshell=4956 if1=59
+R CELLS BW_3PV unit=w n=512 nop=2 rep=5 art=58/58/59 pit=449/451/460 ctl_art=9/9/10 ctl_pit=57/58/64 shell=B2BF bshell=B2BF if1=58
+R CELLS BW_3PV unit=w n=512 nop=4 rep=5 art=58/59/60 pit=450/452/461 ctl_art=12/13/14 ctl_pit=81/81/91 shell=8074 bshell=8074 if1=58
+R CELLS BW_3PV unit=w n=512 nop=8 rep=5 art=58/59/61 pit=450/453/463 ctl_art=18/19/21 ctl_pit=132/132/144 shell=C217 bshell=C217 if1=58
+R CELLS BW_3PV unit=w n=512 nop=16 rep=5 art=58/59/60 pit=450/452/466 ctl_art=31/32/33 ctl_pit=233/233/243 shell=4B10 bshell=4B10 if1=59
+R CELLS BW_3PV unit=w n=512 nop=32 rep=5 art=60/60/62 pit=460/461/481 ctl_art=56/57/58 ctl_pit=434/436/448 shell=ECE1 bshell=ECE1 if1=59
+R CELLS BW_3PV unit=w n=512 nop=64 rep=5 art=110/111/113 pit=863/866/889 ctl_art=107/107/109 ctl_pit=837/839/858 shell=5385 bshell=5385 if1=110
+STATE CELLS mode=48 ah30=05 al=0C bh=31 p9a8=01 q0A=01 bda054C=EF bda054D=DC
+STATE CELLS mode=48 pegc=256 packed al=0C bh=31 p9a8=01 q0A=01 bda054C=EF bda054D=DC
+P CELLS RASTER_48 frames=8 art=41015 hi=157 to=0
+ROW CELLS XCRM_48A
+R CELLS XCRM_48A unit=w n=512 nop=0 rep=5 art=143/144/144 pit=1129/1133/1143 ctl_art=6/6/8 ctl_pit=34/35/46 shell=7E0F bshell=7E0F if1=142
+R CELLS XCRM_48A unit=w n=512 nop=2 rep=5 art=143/144/145 pit=1125/1132/1142 ctl_art=9/10/11 ctl_pit=58/59/69 shell=5204 bshell=5204 if1=145
+R CELLS XCRM_48A unit=w n=512 nop=4 rep=5 art=150/151/151 pit=1181/1184/1188 ctl_art=13/13/14 ctl_pit=84/84/95 shell=01D5 bshell=01D5 if1=148
+R CELLS XCRM_48A unit=w n=512 nop=8 rep=5 art=155/156/157 pit=1222/1231/1237 ctl_art=19/20/20 ctl_pit=135/137/144 shell=B805 bshell=B805 if1=155
+R CELLS XCRM_48A unit=w n=512 nop=16 rep=5 art=172/173/175 pit=1353/1362/1375 ctl_art=32/32/34 ctl_pit=236/237/248 shell=F279 bshell=F279 if1=173
+R CELLS XCRM_48A unit=w n=512 nop=32 rep=5 art=196/197/198 pit=1549/1558/1566 ctl_art=56/57/58 ctl_pit=437/438/452 shell=A9B1 bshell=A9B1 if1=197
+R CELLS XCRM_48A unit=w n=512 nop=64 rep=5 art=239/240/245 pit=1892/1903/1941 ctl_art=107/108/109 ctl_pit=841/842/860 shell=2F57 bshell=2F57 if1=243
+ROW CELLS XCWM_48A
+R CELLS XCWM_48A unit=w n=512 nop=0 rep=5 art=25/25/27 pit=187/188/193 ctl_art=6/7/8 ctl_pit=33/34/43 shell=7E0F bshell=7E0F if1=26
+R CELLS XCWM_48A unit=w n=512 nop=2 rep=5 art=49/49/50 pit=380/382/387 ctl_art=9/10/11 ctl_pit=59/60/69 shell=5204 bshell=5204 if1=51
+R CELLS XCWM_48A unit=w n=512 nop=4 rep=5 art=26/26/26 pit=183/185/198 ctl_art=12/12/14 ctl_pit=84/84/94 shell=01D5 bshell=01D5 if1=25
+R CELLS XCWM_48A unit=w n=512 nop=8 rep=5 art=25/26/28 pit=186/188/199 ctl_art=19/19/21 ctl_pit=135/137/144 shell=B805 bshell=B805 if1=26
+R CELLS XCWM_48A unit=w n=512 nop=16 rep=5 art=49/50/51 pit=382/383/389 ctl_art=31/32/34 ctl_pit=236/236/248 shell=F279 bshell=F279 if1=50
+R CELLS XCWM_48A unit=w n=512 nop=32 rep=5 art=60/60/62 pit=463/463/479 ctl_art=56/57/58 ctl_pit=437/439/451 shell=A9B1 bshell=A9B1 if1=59
+R CELLS XCWM_48A unit=w n=512 nop=64 rep=5 art=110/111/114 pit=867/868/889 ctl_art=107/107/110 ctl_pit=840/841/860 shell=2F57 bshell=2F57 if1=110
+ROW CELLS BRW_48A
+R CELLS BRW_48A unit=w n=512 nop=0 rep=5 art=69/69/70 pit=535/535/542 ctl_art=6/6/7 ctl_pit=31/31/38 shell=4956 bshell=4956 if1=69
+R CELLS BRW_48A unit=w n=512 nop=2 rep=5 art=69/70/70 pit=538/540/547 ctl_art=9/10/10 ctl_pit=56/58/66 shell=B2BF bshell=B2BF if1=69
+R CELLS BRW_48A unit=w n=512 nop=4 rep=5 art=74/75/76 pit=577/579/588 ctl_art=12/13/13 ctl_pit=81/86/90 shell=8074 bshell=8074 if1=75
+R CELLS BRW_48A unit=w n=512 nop=8 rep=5 art=79/80/80 pit=618/619/628 ctl_art=18/19/21 ctl_pit=132/133/143 shell=C217 bshell=C217 if1=80
+R CELLS BRW_48A unit=w n=512 nop=16 rep=5 art=93/94/95 pit=734/734/746 ctl_art=31/32/33 ctl_pit=233/234/243 shell=4B10 bshell=4B10 if1=94
+R CELLS BRW_48A unit=w n=512 nop=32 rep=5 art=118/119/120 pit=927/928/944 ctl_art=56/56/59 ctl_pit=435/435/450 shell=ECE1 bshell=ECE1 if1=118
+R CELLS BRW_48A unit=w n=512 nop=64 rep=5 art=169/169/171 pit=1333/1333/1354 ctl_art=106/107/110 ctl_pit=838/840/860 shell=5385 bshell=5385 if1=168
+ROW CELLS BRD_48A
+R CELLS BRD_48A unit=d n=512 nop=0 rep=5 art=124/125/125 pit=974/975/982 ctl_art=5/6/8 ctl_pit=31/31/41 shell=4956 bshell=4956 if1=124
+R CELLS BRD_48A unit=d n=512 nop=2 rep=5 art=124/124/126 pit=977/977/987 ctl_art=9/10/10 ctl_pit=56/58/64 shell=B2BF bshell=B2BF if1=124
+R CELLS BRD_48A unit=d n=512 nop=4 rep=5 art=130/130/130 pit=1016/1018/1025 ctl_art=12/13/14 ctl_pit=81/82/92 shell=8074 bshell=8074 if1=129
+R CELLS BRD_48A unit=d n=512 nop=8 rep=5 art=134/134/135 pit=1055/1055/1063 ctl_art=18/19/21 ctl_pit=132/133/142 shell=C217 bshell=C217 if1=134
+R CELLS BRD_48A unit=d n=512 nop=16 rep=5 art=150/150/151 pit=1177/1179/1191 ctl_art=31/31/34 ctl_pit=233/233/245 shell=4B10 bshell=4B10 if1=149
+R CELLS BRD_48A unit=d n=512 nop=32 rep=5 art=172/172/173 pit=1357/1359/1373 ctl_art=57/57/59 ctl_pit=435/435/450 shell=ECE1 bshell=ECE1 if1=172
+R CELLS BRD_48A unit=d n=512 nop=64 rep=5 art=228/229/232 pit=1814/1814/1833 ctl_art=107/107/110 ctl_pit=838/838/858 shell=5385 bshell=5385 if1=228
+ROW CELLS BW_48A
+R CELLS BW_48A unit=w n=512 nop=0 rep=5 art=58/58/60 pit=449/451/459 ctl_art=6/7/7 ctl_pit=32/33/39 shell=4956 bshell=4956 if1=59
+R CELLS BW_48A unit=w n=512 nop=2 rep=5 art=58/59/59 pit=451/451/458 ctl_art=9/10/11 ctl_pit=56/56/66 shell=B2BF bshell=B2BF if1=58
+R CELLS BW_48A unit=w n=512 nop=4 rep=5 art=58/58/59 pit=449/450/461 ctl_art=12/13/14 ctl_pit=81/82/91 shell=8074 bshell=8074 if1=59
+R CELLS BW_48A unit=w n=512 nop=8 rep=5 art=59/59/61 pit=452/454/464 ctl_art=18/19/21 ctl_pit=132/133/144 shell=C217 bshell=C217 if1=58
+R CELLS BW_48A unit=w n=512 nop=16 rep=5 art=59/59/60 pit=451/451/466 ctl_art=31/31/33 ctl_pit=233/234/245 shell=4B10 bshell=4B10 if1=58
+R CELLS BW_48A unit=w n=512 nop=32 rep=5 art=59/59/62 pit=462/462/482 ctl_art=56/57/59 ctl_pit=435/435/452 shell=ECE1 bshell=ECE1 if1=60
+R CELLS BW_48A unit=w n=512 nop=64 rep=5 art=110/111/113 pit=865/867/889 ctl_art=106/107/110 ctl_pit=838/838/858 shell=5385 bshell=5385 if1=110
+ROW CELLS BD_48A
+R CELLS BD_48A unit=d n=512 nop=0 rep=5 art=113/114/114 pit=890/892/901 ctl_art=6/6/8 ctl_pit=31/32/42 shell=4956 bshell=4956 if1=114
+R CELLS BD_48A unit=d n=512 nop=2 rep=5 art=113/113/114 pit=891/892/900 ctl_art=9/9/10 ctl_pit=56/57/65 shell=B2BF bshell=B2BF if1=113
+R CELLS BD_48A unit=d n=512 nop=4 rep=5 art=113/114/114 pit=891/892/901 ctl_art=12/13/13 ctl_pit=81/83/90 shell=8074 bshell=8074 if1=114
+R CELLS BD_48A unit=d n=512 nop=8 rep=5 art=113/114/116 pit=893/894/903 ctl_art=18/19/21 ctl_pit=132/133/143 shell=C217 bshell=C217 if1=114
+R CELLS BD_48A unit=d n=512 nop=16 rep=5 art=113/114/115 pit=893/894/908 ctl_art=32/32/33 ctl_pit=234/236/244 shell=4B10 bshell=4B10 if1=113
+R CELLS BD_48A unit=d n=512 nop=32 rep=5 art=113/114/116 pit=893/894/912 ctl_art=56/57/58 ctl_pit=435/435/449 shell=ECE1 bshell=ECE1 if1=113
+R CELLS BD_48A unit=d n=512 nop=64 rep=5 art=115/115/118 pit=897/897/926 ctl_art=107/107/109 ctl_pit=839/840/858 shell=5385 bshell=5385 if1=114
+ROW CELLS XCRM_48V
+R CELLS XCRM_48V unit=w n=512 nop=0 rep=5 art=123/123/124 pit=968/969/973 ctl_art=7/7/8 ctl_pit=33/35/41 shell=7E0F bshell=7E0F if1=123
+R CELLS XCRM_48V unit=w n=512 nop=2 rep=5 art=123/124/124 pit=967/970/982 ctl_art=9/9/11 ctl_pit=59/59/66 shell=5204 bshell=5204 if1=123
+R CELLS XCRM_48V unit=w n=512 nop=4 rep=5 art=128/129/129 pit=1012/1014/1022 ctl_art=12/13/14 ctl_pit=84/84/93 shell=01D5 bshell=01D5 if1=128
+R CELLS XCRM_48V unit=w n=512 nop=8 rep=5 art=133/133/134 pit=1046/1047/1058 ctl_art=19/19/20 ctl_pit=134/136/144 shell=B805 bshell=B805 if1=133
+R CELLS XCRM_48V unit=w n=512 nop=16 rep=5 art=148/148/148 pit=1158/1162/1170 ctl_art=31/31/34 ctl_pit=235/236/247 shell=F279 bshell=F279 if1=147
+R CELLS XCRM_48V unit=w n=512 nop=32 rep=5 art=170/170/172 pit=1344/1347/1363 ctl_art=56/57/59 ctl_pit=439/439/449 shell=A9B1 bshell=A9B1 if1=171
+R CELLS XCRM_48V unit=w n=512 nop=64 rep=5 art=228/230/231 pit=1814/1816/1835 ctl_art=107/107/110 ctl_pit=840/841/859 shell=2F57 bshell=2F57 if1=230
+ROW CELLS XCWM_48V
+R CELLS XCWM_48V unit=w n=512 nop=0 rep=5 art=24/24/25 pit=171/175/182 ctl_art=6/6/8 ctl_pit=34/36/41 shell=7E0F bshell=7E0F if1=24
+R CELLS XCWM_48V unit=w n=512 nop=2 rep=5 art=38/39/39 pit=287/289/296 ctl_art=9/10/12 ctl_pit=59/59/68 shell=5204 bshell=5204 if1=38
+R CELLS XCWM_48V unit=w n=512 nop=4 rep=5 art=39/39/39 pit=287/288/299 ctl_art=12/12/14 ctl_pit=84/85/92 shell=01D5 bshell=01D5 if1=39
+R CELLS XCWM_48V unit=w n=512 nop=8 rep=5 art=24/24/25 pit=173/175/185 ctl_art=19/19/21 ctl_pit=134/137/146 shell=B805 bshell=B805 if1=23
+R CELLS XCWM_48V unit=w n=512 nop=16 rep=5 art=38/38/39 pit=288/288/303 ctl_art=32/32/34 ctl_pit=235/237/244 shell=F279 bshell=F279 if1=39
+R CELLS XCWM_48V unit=w n=512 nop=32 rep=5 art=59/60/62 pit=462/463/478 ctl_art=56/56/59 ctl_pit=437/437/451 shell=A9B1 bshell=A9B1 if1=61
+R CELLS XCWM_48V unit=w n=512 nop=64 rep=5 art=110/110/113 pit=866/866/887 ctl_art=107/108/110 ctl_pit=840/841/860 shell=2F57 bshell=2F57 if1=111
+ROW CELLS BRW_48V
+R CELLS BRW_48V unit=w n=512 nop=0 rep=5 art=68/69/70 pit=533/534/541 ctl_art=5/6/8 ctl_pit=31/31/43 shell=4956 bshell=4956 if1=69
+R CELLS BRW_48V unit=w n=512 nop=2 rep=5 art=69/69/71 pit=539/539/548 ctl_art=9/10/10 ctl_pit=57/58/66 shell=B2BF bshell=B2BF if1=70
+R CELLS BRW_48V unit=w n=512 nop=4 rep=5 art=74/74/76 pit=577/578/586 ctl_art=12/13/13 ctl_pit=81/82/92 shell=8074 bshell=8074 if1=74
+R CELLS BRW_48V unit=w n=512 nop=8 rep=5 art=79/79/81 pit=618/618/626 ctl_art=18/19/20 ctl_pit=132/132/141 shell=C217 bshell=C217 if1=80
+R CELLS BRW_48V unit=w n=512 nop=16 rep=5 art=94/94/96 pit=733/734/745 ctl_art=31/31/34 ctl_pit=233/233/245 shell=4B10 bshell=4B10 if1=94
+R CELLS BRW_48V unit=w n=512 nop=32 rep=5 art=118/119/120 pit=925/928/942 ctl_art=56/57/58 ctl_pit=434/437/448 shell=ECE1 bshell=ECE1 if1=117
+R CELLS BRW_48V unit=w n=512 nop=64 rep=5 art=168/169/172 pit=1333/1335/1354 ctl_art=106/107/110 ctl_pit=837/838/858 shell=5385 bshell=5385 if1=168
+ROW CELLS BRD_48V
+R CELLS BRD_48V unit=d n=512 nop=0 rep=5 art=123/124/125 pit=975/975/983 ctl_art=6/7/7 ctl_pit=32/33/38 shell=4956 bshell=4956 if1=127
+R CELLS BRD_48V unit=d n=512 nop=2 rep=5 art=124/125/126 pit=977/978/986 ctl_art=9/10/10 ctl_pit=56/57/66 shell=B2BF bshell=B2BF if1=124
+R CELLS BRD_48V unit=d n=512 nop=4 rep=5 art=129/129/131 pit=1015/1016/1027 ctl_art=12/13/13 ctl_pit=81/82/90 shell=8074 bshell=8074 if1=129
+R CELLS BRD_48V unit=d n=512 nop=8 rep=5 art=134/135/136 pit=1054/1056/1065 ctl_art=18/18/21 ctl_pit=131/132/144 shell=C217 bshell=C217 if1=134
+R CELLS BRD_48V unit=d n=512 nop=16 rep=5 art=150/150/151 pit=1174/1176/1188 ctl_art=31/32/33 ctl_pit=233/235/246 shell=4B10 bshell=4B10 if1=149
+R CELLS BRD_48V unit=d n=512 nop=32 rep=5 art=171/172/174 pit=1358/1358/1375 ctl_art=56/56/59 ctl_pit=434/435/450 shell=ECE1 bshell=ECE1 if1=172
+R CELLS BRD_48V unit=d n=512 nop=64 rep=5 art=229/229/231 pit=1813/1815/1833 ctl_art=107/107/110 ctl_pit=838/839/858 shell=5385 bshell=5385 if1=228
+ROW CELLS BW_48V
+R CELLS BW_48V unit=w n=512 nop=0 rep=5 art=58/59/60 pit=449/451/457 ctl_art=6/6/7 ctl_pit=31/32/42 shell=4956 bshell=4956 if1=58
+R CELLS BW_48V unit=w n=512 nop=2 rep=5 art=58/58/60 pit=449/450/460 ctl_art=9/10/11 ctl_pit=56/57/65 shell=B2BF bshell=B2BF if1=58
+R CELLS BW_48V unit=w n=512 nop=4 rep=5 art=59/59/60 pit=451/451/460 ctl_art=12/12/14 ctl_pit=81/82/94 shell=8074 bshell=8074 if1=58
+R CELLS BW_48V unit=w n=512 nop=8 rep=5 art=58/59/60 pit=450/450/464 ctl_art=18/19/21 ctl_pit=132/134/143 shell=C217 bshell=C217 if1=59
+R CELLS BW_48V unit=w n=512 nop=16 rep=5 art=58/59/60 pit=452/453/466 ctl_art=31/31/33 ctl_pit=233/233/242 shell=4B10 bshell=4B10 if1=59
+R CELLS BW_48V unit=w n=512 nop=32 rep=5 art=60/60/62 pit=462/463/481 ctl_art=57/57/59 ctl_pit=434/435/449 shell=ECE1 bshell=ECE1 if1=59
+R CELLS BW_48V unit=w n=512 nop=64 rep=5 art=110/111/113 pit=864/864/889 ctl_art=107/107/109 ctl_pit=837/839/857 shell=5385 bshell=5385 if1=110
+ROW CELLS BD_48V
+R CELLS BD_48V unit=d n=512 nop=0 rep=5 art=113/113/115 pit=891/892/899 ctl_art=5/7/8 ctl_pit=31/32/39 shell=4956 bshell=4956 if1=114
+R CELLS BD_48V unit=d n=512 nop=2 rep=5 art=113/114/115 pit=891/892/902 ctl_art=9/9/10 ctl_pit=56/56/66 shell=B2BF bshell=B2BF if1=114
+R CELLS BD_48V unit=d n=512 nop=4 rep=5 art=113/114/114 pit=892/892/901 ctl_art=12/13/14 ctl_pit=82/85/92 shell=8074 bshell=8074 if1=114
+R CELLS BD_48V unit=d n=512 nop=8 rep=5 art=113/114/115 pit=892/893/904 ctl_art=18/19/20 ctl_pit=132/132/142 shell=C217 bshell=C217 if1=117
+R CELLS BD_48V unit=d n=512 nop=16 rep=5 art=113/113/115 pit=892/892/907 ctl_art=32/32/33 ctl_pit=233/233/245 shell=4B10 bshell=4B10 if1=113
+R CELLS BD_48V unit=d n=512 nop=32 rep=5 art=113/114/117 pit=892/893/914 ctl_art=56/57/58 ctl_pit=434/436/449 shell=ECE1 bshell=ECE1 if1=114
+R CELLS BD_48V unit=d n=512 nop=64 rep=5 art=114/114/118 pit=897/897/924 ctl_art=107/107/110 ctl_pit=838/838/858 shell=5385 bshell=5385 if1=113
+RESTORE CELLS Q9A0A_256 was=00 now=00 kind=readback OK
+RESTORE CELLS Q9A04_16C was=00 now=00 kind=readback OK
+RESTORE CELLS E0004_BANK was=- now=00 kind=default OK
+RESTORE CELLS P7E_TILE was=- now=00 kind=default OK
+RESTORE CELLS TRAM_0000_1FFF was=0000 now=0000 kind=self OK
+RESTORE CELLS BDA054C_BIT7 was=00 now=00 kind=readback OK
+RESTORE CELLS BDA054D_BIT2 was=00 now=00 kind=readback OK
+RESTORE CELLS AH31_AL was=09 now=09 kind=readback OK
+RESTORE CELLS AH31_BH was=01 now=01 kind=readback OK
+RESTORE CELLS P9A8_BIT0 was=00 now=00 kind=readback OK
+I CELLS sync_to=0
+RESTORE CELLS P7C_GRCG was=- now=00 kind=default OK
+RESTORE CELLS PA6_PAGE was=- now=00 kind=default OK
+RESTORE CELLS Q9A07_EGC was=00 now=00 kind=readback OK
+END:CELLS rows=537 sum=1A88
+BEGIN:RESTORE
+RESTORE RESTORE P7C_GRCG was=- now=00 kind=default OK
+RESTORE RESTORE PA6_PAGE was=- now=00 kind=default OK
+RESTORE RESTORE VEC08 was=FD80060C now=FD80060C kind=readback OK
+RESTORE RESTORE VEC0A was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0B was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC0C was=FD801833 now=FD801833 kind=readback OK
+RESTORE RESTORE VEC11 was=D80019BC now=D80019BC kind=readback OK
+RESTORE RESTORE VEC12 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC13 was=FD8022F7 now=FD8022F7 kind=readback OK
+RESTORE RESTORE VEC14 was=FD800937 now=FD800937 kind=readback OK
+RESTORE RESTORE VEC1C was=FD800500 now=FD800500 kind=readback OK
+RESTORE RESTORE IMR_M was=7D now=7D kind=readback OK
+RESTORE RESTORE IMR_S was=75 now=75 kind=readback OK
+RESTORE RESTORE Q9A04 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A07 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A08 was=00 now=00 kind=readback OK
+RESTORE RESTORE Q9A0A was=00 now=00 kind=readback OK
+END:RESTORE rows=0 sum=20BE
+XE10T DONE sections=4 sum=F00B9D8F

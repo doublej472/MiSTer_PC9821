@@ -40,7 +40,8 @@
 //   The controller must issue refreshes against both Cs1_n=0 and Cs1_n=1 to
 //   keep both chips alive.
 //
-// See CONTROLLER_GUIDE.md for protocol/timing rules a controller must follow.
+// See CONTROLLER_GUIDE.md in the upstream birdybro/SDRAMsim_MiSTer repository (not vendored
+// here) for protocol/timing rules a controller must follow.
 //
 // -----------------------------------------------------------------------------
 // LOCAL FIXES (PC-9821 core, 2026-10-10). This file is the community SDRAMsim model

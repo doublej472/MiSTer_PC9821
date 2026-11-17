@@ -1,15 +1,15 @@
 // tb_pc9821_audio_out_timeline - each source's own rate survives the output stage.
 //
 // ==== WHAT THIS PROVES ====
-// Two source staircases at their real rates - the OPNA's 55 467 Hz DAC rate (7.9872 MHz/144) on the left and 44 100 Hz (PCM86 and CD-DA) on the right - come out of pc9821_audio_out at the SAME frequency they went in (measured within 0.5%), so the output stage's 256/5 decimation is a resampling of real time and not a playback-rate change: the pre-fix stage's 2.4576 MHz register write rate is 51.2x the framework's 48 kHz DAC rate, and reading that ratio as 'FM is 16% fast, PCM is 8% slow' is what this bench refutes - the measured pitch is 1.0000x for both sources, and a stage that played either source at the wrong rate (a 51.2x displacement, or the 511/512 drift sys/audio_out.sv's own sample_ce carries) fails here by name.
+// Two source staircases at their real rates - the OPNA's 55 467 Hz DAC rate (7.9872 MHz/144) on the left and 44 100 Hz (PCM86 and CD-DA) on the right - come out of pc9821_audio_out at the SAME frequency they went in (measured by interpolated zero crossings over 0.1 s to within 0.1%), so the output stage's 256/5 decimation is a resampling of real time and not a playback-rate change: the pre-fix stage's 2.4576 MHz register write rate is 51.2x the framework's 48 kHz DAC rate, and reading that ratio as 'FM is 16% fast, PCM is 8% slow' is what this bench refutes - the measured pitch is 1.0000x for both sources, and a source that came out at the wrong rate (a 51.2x displacement, or a drift the size of the 511/512 (0.2%) one sys/audio_out.sv's own sample_ce carries) fails here by name.
 //
 // ==== DUT ====
 // pc9821_audio_out (src/pc9821/audio/pc9821_audio_out.sv), driven with two source
 // staircases at their real rates (55 467 Hz on the left, 44 100 Hz on the right).
 //
 // ==== CHECKS ====
-// CHK-1 the 55 467 Hz source's 10 kHz tone comes back within 0.5% of 10 kHz.
-// CHK-2 the 44 100 Hz source's 1 kHz tone comes back within 0.5% of 1 kHz.
+// CHK-1 the 55 467 Hz source's 10 kHz tone comes back within 0.1% of 10 kHz (zero crossings).
+// CHK-2 the 44 100 Hz source's 1 kHz tone comes back within 0.1% of 1 kHz (zero crossings).
 // CHK-3 neither result sits where a 51.2x misreading would put it: the tone bin must
 //       dominate its +/-50 Hz neighbours by 12 dB, which a shifted timeline cannot do.
 // CHK-4 both arms keep the right LEVEL (within 3 dB of the drive), so the frequency checks
@@ -91,6 +91,12 @@ module tb_pc9821_audio_out_timeline;
   real re_l, im_l, re_r, im_r, wsum, dc_l, dc_r;
   // The +/-0.5% neighbours: a tone whose timeline moved sits in THOSE bins, not this one.
   real re_lp, im_lp, re_lm, im_lm, re_rp, im_rp, re_rm, im_rm;
+  // The FREQUENCY itself: positive-going zero crossings over the window, each placed by
+  // linear interpolation between the two output samples around it. f = (crossings - 1)
+  // cycles over (last - first) output samples at 48 kHz; 100 cycles of the 1 kHz tone span
+  // ~4800 samples, so a 0.2% shift moves `last` by ~10 samples - far above the error.
+  real prev_l, prev_r, zf_l, zl_l, zf_r, zl_r;
+  integer zc_l = 0, zc_r = 0;
 
   always @(posedge clk) begin
     out_div = out_div + 1;
@@ -124,6 +130,18 @@ module tb_pc9821_audio_out_timeline;
           re_rm = re_rm + xr * w * $cos(thb);
           im_rm = im_rm - xr * w * $sin(thb);
         end
+        if ((n > 0) && (prev_l < 0.0) && (xl >= 0.0)) begin
+          zl_l = (n - 1) + (-prev_l) / (xl - prev_l);
+          if (zc_l == 0) zf_l = zl_l;
+          zc_l = zc_l + 1;
+        end
+        if ((n > 0) && (prev_r < 0.0) && (xr >= 0.0)) begin
+          zl_r = (n - 1) + (-prev_r) / (xr - prev_r);
+          if (zc_r == 0) zf_r = zl_r;
+          zc_r = zc_r + 1;
+        end
+        prev_l = xl;
+        prev_r = xr;
         dc_l = dc_l + xl;
         dc_r = dc_r + xr;
         wsum = wsum + w;
@@ -136,6 +154,7 @@ module tb_pc9821_audio_out_timeline;
     re_l = 0.0; im_l = 0.0; re_r = 0.0; im_r = 0.0; wsum = 0.0; dc_l = 0.0; dc_r = 0.0;
     re_lp = 0.0; im_lp = 0.0; re_lm = 0.0; im_lm = 0.0;
     re_rp = 0.0; im_rp = 0.0; re_rm = 0.0; im_rm = 0.0;
+    prev_l = 0.0; prev_r = 0.0; zf_l = 0.0; zl_l = 0.0; zf_r = 0.0; zl_r = 0.0;
     #(10 * 2 * (512 * (960 + NSAMP + 8)));
     begin
       real mag_l, mag_r, rel_l, rel_r;
@@ -147,6 +166,18 @@ module tb_pc9821_audio_out_timeline;
                TONE_L, rel_l, mag_l, dc_l / wsum, idx_l);
       $display("right : 44 100 Hz staircase, %.0f Hz tone -> %.1f dB rel. drive (abs %.0f); dc %.1f, idx_r %0d",
                TONE_R, rel_r, mag_r, dc_r / wsum, idx_r);
+      begin
+        real f_l, f_r;
+        f_l = (zc_l > 1) ? (zc_l - 1) * 48000.0 / (zl_l - zf_l) : 0.0;
+        f_r = (zc_r > 1) ? (zc_r - 1) * 48000.0 / (zl_r - zf_r) : 0.0;
+        $display("  measured frequency: left %0.2f Hz (%0d crossings), right %0.3f Hz (%0d crossings)",
+                 f_l, zc_l, f_r, zc_r);
+        // 0.1%: half the 511/512 (0.195%) drift, a fifth of the claim's old 0.5%
+        if (!(f_l > TONE_L * 0.999 && f_l < TONE_L * 1.001))
+          fail("CHK-1 the 55 467 Hz source's 10 kHz tone is not within 0.1% of 10 kHz");
+        if (!(f_r > TONE_R * 0.999 && f_r < TONE_R * 1.001))
+          fail("CHK-2 the 44 100 Hz source's 1 kHz tone is not within 0.1% of 1 kHz");
+      end
       if (!(rel_l > -3.0 && rel_l < 1.0))
         fail("CHK-1/4 the 55 467 Hz source's tone is missing, moved or crushed");
       if (!(rel_r > -3.0 && rel_r < 1.0))

@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         contextp->timeInc(1);
     }
 
-    const int rc = top->sweep_done ? 0 : 1;
+    const int rc = (top->sweep_done && top->sweep_pass) ? 0 : 1;
     delete top;
     delete contextp;
     return rc;

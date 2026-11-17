@@ -1777,7 +1777,7 @@ lbl_w82:        .ascii "w82$"
 lbl_w93:        .ascii "w93$"
 
 msg_banner:
-    .ascii "IDEPROBE - PC-9821 real-machine IDE/ATA probe (tools/hwprobe/ideprobe.s)\r\n"
+    .ascii "IDEPROBE - PC-9821 real-machine IDE/ATA probe (tools/hwprobe/ideprobe/ideprobe.s)\r\n"
     .ascii "Ports: 0430/0432/0433/0435 interface, 0640-064E task file, 074C/074E alt;\r\n"
     .ascii "005C-005F are the ARTIC counter, not IDE. Sections are BEGIN:/END: bracketed.\r\n$"
 msg_done:       .ascii "IDEPROBE DONE\r\n$"

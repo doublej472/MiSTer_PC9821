@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The interrupt path from the device pins to the CPU-facing ports: master ICW4 programming, slave IRQ9 reaching the vector, the cascade acknowledge, the special fully nested mode the authentic disk ISR relies on, and the atomic acknowledge (a higher-priority request arriving between the vector being published and the acknowledge edge must not leave the master's ISR bit naming a different IRQ than the vector). No CPU is instantiated, so 'end to end' means to this module's ports. The interrupts.md F1 addition pins the SPURIOUS-vector selection: after a prior cascade ack, a master-level spurious INTA (the request withdrawn by an IMR write before the handshake) must answer the MASTER's icw2_vec|7 = 0x0F, never the slave's parked 0x17 - the ack event decides the source, not the stale int_acked_irq (FAIL-FIRST: the old mux answers 0x17).
+// The interrupt path from the device pins to the CPU-facing ports: master ICW4 programming, slave IRQ9 reaching the vector, the cascade acknowledge, the special fully nested mode the authentic disk ISR relies on, and the atomic acknowledge (a higher-priority request arriving between the vector being published and the acknowledge edge must not leave the master's ISR bit naming a different IRQ than the vector). No CPU is instantiated, so 'end to end' means to this module's ports. A further section pins the SPURIOUS-vector selection: after a prior cascade ack, a master-level spurious INTA (the request withdrawn by an IMR write before the handshake) must answer the MASTER's icw2_vec|7 = 0x0F, never the slave's parked 0x17 - the ack event decides the source, not the stale int_acked_irq (FAIL-FIRST: the old mux answers 0x17).
 //
-// The interrupt path from the device pins to the CPU-facing ports: master ICW4 programming, slave IRQ9 reaching the vector, the cascade acknowledge, the special fully nested mode the authentic disk ISR relies on, the atomic acknowledge (a higher-priority request arriving between the vector being published and the acknowledge edge must not leave the master's ISR bit naming a different IRQ than the vector), and review interrupts.md F1: a master-level SPURIOUS INTA after a prior cascade ack must answer the MASTER's spurious vector 0x0F, never the slave's 0x17 (FAIL-FIRST: the stale-int_acked_irq mux answers 0x17 there). No CPU is instantiated, so 'end to end' means to this module's ports.
+// The interrupt path from the device pins to the CPU-facing ports: master ICW4 programming, slave IRQ9 reaching the vector, the cascade acknowledge, the special fully nested mode the authentic disk ISR relies on, the atomic acknowledge (a higher-priority request arriving between the vector being published and the acknowledge edge must not leave the master's ISR bit naming a different IRQ than the vector), and a master-level SPURIOUS INTA after a prior cascade ack must answer the MASTER's spurious vector 0x0F, never the slave's 0x17 (FAIL-FIRST: the stale-int_acked_irq mux answers 0x17 there). No CPU is instantiated, so 'end to end' means to this module's ports.
 
 
 module tb_pc9821_interrupts;
@@ -317,7 +317,7 @@ module tb_pc9821_interrupts;
     reset_n = 1;
     repeat (4) @(posedge clk);
 
-    // ---- interrupts.md F1: a master-level SPURIOUS INTA after a prior cascade ack ----
+    // ---- a master-level SPURIOUS INTA after a prior cascade ack ----
     // The vector source was muxed on the frozen int_acked_irq, so once any cascade
     // ack had happened (int_acked_irq == 7), a spurious ack answered the SLAVE's parked
     // spurious vector 0x17 - the CPU landed in IVT[0x17], the IRQ15/calendar slot, and

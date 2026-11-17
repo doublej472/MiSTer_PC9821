@@ -92,6 +92,29 @@ SUMMARY = re.compile(
 FIT_SETTING = re.compile(r"^set_(?:global|instance)_assignment\s+-name\s+\S+\s+\S")
 
 
+def scratch_refusal(scratch: Path, repo_root: Path, project: str) -> str | None:
+    """Why SCRATCH must not be wiped, or None. The scratch is rmtree'd at the start of every
+    build and QUARTUS_SCRATCH comes from the environment, so a mistaken value (the tree, $HOME,
+    another checkout) would be deleted silently. A scratch is accepted when it is absent, empty,
+    or looks like a previous scratch copy (it holds PROJECT.qsf and no .git)."""
+    s = scratch.resolve()
+    tree = repo_root.resolve()
+    if s == tree or s in tree.parents:
+        return f"{scratch} is the tree or one of its parents"
+    if s == Path.home().resolve() or s.parent == s:
+        return f"{scratch} is the home or the root directory"
+    if s.is_relative_to(tree) and not s.is_relative_to(tree / ".build"):
+        return f"{scratch} is inside the tree but not under {tree / '.build'}"
+    if s.exists() and not s.is_dir():
+        return f"{scratch} exists and is not a directory"
+    if s.is_dir() and any(s.iterdir()):
+        if (s / ".git").exists():
+            return f"{scratch} holds a .git: a checkout, not a scratch copy"
+        if not (s / f"{project}.qsf").is_file():
+            return f"{scratch} is not empty and holds no {project}.qsf: not a previous scratch"
+    return None
+
+
 def _now() -> float:
     return time.time()
 
@@ -264,6 +287,18 @@ class Build:
         print(f"==> project: {self.project} (scratch: {self.scratch})")
         print(f"==> started: {_stamp(self.started)}")
 
+        refusal = scratch_refusal(self.scratch, REPO_ROOT, self.project)
+        if refusal:
+            self.fail(f"refusing to wipe the scratch: {refusal} (QUARTUS_SCRATCH)")
+
+        # Hashed BEFORE the copy, so the attribution describes the tree as it was when the copy
+        # began and an edit made during the copy shows as a changed post-fit hash.
+        tree_before = self.capture(
+            [sys.executable, str(TOOLS_DIR / "check_fit.py"), "--rtl-hash-of", str(REPO_ROOT)],
+            "the pre-fit rtl tree hash",
+        ).strip()
+        print(f"==> rtl tree hash: {tree_before}")
+
         # Fresh scratch copy: no .git (Quartus demands write access to every file it
         # sees and the git objects are read-only) and no previous build state. src/z486
         # is vendored with the local patch already applied, so there is nothing to apply.
@@ -330,12 +365,6 @@ class Build:
                 self.fail("the scratch qsf has no single NUM_PARALLEL_PROCESSORS line to set")
             qsf.write_text(text)
             print(f"==> NUM_PARALLEL_PROCESSORS {npp}")
-
-        tree_before = self.capture(
-            [sys.executable, str(TOOLS_DIR / "check_fit.py"), "--rtl-hash-of", str(REPO_ROOT)],
-            "the pre-fit rtl tree hash",
-        ).strip()
-        print(f"==> rtl tree hash: {tree_before}")
 
         # Record which tree this fit is of, beside the reports, BEFORE the fit and the
         # copy-back, so both carry it and check_fit.py can refuse to give a verdict for

@@ -121,7 +121,7 @@ module tb_pc9821_pcm86_underrun;
   endtask
 
   // A host write: one clk-wide request_write strobe, held off while the buffer's write
-  // FIFO back-pressures, exactly as pc9821_iobus holds its S_IOWAIT state.
+  // FIFO back-pressures, exactly as pc9821_iobus holds the lane in S_BYTE.
   task automatic port_write(input [15:0] addr, input [7:0] data);
     begin
       @(negedge clk);

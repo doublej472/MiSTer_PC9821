@@ -258,9 +258,12 @@ def main():
     if not tpm.build_testbench():
         return 1
     # The checker must reject a corrupted expectation before any pass counts.
+    # It must fail at the corrupted EBX compare itself: an assembly error, a
+    # timeout or a crash is a broken harness, not a catch.
     ok, msg = run_seed(1, 40, 0, False, False, corrupt=True)
-    if ok:
-        print('fuzz self-test FAILED: a corrupted expectation passed')
+    want = f'FAIL Failure data: 0x{REGS.index("ebx") + 1:08x}'
+    if ok or msg != want:
+        print(f'fuzz self-test FAILED: a corrupted EBX expectation gave {msg!r}, not {want!r}')
         return 1
     seeds = [args.seed] if args.seed is not None else range(args.first, args.first + args.count)
     bad = []

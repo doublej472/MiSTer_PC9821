@@ -22,7 +22,7 @@ module pc9821_cpu_reset_gate #(
 );
 
 // The SDRAM term, and the defect it closes. A platform reset re-runs the controller's JEDEC
-// initialisation (src/memory/sdram.v:1903-1905 `state_n = INIT;` with busy_buf_n high) and it then spends
+// initialisation (src/memory/sdram.v:1927-1929 `state_n = INIT;` with busy_buf_n high) and it then spends
 // ~200 us calibrating before it answers anything. A core reload hides that because the pack
 // download holds cpu_run low for seconds; an OSD reset does not, because pc9821_rom_loader keeps
 // rom_ready deliberately so the pack is not re-downloaded - so the CPU was released 15 cycles

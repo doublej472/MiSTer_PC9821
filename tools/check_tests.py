@@ -11,38 +11,14 @@ No simulation, no build. Per bench it requires:
   4  the PASS marker the manifest declares, printed exactly
   5  the standard sections: WHAT THIS PROVES, DUT, CHECKS, VERDICT
 
-Exit status 0 if every bench conforms.
+Exit status 0 if every bench conforms. There is no tolerated-debt list: every bench
+meets every rule, so any problem fails (a ledger, if one is ever needed again, must be
+shrink-only and fail on an entry that is no longer true).
 
 Usage:
   tools/check_tests.py            check every bench against the rules above
-  tools/check_tests.py --ledger   print the KNOWN-LEGACY sets for THIS tree, ready to
-                                  paste, so the ledger below is read off the tree rather
-                                  than typed by hand
   tools/check_tests.py --selftest plant the verdict shapes rule 3 exists to reject and
                                   require each to be caught, then re-check the real tree
-                                  (a guard that cannot fail is the defect it hunts)
-
-THE KNOWN-LEGACY DEBT LEDGER, and why a checker that is installed red is worse than one
-that is absent. This tool was out of the tree for 421
-commits while the benches kept being written and reviewed, and what it checks drifted:
-77 of 202 benches no longer carry the manifest claim verbatim, 44 are missing one or more
-of the DUT/CHECKS/VERDICT banners, 5 are shaped so a failing run still exits 0 and 1 has
-no `$fatal(1, ...)` at all. None of that is the checker's opinion -- it is what the tree
-says -- and none of it can be fixed from tools/: the fixes belong in the benches.
-
-A checker that simply fails on all of it cannot be added to the gate, and one kept out of
-the gate is a check nobody runs, which is the defect class this repository's own
-check_lint.py docstring names. So the debt is ENUMERATED here instead of hidden: the four
-sets below name the benches that carry each class of debt TODAY, and the bench name is a
-work order for that bench. What the ledger does NOT do is tolerate
-anything new:
-
-  * a bench that is in no set must be clean -- ONE new bench with a diverged claim, no
-    bound, a missing banner or a silent verdict fails this tool, which is the whole point
-    of restoring it;
-  * the ledger is SHRINK-ONLY and self-checking: an entry that no longer shows its class,
-    or that names a bench which does not exist, is itself a failure, so the sets cannot
-    rot into a suppression nobody can see. Paying the debt means deleting the entry.
 """
 import importlib.util
 import pathlib
@@ -55,18 +31,10 @@ TB_DIR = ROOT / "tests/pc9821"
 # The verdict forms that are acceptable, and the one that is not.
 SILENT_PASS = re.compile(r'if\s*\(\s*errors\s*==\s*0\s*\)\s*\$display', re.S)
 # The same defect under another name: a verdict that prints its failure and then $finish,
-# so the process still exits 0. SILENT_PASS above keys on a counter called `errors`, which
-# is how tb_pc9821_block_share.sv (its counter is `fails`) printed FAIL and exited 0 while
-# satisfying every other rule in this file -- the class had a blind spot the whole time it
-# was a ledger. This pattern is the shape itself, whatever the counter is called: a FAIL
-# $display followed by $finish and NOTHING BETWEEN, with no $fatal on that path.
-#
-# THE `end` IS THE POINT. The first form of this pattern was
-# `\s*` between the two statements, and `\s*` cannot cross an `end` -- so the same silent
-# verdict WRAPPED IN begin/end read as clean, because whitespace is not the only thing that
-# can sit between a FAIL display and its $finish. The wrapper is optional textually (a
-# one-line `if` needs none, a multi-statement arm does), so the pattern allows one `end`
-# there. It still requires the $finish to be reached with NO $fatal in between: a shape like
+# so the process still exits 0. SILENT_PASS above keys on a counter called `errors`; this
+# pattern is the shape itself, whatever the counter is called: a FAIL $display followed
+# by $finish with no $fatal on that path. One `end` may sit between them (the same
+# verdict wrapped in begin/end; plain `\s*` cannot cross it). A shape like
 # `if (fails != 0) begin $display("FAIL"); $fatal(1, ...); end $finish;` is a correct verdict
 # and does not match, and the selftest below holds both sides of that line.
 SILENT_FINISH = re.compile(
@@ -75,9 +43,8 @@ SILENT_FINISH = re.compile(
     r'\s*\$finish\s*;', re.S)
 # The other shape that returns 0 on failure: a verdict block that ends with a bare
 # trailing $fatal. Verilator's $finish returns from the process rather than aborting
-# it, so that $fatal also runs after a PASS and prints "FAIL (0 errors)". Six benches
-# already had this shape and r7 recorded it; my own rewrite then spread it to ten
-# more. The correct form has `else`.
+# it, so that $fatal also runs after a PASS and prints "FAIL (0 errors)". The correct
+# form has `else`.
 BARE_TRAILING_FATAL = re.compile(r"\$finish;\s*\n\s*end\s*\n\s*\$fatal\s*\(", re.S)
 HARD_FAIL = re.compile(r"\$fatal\s*\(\s*1\s*,", re.S)
 
@@ -86,63 +53,6 @@ HARD_FAIL = re.compile(r"\$fatal\s*\(\s*1\s*,", re.S)
 SECTIONS = ["WHAT THIS PROVES", "DUT", "CHECKS", "VERDICT"]
 OPTIONAL_SECTIONS = ["STIMULUS"]
 
-INTEGRATED = ["boot", "portharness", "userdisk", "throttle", "dma_snoop_throttle"]
-
-# ---------------------------------------------------------------------------------------
-# THE LEDGER: benches that carry each class of debt today. See the module docstring.
-# ---------------------------------------------------------------------------------------
-# The manifest claim and the bench's WHAT THIS PROVES banner have diverged (the claim was
-# updated for a change and the banner was not, or the other way round). The fix is to make
-# the banner the manifest claim, word for word, which is what tests/pc9821/
-# tb_pc9821_gvram_decouple.sv:6 "manifest claim VERBATIM" already states as the convention.
-# PAID: all 71 benches now open their banner with the claim
-# verbatim, so the class is enforced for every bench rather than owed. Six claims were
-# CORRECTED rather than copied, because the bench and the claim disagreed about what is
-# proved and the bench was right: kbd_codes (99 agree / 2 divergences, not 98/3),
-# cg_window (the even/low page IS asserted at the machine's 0x8F), egc_regs (the GRCG
-# bit-7 gate case IS asserted through the bench's own AND), pcm86_cdc (the 20-bit bus's
-# 0x7FFFF/0x80000, not the 16-bit codes), ata_throughput (4856 clk/sector - the bench's
-# own 4600 + 256 - not a stale 4926) and sound_sum (the claim was a fragment with no
-# subject).
-CLAIM_DRIFT = set()
-
-# One or more of the DUT / CHECKS / VERDICT banners is absent. Owed by the bench:
-# either the banners or the rule, but a bench that cannot be read structurally is how a
-# bench loses its claim quietly. PAID: every bench now names
-# its four sections, so the class is enforced for every bench rather than owed. The banners
-# were placed where the block they name begins (DUT = the declaration/instance block, CHECKS
-# = the check helpers and the run, VERDICT = the verdict), and a few benches whose header
-# carried a section MAP further up the file had those map lines demoted to sub-headings,
-# because the checker reads the first occurrence of each banner.
-MISSING_BANNERS = set()
-
-# `if (errors == 0) $display(PASS)` with no `$fatal` at all: a run that found a mismatch
-# prints no PASS marker but exits 0, so a hand-run looks green. tools/bench.py still fails
-# such a bench (it requires the marker AND exit 0), which is why this was debt rather than
-# an emergency. PAID: both remaining benches carried the
-# shape and now raise the exit code, so the set is empty and the class is enforced for
-# every bench -- a new one that can pass silently is a hard failure, not ledger debt.
-# Note the detector is `if (errors == 0) $display` textually: a bench whose verdict is
-# `if (errors == 0) begin $display(PASS); end else $fatal(1, ...)` is correct and the
-# textual form is what the checker can see, which is why the verdicts below use it.
-EXITS_ZERO_ON_FAILURE = set()
-
-# No `$fatal(1, ...)` anywhere in the file: the failing path cannot make the process exit
-# non-zero even in principle.
-NO_FATAL = set()
-
-LEDGER = (
-    ("claim", CLAIM_DRIFT,
-     "its WHAT THIS PROVES text does not match the manifest's claim"),
-    ("banner", MISSING_BANNERS,
-     "missing section banner(s)"),
-    ("silent-pass", EXITS_ZERO_ON_FAILURE,
-     "CAN PASS SILENTLY"),
-    ("no-fatal", NO_FATAL,
-     "no $fatal(1, ...) anywhere"),
-)
-
-
 def load_table():
     """name -> (marker, claim). The unit benches come from the manifest; the three
     integrated benches are declared with it and checked the same way."""
@@ -150,7 +60,7 @@ def load_table():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     table = {n: (v[0], v[1]) for n, v in mod.BENCHES.items()}
-    for n in INTEGRATED:
+    for n in mod.INTEGRATED:
         table[n] = (None, None)          # marker/claim filled in below, from the file
     return table
 
@@ -158,7 +68,7 @@ def load_table():
 def check_bench(name, marker, manifest_claim, src):
     """Every problem with one bench, as (class, message) pairs.
 
-    The class is what the ledger keys on; the message is what a reader sees."""
+    The class is what the selftest keys on; the message is what a reader sees."""
     problems = []
 
     # 1. claim banner
@@ -231,9 +141,7 @@ def check_bench(name, marker, manifest_claim, src):
     #
     #     NOTE the containment is over the RAW source with only whitespace
     #     collapsed, so a claim wrapped across two `//` lines does NOT match (the
-    #     comment marker between them is a character, not whitespace). Two benches
-    #     sat on this ledger for exactly that reason: readback_ata and
-    #     readback_sysports carried the claim word for word, line-wrapped. Write the
+    #     comment marker between them is a character, not whitespace). Write the
     #     claim as ONE comment line at the top of WHAT THIS PROVES, the shape
     #     tb_pc9821_gvram_decouple.sv and tb_pc9821_artic_word.sv use.
     if manifest_claim:
@@ -251,33 +159,6 @@ def check_bench(name, marker, manifest_claim, src):
     no_stimulus = not any(src.find(f"==== {o} ====") >= 0 for o in OPTIONAL_SECTIONS)
 
     return problems, early_wait, no_stimulus
-
-
-def ledger_for(cls):
-    for name, members, _text in LEDGER:
-        if name == cls:
-            return members
-    return None
-
-
-def print_ledger(table):
-    """The sets for this tree, ready to paste into this file."""
-    found = {cls: set() for cls, _members, _text in LEDGER}
-    for name, (marker, claim) in sorted(table.items()):
-        path = TB_DIR / f"tb_pc9821_{name}.sv"
-        if not path.exists():
-            continue
-        src = path.read_text()
-        eff_marker = marker or f"TB_PC9821_{name.upper()}"
-        problems, _early, _no_stim = check_bench(name, eff_marker, claim, src)
-        for cls, _msg in problems:
-            if cls in found:
-                found[cls].add(name)
-    for cls, _members, _text in LEDGER:
-        names = sorted(found[cls])
-        print(f"{cls} ({len(names)}):")
-        for n in names:
-            print(f'    "{n}",')
 
 
 # ---------------------------------------------------------------------------------------
@@ -371,11 +252,7 @@ def selftest() -> int:
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
-    table = load_table()
-    if "--ledger" in sys.argv:
-        print_ledger(table)
-        return 0
-    return check_tree(table)
+    return check_tree(load_table())
 
 
 def check_tree(table: dict, quiet: bool = False) -> int:
@@ -392,7 +269,7 @@ def check_tree(table: dict, quiet: bool = False) -> int:
                        "one machine-readable line per access with its cycle; a failed "
                        "expectation exits non-zero and an unknown op is reported rather than "
                        "ignored.",
-        "throttle": "The OSD CPU Speed throttle slows the CPU and only the CPU, through the real CPU, bridge, memory and I/O path: at 8 MHz and at 1 MHz a 4096-iteration DEC/JNZ takes the clock ratio times its full-speed time (within 3%), a 12288-dword REP STOSD takes at least one throttled CPU edge per dword (the throttle acts inside the REP, which an instruction-boundary throttle cannot), every timed interval is its CPU-edge count at the selected rate, and the guest's architectural results - a data-dependent checksum over the region re-read after a whole-L1 flush, and the region itself - are identical at every setting, with a CPU reset, an I/O read, burst line fills, the 0x043F flush and an INTA all crossing the gated-clock bridge on the way; and at every setting an IRQ0 the 8259 raises a few platform cycles after it acknowledges IRQ2 (its INT low for less than one throttled CPU clock) is still taken once the IRQ2 handler's IRET sets IF (a 486 samples INTR as a level, so INTR need not be seen low between two requests).",
+        "throttle": "The OSD CPU Speed throttle slows the CPU and only the CPU, through the real CPU, bridge, memory and I/O path: at 8 MHz and at 1 MHz a 4096-iteration DEC/JNZ takes the clock ratio times its full-speed time (within 3%), a 12288-dword REP STOSD takes at least one throttled CPU edge per dword (the throttle acts inside the REP, which an instruction-boundary throttle cannot), every timed interval (the REP STOSD and the DEC/JNZ) is its CPU-edge count at the rate the OSD label names (8000 and 1000 kHz, hard-coded from CONF_STR, not read from cpu_throttle's rate table), and the guest's architectural results - a data-dependent checksum over the region re-read after a whole-L1 flush, and the region itself - are identical at every setting, with a CPU reset, an I/O read, burst line fills, the 0x043F flush and an INTA all crossing the gated-clock bridge on the way; and at every setting an IRQ0 the 8259 raises a few platform cycles after it acknowledges IRQ2 (its INT low for less than one throttled CPU clock) is still taken once the IRQ2 handler's IRET sets IF (a 486 samples INTR as a level, so INTR need not be seen low between two requests).",
         "dma_snoop_throttle": "TB_PC9821_DMA_SNOOP_THROTTLE: DMA writes accepted by the backend inside a gated (cpu_ce=0) CPU run still invalidate every line they land in - one FDC byte held for the next enabled edge, then TWO back-to-back bytes of a software-request channel-0 transfer in ONE disabled run, each into a different cached line, with both re-reads coherent. It runs the REAL pc9821_system (real z486, real gated cpu_clk, real bridge, real iobus/FDC/uPD71071) at OSD CPU Speed = 1 MHz, so a disabled run spans the uPD71071's ~8-cycle byte cadence: a one-deep snoop hold would let the second accept replace the first address and leave the first line stale, and the bench also asserts no write was accepted while the bridge held a snoop (the back-pressure).",
         "userdisk": 'The AUTHENTIC firmware against a user IDE image reaches the IPL at 1FC0:0000, and before that it passes the CG-window configuration record asserted by the ITF\'s own writes (no repair store at 0x811, the accept-only stage 0x05). That is a control-flow criterion and cannot see wrong sector data; this is the only tier that exercises the disk at all, it is skipped when PC98_USERDISK is unset, and its instruments run during the run rather than on a timeout path.',
     }
@@ -419,64 +296,28 @@ def check_tree(table: dict, quiet: bool = False) -> int:
             NOTE.append(f"{name}: no separate STIMULUS section (the DUT is driven "
                         f"inline in the run block)")
 
-    # The ledger is checked in both directions: an entry that is no longer true, or that
-    # names a bench which does not exist, is a failure. Deleting a paid entry is part of
-    # paying it, which is what keeps these sets from becoming a suppression nobody sees.
-    stale_ledger = []
-    for cls, members, _text in LEDGER:
-        for name in sorted(members):
-            if name not in table:
-                stale_ledger.append(f"{cls}: '{name}' is not a bench in the manifest")
-            elif name not in problems or cls not in {c for c, _m in problems[name]}:
-                stale_ledger.append(f"{cls}: '{name}' no longer shows this problem -- "
-                                    f"delete the ledger entry")
-
-    # Everything a ledger entry covers is reported as debt; everything else fails.
-    fatal = {}
-    for name, found in problems.items():
-        for cls, msg in found:
-            members = ledger_for(cls)
-            if members is not None and name in members:
-                continue
-            fatal.setdefault(name, []).append(msg)
+    fatal = {name: [msg for _cls, msg in found] for name, found in problems.items()}
 
     width = max(len(n) for n in table) if table else 10
     if not quiet:
         for name in sorted(table):
-            found = problems.get(name, [])
-            if name in fatal:
-                state = "PROBLEM"
-            elif found:
-                state = "legacy"
-            else:
-                state = "ok"
+            state = "PROBLEM" if name in fatal else "ok"
             print(f"{name:<{width}}  {state}")
             for msg in fatal.get(name, []):
                 print(f"{'':<{width}}    - {msg}")
 
-    live = len({n for _cls, members, _text in LEDGER for n in members if n in problems})
     if not quiet:
         print()
         for n in NOTE:
             print(f"note: {n}")
-    if live:
-        by_class = ", ".join(f"{cls} {len(members)}" for cls, members, _text in LEDGER)
-        print(f"ledger: {live} bench(es) carry KNOWN-LEGACY debt ({by_class}) -- "
-              f"see the sets at the top of this file and the report; a clean bench is "
-              f"one that appears in none of them")
     for name in sorted(fatal):
         if quiet:
             for msg in fatal[name]:
                 print(f"{name}: PROBLEM - {msg}")
-    for bad in stale_ledger:
-        print(f"STALE LEDGER ENTRY: {bad}")
-    if fatal or stale_ledger:
-        print(f"TEST STRUCTURE: FAIL ({len(fatal)} bench(es) with problems this ledger does "
-              f"not cover, {len(stale_ledger)} stale ledger entry/entries)")
+    if fatal:
+        print(f"TEST STRUCTURE: FAIL ({len(fatal)} bench(es) with problems)")
         return 1
-    total = len(table)
-    print(f"TEST STRUCTURE: PASS ({total} benches: {total - live} clean, "
-          f"{live} on the debt ledger)")
+    print(f"TEST STRUCTURE: PASS ({len(table)} benches, all clean)")
     return 0
 
 

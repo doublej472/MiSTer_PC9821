@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PIT_TICK:
-// TB_PC9821_PIT_TICK: The 8253 arm of the I/O class table is DERIVED from the profile clock, so the ITF's POST self-test floor holds at every clock the tree can be built for and not only at the 50 MHz base profile: with the iobus parameterised at 85 MHz (the `production` clock) an 8253 WRITE still outlasts one 2.4576 MHz PIT tick, where a fixed 21-cycle arm delivered 22 cycles = 259 ns and fell 148 ns short. The floor is asserted on the WRITE because that is the direction it exists for -- the ITF's self-test programs a count into the counter and reads it back, while the machine READS 8253 count registers at the default class (its PITD0/PITD1 rows in docs/probes/IO.TXT), so the read carries no floor at all. The bench asserts the property -- the delivered write, converted at SYS_CLOCK_HZ, covers one tick -- on the real port 0x0071 and its 0x3FDB alias, and that the arm still fits the bus's 12-bit hold field.
+// TB_PC9821_PIT_TICK: The 8253 arm of the I/O class table is DERIVED from the profile clock, so the ITF's POST self-test floor holds at every clock the tree can be built for and not only at the 50 MHz base profile: with the iobus parameterised at 85 MHz (the `production` clock) an 8253 WRITE still outlasts one 2.4576 MHz PIT tick, where a fixed 21-cycle arm delivered 22 cycles = 259 ns and fell 148 ns short. The floor is asserted on the WRITE because that is the direction it exists for -- the ITF's self-test programs a count into the counter and reads it back, while the machine READS 8253 count registers at the default class (its PITD0/PITD1 rows in docs/probes/IO.TXT), so the read carries no floor at all. The bench asserts the property -- the delivered write, converted at SYS_CLOCK_HZ, covers one tick -- on every 8253 port, 0x0071/0x0073/0x0075/0x0077 and the 0x3FD9/0x3FDB/0x3FDD/0x3FDF aliases, and that the arm still fits the bus's 12-bit hold field.
 //
 // ---- the bench's own account of where the expectation comes from ----
 //
@@ -15,7 +15,7 @@
 //
 // The requirement is a TIME, the arm is a clk_sys CYCLE count, and `pc9821_iobus` is
 // parameterised on SYS_CLOCK_HZ -- so a hardcoded arm is correct at exactly one profile.
-// tb_pc9821_io_wait measures the arm at the default 50 MHz, where a fixed 21 passes; no
+// tb_pc9821_io_class measures the arm at the default 50 MHz, where a fixed 21 passes; no
 // bench instantiated the bus at another clock, which is the coverage gap this one closes.
 //
 // WHAT IS ASSERTED (CLK_HZ = 85,000,000, one tick = 1/2,457,600 s):
@@ -23,8 +23,11 @@
 //      (cycles * 2,457,600 >= CLK_HZ) on 0x0071 and on the 0x3FDB alias;
 //   2. the arm is at least ceil(CLK_HZ / 2,457,600) cycles -- the derived value, 35 at
 //      85 MHz -- so a fix that merely raised the constant for one profile still fails.
-// The current RTL (a fixed 21) delivers 22 cycles at this clock: check 1 computes
-// 22 * 2,457,600 = 54,067,200 < 85,000,000 and the bench FAILs.
+// FAIL-FIRST (historical): the RTL this bench was written against had a fixed 21-cycle arm,
+// which delivers 22 cycles at this clock - check 1 computes 22 * 2,457,600 = 54,067,200 <
+// 85,000,000 and the bench FAILs. The arm is derived now (pc9821_iobus IO_PIT_HOLD =
+// ceil(SYS_CLOCK_HZ / 2,457,600)); tests/pc9821/mutations.json records the fixed-21 arm as a
+// mutant this bench kills.
 
 `default_nettype none
 
@@ -144,6 +147,7 @@ module tb_pc9821_pit_tick;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -173,6 +177,7 @@ module tb_pc9821_pit_tick;
   integer errors = 0;
   integer measured_cycles = 0;
   integer c_real = 0, c_alias = 0;
+  integer pi;
   reg [15:0] probe_port = 16'h0000;
 
   // A WRITE, because that is the direction the floor exists for: the ITF's
@@ -213,19 +218,14 @@ module tb_pc9821_pit_tick;
       // 1. the delivered 8253 WRITE, at SYS_CLOCK_HZ, must cover one PIT tick. `cycles` is the
       //    access's own clk_sys cycle count and the RTL counts clk_sys cycles, so the
       //    comparison with SYS_CLOCK_HZ is the RTL's property, not the bench's clock's.
+      //    (For integers this is the same test as cycles >= ceil(CLK_HZ/PIT_HZ), the derived
+      //    arm PIT_TICK, so a fix that raised the constant for one profile is caught here.)
       if (cycles * PIT_HZ < CLK_HZ) begin
-        $display("FAIL port %04x: %0d cycles at %0d Hz = %0.1f ns, under one PIT tick (407 ns)",
-                 port, cycles, CLK_HZ, cycles * 1.0e9 / CLK_HZ);
+        $display("FAIL port %04x: %0d cycles at %0d Hz = %0.1f ns, under one PIT tick (407 ns; derived arm ceil(%0d/%0d) = %0d)",
+                 port, cycles, CLK_HZ, cycles * 1.0e9 / CLK_HZ, CLK_HZ, PIT_HZ, PIT_TICK);
         errors = errors + 1;
       end
-      // 2. the arm must be the DERIVED value, so a fix that raised the constant for one
-      //    profile is still caught.
-      if (cycles < PIT_TICK) begin
-        $display("FAIL port %04x: %0d cycles, under the derived arm ceil(%0d/%0d) = %0d",
-                 port, cycles, CLK_HZ, PIT_HZ, PIT_TICK);
-        errors = errors + 1;
-      end
-      // 3. the arm is carried in io_hold's 12 bits; a value at the device ceiling must fit.
+      // 2. the arm is carried in io_hold's 12 bits; a value at the device ceiling must fit.
       if (cycles > 4095) begin
         $display("FAIL port %04x: %0d cycles does not fit io_hold's 12 bits", port, cycles);
         errors = errors + 1;
@@ -239,14 +239,20 @@ module tb_pc9821_pit_tick;
     reset = 1'b0;
     repeat (2) @(posedge clk);
 
-    probe_port = 16'h0071; measure_port; c_real  = measured_cycles;
-    probe_port = 16'h3FDB; measure_port; c_alias = measured_cycles;
+    // Every 8253 register the machine decodes: the counters and the control word at
+    // 0x71/0x73/0x75/0x77 and their 0x3FD9..0x3FDF aliases (each is an 8253 write the
+    // device must see for a full tick; tb_pc9821_io_class sweeps them at 50 MHz).
+    for (pi = 0; pi < 8; pi = pi + 1) begin
+      probe_port = (pi < 4) ? (16'h0071 + 16'(2 * pi)) : (16'h3FD9 + 16'(2 * (pi - 4)));
+      measure_port;
+      if (pi == 0) c_real  = measured_cycles;
+      if (pi == 5) c_alias = measured_cycles;
+      $display("  pit_tick: port %04x %0d cycles", probe_port, measured_cycles);
+      check_port(probe_port, measured_cycles);
+    end
 
     $display("  pit_tick: clk=%0d Hz tick=%0d ns derived_arm=%0d real=%0d alias=%0d cycles",
              CLK_HZ, 1_000_000_000 / PIT_HZ, PIT_TICK, c_real, c_alias);
-
-    check_port(16'h0071, c_real);
-    check_port(16'h3FDB, c_alias);
 
   // ==== VERDICT ====
     if (errors == 0) begin

@@ -125,6 +125,19 @@ module pc9821_pegc_scan (
   // A comfortable burst: 16 bursts of 10 dwords per line, well inside the
   // controller's 15-dword cap (split_sdram_backend clamps above it).
   localparam [3:0] BURST_LEN  = 4'd10;
+  // THE LINE WRAPS AT THE END OF THE 512 KiB STORE. NP2kai's packed walk addresses the store in
+  // 8-byte units with a 16-bit counter that wraps per column (vram/makegrex.c grphput_all:
+  // `vc = LOW16(vc + 1);` after `*(UINT32 *)(vramex + (vc * 8) + 4)`), so a line that starts
+  // within 640 bytes of the end continues at offset 0 of the store; MAME keeps the same
+  // 16-bit walk through `& 0xffff` (pc9821.cpp:104-113, the header above). The next line's
+  // base already wraps (pc9821_gdc2's v_gline is 16 bits), so only the line that straddles
+  // the end needs it here. The dword offset is formed in 17 bits (off_dw), and a burst that
+  // would run past the end is CUT there: the cut part fetches the dwords left to the end and
+  // the remainder (split_rest) is the next burst, from offset 0, so fetch_w is back on a
+  // multiple of BURST_LEN after the pair and the line is still exactly LINE_WORDS beats. Line
+  // starts are 8-byte aligned and every burst start is an even dword, so a cut is 2, 4, 6 or 8
+  // dwords and its remainder 8, 6, 4 or 2. One extra request on that one line is the only
+  // cost; every other line is the sixteen full bursts it always was.
 
   reg [31:0] lbuf [0:511];
 
@@ -135,11 +148,14 @@ module pc9821_pegc_scan (
   // accounting can never see two bursts' beats interleaved.
   reg  [8:0]  fetch_w;        // next dword of the line to request
   reg         fetch_active;
+  /* verilator lint_off UNUSEDSIGNAL */   // bits 1:0 are always zero ({..., 3'b000}): off_dw reads [18:2]
   reg  [18:0] line_base_q;    // packed byte base of the line being fetched
+  /* verilator lint_on UNUSEDSIGNAL */
   reg  [18:0] line_base_next; // the deferred restart's base
   reg         restart_pend;   // a tick asked for a restart the burst has not earned
   reg         req_inflight;   // a burst is outstanding
   reg  [3:0]  beats_left;     // its remaining response beats
+  reg  [3:0]  split_rest;     // the cut burst's remainder (0 = none), fetched from offset 0
   reg  [8:0]  wr_idx;         // next dword of the line to fill
   reg         wr_sel;         // the buffer being filled (never line_sel_r)
   reg         line_sel_r;
@@ -157,17 +173,15 @@ module pc9821_pegc_scan (
   // (the gvram_scan `fill_complete` rule: hold and repeat the previous line
   // rather than ever blending one).
   wire prev_done = !fetch_active;
-  // EVERY LIVE BURST IS THE FULL BURST_LEN, so there is no burst_words subtractor:
-  // fetch_w is ALWAYS a multiple of BURST_LEN. Reset/restart write it to 0
-  // (`fetch_w <= 9'd0;`); its only other write adds BURST_LEN (`fetch_w <= fetch_w +
-  // {5'd0, BURST_LEN};`); and a request is live only while `fetch_w < LINE_WORDS`. LINE_WORDS
-  // = 160 = 16 x BURST_LEN exactly, so the values a live request can hold are
-  // 0, 10, ..., 150 - each leaves at least one full burst (160 - 150 = 10 =
-  // BURST_LEN), so a min() `((LINE_WORDS - fetch_w) > BURST_LEN) ?
-  // BURST_LEN : (LINE_WORDS - fetch_w)` would never take its second arm and its 9-bit
-  // subtract/compare/mux would be dead on the SDRAM request path; the burst is BURST_LEN. (A LINE_WORDS that did
-  // not divide evenly would break this - keep the encoding 16 x 10.) Cycle-identical:
-  // the request, its burstcount and its beat count are the same at every clk.
+  // NO BURST NEEDS A LINE-END CLAMP, so there is no burst_words subtractor. Outside a
+  // wrap cut fetch_w is a multiple of BURST_LEN: reset/restart write it to 0
+  // (`fetch_w <= 9'd0;`), a full burst adds BURST_LEN, and a cut burst plus its remainder add
+  // BURST_LEN between them (the wrap note above); a request is live only while `fetch_w <
+  // LINE_WORDS`. LINE_WORDS = 160 = 16 x BURST_LEN exactly, so a full burst always starts
+  // at 0, 10, ..., 150 and leaves at least BURST_LEN dwords (160 - 150 = 10), and a remainder
+  // ends where its full burst would have; a min() `((LINE_WORDS - fetch_w) > BURST_LEN) ?
+  // BURST_LEN : (LINE_WORDS - fetch_w)` would never take its second arm. (A LINE_WORDS that
+  // did not divide evenly would break this - keep the encoding 16 x 10.)
   // The packed byte base: {page, scan_line_base} << 3 (MAME's `(...) << 3`,
   // pc9821.cpp:104-113). The page bit is the walk's own (SCROLL bit 14, already the
   // frame-boundary-latched value) XOR the 0xA4 term MAME adds (pc9821.cpp:98,112).
@@ -188,10 +202,20 @@ module pc9821_pegc_scan (
   assign mem_valid      = req_open && (!restart_pend || req_held);
   wire restart_now = (scan_tick || scan_arm || restart_pend) && burst_idle && !mem_valid;
 
-  assign mem_addr       = peg_base + {13'd0, line_base_q} + {21'd0, fetch_w, 2'b00};
+  // The request's dword offset in the store, modulo its 512 KiB (see the wrap note above).
+  wire [16:0] off_dw    = line_base_q[18:2] + {8'd0, fetch_w};
+  // A full burst from off_dw would pass the end exactly when off_dw >= 0x1FFF7, and off_dw is
+  // even, so the cut is off_dw[16:3] all ones (0x1FFF8-0x1FFFE); the dwords left to the end
+  // are then 16 - off_dw[3:0] = 8, 6, 4 or 2. A remainder starts at offset 0, so it is never cut.
+  wire        wrap_cut  = &off_dw[16:3];
+  wire [3:0]  to_end    = 4'd0 - off_dw[3:0];
+  wire [3:0]  burst_len = (split_rest != 4'd0) ? split_rest :
+                          wrap_cut             ? to_end     : BURST_LEN;
+
+  assign mem_addr       = peg_base + {13'd0, off_dw, 2'b00};
   assign mem_write      = 1'b0;
   assign mem_be         = 4'hF;
-  assign mem_burstcount = {4'd0, BURST_LEN};
+  assign mem_burstcount = {4'd0, burst_len};
   assign mem_din        = 32'd0;
 
   always @(posedge clk) begin
@@ -203,6 +227,7 @@ module pc9821_pegc_scan (
       restart_pend  <= 1'b0;
       req_inflight  <= 1'b0;
       beats_left    <= 4'd0;
+      split_rest    <= 4'd0;
       wr_idx        <= 9'd0;
       wr_sel        <= 1'b0;
       line_sel_r    <= 1'b0;
@@ -227,6 +252,7 @@ module pc9821_pegc_scan (
         line_base_q  <= restart_pend && !(scan_tick || scan_arm) ? line_base_next
                                                                 : line_base_new;
         fetch_w      <= 9'd0;
+        split_rest   <= 4'd0;
         wr_idx       <= 9'd0;
         fetch_active <= scan_enable;
         restart_pend <= 1'b0;
@@ -237,9 +263,10 @@ module pc9821_pegc_scan (
       end
 
       if (mem_valid && mem_ready) begin
-        fetch_w      <= fetch_w + {5'd0, BURST_LEN};
+        fetch_w      <= fetch_w + {5'd0, burst_len};
         req_inflight <= 1'b1;
-        beats_left   <= BURST_LEN;
+        beats_left   <= burst_len;
+        split_rest   <= wrap_cut ? (BURST_LEN - to_end) : 4'd0;
       end
       if (mem_resp_valid && (beats_left != 4'd0)) begin
         // A response beat always belongs to the line being filled: the restart

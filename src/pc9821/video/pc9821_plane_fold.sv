@@ -9,7 +9,8 @@
 // The fold is kept whole and alone - plane order and dot select, no palette, no
 // compositor - so PEGC's 256-colour packed mode can bypass it at the palette's
 // address input in pc9821_video_mixer rather than needing a second datapath.
-// Derivation of the plane order and the mapping
+// The plane windows are NP2kai's (i386c/cpumem.h:26-29 `#define VRAM_B 0x0a8000` ...
+// `VRAM_E 0x0e0000`).
 
 `default_nettype none
 

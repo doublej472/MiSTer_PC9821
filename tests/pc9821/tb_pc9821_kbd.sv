@@ -213,29 +213,37 @@ module tb_pc9821_kbd;
     #1;
     read_byte(8'h11);  // NEC make code for W
     read_byte(8'h12);  // NEC make code for E
+    // Release Q, W and E, so no held key's break owes a slot during the fill below.
+    send_key(1'b0, 1'b0, 8'h15);  read_byte(8'h90);
+    send_key(1'b0, 1'b0, 8'h1D);  read_byte(8'h91);
+    send_key(1'b0, 1'b0, 8'h24);  read_byte(8'h92);
 
     // Fill the receiver to capacity by never reading it: the byte already
     // delivered keeps RxRDY set, so further keys queue. The event after the
     // last queued byte is dropped and sets the overrun flag rather than
-    // wrapping the FIFO.
+    // wrapping the FIFO. The fill is taps, not held keys: a held key's break
+    // keeps a slot of its own (A FULL QUEUE NEVER LOSES A BREAK in pc9821_kbd,
+    // tb_pc9821_kbd_overrun_break), so sixteen held makes could not fill it. Esc's
+    // break, seven taps and a CAPS press (a lock press owes no break) are the
+    // sixteen bytes.
     write_port(1'b1, 8'h05);
     send_key(1'b1, 1'b0, 8'h76);  // Esc: delivered immediately, RxRDY stays set
     send_key(1'b1, 1'b0, 8'h75);  // so everything after it queues
+    send_key(1'b0, 1'b0, 8'h75);
     send_key(1'b1, 1'b0, 8'h16);
+    send_key(1'b0, 1'b0, 8'h16);
     send_key(1'b1, 1'b0, 8'h1E);
+    send_key(1'b0, 1'b0, 8'h1E);
     send_key(1'b1, 1'b0, 8'h26);
+    send_key(1'b0, 1'b0, 8'h26);
     send_key(1'b1, 1'b0, 8'h25);
+    send_key(1'b0, 1'b0, 8'h25);
     send_key(1'b1, 1'b0, 8'h2E);
+    send_key(1'b0, 1'b0, 8'h2E);
     send_key(1'b1, 1'b0, 8'h36);
-    send_key(1'b1, 1'b0, 8'h3D);
-    send_key(1'b1, 1'b0, 8'h3E);
-    send_key(1'b1, 1'b0, 8'h46);
-    send_key(1'b1, 1'b0, 8'h45);
-    send_key(1'b1, 1'b0, 8'h05);
-    send_key(1'b1, 1'b0, 8'h06);
-    send_key(1'b1, 1'b0, 8'h04);
-    send_key(1'b1, 1'b0, 8'h0C);
-    send_key(1'b1, 1'b0, 8'h03);
+    send_key(1'b0, 1'b0, 8'h36);
+    send_key(1'b0, 1'b0, 8'h76);  // Esc's break
+    send_key(1'b1, 1'b0, 8'h58);  // CAPS: the sixteenth byte
     // The translation ROM's read is registered, so the last key's event lands one
     // clk_sys after its send_key. One settle cycle lets the pipeline drain before the count.
     // RE-PINNED 1 -> 2 cycles by T6:

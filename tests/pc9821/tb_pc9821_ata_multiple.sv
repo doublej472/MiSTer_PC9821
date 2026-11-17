@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_MULTIPLE:
-// ATA multiple-block mode, which NP2kai's IDENTIFY page advertises (word 47 = 0x8080) and the xe10 IDE option ROM drives: SET MULTIPLE MODE accepts exactly 2/4/8/16/32/64/128 and ABRTs any other count, READ MULTIPLE serves its sectors byte-exact while raising the data interrupt once per negotiated BLOCK, and WRITE MULTIPLE (0xC5) drains its sectors byte-exact with the reference's block-end cadence (four sectors in a block of 2 raise two interrupts, because the final sector always interrupts). It also pins the model's streaming limit and the reason IDENTIFY word 47 withdraws the multiple advertisement: a host that reads a block without checking DRQ, as the Xe10 ROM does, sees 0x00 while the fetch stalls.
+// ATA multiple-block mode, which NP2kai's IDENTIFY page advertises (word 47 = 0x8080) and the xe10 IDE option ROM drives: SET MULTIPLE MODE, tried at every count 0..255, accepts exactly 2/4/8/16/32/64/128 and ABRTs any other (NP2kai ideio.c case 0xc6), READ MULTIPLE serves its sectors byte-exact while raising the data interrupt once per negotiated BLOCK, and WRITE MULTIPLE (0xC5) drains its sectors byte-exact with the reference's block-end cadence (four sectors in a block of 2 raise two interrupts, because the final sector always interrupts); a partial final block (three sectors in a block of 2) raises NP2kai's two interrupts on both (readsec at in-block count 0, writesec at each block end plus the final sector). It also asserts the model's streaming limit, a documented divergence from NP2kai (whose synchronous image read serves a whole block before its interrupt) and the reason IDENTIFY word 47 withdraws the multiple advertisement: a host that takes the block's one interrupt and then streams the whole 2-sector block without checking DRQ, as the Xe10 ROM does, reads the first sector's 256 words byte-exact with DRQ set and then exactly 256 words of 0x0000 with DRQ clear while the second sector's fetch stalls - no stale or shifted data, and no 0x0000 while DRQ is set.
 
 module tb_pc9821_ata_multiple;
 
@@ -89,6 +89,10 @@ module tb_pc9821_ata_multiple;
       @(posedge clk);
       @(negedge clk);
       io_wr = 0;
+      // The guest's next access comes at least five clk_sys after a command's (pc9821_iobus
+      // S_BYTE -> S_REPLY -> S_HOLD -> S_IDLE -> S_IOWAIT -> S_BYTE), and a media command
+      // dispatches pc9821_ata's MEDIA_WAIT cycles after its write: look no sooner than the bus.
+      if (addr == 16'h064E) repeat (4) @(negedge clk);
     end
   endtask
 
@@ -319,17 +323,93 @@ module tb_pc9821_ata_multiple;
     if (write_errors != 0)
       fail("WRITE MULTIPLE drain pattern mismatch");
 
+    // ---- 5b. SET MULTIPLE MODE over every count, against NP2kai's accept set ----
+    // cbus/ideio.c case 0xc6: `case 2: case 4: case 8: case 16: case 32: case 64: case 128:`
+    // set mulmode (IDEIO_MULTIPLE_MAX is 128); every other count falls to `default: cmdabort`
+    // (STATUS DRDY|ERR 0x41, ERROR ABRT 0x04).
+    begin : accept_set
+      integer c, bad;
+      bad = 0;
+      for (c = 0; c < 256; c = c + 1) begin
+        read_byte(16'h064E, value);
+        set_multiple(c[7:0]);
+        if (c == 2 || c == 4 || c == 8 || c == 16 || c == 32 || c == 64 || c == 128) begin
+          if (dut.status_reg !== 8'h50 || dut.error_reg !== 8'h00) begin
+            if (bad < 4) $display("FAIL: SET MULTIPLE %0d was not accepted (status %02x error %02x)",
+                                  c, dut.status_reg, dut.error_reg);
+            bad = bad + 1;
+          end
+        end else if (dut.status_reg !== 8'h41 || dut.error_reg !== 8'h04) begin
+          if (bad < 4) $display("FAIL: SET MULTIPLE %0d was not rejected with ABRT (status %02x error %02x)",
+                                c, dut.status_reg, dut.error_reg);
+          bad = bad + 1;
+        end
+      end
+      if (bad != 0) fail("SET MULTIPLE's accept set is not NP2kai's 2/4/8/16/32/64/128");
+    end
+
+    // ---- 5c. A partial final block: three sectors in a block of 2 ----
+    // NP2kai readsec interrupts while its in-block counter is 0 (sectors 0 and 2: two), and
+    // writesec at each block's end plus the final sector (after sector 1, and the last: two).
+    read_byte(16'h064E, value);
+    set_multiple(8'd2);
+    if (dut.status_reg !== 8'h50) fail("SET MULTIPLE 2 (partial-block cases) was not accepted");
+    read_byte(16'h064E, value);
+    write_byte(16'h064C, 8'hE0);
+    write_byte(16'h0646, LBA_BASE[7:0]);
+    write_byte(16'h0648, LBA_BASE[15:8]);
+    write_byte(16'h064A, LBA_BASE[23:16]);
+    write_byte(16'h0644, 8'd3);
+    irq_count = 0;
+    write_byte(16'h064E, 8'hC4);
+    for (s = 0; s < 3; s = s + 1) read_sector(LBA_BASE + s[31:0]);
+    while (dut.status_reg[7]) @(negedge clk);
+    repeat (4) @(negedge clk);
+    if (dut.status_reg !== 8'h50)
+      fail("three-sector READ MULTIPLE did not complete");
+    if (irq_count !== 2)
+      fail("three-sector READ MULTIPLE with a block of 2 did not raise two interrupts");
+
+    read_byte(16'h064E, value);
+    write_errors = 0;
+    ad_writes = 0;
+    write_byte(16'h064C, 8'hE0);
+    write_byte(16'h0646, LBA_W[7:0]);
+    write_byte(16'h0648, LBA_W[15:8]);
+    write_byte(16'h064A, LBA_W[23:16]);
+    write_byte(16'h0644, 8'd3);
+    irq_count = 0;
+    write_byte(16'h064E, 8'hC5);
+    for (s = 0; s < 3; s = s + 1) write_sector(LBA_W + s[31:0]);
+    while (dut.status_reg[7]) @(negedge clk);
+    repeat (4) @(negedge clk);
+    if (dut.status_reg !== 8'h50)
+      fail("three-sector WRITE MULTIPLE did not complete");
+    if (irq_count !== 2)
+      fail("three-sector WRITE MULTIPLE with a block of 2 did not raise two interrupts");
+    if (ad_writes !== 3)
+      fail("the block adapter did not drain every three-sector WRITE MULTIPLE sector");
+    if (write_errors != 0)
+      fail("three-sector WRITE MULTIPLE drain pattern mismatch");
+
     // ---- 6. The streaming limit: why word 47 advertises no multiple mode ----
     // The Xe10 ROM's READ MULTIPLE handler (BANK3 0x9603) waits for ONE interrupt
     // and then consumes 256*M words with `rep insw`, never checking DRQ. With the
     // HPS fetch slower than the PIO drain the model drops DRQ mid-block, and the
     // ATA rule for the data port with DRQ clear is 0x00 - so a host that reads
     // ahead of the data gets 0x00 spliced into the block. This case drives exactly
-    // that shape and asserts the model answers 0x00 rather than stale data, which
-    // is the measured reason IDENTIFY word 47 advertises no multiple mode.
+    // that shape and asserts, word by word, that the model answers 0x00 rather than
+    // stale data, which is the measured reason IDENTIFY word 47 advertises no
+    // multiple mode.
+    // A KNOWN DIVERGENCE from NP2kai, asserted as the model's own contract: NP2kai's image
+    // read is synchronous, so its block is whole before the interrupt; this model buffers
+    // one sector and fetches the next during the drain, so the ROM's DRQ-blind `rep insw`
+    // outruns it. What is pinned is that the outrun is CLEAN: sector 0 exact, then 0x0000
+    // for every word read while DRQ is clear, and nothing read while DRQ is set is 0x0000.
     ad_lat = 8000;                       // a fetch slower than the whole block drain
     set_multiple(8'd2);
     read_byte(16'h064E, value);
+    irq_count = 0;
     write_byte(16'h064C, 8'hE0);
     write_byte(16'h0646, LBA_W[7:0]);
     write_byte(16'h0648, LBA_W[15:8]);
@@ -337,15 +417,40 @@ module tb_pc9821_ata_multiple;
     write_byte(16'h0644, 8'd4);
     write_byte(16'h064E, 8'hC4);         // READ MULTIPLE, block of 2, 4 sectors
     begin : stream_limit
-      integer k; integer zeros;
-      zeros = 0;
-      for (k = 0; k < 1024; k = k + 1) begin
-        read_pio_word(word_value);
-        if (word_value === 16'h0000) zeros = zeros + 1;
+      integer k; integer zeros; integer served; integer bad_served; integer bad_zero;
+      reg drq_at_read;
+      zeros = 0; served = 0; bad_served = 0; bad_zero = 0;
+      // The ROM's shape: ONE interrupt for the block (the first sector's), then 256*M words.
+      n = 0;
+      while (!irq && n < 200000) begin
+        @(negedge clk);
+        n = n + 1;
       end
-      if (zeros == 0)
-        fail("a streamed READ MULTIPLE outran its fetch but no DRQ-clear 0x00 appeared");
-      $display("NOTE ata_multiple: a streamed block read %0d of 1024 words as 0x00 while the fetch stalled (DRQ clear) - the reason word 47 is withdrawn", zeros);
+      if (!irq) fail("the streamed READ MULTIPLE never raised its block interrupt");
+      for (k = 0; k < 512; k = k + 1) begin
+        // DRQ only changes on a 0x0641 read (the word's second lane), so its value before
+        // the word is the value both lanes see.
+        drq_at_read = dut.status_reg[3];
+        read_pio_word(word_value);
+        if (drq_at_read) begin
+          if (word_value !== sector_word_for(LBA_W + (served / 256), served[7:0]))
+            bad_served = bad_served + 1;
+          served = served + 1;
+        end else begin
+          if (word_value !== 16'h0000) bad_zero = bad_zero + 1;
+          zeros = zeros + 1;
+        end
+      end
+      $display("NOTE ata_multiple: KNOWN-DIVERGENCE (np2kai serves the whole block) streamed block: %0d words served with DRQ (%0d wrong), %0d read with DRQ clear (%0d not 0x0000) - the reason word 47 is withdrawn",
+               served, bad_served, zeros, bad_zero);
+      if (served != 256)
+        fail("the streamed block did not serve exactly the first sector's 256 words with DRQ set");
+      if (bad_served != 0)
+        fail("a word read with DRQ set was not the block's next word (stale or shifted data)");
+      if (zeros != 256)
+        fail("the stalled second sector did not read as exactly 256 DRQ-clear words");
+      if (bad_zero != 0)
+        fail("a word read with DRQ clear was not 0x0000");
     end
     // Abandon and drain the half-served block, then restore the fast adapter.
     ad_lat = 4;
@@ -367,7 +472,7 @@ module tb_pc9821_ata_multiple;
     // ---- verdict ----
     // ==== VERDICT ====
     if (errors == 0) begin
-      $display("NOTE ata_multiple: SET MULTIPLE accepts 2/128 and aborts 3; READ MULTIPLE served 6 sectors with one interrupt per block of 2; WRITE MULTIPLE drained 4 sectors with one interrupt per block of 2");
+      $display("NOTE ata_multiple: SET MULTIPLE accepts exactly 2/4/8/16/32/64/128 of 0..255; READ MULTIPLE served 2, 4 and 3 sectors and WRITE MULTIPLE drained 4 and 3 with NP2kai's per-block interrupts in a block of 2");
       $display("TB_PC9821_ATA_MULTIPLE: PASS");
       $finish;
     end else begin

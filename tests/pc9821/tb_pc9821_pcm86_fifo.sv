@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PCM86_FIFO:
-// The PC-9801-86's 86-PCM block against NP2kai, FIFO level rather than waveform: the reset values 0xA468 = 0x00 and 0xA46A = 0x32, 0xA466's full and empty bits at NP2kai's own thresholds (virbuf >= 0x8000 for full, virbuf <= stepmask for empty, so the empty boundary moves with the 0xA46A format field), the logical count saturating at 0x8000 and the oldest byte being dropped past it, the 0xA468 read substituting the interrupt for bit 4, and the buffer-low interrupt rising at the 0xA46A threshold and re-asserting on a bit-4-clear write while the buffer is still below threshold. The four spare ports NP2kai leaves as a dummy read (0xA462, 0xA464, 0xA46C, 0xA46E) are ASSERTED to answer the Xe10's bytes FF, FF, EE, FF (docs/probes/XE10T-XE10-AUDIT.TXT), not pcm86_inpdummy's 0x00. And the 0xA46C write FIFO back-pressures its writer when full -- twelve pushes at the strobe cadence with the SDRAM port withheld are all held and land byte-exact, never dropped -- which is what io_wr_wait and the bus's S_IOWAIT hold now guarantee. The remaining measured divergences are named and printed rather than asserted: a 0xA468 bit-7 rising edge does not restart the sample clock where pcm86_oa468 resets lastclock, and an arming write with the count already at or below the threshold raises the interrupt on the next cycle where NP2kai waits datawriteirqwait.
+// The PC-9801-86's 86-PCM block against NP2kai, FIFO level rather than waveform: the reset values 0xA468 = 0x00 and 0xA46A = 0x32, 0xA466's full and empty bits at NP2kai's own thresholds (virbuf >= 0x8000 for full, virbuf <= stepmask for empty, so the empty boundary moves with the 0xA46A format field), the logical count saturating at 0x8000 and the oldest byte being dropped past it, the 0xA468 read substituting the interrupt for bit 4, and the buffer-low interrupt rising at the 0xA46A threshold and re-asserting on a bit-4-clear write while the buffer is still below threshold. The four spare ports NP2kai leaves as a dummy read (0xA462, 0xA464, 0xA46C, 0xA46E) are ASSERTED to answer the Xe10's bytes FF, FF, EE, FF (docs/probes/XE10T-XE10-AUDIT.TXT), not pcm86_inpdummy's 0x00. And the 0xA46C write FIFO back-pressures its writer when full -- twelve pushes at the strobe cadence with the SDRAM port withheld are all held and land byte-exact, never dropped -- which is what io_wr_wait and the bus's S_BYTE hold now guarantee. The remaining measured divergences are named and printed rather than asserted: a 0xA468 bit-7 rising edge does not restart the sample clock where pcm86_oa468 resets lastclock, and an arming write with the count already at or below the threshold raises the interrupt on the next cycle where NP2kai waits datawriteirqwait.
 
 // Reference: NP2kai (PRIMARY) cbus/pcm86io.c
 // (pcm86_oa468, pcm86_oa46a, pcm86_oa46c, pcm86_ia466, pcm86_ia468, pcm86_inpdummy)
@@ -84,7 +84,7 @@ module tb_pc9821_pcm86_fifo;
   task automatic write_port(input [15:0] addr, input [7:0] data);
     begin
       @(negedge clk); io_addr = addr; io_din = data;
-      // S6 back-pressure: pc9821_iobus holds the access in S_IOWAIT while the
+      // S6 back-pressure: pc9821_iobus holds the access in S_BYTE while the
       // 0xA46C write FIFO is full; the bench presents the address and strobes
       // io_wr only once the buffer can take the byte, exactly as the held bus
       // does, so a full FIFO WAITS here and no byte is dropped.
@@ -290,13 +290,13 @@ module tb_pc9821_pcm86_fifo;
     if (rb !== 8'hFF) fail("0xA46E is not the Xe10's 0xFF");
 
     // ---- 8. S6: a full write FIFO back-pressures the writer; no byte is dropped ----
-    // With the SDRAM port withheld (the model's stall), the depth-4 write FIFO
-    // fills and the 0xA46C writer must be HELD (io_wr_wait -> the bus's S_IOWAIT
+    // With the SDRAM port withheld (the model's stall), the write FIFO
+    // fills and the 0xA46C writer must be HELD (io_wr_wait -> the bus's S_BYTE
     // hold write_port models above) instead of the old silent drop. Twelve
     // pushes at the strobe cadence with the port withheld for the first 60 clks
     // must all land, byte-exact in the SDRAM store, once it is released.
     begin : s6
-      integer j;
+      integer j, n_pre;
       // Playback off and the engine quiesced BEFORE the stall: a drain read
       // still in flight when the port is withheld would answer late and could
       // subtract a frame from the reset count.
@@ -306,16 +306,26 @@ module tb_pc9821_pcm86_fifo;
       write_port(P_FIFO, 8'h08);             // buffer reset, playback off
       write_port(P_FIFO, 8'h00);
       write_port(P_DAC, 8'h60);              // 1-byte frames
-      for (j = 0; j < 4; j = j + 1) write_port(P_DATA, 8'hC0 + j[7:0]);
-      // The FIFO is full and the engine cannot drain it: the writer must be
-      // held rather than handed a dropped byte.
+      // Push until the writer is held: the FIFO's depth is the buffer's own choice (no
+      // capture fixes it), so the check is that SOME finite fill raises io_wr_wait - at
+      // most 8 bytes, the bound that keeps the held phase inside this 12-byte stream - and
+      // that nothing pushed before or after it is lost.
+      n_pre = 0;
       @(negedge clk); io_addr = P_DATA;
       #1;
-      if (!io_wr_wait) fail("S6: a full write FIFO did not raise io_wr_wait (the byte would be dropped)");
+      while (!io_wr_wait && n_pre < 9) begin
+        write_port(P_DATA, 8'hC0 + n_pre[7:0]);
+        n_pre = n_pre + 1;
+        @(negedge clk); io_addr = P_DATA;
+        #1;
+      end
+      if (!io_wr_wait)
+        fail("S6: 9 bytes into a withheld write FIFO and io_wr_wait never rose (a byte would be dropped)");
+      $display("  S6: io_wr_wait rose after %0d bytes", n_pre);
       @(negedge clk); io_addr = 16'hFFFF;
       fork
         begin
-          for (j = 4; j < 12; j = j + 1) write_port(P_DATA, 8'hC0 + j[7:0]);
+          for (j = n_pre; j < 12; j = j + 1) write_port(P_DATA, 8'hC0 + j[7:0]);
         end
         begin
           repeat (60) @(negedge clk);   // ~5 held pushes into the burst

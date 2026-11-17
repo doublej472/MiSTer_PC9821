@@ -582,43 +582,57 @@ def generate_pll(req: PllRequest, dest_rtl: Path, *, project_dir: Path = PROJECT
 #
 # The analog picture needs a video clock that is an EXACT multiple of the dot rate the raster runs on,
 # so every pixel and sync period is a constant number of clocks. The video PLL is a FRACTIONAL-N PLL
-# on the 50 MHz reference, N bypassed, C0 = 19: CLK_VIDEO = 50 MHz x (M + K/2^32) / 19, and
-# pc9821_vpll_ctl reprograms it at run time between (src/pc9821/video/pc9821_vclk_pkg.sv holds the
-# numbers; VCLK_SETTINGS below must equal them):
-#   24 kHz  M 16, K 0           800/19 MHz = 42.105 263 MHz   (2 x 400/19 MHz)
-#   31 kHz  M 19, K 0x20B00000  50.336 015 MHz                 (2 x the captured 25.168 MHz, -0.94 ppm)
-# The wizard GENERATES it at the build's fastest clock, the 31 kHz configuration, so the fitter times
-# the video domain at that period (19.866 ns). pc9821_vpll_ctl writes N, M and K on every
-# reconfiguration, so the generated values matter only for the timing analysis and the first lock.
-# The read-back checks the wizard's counters and fraction, not just its rounded frequency text.
+# on the 50 MHz reference, N bypassed, C0 = 24: CLK_VIDEO = 50 MHz x (M + K/2^32) / 24, and
+# pc9821_vpll_ctl reprograms M and K at run time between (src/pc9821/video/pc9821_vclk_pkg.sv holds
+# the numbers and why; VCLK_SETTINGS below must equal them):
+#   24 kHz  M 20, K 0x35E50000   42.105 261 MHz   (2 x 400/19 MHz, -0.040 ppm)
+#   31 kHz  M 24, K 0x294C0000   50.336 075 MHz   (2 x the captured 25.168 MHz, +0.255 ppm)
+# Each fraction K/2^32 is inside the fractional-N PLL's legal 0.05..0.95, which the wizard enforces
+# (vclk_pkg_problems checks it too, so a setting the wizard would refuse cannot reach the RTL).
+# The wizard GENERATES it at the 24 kHz configuration, the one the guest starts in, so a core load
+# reconfigures nothing (pc9821_vpll_ctl starts in it); the SDC re-declares its output clock at the
+# FASTEST run-time configuration, the 31 kHz one, so the fitter still times the video domain at that
+# period (19.867 ns; render_sdc, @VCLK_MULT@/@VCLK_DIV@). pc9821_vpll_ctl writes N, M and K on
+# every reconfiguration (C0 stays as generated). The read-back checks the wizard's counters and fraction, not just its
+# rounded frequency text.
 VPLL_TEMPLATE = PROFILE_DIR / "vpll_template.v"
 VPLL_FILES = (Path("vpll.v"), Path("vpll.qip"), Path("vpll/vpll_0002.v"), Path("vpll/vpll_0002.qip"))
 VPLL_SIDE_FILES = ("vpll.bsf", "vpll.cmp", "vpll.ppf", "vpll.sip", "vpll.spd", "vpll_sim",
                    "vpll_sim.f")
-VPLL_GENERATOR_VERSION = "2"
-# The run-time settings (pc9821_vclk_pkg): {name: (M, K)}.
-VCLK_SETTINGS = {"24k": (16, 0), "31k": (19, 0x20B0_0000)}
-VPLL_C = 19
-# {VpllRequest.tv: (requested MHz text, the wizard's reported frequency, M hi/lo, K, VCO text)}
-# The 31 kHz generation (tv False) is the only one: there is no TV converter, so no other rate is
-# ever generated. The `tv` key stays so the request (and the stamp it is recorded in) is unchanged.
+VPLL_GENERATOR_VERSION = "3"
+# The run-time settings (pc9821_vclk_pkg): {name: (M, K)}, both over VPLL_C.
+VCLK_SETTINGS = {"24k": (20, 0x35E5_0000), "31k": (24, 0x294C_0000)}
+VPLL_C = 24
+VCLK_GENERATED = "24k"       # pc9821_vclk_pkg VPLL_GEN_31 0
+VPLL_FRAC_LEGAL = (Fraction(5, 100), Fraction(95, 100))   # the wizard's legal fraction range
+# {VpllRequest.tv: (requested MHz text, the wizard's reported frequency, M hi/lo, K, VCO text)}.
+# The 24 kHz generation (tv False) is the only one: there is no TV converter, so no
+# other rate is ever generated. The `tv` key stays so the request (and the stamp it is recorded in)
+# is unchanged.
 VPLL_CONFIGS = {
-    False: ("50.336015", "50.336014 MHz", (10, 9), 0x20B0_0000, "956.384266 MHz"),
+    False: ("42.105261", "42.105262 MHz", (10, 10), 0x35E5_0000, "1010.526287 MHz"),
 }
-VPLL_C0 = (10, 9)            # C0 = 19: high 10, low 9 (odd division)
+VPLL_C0 = (12, 12)           # C0 = 24: high 12, low 12
+
+
+def vclk_hz(setting: str) -> Fraction:
+    """A run-time setting's video clock (CLK_VIDEO), exactly."""
+    m, k = VCLK_SETTINGS[setting]
+    return Fraction(50_000_000) * (m + Fraction(k, 1 << 32)) / VPLL_C
 
 
 def vpll_generated_hz(tv: bool) -> Fraction:
     _, _, m_hilo, k, _ = VPLL_CONFIGS[tv]
-    return Fraction(50_000_000) * (sum(m_hilo) + Fraction(k, 1 << 32)) / VPLL_C
+    return Fraction(50_000_000) * (sum(m_hilo) + Fraction(k, 1 << 32)) / sum(VPLL_C0)
 
 
 VCLK_PKG = Path("src/pc9821/video/pc9821_vclk_pkg.sv")
+DOT_CE_FRAC_BITS = 16        # pc9821_vclk_pkg FRAC_BITS: the dot enable's fixed-point fraction
 
 
 def vclk_pkg_problems(text: str) -> list[str]:
-    """pc9821_vclk_pkg (what the RTL programs and the dot enable runs at) against VCLK_SETTINGS and
-    VPLL_C (what the generator and its read-back assume), and the base generation at 31 kHz."""
+    """pc9821_vclk_pkg (what the RTL programs and the dot enable runs at) against VCLK_SETTINGS
+    (what the generator and its read-back assume), the generated setting, and the legal range."""
     def val(name):
         m = re.search(rf"localparam\s+int\s+unsigned\s+{name}\s*=\s*(32'h([0-9A-Fa-f_]+)|(\d+))\s*;", text)
         if not m:
@@ -630,21 +644,41 @@ def vclk_pkg_problems(text: str) -> list[str]:
         if got != VCLK_SETTINGS[key]:
             problems.append(f"{VCLK_PKG}: the {key} setting is M {got[0]} K {got[1]}, tools/profile_gen.py "
                             f"VCLK_SETTINGS says M {VCLK_SETTINGS[key][0]} K {VCLK_SETTINGS[key][1]}")
-    if val("VPLL_C") != VPLL_C:
-        problems.append(f"{VCLK_PKG}: VPLL_C is {val('VPLL_C')}, the generated PLL's C0 is {VPLL_C}")
+    if val("VPLL_C") != VPLL_C or sum(VPLL_C0) != VPLL_C:
+        problems.append(f"{VCLK_PKG}: VPLL_C is {val('VPLL_C')}, the generated PLL's C0 is {VPLL_C} "
+                        f"({VPLL_C0})")
+    for key, (m, k) in VCLK_SETTINGS.items():
+        frac = Fraction(k, 1 << 32)
+        if not VPLL_FRAC_LEGAL[0] <= frac <= VPLL_FRAC_LEGAL[1]:
+            problems.append(f"the {key} setting's fraction K/2^32 = {float(frac):.4f} is outside the "
+                            "fractional-N PLL's legal 0.05..0.95 (the wizard refuses it)")
+        if k & ((1 << (32 - DOT_CE_FRAC_BITS)) - 1):
+            problems.append(f"the {key} setting's K 0x{k:08X} has bits below the dot enable's "
+                            f"{DOT_CE_FRAC_BITS} fraction bits")
+    if val("FRAC_BITS") != DOT_CE_FRAC_BITS:
+        problems.append(f"{VCLK_PKG}: FRAC_BITS is {val('FRAC_BITS')}, the SDC's dot-enable spacing "
+                        f"(render_cen_multicycles) assumes {DOT_CE_FRAC_BITS}")
+    if val("VPLL_GEN_31") != (1 if VCLK_GENERATED == "31k" else 0):
+        problems.append(f"{VCLK_PKG}: VPLL_GEN_31 is {val('VPLL_GEN_31')}, but the PLL is generated "
+                        f"at the {VCLK_GENERATED} setting (VCLK_GENERATED)")
     gen = VPLL_CONFIGS[False]
-    if (sum(gen[2]), gen[3]) != VCLK_SETTINGS["31k"]:
-        problems.append("the base build's video PLL is not generated at the 31 kHz setting (VPLL_CONFIGS)")
+    if (sum(gen[2]), gen[3]) != VCLK_SETTINGS[VCLK_GENERATED]:
+        problems.append(f"the base build's video PLL is not generated at the {VCLK_GENERATED} "
+                        "setting (VPLL_CONFIGS)")
     return problems
 
 
-# The video clock's period as generated (ns), for the SDC's crossing bound.
-VPLL_PERIOD_NS = {tv: Fraction(10 ** 9) / vpll_generated_hz(tv) for tv in VPLL_CONFIGS}
+# The video clock the SDC times: the FASTEST run-time setting (the 31 kHz one), whatever the PLL is
+# generated at. Its period bounds the clk_sys -> video crossings, and its ratio to the 50 MHz
+# reference re-declares the PLL's output clock (render_sdc).
+VCLK_FASTEST = max(VCLK_SETTINGS, key=vclk_hz)
+VCLK_TIMED_PERIOD_NS = Fraction(10 ** 9) / vclk_hz(VCLK_FASTEST)
+VCLK_TIMED_RATIO = vclk_hz(VCLK_FASTEST) / 50_000_000    # multiply_by / divide_by from the reference
 
 
 @dataclasses.dataclass(frozen=True)
 class VpllRequest:
-    tv: bool               # always False: the 31 kHz generation (VPLL_CONFIGS) is the only one
+    tv: bool               # always False: the 24 kHz generation (VPLL_CONFIGS) is the only one
 
     def as_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -654,7 +688,8 @@ def render_vpll_v(req: VpllRequest, template_text: str | None = None) -> str:
     text = VPLL_TEMPLATE.read_text() if template_text is None else template_text
     subs = {"@VPLL_MHZ@": VPLL_CONFIGS[req.tv][0],
             "@VPLL_M@": str(sum(VPLL_CONFIGS[req.tv][2])),
-            "@VPLL_K@": str(VPLL_CONFIGS[req.tv][3])}
+            "@VPLL_K@": str(VPLL_CONFIGS[req.tv][3]),
+            "@VPLL_C@": str(VPLL_C)}
     for key, value in subs.items():
         if text.count(key) != 1:
             raise GenerationError(f"{VPLL_TEMPLATE}: expected exactly one {key}")
@@ -691,14 +726,15 @@ def read_back_vpll(pll_dir: Path) -> dict:
 
 def verify_readback_vpll(req: VpllRequest, rb: dict) -> list[str]:
     _, freq_text, m_hilo, k, vco = VPLL_CONFIGS[req.tv]
+    c_hilo = VPLL_C0
     problems = []
     if rb["freq0"] != freq_text:
         problems.append(f"the video PLL runs at {rb['freq0']}, expected {freq_text}")
-    if (tuple(rb["m"]) != m_hilo or rb.get("k") != k or tuple(rb["c0"]) != VPLL_C0
+    if (tuple(rb["m"]) != m_hilo or rb.get("k") != k or tuple(rb["c0"]) != c_hilo
             or rb["n_bypass"] != "true"):
         problems.append(f"the video PLL's counters are M {tuple(rb['m'])} K {rb.get('k')} C0 "
                         f"{tuple(rb['c0'])} N bypass {rb['n_bypass']}, expected M {m_hilo} K {k} "
-                        f"C0 {VPLL_C0} N bypass true (50 MHz x (M + K/2^32) / 19)")
+                        f"C0 {c_hilo} N bypass true (50 MHz x (M + K/2^32) / C0)")
     if rb.get("frac_vco") != "true":
         problems.append(f"the video PLL is not fractional-N (fractional_vco_multiplier "
                         f"{rb.get('frac_vco')}): pc9821_vpll_ctl's K writes need it")
@@ -907,14 +943,145 @@ def pll_counter(n: int, dps: bool) -> str:
     return f"cyclonev_pll|counter[{n}].output_counter" if dps else f"general[{n}]"
 
 
+# ---------------------------------------------------------------------------------------
+# The clock-enable multicycles. Each is exact only for its enable's minimum pulse spacing, which
+# depends on clk_sys, so N is computed here per configuration (never a fixed number in the
+# template) and the exception is left out when N < 2. The proofs are in the template's comment
+# above @CEN_MULTICYCLES@; the matched sets are counted exactly by tools/check_sdc_exceptions.py
+# (tools/timing/sdc_exceptions.tsv, the mc_* rows).
+# ---------------------------------------------------------------------------------------
+
+def pixel_ce_spacing(clk_sys_hz: int) -> int:
+    """Minimum clk_sys cycles between pc9821_dot_ce pulses at either rate. ce = (acc + NUM >= DEN)
+    and acc < NUM after a pulse, so the next one is at least floor(DEN / NUM) cycles later; the
+    larger NUM decides (pc9821_dot_ce.sv: NUM = 25 MHz x (M x 2^FRAC + K >> (32 - FRAC)),
+    DEN = VPLL_C x 2^FRAC x SYS_FREQ)."""
+    def mk(setting):
+        m, k = VCLK_SETTINGS[setting]
+        return m * (1 << DOT_CE_FRAC_BITS) + (k >> (32 - DOT_CE_FRAC_BITS))
+    num = 25_000_000 * max(mk("24k"), mk("31k"))
+    den = VPLL_C * (1 << DOT_CE_FRAC_BITS) * clk_sys_hz
+    return den // num
+
+
+OPNA_CEN_HZ = 7_987_200       # pc9821_opna.sv CEN_STEP's 7.9872 MHz
+
+
+def opna_cen_spacing(clk_sys_hz: int) -> int:
+    """Minimum clk_sys cycles between OPNA cen pulses: a 32-bit DDS of CEN_STEP =
+    floor(2^32 x 7.9872 MHz / SYS_CLOCK_HZ) carries at most once per floor(2^32 / CEN_STEP)."""
+    step = ((1 << 32) * OPNA_CEN_HZ) // clk_sys_hz
+    return (1 << 32) // step
+
+
+CEN_MC_PLACEHOLDER = "@CEN_MULTICYCLES@"
+CRTC_RESET_HOLD_MIN = 3       # the shortest rst_n_sys assertion (see the crtc entry below)
+OPNA_PATH = Path("src/opna/pc9821_opna.sv")
+
+
+def opna_cen_problems(text: str) -> list[str]:
+    """pc9821_opna.sv's CEN_STEP must use the rate opna_cen_spacing assumes."""
+    m = re.search(r"\(64'd4_294_967_296 \* 64'd([0-9_]+)\)", text)
+    if not m or int(m.group(1).replace("_", "")) != OPNA_CEN_HZ:
+        return [f"{OPNA_PATH}: CEN_STEP's rate is not {OPNA_CEN_HZ} Hz (the SDC's jt12 multicycle "
+                "spacing, tools/profile_gen.py opna_cen_spacing)"]
+    return []
+# (id, from patterns, to patterns, spacing function)
+CEN_MULTICYCLES = (
+    # crtc's N is capped at 3: a source also changes when rst_n_sys asserts (the reset values, on a
+    # non-pulse edge), and the destinations, held by the same rst_n_sys, capture again at the first
+    # pixel_ce after its release. rst_n_sys is low for at least 3 cycles (the shortest firmware
+    # download the loader can see drops cpu_run for 3; a platform reset holds it longer), so 3 is
+    # the bound for the reset case at any clk_sys (the independent verification of 2026-11-12).
+    ("crtc", "pc9821_mc_crtc",
+     "*|pc9821_crtc:u_crtc|s_x_r[*] *|pc9821_crtc:u_crtc|s_y_r[*] *|pc9821_crtc:u_crtc|s_ha_r[*] "
+     "*|pc9821_crtc:u_crtc|s_va_r[*] *|pc9821_crtc:u_crtc|s_lc80_r[*] *|pc9821_crtc:u_crtc|s_lc40_r[*] "
+     "*|pc9821_crtc:u_crtc|v_sync[*][*]",
+     "*|pc9821_crtc:u_crtc|code_lo_r[*] *|pc9821_crtc:u_crtc|code_hi_r[*] *|pc9821_crtc:u_crtc|attr_r[*] "
+     "*|pc9821_crtc:u_crtc|r_font[*] *|pc9821_crtc:u_crtc|r_jis_ok *|pc9821_crtc:u_crtc|r_jis_2nd "
+     "*|pc9821_crtc:u_crtc|r_gaiji_2nd *|pc9821_crtc:u_crtc|p_gaiji *|pc9821_crtc:u_crtc|p_code_lo[*] "
+     "*|pc9821_crtc:u_crtc|p_code_hi[*] *|pc9821_crtc:u_crtc|r_wordidx[*] *|pc9821_crtc:u_crtc|r_raster[*] "
+     "*|pc9821_crtc:u_crtc|r_nowh[*] *|pc9821_crtc:u_crtc|r_code_hi[*] *|pc9821_crtc:u_crtc|r_code_lo[*] "
+     "*|pc9821_crtc:u_crtc|r_attr[*] *|pc9821_crtc:u_crtc|r_valid *|pc9821_crtc:u_crtc|f_half "
+     "*|pc9821_crtc:u_crtc|f_rowbase_r[*]",
+     lambda hz: min(pixel_ce_spacing(hz), CRTC_RESET_HOLD_MIN)),
+    ("jt12", "pc9821_mc_jt12",
+     "*|jt12_mmr:u_mmr|jt12_reg:u_reg|cur_ch[*] *|jt12_mmr:u_mmr|jt12_reg:u_reg|cur_op[*]",
+     "*|jt12_top:u_jt12|jt12_pg:u_pg|phinc_II[*] *|jt12_top:u_jt12|jt12_pg:u_pg|keycode_II[*] "
+     "*|jt12_top:u_jt12|jt12_pg:u_pg|detune_mod_II[*] "
+     "*|jt08_acc:gen_adpcm.u_acc|jt12_single_acc:u_left|acc[*] "
+     "*|jt08_acc:gen_adpcm.u_acc|jt12_single_acc:u_right|acc[*]",
+     opna_cen_spacing),
+    # The io_strobe-paced writes (strobes >= 2 clk_sys apart, sys/sys_top.v:256). hpsio and the
+    # sys_top cnt rows rely, for hpsio, on the HPS not raising io_enable and the strobe on the cycle
+    # right after an io_enable dip (the template comment); rhythm is exact from the RTL.
+    ("hpsio", "pc9821_mc_hpsio",
+     "*hps_io|uio_block.cmd[*] *hps_io|byte_cnt[*]",
+     "*hps_io|status[*] *hps_io|img_size[*]",
+     lambda hz: 2),
+    ("rhythm", "pc9821_mc_rhythm",
+     "*hps_io|ioctl_addr[*]",
+     "*|pc9821_rhythm_loader:rhythm_loader|waddr[*] *|pc9821_rhythm_loader:rhythm_loader|wdata[*]",
+     lambda hz: 2),
+    # The DMA byte's address snapshot (pc9821_dmac THE ADDRESS SNAPSHOT, docs/trade-candidates.md
+    # T89): ld_addr is written only at S_IDLE's accept and in S_SEL, and every load that reads it
+    # (S_FIRST, two cycles after the accept; S_DEV, two cycles after S_SEL) captures no sooner than
+    # two cycles after its write, so ld_addr -> the subsystem's DMA load registers is a two-cycle
+    # path at any clk_sys (owner 2026-11-13: "yes, go with option 1"). The load enable (the DMAC's
+    # state) and the map configuration are not sources and stay single-cycle.
+    ("dmaaddr", "pc9821_mc_dmaaddr",
+     "*|pc9821_dmac:u_dma|ld_addr[*]",
+     "*|pc9821_memory_subsystem:memory|dma_be_addr[*] *|pc9821_memory_subsystem:memory|dma_cls[*] "
+     "*|pc9821_memory_subsystem:memory|dma_gv_plane[*] *|pc9821_memory_subsystem:memory|dma_snoop_q[*]",
+     lambda hz: 2),
+    ("sysio", "pc9821_mc_sysio",
+     "cnt[*]",
+     "acx[*] acy0[*] acy1[*] acy2[*] arc1x[*] arc1y[*] arc2x[*] arc2y[*] cfg_custom_p1[*] "
+     "cfg_custom_p2[*] cfg_custom_t cfg_custom_t~DUPLICATE cfg_done cfg_done~DUPLICATE lowlat "
+     "lowlat~DUPLICATE vol_boost[*] LFB_BASE[*] LFB_FMT[*] LFB_WIDTH[*] PhaseInc[*]",
+     lambda hz: 2))
+
+
+# Registers that synthesis or the fitter RETIMED (`_OTERM`/`_NEW_REG` names; the patterns above
+# also match them) are no longer the RTL registers the proofs speak of: a retimed chain can load
+# every cycle from enabled neighbours (seen in pc9821_crtc's s_lc80_r on the sdc-32503923 fits), so
+# they are taken out of every set and their paths stay single-cycle.
+RETIMED_REGS = "*_OTERM* *_NEW_REG*"
+
+
+def render_cen_multicycles(clk_sys_hz: int) -> str:
+    lines = [f"set pc9821_mc_retimed [get_registers -nowarn {{{RETIMED_REGS}}}]"]
+    for ident, var, frm, to, spacing in CEN_MULTICYCLES:
+        n = spacing(clk_sys_hz)
+        if n < 2:
+            lines.append(f"# {ident}: the enable's minimum spacing at this clk_sys is {n} cycle(s): "
+                         "no multicycle")
+            continue
+        lines += [
+            f"# {ident}: minimum enable spacing {n} clk_sys at {mhz_text(clk_sys_hz)} MHz -> "
+            f"-setup {n} -hold {n - 1}",
+            f"set {var}_src [remove_from_collection [get_registers -nowarn {{{frm}}}] $pc9821_mc_retimed]",
+            f"set {var}_dst [remove_from_collection [get_registers -nowarn {{{to}}}] $pc9821_mc_retimed]",
+            f"if {{[get_collection_size ${var}_src] == 0 || [get_collection_size ${var}_dst] == 0}} {{",
+            f'    error "PC9821: the {ident} clock-enable multicycle registers not found"',
+            "}",
+            f"set_multicycle_path -from ${var}_src -to ${var}_dst -setup {n}",
+            f"set_multicycle_path -from ${var}_src -to ${var}_dst -hold {n - 1}",
+        ]
+    return "\n".join(lines)
+
+
 def render_sdc(name: str, clk_sys_hz: int, tv: bool = False, dq_ddio: bool = True,
                out_ddio: bool = True, clk_ddio: bool | None = None, dps: bool = False) -> str:
     text = SDC_TEMPLATE.read_text()
     if text.count(SDC_BLOCK_PLACEHOLDER) != 1:
         raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {SDC_BLOCK_PLACEHOLDER}")
     # The clk_sys <-> video clock crossings are bounded by one period of the destination: the video
-    # clock's GENERATED (fastest) configuration (50.336 MHz), and clk_sys's own period.
-    for token, value in (("@VCLK_PERIOD_NS@", f"{float(VPLL_PERIOD_NS[tv]):.3f}"),
+    # clock's FASTEST run-time configuration (50.336 MHz, which the SDC re-declares the PLL's output
+    # at), and clk_sys's own period.
+    for token, value in (("@VCLK_PERIOD_NS@", f"{float(VCLK_TIMED_PERIOD_NS):.3f}"),
+                         ("@VCLK_MULT@", str(VCLK_TIMED_RATIO.numerator)),
+                         ("@VCLK_DIV@", str(VCLK_TIMED_RATIO.denominator)),
                          ("@CLK_SYS_PERIOD_NS@", f"{1e9 / clk_sys_hz:.3f}")):
         if text.count(token) != 1:
             raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {token}")
@@ -932,6 +1099,9 @@ def render_sdc(name: str, clk_sys_hz: int, tv: bool = False, dq_ddio: bool = Tru
         if text.count(token) != 1:
             raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {token}")
         text = text.replace(token, on if ddio else off)
+    if text.count(CEN_MC_PLACEHOLDER) != 1:
+        raise GenerationError(f"{SDC_TEMPLATE}: expected exactly one {CEN_MC_PLACEHOLDER}")
+    text = text.replace(CEN_MC_PLACEHOLDER, render_cen_multicycles(clk_sys_hz))
     for token, value in (("@SDRAM_DQ_CAPTURE_REGS@", DQ_CAPTURE_REGS[dq_ddio]),
                          ("@SDRAM_DQ_LO_CUT@", render_dq_lo_cut(dq_ddio)),
                          ("@SDRAM_OUT_CELL_CUT@", render_out_cut(out_ddio))):

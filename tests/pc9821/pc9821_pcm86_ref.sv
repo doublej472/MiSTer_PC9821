@@ -1,4 +1,4 @@
-// TEST REFERENCE: a frozen copy of src/pcm86/pc9821_pcm86.sv before its area rewrite, kept as the equivalence reference of tb_pc9821_pcm86_equiv; not maintained.
+// TEST REFERENCE: a copy of src/pcm86/pc9821_pcm86.sv from before its area rewrite, kept as the equivalence reference of tb_pc9821_pcm86_equiv. It is held in LOCKSTEP, not frozen: a deliberate behaviour change to pc9821_pcm86.sv is mirrored here in the same commit (or tb_pc9821_pcm86_equiv fails), and the rewrite's own structure is never copied in.
 // The PC-9801-86's 86-PCM block: the half of the card that is not the YM2608 (src/opna/).
 
 // A register file plus a 32 KiB circular sample buffer fed through ONE write-only byte port.
@@ -63,7 +63,7 @@ module pc9821_pcm86_ref #(
     // latched flag OR the live buffer-low level). It is LOW while the guest
     // masks it and rises AGAIN on a re-enable with the flag still latched,
     // which is the fresh edge the edge-latched PIC consumes
-    // (pc9821_pic.sv:172 `ir_set = ir_in & ~ir_prev`). The guest clears the
+    // (pc9821_pic.sv:178 `ir_set = ir_in & ~ir_prev`). The guest clears the
     // latched flag by writing 0xA468 with bit 4 clear. On the card one strap
     // feeds the OPNA's timers and this block, so pc9821_system puts this and
     // the OPNA's IRQ line on one 8259 input (pc9821_irq_share) rather than
@@ -352,7 +352,7 @@ module pc9821_pcm86_ref #(
   // A wire driven by irq_pending alone is NOT that query: it stays HIGH through
   // an 0xA468 write of 0x90 (bit 5 clear, bit 4 set, so the latch survives -
   // cbus/pcm86io.c:114-121) and eats the re-enable's rising edge at the PIC
-  // (pc9821_pic.sv:168; wired in through pc9821_system.sv:1533, `.irq_a(opna_irq), .irq_b(pcm86_irq),`). tb_pc9821_pcm86_irqmask.
+  // (pc9821_pic.sv:178; wired in through pc9821_system.sv:1588, `.irq_a(opna_irq), .irq_b(pcm86_irq),`). tb_pc9821_pcm86_irqmask.
   wire irq_query = (irq_pending || (count <= fifosize)) && fifo[5];
 
   // EVERY ARMED THRESHOLD EVENT IS A FRESH REQUEST. NP2kai delivers each one with its own

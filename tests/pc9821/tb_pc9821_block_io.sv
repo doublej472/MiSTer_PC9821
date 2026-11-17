@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_BLOCK_IO:
-// The MiSTer image metadata and SD-block handshake: an unmounted request fails immediately, metadata is latched, the request reaches hps_io, the buffer streams through, sd_rd clears on acknowledge, completion pulses with status, and a short block is rejected; words hps_io streams for ANOTHER slot's transfer while this request waits for its own acknowledge are ignored. And a remount empties the read-ahead window: after a third sequential read bursts 8 sectors into it, a window sector is replayed with no handshake and carries the image's words, and after the slot is remounted the same LBA goes back to hps_io and returns the new image's words.
+// The MiSTer image metadata and SD-block handshake: an unmounted request fails immediately, metadata is latched, the request reaches hps_io, the buffer streams through, sd_rd clears on acknowledge, completion pulses with status, and a short block is rejected; words hps_io streams for ANOTHER slot's transfer while this request waits for its own acknowledge are ignored. And a remount empties the read-ahead window: after a third sequential read bursts 8 sectors into it, a window sector is replayed with no handshake and carries the image's words, and after the slot is remounted the same LBA goes back to hps_io and returns the new image's words. A write drops the window too: with LBA 12..19 in it, a write of LBA 16 sends the next read of LBA 16 back to hps_io, which returns the written sector, never the window's stale copy.
 
 
 module tb_pc9821_block_io;
@@ -177,18 +177,19 @@ module tb_pc9821_block_io;
       sd_buff_wr = 1;
       sd_buff_addr = word_index;
       sd_buff_dout = 16'hA500 | word_index[7:0];
-      #1;
+      @(posedge clk);
+      #1;   // the engine's HPS stage has taken the word: the fill port presents it this cycle
       // Every word, not a sample: a stream that shifts by one would still hit a
       // single probe index.
       if (!buf_we || buf_addr !== word_index[7:0] ||
           buf_data !== (16'hA500 | word_index[7:0]))
         fail("SD buffer stream passthrough (word mismatch)");
-      @(posedge clk);
       @(negedge clk);
     end
     sd_buff_wr = 0;
     if (sd_rd) fail("sd_rd remained asserted after acknowledge");
     sd_ack = 0;
+    @(posedge clk);   // the engine's HPS stage takes the fall; the completion pulses an edge later
     @(posedge clk);
     #1;
     if (!req_done || req_error || busy) fail("block completion pulse/status");
@@ -222,6 +223,7 @@ module tb_pc9821_block_io;
     @(negedge clk);
     sd_buff_wr = 0;
     sd_ack = 0;
+    @(posedge clk);   // the engine's HPS stage takes the fall; the completion pulses an edge later
     @(posedge clk);
     #1;
     if (!req_done || !req_error || busy) fail("short block was not rejected");
@@ -250,6 +252,7 @@ module tb_pc9821_block_io;
     @(negedge clk);
     sd_buff_wr = 0;
     sd_ack = 0;                           // completion happens on the ack fall
+    @(posedge clk);   // (the engine's HPS stage takes the fall; the completion pulses an edge later)
     @(posedge clk);
     #1;
     if (!req_done || !req_error || busy)
@@ -296,15 +299,16 @@ module tb_pc9821_block_io;
       sd_buff_wr = 1;
       sd_buff_addr = word_index;
       sd_buff_dout = 16'h5A00 | word_index[7:0];
-      #1;
+      @(posedge clk);
+      #1;   // the engine's HPS stage has taken the word: the fill port presents it this cycle
       if (!buf_we || buf_addr !== word_index[7:0] ||
           buf_data !== (16'h5A00 | word_index[7:0]))
         fail("own transfer after a foreign stream (word mismatch)");
-      @(posedge clk);
       @(negedge clk);
     end
     sd_buff_wr = 0;
     sd_ack = 0;
+    @(posedge clk);   // the engine's HPS stage takes the fall; the completion pulses an edge later
     @(posedge clk);
     #1;
     if (!req_done || req_error || busy) fail("own transfer after a foreign stream did not complete cleanly");
@@ -328,9 +332,11 @@ module tb_pc9821_block_io;
     if (sd_buff_din !== 16'h1234) fail("sd_buff_din did not track the address");
     if (buf_rd_addr !== 8'd9) fail("buffer read address not driven from sd_buff_addr");
     sd_ack = 1;
-    @(negedge clk);
+    @(negedge clk);   // the engine's HPS stage takes the acknowledge ...
+    @(negedge clk);   // ... and sd_wr falls an edge later
     if (sd_wr) fail("sd_wr held after acknowledgement");
     sd_ack = 0;
+    @(negedge clk);   // (likewise the fall, and the completion an edge later)
     @(negedge clk);
     if (!req_done || req_error || busy) fail("block write did not complete cleanly");
 
@@ -384,6 +390,40 @@ module tb_pc9821_block_io;
           word_index = 256;
         end
     end
+
+    // ---- a WRITE drops the read-ahead window (write coherence) ----
+    // A read after a write of the same sector returns what was written: that is what a disk
+    // write means. The host model is stateful here: after the write of LBA 16, the image holds
+    // new words there (image 3's). A read of LBA 16 that the old window replayed would hand the
+    // guest the stale sector with no handshake, so after the write LBA 16 must go back to hps_io
+    // and return the new words.
+    pulse_mount(64'd512 * 100, 1'b0);           // writable image A; the mount empties the window
+    pulse_request(32'd10); host_serve(4'd1);
+    pulse_request(32'd11); host_serve(4'd1);
+    pulse_request(32'd12);
+    if (!sd_rd || dut.sd_blk_cnt == 6'd0) fail("write case: the third sequential read did not burst");
+    host_serve(4'd1);                           // LBA 12..19 in the window
+    pulse_write_request(32'd16);
+    if (!sd_wr || sd_lba !== 32'd16) fail("write case: the write of LBA 16 did not reach hps_io");
+    sd_ack = 1;
+    @(negedge clk);
+    @(negedge clk);
+    sd_ack = 0;
+    repeat (4) @(negedge clk);
+    done_count = 0; done_err_count = 0;
+    pulse_request(32'd16);
+    if (!sd_rd || sd_lba !== 32'd16)
+      fail("a read of LBA 16 after its write was served from the read-ahead window (stale data)");
+    else begin
+      host_serve(4'd3);
+      if (done_count != 1 || done_err_count != 0) fail("write case: the read after the write did not complete once, cleanly");
+      for (word_index = 0; word_index < 256; word_index = word_index + 1)
+        if (cap[word_index] !== hword(4'd3, 32'd16, word_index)) begin
+          fail("a read of LBA 16 after its write did not return the written sector");
+          word_index = 256;
+        end
+    end
+
   // ==== VERDICT ====
 
     if (errors == 0) begin

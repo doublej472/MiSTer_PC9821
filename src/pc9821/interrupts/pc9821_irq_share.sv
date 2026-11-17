@@ -27,9 +27,12 @@
 // one rising edge, as two pic_setirq calls before an acknowledge are one request.
 //
 // The bubble is a falling edge on a line the slave PIC withdraws on (WD_UNMASKED bit 4,
-// pc9821_interrupts.sv): a request already latched and not yet acknowledged is withdrawn for
-// the one cycle and latched again by the rising edge that follows, exactly as pc9821_pcm86's
-// own bubble does on the same line.
+// pc9821_interrupts.sv), so that line is also in the slave's WD_FILTER: its withdraw is taken
+// only when the line stays low a second cycle, and a request already latched and not yet
+// acknowledged survives the bubble (the rising edge after it sets a bit already set). Without
+// the filter the request was withdrawn for one cycle and the slave's INT, and with it the
+// master's IR7, dropped behind it: an INTA landing there took INT 17h or INT 0Fh
+// (tb_pc9821_irq_share_race). pc9821_pcm86's own bubble on the same line is covered alike.
 `default_nettype none
 
 module pc9821_irq_share (
@@ -63,7 +66,7 @@ module pc9821_irq_share (
 
   assign irq = (irq_a | irq_b) & ~bubble;
 
-`ifndef SYNTHESIS
+  // synthesis translate_off
   // The contract (SCED R8): a bubble only ever follows a cycle in which the shared line was
   // already high (else the event made its own edge and dropping the line would delay it).
   reg line_q;
@@ -72,7 +75,7 @@ module pc9821_irq_share (
     if (!reset && bubble && !line_q)
       $fatal(1, "pc9821_irq_share: bubble after a cycle in which the shared line was low");
   end
-`endif
+  // synthesis translate_on
 
 endmodule
 

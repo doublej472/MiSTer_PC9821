@@ -20,12 +20,13 @@
 ;     leaves AL=80h and AH = (dividend + 80h * divisor) mod 100h.  The
 ;     loop is width-generic and the Am486DX4 completes the word and dword
 ;     forms the same way (CPUSUITE-XE10 triage run, tri_idiv1632
-;     data=01E201E2 eax=F00300FF: cases 15h, 16h, 25h, 26h below complete
+;     data=01E201E2 eax=F00300FF: cases 45h, 46h, 25h, 26h below complete
 ;     with quotient 8000h / 80000000h and remainder low byte 01h, E2h, 01h,
-;     E2h; 17h and 18h, just outside the pattern, raise #DE).
+;     E2h; 47h and 48h, just outside the pattern, raise #DE).
 ;   - a quotient just below -max-1, which faults on every width.
 ; The #DE handler counts faults and resumes at [resume]; an unexpected #DE
-; reports the case number with bit 7 set.
+; reports the case number with bit 7 set.  Case numbers, as port 0xE4 reports
+; them (hex): byte 01h-11h, word 41h-48h, dword 21h-26h.
 
 BITS 16
 org 0
@@ -76,7 +77,7 @@ start:
     idiv cl
     cmp ax, 0x0281
     jne fail
-    inc bl                      ; 5: -128 / -1 = +128 -> #DE
+    inc bl                      ; 05h: -128 / -1 = +128 -> #DE
     EXPECT_DE .b5
     mov ax, 0xFF80
     mov cl, 0xFF
@@ -85,7 +86,7 @@ start:
 .b5:
     cmp ax, 0xFF80
     jne fail
-    inc bl                      ; 6: 256 / 2 = +128 -> #DE
+    inc bl                      ; 06h: 256 / 2 = +128 -> #DE
     EXPECT_DE .b6
     mov ax, 0x0100
     mov byte [mem8], 2
@@ -94,13 +95,13 @@ start:
 .b6:
     cmp ax, 0x0100
     jne fail
-    inc bl                      ; 7: 29726 / -104 = -285 -> AX=1E80h, no #DE
+    inc bl                      ; 07h: 29726 / -104 = -285 -> AX=1E80h, no #DE
     mov ax, 0x741E              ;    (Xe10: AH=1Eh; 386EX 67F6.7 idx 375: 1E80h)
     mov cl, 0x98
     idiv cl
     cmp ax, 0x1E80
     jne fail
-    inc bl                      ; 8: -258 / 2 = -129 -> #DE
+    inc bl                      ; 08h: -258 / 2 = -129 -> #DE
     EXPECT_DE .b8
     mov ax, 0xFEFE
     mov cl, 2
@@ -111,55 +112,55 @@ start:
     jne fail
     ; 9-15: more 386EX captures that complete out of range (SingleStepTests
     ; real mode; the operands are the capture's AX and r/m8).
-    inc bl                      ; 9: F6.7 idx 469: 648Ch / B7h -> 0C80h
+    inc bl                      ; 09h: F6.7 idx 469: 648Ch / B7h -> 0C80h
     mov ax, 0x648C
     mov cl, 0xB7
     idiv cl
     cmp ax, 0x0C80
     jne fail
-    inc bl                      ; 10: F6.7 idx 516: 9C71h / 47h -> F180h
+    inc bl                      ; 0Ah: F6.7 idx 516: 9C71h / 47h -> F180h
     mov ax, 0x9C71
     mov byte [mem8], 0x47
     idiv byte [mem8]
     cmp ax, 0xF180
     jne fail
-    inc bl                      ; 11: F6.7 idx 850: 8947h / 6Dh -> C780h
+    inc bl                      ; 0Bh: F6.7 idx 850: 8947h / 6Dh -> C780h
     mov ax, 0x8947
     mov cl, 0x6D
     idiv cl
     cmp ax, 0xC780
     jne fail
-    inc bl                      ; 12: F6.7 idx 1265: 4800h / F0h -> 0080h
+    inc bl                      ; 0Ch: F6.7 idx 1265: 4800h / F0h -> 0080h
     mov ax, 0x4800
     mov cl, 0xF0
     idiv cl
     cmp ax, 0x0080
     jne fail
-    inc bl                      ; 13: F6.7 idx 1754: ACE8h / 26h -> E880h
+    inc bl                      ; 0Dh: F6.7 idx 1754: ACE8h / 26h -> E880h
     mov ax, 0xACE8
     mov cl, 0x26
     idiv cl
     cmp ax, 0xE880
     jne fail
-    inc bl                      ; 14: F6.7 idx 2348: 7DBDh / 85h -> 3D80h
+    inc bl                      ; 0Eh: F6.7 idx 2348: 7DBDh / 85h -> 3D80h
     mov ax, 0x7DBD
     mov cl, 0x85
     idiv cl
     cmp ax, 0x3D80
     jne fail
-    inc bl                      ; 15: 67F6.7 idx 460: 6180h / BDh -> 0080h
+    inc bl                      ; 0Fh: 67F6.7 idx 460: 6180h / BDh -> 0080h
     mov ax, 0x6180
     mov cl, 0xBD
     idiv cl
     cmp ax, 0x0080
     jne fail
-    inc bl                      ; 16: US 5,689,721's worked example,
+    inc bl                      ; 10h: US 5,689,721's worked example,
     mov ax, 0xB0F8              ;     -20232 / 30 (quotient -674): "adjustment
     mov cl, 0x1E                ;     ripples it to 10000000", no overflow
     idiv cl
     cmp al, 0x80
     jne fail
-    inc bl                      ; 17: Xe10 div_edges case 231: 7F81h / 81h
+    inc bl                      ; 11h: Xe10 div_edges case 231: 7F81h / 81h
     mov ax, 0x7F81              ;     (quotient -257) completes, no #DE
     mov cl, 0x81
     idiv cl
@@ -169,7 +170,7 @@ start:
     jne fail
 
     ;=== word: DX:AX / r/m16 ===
-    mov bl, 0x11
+    mov bl, 0x41
     mov dx, 0xFFFF              ; -65536 / 2 = -32768 r 0
     xor ax, ax
     mov cx, 2
@@ -187,7 +188,7 @@ start:
     jne fail
     test dx, dx
     jne fail
-    inc bl                      ; 13: -32768 / -1 = +32768 -> #DE
+    inc bl                      ; 43h: -32768 / -1 = +32768 -> #DE
     EXPECT_DE .w3
     mov dx, 0xFFFF
     mov ax, 0x8000
@@ -199,7 +200,7 @@ start:
     jne fail
     cmp ax, 0x8000
     jne fail
-    inc bl                      ; 14: 65536 / 2 = +32768 -> #DE
+    inc bl                      ; 44h: 65536 / 2 = +32768 -> #DE
     EXPECT_DE .w4
     mov dx, 1
     xor ax, ax
@@ -211,11 +212,11 @@ start:
     jne fail
     test ax, ax
     jne fail
-    ; 15h-18h: the 7FFFh -> 8000h ripple at r16 (Xe10 tri_idiv1632 A, B, E, F).
+    ; 45h-48h: the 7FFFh -> 8000h ripple at r16 (Xe10 tri_idiv1632 A, B, E, F).
     ; It completes a signs-differ divide with |dividend| = 40000000h +
     ; 8000h * |divisor| + r, 0 <= r < |divisor| (r > 0 for a negative
     ; dividend), as AX=8000h, DX = (dividend + 8000h * divisor) mod 10000h.
-    inc bl                      ; 15h: 7FFF8001h / 8001h (div_edges 569)
+    inc bl                      ; 45h: 7FFF8001h / 8001h (div_edges 569)
     mov dx, 0x7FFF
     mov ax, 0x8001
     mov cx, 0x8001
@@ -224,7 +225,7 @@ start:
     jne fail
     cmp dx, 0x0001
     jne fail
-    inc bl                      ; 16h: BFCBFFE2h / 68h (negative dividend)
+    inc bl                      ; 46h: BFCBFFE2h / 68h (negative dividend)
     mov dx, 0xBFCB
     mov ax, 0xFFE2
     mov cx, 0x0068
@@ -233,7 +234,7 @@ start:
     jne fail
     cmp dx, 0xFFE2
     jne fail
-    inc bl                      ; 17h: BFCC0000h / 68h: r = 0 for a negative
+    inc bl                      ; 47h: BFCC0000h / 68h: r = 0 for a negative
     EXPECT_DE .w7               ;      dividend, outside the pattern -> #DE
     mov dx, 0xBFCC
     xor ax, ax
@@ -245,7 +246,7 @@ start:
     jne fail
     test ax, ax
     jne fail
-    inc bl                      ; 18h: 40340068h / FF98h: r = |divisor|,
+    inc bl                      ; 48h: 40340068h / FF98h: r = |divisor|,
     EXPECT_DE .w8               ;      outside the pattern -> #DE
     mov dx, 0x4034
     mov ax, 0x0068
@@ -279,7 +280,7 @@ start:
     jne fail
     test edx, edx
     jne fail
-    inc bl                      ; 0x23: -2^31 / -1 = +2^31 -> #DE
+    inc bl                      ; 23h: -2^31 / -1 = +2^31 -> #DE
     EXPECT_DE .d3
     mov edx, 0xFFFFFFFF
     mov eax, 0x80000000
@@ -291,7 +292,7 @@ start:
     jne fail
     cmp eax, 0x80000000
     jne fail
-    inc bl                      ; 0x24: 2^32 / 2 = +2^31 -> #DE
+    inc bl                      ; 24h: 2^32 / 2 = +2^31 -> #DE
     EXPECT_DE .d4
     mov edx, 1
     xor eax, eax

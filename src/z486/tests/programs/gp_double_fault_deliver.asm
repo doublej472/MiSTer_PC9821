@@ -17,8 +17,9 @@
 ; exception-entry cluster only counted as a delivery start. z486 now redirects
 ; that re-entry to UADDR_DOUBLE_FAULT.
 ;
-; The companion payload gp_deliver_valid_idt.asm pins the other half: when the
-; tables are intact the #GP is delivered normally, and has been all along.
+; The other half, a #GP delivered normally through intact tables, is what every
+; other #GP program in this directory exercises (the companion payload this
+; program was written beside was not carried into the tree).
 ;
 ; Result protocol:
 ;   Port 0xE0: 0x01 = pass, 0xFF = fail
@@ -41,7 +42,7 @@ gdt:
     dq 0
     dq 0x00cf9b010000ffff    ; 0x08: code,  base 0x00010000, limit 0xFFFFF
     dq 0x00cf93000000ffff    ; 0x10: data,  base 0x00000000, limit 0xFFFFF
-    dq 0x30cf93000001ffff    ; 0x18: stack, base 0x00010000, limit 0xFFFFF
+    dq 0x00cf93010000ffff    ; 0x18: stack, base 0x00010000, limit 0xFFFFF
     dq 0x00cf93000000ffff    ; 0x20: data alias of 0x10
     dq 0                     ; 0x28
     dq 0                     ; 0x30: the selector under test -- ABSENT
@@ -107,6 +108,7 @@ times 0x200 - ($ - $$) db 0x90
 
 start:
     cli
+    mov esp, 0x8000                 ; SS base 0x10000: the frame lands at 0x17FF4
     lgdt [cs:gdt_desc]
     lidt [cs:idt_desc]
 

@@ -1,11 +1,12 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SOUND_SUM: the loud-chord clip census. It drives every sound source the PC-9801-86 board has and reports the running peak and 16-bit-rail count at EVERY summing stage of the audio path, and pins the F1 contract: the FM+SSG join delivers the WIDE 20-bit sum UNCLAMPED (snd_l === mix_l, fail-first against the pre-fix intermediate sat16) with the AC-coupled (zero-mean) SSG added after the junction clamp, the single saturation of the chain living at the final DAC (ymfm's clamp16 / NP2kai's _saturation_s16)
+// TB_PC9821_SOUND_SUM: the loud-chord clip census. It drives every sound source the board's OPNA has (FM, SSG and the six rhythm drums; the 86-PCM is not built here, tb_pc9821_snd86_join owns that join) on the LEFT channel and reports the running peak and 16-bit-rail count at EVERY summing stage of the audio path, and pins the F1 contract: the FM+SSG join delivers the WIDE 20-bit sum UNCLAMPED (snd_l === mix_l, fail-first against the pre-fix intermediate sat16) with the AC-coupled (zero-mean) SSG added after the junction clamp, the single saturation of the chain living at the final DAC (ymfm's clamp16 / NP2kai's _saturation_s16)
 //
-// the loud-chord clip census. It drives every sound source the PC-9801-86 board has and reports the running peak and clip/over-16 count at EVERY summing stage of the audio path:
+// the loud-chord clip census. It drives every sound source the board's OPNA has (left channel) and reports the running peak and clip/over-16 count at EVERY summing stage of the audio path:
 //
-//   * the six-drum pre-sum      (jt08_adpcm_acc's pcm_out, the WIDE raw sum)
+//   * the six-drum pre-sum      (jt08_adpcm_acc's pcm_out: the die's 16-bit WRAPPED round
+//     sum, sign-extended - YM2608-LLE fmopna_impl.c:5370)
 //   * the FM+rhythm+B accumulator (jt12_single_acc's running acc and its snd output,
 //     the 20-bit sum BEFORE the junction clamp)
 //   * the FM+ADPCM junction     (jt08_acc's clamped output = pc9821_opna's fm_l: the
@@ -18,7 +19,8 @@
 //
 // WHAT IT PINS, as the checks at the end: at the shipped 0 dB the six full RHYTHM
 // drums sum PAST the 16-bit range (the overlap is real and still in the
-// stimulus), but the drum PRE-SUM does not clip - pcm_out carries the raw sum - and
+// stimulus), but the drum PRE-SUM does not clip - pcm_out carries the die's 16-bit
+// two's-complement wrap of the round sum, never a clamped one - and
 // the FM+ADPCM sum is clamped exactly once, AT the jt08_acc junction (the same point
 // ymfm's m_last_fm.clamp16() clamps), with the SSG joining after it. A-1 (a194031e)
 // removed that junction clamp and left the raw sum to the final DAC; a
@@ -33,10 +35,10 @@
 // removed the junction clamp entirely, and this change restores it (ymfm clamps the
 // complete FM+ADPCM sum once, ymfm_opn.cpp:1410-1414, and adds the SSG after).
 // This bench keeps all of those facts pinned: the overlap still drives past the old
-// rail (so the case stays covered), the drum pre-sum does not reduce it, and the
-// junction clamps it to the 16-bit rail exactly as ymfm does - fail-first on both
-// the earlier tree (where pcm_out was sat16) and the A-1 tree (where the
-// junction was raw).
+// rail (so the case stays covered), the drum pre-sum wraps it at 16 bits as the die
+// does instead of flat-topping it, and the junction clamps the FM+ADPCM sum to the
+// 16-bit rail exactly as ymfm does - fail-first on both the earlier tree (where pcm_out
+// was sat16) and the A-1 tree (where the junction was raw).
 
 module tb_pc9821_sound_sum;
   reg clk = 0;
@@ -96,11 +98,11 @@ module tb_pc9821_sound_sum;
   wire signed [19:0] mixl = dut.mix_l;
 
   // The drum-sum reference model: jt08_adpcm_acc's own arithmetic recomputed here
-  // with UNBOUNDED integers from the per-drum slot inputs, so it cannot wrap and
-  // cannot be fooled by the DUT's width. Checked against the DUT's acc every slot
-  // (wrap detection) and captured at each round's end for the clip check: pcm_out
-  // must be the raw round sum, never a clamped one. On the pre-fix tree every
-  // over-rail round mismatches here - the flat-top heard on hardware.
+  // with UNBOUNDED integers from the per-drum slot inputs (model_raw), and its 16-bit
+  // two's-complement image (model_acc = wrap16(model_raw), the die's bus). Checked
+  // against the DUT's acc every slot and captured at each round's end for the clip
+  // check: pcm_out must be the WRAPPED round sum, never a clamped one. On the pre-fix
+  // tree every over-rail round mismatches here - the flat-top heard on hardware.
   wire        dr_cen    = dut.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.cen;
   wire        dr_match  = dut.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.match;
   wire        dr_en_sum = dut.u_opna.u_jt08.u_jt12.gen_adpcm.u_adpcm_a.u_acc_left.en_sum;

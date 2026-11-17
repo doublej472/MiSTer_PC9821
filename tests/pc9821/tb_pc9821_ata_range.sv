@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ATA_RANGE:
-// A data command (READ SECTORS 0x20) is accepted exactly when the image holds every sector it names, which is ATA's own rule and the bench's own 64-bit arithmetic, never a value read out of the RTL: the sector count (0 meaning 256) fits between the start LBA and the capacity (start + count <= capacity, so capacity 0 accepts nothing), in the LBA28 form for starts at 0, capacity-2, capacity-1, capacity, capacity+1 and 2^28-1 and counts 1, 2, 255 and 256 over capacities from 0 to 2^32-1 (the 2^28 and 2^31 classes included, whose starts the LBA28 field cannot name past 2^28-1), and in the CHS form of the default 8-head/17-sector geometry for sectors 0, 1, 17 and 18 and heads 7 and 8 around a capacity boundary, an invalid sector or head being refused whatever the capacity; an accepted command issues its block request at the LBA the task file named and a refused one answers STATUS 0x41 with ERROR 0x04 and issues none.
+// A data command (READ SECTORS 0x20) is accepted exactly when the image holds every sector it names, which is ATA's own rule and the bench's own 64-bit arithmetic, never a value read out of the RTL: the sector count (0 meaning 256) fits between the start LBA and the capacity (start + count <= capacity, so capacity 0 accepts nothing, and start + count <= 0x0FFFFFFF, the most sectors IDENTIFY words 60/61 can advertise to an LBA28 command, so a run that would carry past LBA 2^28-1 is refused rather than wrapped to LBA 0), in the LBA28 form for starts at 0, capacity-2, capacity-1, capacity, capacity+1 and 2^28-1 and counts 1, 2, 255 and 256 over capacities from 0 to 2^32-1 (the 2^28 and 2^31 classes included, whose starts the LBA28 field cannot name past 2^28-1), and in the CHS form of the default 8-head/17-sector geometry for sectors 0, 1, 17 and 18 and heads 7 and 8 around a capacity boundary, an invalid sector or head being refused whatever the capacity; an accepted command issues its block request at the LBA the task file named and a refused one answers STATUS 0x41 with ERROR 0x04 and issues none. And in that CHS geometry the check reads the task file as it stands at the command even when one 32-bit OUT at 0x064C writes drive/head and the command together (the I/O bus's lane sequence 0x064C, 0x064D, 0x064E, 0x064F on consecutive clk_sys): a head change that moves the start past the image is refused and one that brings it back inside is accepted at the new head's LBA, as NP2kai executes the command against the drive's current task file (cbus/ideio.c ideio_o64e).
 
 module tb_pc9821_ata_range;
 
@@ -147,6 +147,38 @@ module tb_pc9821_ata_range;
     end
   endtask
 
+  // One 32-bit OUT at 0x064C as pc9821_iobus presents it to the device: its four lanes on four
+  // consecutive clk_sys (S_BYTE -> S_BYTE), drive/head (0x064C) on lane 0 and the command (0x064E)
+  // on lane 2. The rest of the task file is written first, with the OLD head, by separate accesses.
+  task run_lanes(input [15:0] cyl, input [3:0] old_head, input [3:0] new_head, input [7:0] sec,
+                 input accept, input [31:0] want_lba, input [8*24-1:0] tag);
+    begin
+      srst;
+      saw_req = 0;
+      write_byte(16'h0644, 8'd1);
+      write_byte(16'h0646, sec);
+      write_byte(16'h0648, cyl[7:0]);
+      write_byte(16'h064A, cyl[15:8]);
+      write_byte(16'h064C, {4'hA, old_head});
+      repeat (8) @(posedge clk);
+      @(negedge clk); io_addr = 16'h064C; io_din = {4'hA, new_head}; io_wr = 1;
+      @(negedge clk); io_addr = 16'h064D; io_din = 8'h00;
+      @(negedge clk); io_addr = 16'h064E; io_din = 8'h20;
+      @(negedge clk); io_addr = 16'h064F; io_din = 8'h00;
+      @(negedge clk); io_wr = 0;
+      repeat (12) @(posedge clk);
+      checks = checks + 1;
+      if (accept) begin
+        if (!saw_req) begin $display("  %0s: head %0d -> %0d: refused, want accepted", tag, old_head, new_head); fail("a multi-lane command that fits was refused"); end
+        else if (req_lba !== want_lba) begin $display("  %0s: requested %0d, want %0d", tag, req_lba, want_lba); fail("multi-lane block request is not at the new head's LBA"); end
+      end else begin
+        read_byte(16'h074C, value);
+        if (saw_req) begin $display("  %0s: head %0d -> %0d: accepted, want refused", tag, old_head, new_head); fail("a multi-lane command past the image was accepted"); end
+        else if (value !== 8'h41) begin $display("  %0s: STATUS %02x", tag, value); fail("multi-lane refusal STATUS is not 0x41"); end
+      end
+    end
+  endtask
+
   // ==== CHECKS ====
   localparam integer NCAP = 12;
   reg [31:0] caps [0:NCAP-1];
@@ -186,8 +218,13 @@ module tb_pc9821_ata_range;
         for (ni = 0; ni < 4; ni = ni + 1) begin
           lo = {36'd0, starts[si]};
           last = lo + counts[ni];
-          // ATA: the whole run [lba, lba+count) must lie inside [0, capacity)
-          exp_ok = (last <= {32'd0, cap});
+          // ATA: the whole run [lba, lba+count) must lie inside [0, capacity), and an LBA28
+          // command addresses at most the 0x0FFFFFFF sectors IDENTIFY words 60/61 can advertise
+          // (ATA/ATAPI-6: their maximum value is 0FFFFFFFh), so above that the run must lie
+          // inside [0, 0x0FFFFFFF): a run that would carry past LBA 2^28-1 is refused, never
+          // wrapped to LBA 0. FAIL-FIRST: start 2^28-1 with count 2 over a capacity of 2^28 or
+          // more was accepted and its second sector requested at LBA 0.
+          exp_ok = (last <= ((cap > 32'h0FFF_FFFF) ? 64'h0FFF_FFFF : {32'd0, cap}));
           run_cmd(1, starts[si], 16'd0, 4'd0, 8'd1, counts[ni], exp_ok, "lba28");
         end
     end
@@ -209,6 +246,15 @@ module tb_pc9821_ata_range;
             run_cmd(0, 28'd0, ch[15:0], hd[3:0], sc[7:0], 9'd2, exp_ok, "chs2");
           end
         end
+
+    // ---- CHS through one 32-bit OUT at 0x064C (drive/head and the command in one access) ----
+    // capacity 1000, cylinder 7, sector 17, one sector: head 0 is LBA (7*8+0)*17+16 = 968 (inside),
+    // head 3 is (7*8+3)*17+16 = 1019 (past the end). The verdict must follow the NEW head.
+    capacity = 32'd1000;
+    repeat (4) @(posedge clk);
+    run_lanes(16'd7, 4'd0, 4'd3, 8'd17, 1'b0, 32'd0, "lanes 0->3");
+    run_lanes(16'd7, 4'd3, 4'd0, 8'd17, 1'b1, 32'd968, "lanes 3->0");
+    run_lanes(16'd7, 4'd0, 4'd0, 8'd17, 1'b1, 32'd968, "lanes 0->0");
 
     // ==== VERDICT ====
     if (errors == 0) begin

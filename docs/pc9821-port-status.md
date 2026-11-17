@@ -63,11 +63,13 @@ rule, todo item 82):
   read is the default class.
 - **Xe10**: the machine's measured per-class times, the `net_ns` of the Xe10's XE10T /IO rows
   (`docs/probes/XE10T-XE10.TXT`: default 792 ns R / 823 ns W, text GDC 414, graphics GDC 639,
-  EGC 350 R, the fast write class 318 on 0x6A/0xA6/0x7C/0x7E/0x64/0xA4 and the EGC file, the
+  EGC 350 R, the fast write class 318 on 0x6A/0xA6/0x7C/0x7E/0x64/0xA3/0xA4/0xA5 and the EGC file, the
   EGC file's even read 5990, 0x09A0/0x09A8 353, 0x0FAA 255, `0x005F` 792 R / posted W), less the
   core CPU's own 8 clk_sys around an I/O instruction (`docs/probes/core/KIT2-CORE-SPEED.TXT`), so
   the whole `in`/`out` takes the machine's time; a 16-bit access pays one class (R16_005C,
-  R16_0188, W16_04A8). Kit 2's SPEED cross-checks it: `in al,dx` 802 ns at 0x02 and 651 ns at
+  R16_0188, W16_04A8), and so does a word WRITE at lanes 1-2 of a dword, while a word READ there
+  pays two classes less 127 ns (XE10W `/MISAL2`, `docs/probes/XE10W-XE10-MIS2RUN1.TXT`: `IOOW_5`,
+  `IOIW_1`; 0xA3/0xA5 from `IOOB_3` and `IOOW_5`). Kit 2's SPEED cross-checks it: `in al,dx` 802 ns at 0x02 and 651 ns at
   0xA0 on the machine. The older ioprobe capture (`docs/probes/IO.TXT`) reads the same classes
   3-5 % higher and the EGC file's even read at 8.6-9.4 us; XE10T and SPEED agree, so XE10T is
   the table.
@@ -177,7 +179,7 @@ GRCG/EGC routes, behind the uPD7220's 16-entry command FIFO with the DRAWING sta
 per 14 dot clocks (`tb_pc9821_gdc2_figure_xe10` replays 1,450 Xe10 capture rows,
 `tb_pc9821_gdc2_figure`; `tools/hwprobe/gdcfig` draws a comparison picture). The CURD read-back answers
 the Xe10's five bytes ({EAD[7:0], EAD[15:8], 0xF0|EAD[17:16], MASK[7:0], MASK[15:8]},
-`tb_pc9821_readback_gdc`), and the arc has no capture yet (item 126).
+`tb_pc9821_readback_gdc`), and the arcs match the Xe10's dot for dot (`tools/hwprobe/gdcfig` on both, `docs/probes/KIT1-XE10-GDCFIG.BIN` against the core's GVDUMP: radii 15, 30, 40, 55, 70 and 95).
 
 ### Character generator
 
@@ -233,17 +235,21 @@ at any clk_sys), so everything the guest sees keeps one time base. Two dot clock
 machine: 400/19 MHz (21.0526 MHz, 50 MHz x 8/19) for the 24 kHz raster, and while port `0x09A8`
 bit 0 is set the Xe10's SEPARATE 31 kHz oscillator, measured at 25 168 031 Hz
 (`docs/probes/CRT31K.TXT`, the ARTIC calibrated by the same run's 24 kHz rows: a VGA-class part,
-not NP2kai's 25.26 MHz); the core makes 25 168 007 Hz (-0.94 ppm). `0x09A8` also selects the
+not NP2kai's 25.26 MHz); the core makes 25 168 037 Hz (+0.26 ppm), and the 24 kHz dot
+21 052 631 Hz (-0.04 ppm from 400/19 MHz). `0x09A8` also selects the
 31 kHz monitor range for the clamp (NP2kai `gdcclk[2]`, minx 92 / maxx 108). The constants live
 in one place, `src/pc9821/video/pc9821_vclk_pkg.sv`.
 
 The picture leaves on its own clock: `CLK_VIDEO` is a second, fractional-N PLL (`rtl/vpll`,
-generated from `tools/profile/vpll_template.v`), 50 MHz x (M + K/2^32) / 19 with N bypassed;
+generated from `tools/profile/vpll_template.v`), 50 MHz x (M + K/2^32) / 24 with N bypassed;
 `pc9821_vpll_ctl` reprograms it (N, M, K, start, through the framework's cut-down `pll_cfg_hdmi`)
-between M 16 = 42.105 MHz (2 x the 24 kHz dot) and M 19 + 523/4096 = 50.336 MHz (2 x the 31 kHz
-dot). No integer PLL comes within 54 ppm of the 31 kHz clock, hence fractional mode, as the
-framework's HDMI PLL. The PLL is generated at its fastest setting (31 kHz) so the fitter times the
-video domain there. `pc9821_video_out` carries each dot across through a 16-entry Gray-pointer FIFO
+between M 20 + 13797/65536 = 42.105 MHz (2 x the 24 kHz dot) and M 24 + 10572/65536 = 50.336 MHz
+(2 x the 31 kHz dot). No integer PLL comes within 54 ppm of the 31 kHz clock, hence fractional
+mode, as the framework's HDMI PLL; and a fractional-N PLL's fraction must stay within 0.05..0.95
+(Quartus's PLL generator rejects anything else), so neither setting is an integer M. The PLL is
+generated at the 24 kHz setting, the one the guest starts in, so a core load reconfigures nothing;
+the SDC re-declares its clock at the 31 kHz rate so the fitter times the video domain there. A
+write or relock that has not completed in 5 ms resets the PLL and reprograms it. `pc9821_video_out` carries each dot across through a 16-entry Gray-pointer FIFO
 that is frame-locked by construction (both sides' dot rates are the same exact ratio of 50 MHz); a
 PLL switch flushes and re-primes it. A pixel is then a constant 2 video clocks (native: 24.83 kHz,
 or 31.46 kHz in the 31 kHz mode) or 1 (the line doubler, 49.66 kHz). A 31 kHz raster always leaves
@@ -283,8 +289,19 @@ SNDTEST recordings (`docs/probes/SNDTEST-balance-2026-09-25.txt`). The rhythm im
 input (see the pack). An **MPU-PC98II** MIDI interface over the MiSTer UART is built in every
 preset except `trace`, and is present to the guest (ports 0xE0D0/0xE0D2, IRQ6) only while the
 OSD's UART mode is MIDI: otherwise its ports read open bus and it is held in reset, so it
-reappears in its power-on state (`tb_pc9821_mpu_system`). The core's ADPCM-A rhythm sounds without a driver; the Xe10's `XE10T /OPNA3 /LISTEN` run also
-plays the rhythm with no driver resident, so the earlier "machine silent" observation is being re-checked (TODO item 47).
+reappears in its power-on state (`tb_pc9821_mpu_system`). The core's ADPCM-A rhythm sounds without a driver, as the Xe10's does: `XE10T /OPNA3 /LISTEN`
+writes the rhythm total level and the bass-drum key-ons itself at a plain DOS prompt, with no driver
+resident, and the drum is audible (`tools/hwprobe/xe10t/sec_opna3.inc:936`, `mov ax, 0x3611`;
+`tools/hwprobe/xe10t/README.md` "`/OPNA3 /LISTEN`"). The rhythm needs no driver-only enable beyond
+register writes; a program that never writes the rhythm total level (0x11) is silent on either.
+No ADPCM-B sample RAM is fitted (TODO item 38): bytes written through `0x108` in memory-write
+mode move the unit's address and set EOS at the stop address, and the `+6` read after a write
+answers the byte written, as the Xe10's `XE10T /OPNA2` ADB rows do (`tb_pc9821_opna_adpcmb_mem`);
+a `0x110 = 80` flag reset leaves BRDY clear for the next read, as on the Xe10 (a marked LOCAL FIX in
+the vendored unit). What a read returns after a pattern is written, and the BRDY the machine kept
+through three resets right after EOS, are not captured or not explained.
+Register `0x0E` answers the joystick connector only while `0x0F` bit 6 (INSL) is clear, as NP2kai
+and MAME read it (`tb_pc9821_opna_insl`).
 
 **Write timing at the YM2608, and why the rhythm registers drain with the FM gap.** The board
 glue feeds the chip through a write queue (`src/opna/pc9821_opna.sv`), and two die mechanisms set
@@ -353,7 +370,10 @@ has no -118 and reads open bus there). There is no OSD selection for its button 
 `0x128`, data on `0x33` bit 0, IRQ15), counting from the MiSTer RTC in BCD. `0x128` is the
 interval interrupt as the Xe10 answers it (`docs/probes/XE10T-XE10-AUDIT.TXT`): bits 1:0 the rate
 (64, 32, off, 16 Hz), bit 7 the IRQ15 enable, bit 4 a tick flag a read clears, and one request
-per tick whether or not the handler reads the port. **Its bit order is
+per tick whether or not the handler reads the port. The tick runs free: a `0x128` write does not
+restart it (kit 2's `/AUDIT2` CALIRR rows, `tb_pc9821_calendar_tick_phase`). A TIME SET loads whatever it is sent and
+folds a digit past its counter's end as the Xe10's chip does (`docs/probes/XE10Z-XE10.TXT`, the
+probe XE10Z's CAL rows: nothing is refused), and restarts the running second. **Its bit order is
 not hardware-verified**: the measurement machine's backup battery is dead (every bit reads 1);
 the order follows the firmware's own reader and two references.
 

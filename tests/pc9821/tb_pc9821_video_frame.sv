@@ -26,7 +26,7 @@ module tb_pc9821_video_frame;
 
   // ==== DUT ====
   // The raster GDC, clocked exactly as pc9821_system clocks it: clk_vid = clk_sys gated
-  // by the pixel enable (pc9821_system.sv:1240, `The video domain is clk_sys gated by pixel_ce`). It owns the raster and the
+  // by the pixel enable (pc9821_system.sv:1293, `The video domain is clk_sys gated by pixel_ce`). It owns the raster and the
   // line origin (gfx_line_addr); every signal below is declared because the (.*) instance
   // matches ports by name, the same shape tb_pc9821_gdc2_scroll.sv uses.
   wire clk_sys    = clk;
@@ -159,7 +159,7 @@ module tb_pc9821_video_frame;
   // The pixel pipeline's read side: the mixer owns the column address and the buffer
   // select, exactly as pc9821_system wires it. Only the graphics arm is exercised.
   wire [7:0] r_out, g_out, b_out;
-  // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
+  // The PEGC arm's inputs: tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
   reg        mix_pegc_256 = 1'b0;
   reg        mix_pal256_wr_en = 1'b0;

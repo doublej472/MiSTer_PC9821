@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_ICACHE_FLUSH_SCOPE:
-// The I$ half of the cache-flush migration is what the rewritten leaf still owns: its NATIVE whole-L1 flush clears EVERY line whatever the tag - a line whose tag matches nothing in the swept range, and the 0xFFFF8000 fw_high alias of the banked ROM window, are the cases a set-local clear leaves behind - because the rewritten l1_icache's EXTERNAL invalidate is TAG-MATCHED ONLY (its own comment: there is no set-wide external invalidate) and the PC-98 platform stopped sweeping when it moved to this native port; the D$->I$ STORE PATCH path stays TAG-MATCHED - a same-set neighbour keeps its line - and the patched line's refill carries the patched bytes out of the leaf's own patch queue; and the lookup-vs-patch one-cycle race (src/z486/docs/coherency-audit.md C9) cannot answer a stale hit: a fetch accepted on the snoop's registered cycle lands its tag capture on the clear's commit edge, and the response must refetch (or already carry the patched word) rather than return the pre-clear line. Refills are measured at the backend's accept count, not read out of the FSM. FAIL-FIRST by mutant: (a)/(d) fail against a set-local clear and (c) against a tree without the race guard.
+// The I$ half of the cache-flush migration is what the rewritten leaf still owns: its NATIVE whole-L1 flush clears EVERY line whatever the tag - a line whose tag matches nothing in the swept range, the 0xFFFF8000 fw_high alias of the banked ROM window, and one line in each of the 32 sets plus all four ways of the last set, every one confirmed resident before the flush and refilling after it - because the rewritten l1_icache's EXTERNAL invalidate is TAG-MATCHED ONLY (its own comment: there is no set-wide external invalidate) and the PC-98 platform stopped sweeping when it moved to this native port; the D$->I$ STORE PATCH path stays TAG-MATCHED - a same-set neighbour keeps its line - and the patched line's refill carries the patched bytes out of the leaf's own patch queue; and the lookup-vs-patch one-cycle race (src/z486/docs/coherency-audit.md C9) cannot answer a stale hit: swept over a lead of 0-4 cycles between the patch and the fetch, every response - hit or refill - must carry the patched word 0 (the backend never sees the patch, so a refill that missed the patch-queue merge is as stale as a stale hit). The fetch-on-the-commit-edge alignment the retired leg pinned is not one of the swept leads. Refills are measured at the backend's accept count, not read out of the FSM. Proven by mutants of the leaf (in the mutation plan): a walk that ends one set early fails (e), and a refill that skips the patch-queue merge fails (b) and (c).
 //
 // WHY THIS EXISTS, AND WHAT MOVED. The bench was written when the platform swept the I$ with a
 // line-by-line EXTERNAL invalidate and the leaf's clear was set-wide behind a parameter. The
@@ -189,6 +189,7 @@ module tb_pc9821_icache_flush_scope;
 
   reg        refilled;
   reg [127:0] line;
+  integer    es;
 
   // ==== CHECKS ====
   initial begin
@@ -197,7 +198,7 @@ module tb_pc9821_icache_flush_scope;
     settle(20);
 
     // ------------------------------------------------------------------
-    // (a) cpu-int F2: the 0x043F=0xA0 pass (base 0, 2048 lines) must clear
+    // (a) the 0x043F=0xA0 pass (base 0, 2048 lines) must clear
     //     the WHOLE I$. A line whose tag matches nothing in 0x00000-0x07FFF
     //     is the case a tag-matched invalidator leaves behind.
     // ------------------------------------------------------------------
@@ -237,7 +238,7 @@ module tb_pc9821_icache_flush_scope;
     end
 
     // ------------------------------------------------------------------
-    // (c) cpu-int F3 / src/z486/docs/coherency-audit.md C9: THE LOOKUP-VS-PATCH RACE, SWEPT OVER ITS
+    // (c) src/z486/docs/coherency-audit.md C9: THE LOOKUP-VS-PATCH RACE, SWEPT OVER ITS
     //     ALIGNMENT. The D$->I$ patch and the I$ fetch are independent, so the lead between them
     //     is arbitrary; the retired single-alignment leg pinned one (the fetch accepted on the
     //     clear's commit edge) and the rewrite's own experiment showed that leg is the case the
@@ -270,16 +271,19 @@ module tb_pc9821_icache_flush_scope;
           $fatal(1, "the raced fetch of 0x60010 never responded (lead %0d)", coff);
       end
       checks = checks + 1;
-      if ((mem_accepts == acc_mark) && (i_cpu_line[0 +: 32] !== 32'h5A5A_A5A5)) begin
-        $display("FAIL (c) lead %0d: stale hit (word 0 = %08x, no refill)",
-                 coff, i_cpu_line[0 +: 32]);
+      // Hit or refill, the fetched word 0 is the patched one: the backend never sees the
+      // patch, so a refill that missed the leaf's patch-queue merge returns the stale bytes
+      // too, and is a failure as much as a stale hit is.
+      if (i_cpu_line[0 +: 32] !== 32'h5A5A_A5A5) begin
+        $display("FAIL (c) lead %0d: stale word 0 = %08x (%0s), want 5a5aa5a5",
+                 coff, i_cpu_line[0 +: 32], (mem_accepts == acc_mark) ? "hit" : "refill");
         errors = errors + 1;
       end
       settle(4);
     end
 
     // ------------------------------------------------------------------
-    // (d) memmap F2 (I$ half): the bank-flip sweep covers 0xF8000-0xFFFFF;
+    // (d) the I$ half of the fw_high bank flip: the bank-flip sweep covers 0xF8000-0xFFFFF;
     //     the SAME window's high alias at 0xFFFF8000 must lose its lines too.
     //     The line sits in set 2, clear of (b)/(c)'s churn.
     // ------------------------------------------------------------------
@@ -288,6 +292,21 @@ module tb_pc9821_icache_flush_scope;
     expect_hit(32'hFFFF_8020, "(d) 0xFFFF8020 warms");
     flush_all();                                       // the native walk reaches the alias too
     expect_miss(32'hFFFF_8020, "(d) 0xFFFF8020 cleared with the bank window");
+
+    // ------------------------------------------------------------------
+    // (e) the native flush reaches EVERY set and every way: one line warmed in each of the
+    //     32 sets (0x40000 + 16*s, set = addr[8:4]) and all four ways of the last set
+    //     (0x401F0/0x403F0/0x405F0/0x407F0), each confirmed resident, then one flush, then
+    //     every one of them must refill. A walk that stops early or skips the top set fails.
+    // ------------------------------------------------------------------
+    $display("NOTE icache_flush_scope: --- (e) the native flush over every set and way ---");
+    for (es = 0; es < 32; es = es + 1) fetch(32'h0004_0000 + es * 16, refilled, line);
+    for (es = 1; es < 4; es = es + 1)  fetch(32'h0004_01F0 + es * 32'h200, refilled, line);
+    for (es = 0; es < 32; es = es + 1) expect_hit(32'h0004_0000 + es * 16, "(e) set line warms");
+    for (es = 1; es < 4; es = es + 1)  expect_hit(32'h0004_01F0 + es * 32'h200, "(e) last-set way warms");
+    flush_all();
+    for (es = 0; es < 32; es = es + 1) expect_miss(32'h0004_0000 + es * 16, "(e) set line cleared by the native flush");
+    for (es = 1; es < 4; es = es + 1)  expect_miss(32'h0004_01F0 + es * 32'h200, "(e) last-set way cleared by the native flush");
 
     $display("TB_PC9821_ICACHE_FLUSH_SCOPE: %0d scope check(s), %0d mismatch(es)",
              checks, errors);

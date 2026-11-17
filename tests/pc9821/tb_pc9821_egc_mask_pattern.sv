@@ -2,11 +2,11 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_EGC_MASK_PATTERN:
-// The EGC's mask register and its fgbg colour-quad / pattern selection, driven directly at the pc9821_egc D1 port, against NP2kai's egc_writebyte / egc_writeword: the mask register's byte-lane placement on the addressed lane (full, partial and zero masks merged into the destination byte-by-byte), the fgbg&0x6000 fgc/bgc quads expanded per plane from the fg/bg low nibble, the fgbg-selected pattern register as a colour source, and the srcmask NP2kai's EGCOPE_SHIFTW2 / EGCOPE_SHIFTB apply in each of the four fgbg selections and every ope mode.
+// The EGC's mask register and its fgbg colour-quad / pattern selection, driven directly at the pc9821_egc D1 port, against NP2kai's egc_writebyte / egc_writeword: the mask register's byte-lane placement on the addressed lane (full, partial and zero masks merged into the destination byte-by-byte), the fgbg&0x6000 fgc/bgc quads expanded per plane from the fg/bg low nibble (both bytes of a word fill, on every plane), the fgbg-selected pattern register as a colour source, and the srcmask NP2kai's EGCOPE_SHIFTB ANDs on the BYTE path at ope 0x1000 under the default fgbg selections 0x0000 and 0x6000 (the 0x2000/0x4000 quads take no srcmask there).
 //
-// Sections A-C and F1/F2 pass; D2, E1-E3 and F3 are DEVIATIONS from NP2kai.
-// This bench therefore
-// FAILs on the current RTL by design.
+// Every section (A-C, D1/D2, E1-E3, F1-F3) is asserted against NP2kai and passes: D2,
+// E1-E3 and F3 were deviations when this bench was written and have since been fixed in
+// pc9821_egc; none is waived or reduced to a printed line.
 //
 // NOTE the scope: the D1 backend is this bench's own behavioural client (one byte per
 // plane per column, exactly pc9821_gvram.sv's contract), not the real SDRAM path.
@@ -161,6 +161,19 @@ module tb_pc9821_egc_mask_pattern;
     end
   endtask
 
+  // A full-mask colour-quad word fill: BOTH bytes of the word on every plane carry the quad
+  // (plane p = 0xFF iff bit p of the colour nibble, NP2kai io/egc.c maskword[] expansion);
+  // the 0x11 preload under the word makes a dropped or misplaced byte visible.
+  task automatic chk_quad_word(input [8*48-1:0] name, input integer off, input [3:0] colour);
+    integer p;
+    begin
+      for (p = 0; p < 4; p = p + 1) begin
+        chk(name, p, off,     colour[p] ? 8'hFF : 8'h00);
+        chk(name, p, off + 1, colour[p] ? 8'hFF : 8'h00);
+      end
+    end
+  endtask
+
   // ==== STIMULUS ====
   // A clean module state plus the arm the guest's 0x4AC/0x4AE write would give (NP2kai
   // egcshift + `srcmask = 0xFFFF`).
@@ -305,24 +318,21 @@ module tb_pc9821_egc_mask_pattern;
     // ============================================================
     // B1: bgc = 0x0005 -> planes 0,2 full; 1,3 empty.
     begin_case(16'hFFF0, 16'h2000, 16'h1000, 16'd0, 16'h0005, 16'hFFFF, 16'd0, 16'h000F);
+    preload(15'h0100, 8'h11);
     word_write(32'h0000_0000, 4'b0011, 15'h0100);
-    chk("B1 bgc=5 plane0", 0, 15'h0101, 8'hFF);
-    chk("B1 bgc=5 plane1", 1, 15'h0101, 8'h00);
-    chk("B1 bgc=5 plane2", 2, 15'h0101, 8'hFF);
-    chk("B1 bgc=5 plane3", 3, 15'h0101, 8'h00);
+    chk_quad_word("B1 bgc=5", 15'h0100, 4'h5);
 
     // B2: fgc = 0x000A -> planes 1,3 full; 0,2 empty.
     begin_case(16'hFFF0, 16'h4000, 16'h1000, 16'h000A, 16'd0, 16'hFFFF, 16'd0, 16'h000F);
+    preload(15'h0100, 8'h11);
     word_write(32'h0000_0000, 4'b0011, 15'h0100);
-    chk("B2 fgc=A plane0", 0, 15'h0101, 8'h00);
-    chk("B2 fgc=A plane1", 1, 15'h0101, 8'hFF);
-    chk("B2 fgc=A plane2", 2, 15'h0101, 8'h00);
-    chk("B2 fgc=A plane3", 3, 15'h0101, 8'hFF);
+    chk_quad_word("B2 fgc=A", 15'h0100, 4'hA);
 
     // B3: fgc = 0x000F -> all planes full.
     begin_case(16'hFFF0, 16'h4000, 16'h1000, 16'h000F, 16'd0, 16'hFFFF, 16'd0, 16'h000F);
+    preload(15'h0100, 8'h11);
     word_write(32'h0000_0000, 4'b0011, 15'h0100);
-    for (p = 0; p < 4; p = p + 1) chk("B3 fgc=F plane all", p, 15'h0101, 8'hFF);
+    chk_quad_word("B3 fgc=F", 15'h0100, 4'hF);
 
     // B4: fgc = 0x0009 (planes 0,3) with mask 0xFF00 over a 0x1111 destination.
     //     plane0/3: (0xFFFF & 0xFF00)|(0x1111 & 0x00FF) = 0xFF11
@@ -331,6 +341,9 @@ module tb_pc9821_egc_mask_pattern;
     preload(15'h0100, 8'h11);
     word_write(32'h0000_0000, 4'b0011, 15'h0100);
     chk("B4 fgc=9 maskFF00 p0 low",  0, 15'h0100, 8'h11);
+    chk("B4 fgc=9 maskFF00 p1 low",  1, 15'h0100, 8'h11);
+    chk("B4 fgc=9 maskFF00 p2 low",  2, 15'h0100, 8'h11);
+    chk("B4 fgc=9 maskFF00 p3 low",  3, 15'h0100, 8'h11);
     chk("B4 fgc=9 maskFF00 p0 high", 0, 15'h0101, 8'hFF);
     chk("B4 fgc=9 maskFF00 p1 high", 1, 15'h0101, 8'h00);
     chk("B4 fgc=9 maskFF00 p2 high", 2, 15'h0101, 8'h00);
@@ -338,15 +351,15 @@ module tb_pc9821_egc_mask_pattern;
 
     // B5: fgc = 0x0001 -> plane 0 only.
     begin_case(16'hFFF0, 16'h4000, 16'h1000, 16'h0001, 16'd0, 16'hFFFF, 16'd0, 16'h000F);
+    preload(15'h0100, 8'h11);
     word_write(32'h0000_0000, 4'b0011, 15'h0100);
-    chk("B5 fgc=1 plane0", 0, 15'h0101, 8'hFF);
-    chk("B5 fgc=1 plane1", 1, 15'h0101, 8'h00);
+    chk_quad_word("B5 fgc=1", 15'h0100, 4'h1);
 
     // B6: fgc = 0x0008 -> plane 3 only.
     begin_case(16'hFFF0, 16'h4000, 16'h1000, 16'h0008, 16'd0, 16'hFFFF, 16'd0, 16'h000F);
+    preload(15'h0100, 8'h11);
     word_write(32'h0000_0000, 4'b0011, 15'h0100);
-    chk("B6 fgc=8 plane2", 2, 15'h0101, 8'h00);
-    chk("B6 fgc=8 plane3", 3, 15'h0101, 8'hFF);
+    chk_quad_word("B6 fgc=8", 15'h0100, 4'h8);
 
     // ============================================================
     // C. The fgbg colour quads, BYTE path (egc_opeb, mem/memegc.c). case 0x1000

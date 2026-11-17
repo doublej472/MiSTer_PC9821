@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PIC_CMD:
-// The 8259A's COMMAND and REQUEST-LATCH semantics, which the init-sequence bench does not reach: an ICW1 clears the mask and the latched requests but deliberately keeps the in-service register (NP2kai io/pic.c:326-337 leaves the isr clear disabled inside #if 0; FAIL-FIRST against the old clear); OCW3 selects whether a command-port read returns the IRR or the ISR and only when RR is set; a masked request is latched but not forwarded; a non-specific EOI clears the highest-priority in-service level and only that one; a specific EOI clears exactly the level it names; an unacknowledged request answers the ICW2|7 spurious vector; and after an acknowledge a still-held line does not re-request while a fresh rising edge does, which is the edge-triggered behaviour the authentic ITF selects.
+// The 8259A's COMMAND and REQUEST-LATCH semantics, which the init-sequence bench does not reach: an ICW1 clears the mask and the latched requests but deliberately keeps the in-service register (NP2kai io/pic.c:326-337 leaves the isr clear disabled inside #if 0; FAIL-FIRST against the old clear); OCW3 selects whether a command-port read returns the IRR or the ISR and only when RR is set; a masked request is latched but not forwarded; a non-specific EOI clears the highest-priority in-service level and only that one; a specific EOI clears exactly the level it names; a spurious acknowledge (nothing pending) is answered with the ICW2|7 vector, both while idle and through the acknowledge and the hold window after it (QEMU hw/intc/i8259.c:197-199); and after an acknowledge a still-held line does not re-request while a fresh rising edge does, which is the edge-triggered behaviour the authentic ITF selects.
 
 // ==== where the expectation comes from ====
 //
@@ -255,8 +255,15 @@ module tb_pc9821_pic_cmd;
     check(int_out == 1'b0, "INT is asserted with nothing pending");
     check(int_vec == (8'h08 | 8'h07),
           "the spurious vector is not ICW2 | 7");
+    // The vector the CPU reads is the one published AT and AFTER the acknowledge, through
+    // the post-INTA hold window - not the idle value sampled above (QEMU i8259.c:197-199
+    // answers irq_base + 7 for the spurious INTA itself).
     ack();                                 // a spurious ack must not set an ISR bit
-    repeat (4) @(negedge clk);
+    for (i = 0; i < 6; i = i + 1) begin
+      check(int_vec == (8'h08 | 8'h07),
+            "the vector published by a spurious acknowledge is not ICW2 | 7");
+      @(negedge clk);
+    end
     check(dbg_isr == 8'h00, "a spurious acknowledge set an in-service bit");
 
     // ---- 7. edge-triggered: a held level does not re-request ---------------

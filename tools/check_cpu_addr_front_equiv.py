@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_cpu_addr_front_equiv.py -- prove the ONE window-0 front end is the one the subsystem had.
 
-Before P2 (structural-refactors-20261017.md) pc9821_memory_subsystem computed the window-0
+Before the P2 structural refactor, pc9821_memory_subsystem computed the window-0
 membership test, the 9-bit bias add and the 32-bit bias select a second time, in parallel with
 pc9821_memory_map's own copy, and the two were held together by prose plus the standalone
 two-expression harness `tools/equiv/route_addr_vs_d_addr.sv` (deleted with P2: it compared two
@@ -103,6 +103,11 @@ def strip_comments(text):
 
 
 def git_show(rev, path):
+    if subprocess.run(["git", "rev-parse", "--verify", "-q", "%s^{commit}" % rev], cwd=REPO,
+                      capture_output=True).returncode:
+        print("SKIP: revision %s is not in this clone (a squashed release carries no history); "
+              "this proof compares against it" % rev)
+        sys.exit(2)
     out = subprocess.run(["git", "show", "%s:%s" % (rev, path)],
                          cwd=REPO, capture_output=True, text=True)
     if out.returncode != 0:

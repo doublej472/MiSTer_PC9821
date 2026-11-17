@@ -160,8 +160,9 @@ module tb_pc9821_unk18f;
     // 0x18F0 <- 0x0015 selects the window; then write the four words. A WORD
     // access is two lanes, so this is the `out dx,ax` the firmware performs.
     acc_port=16'h18F0; acc_be=4'b0001; acc_wr=1'b1; acc_wdata=32'h0000_0015; access; rd_word=acc_rdata;
-    for (i = 0; i < 4; i = i + 1)
+    for (i = 0; i < 4; i = i + 1) begin
       acc_port=16'h18F2; acc_be=4'b1100; acc_wr=1'b1; acc_wdata={want[i], 16'd0}; access; rd_word=acc_rdata;
+    end
 
     // The firmware RE-SELECTS before reading. That is property 2: the pointer
     // must be back at the first word, or the read starts off the end of the write.
@@ -173,8 +174,8 @@ module tb_pc9821_unk18f;
       $display("  unk18f: word %0d wrote %04x read %04x", i, want[i], back[i]);
     end
 
-    // ONLY word 0 is asserted. See the note at the end of this block.
-    for (i = 0; i < 1; i = i + 1) begin
+    // All four words, in order: property 1.
+    for (i = 0; i < 4; i = i + 1) begin
       if (back[i] !== want[i]) begin
         $display("FAIL word %0d: wrote %04x and read back %04x (0xFFFF = still open bus)", i, want[i], back[i]);
         $display("     BANK4@0x5460 copies this read-back straight into the CG store under");
@@ -184,14 +185,6 @@ module tb_pc9821_unk18f;
       end
     end
 
-    // OPEN ITEM, printed and deliberately NOT asserted: words 1..3 above read
-    // back 0x0000 while word 0 round-trips. So the first access through the
-    // window is demonstrated and a longer sequence is NOT, and a lane that
-    // cannot finish the investigation should not leave a red gate behind.
-    // The symptom is exact: the second and later word stores do not appear in
-    // the window. Byte accesses at 0x18F2/0x18F3 each advance the pointer once,
-    // so a word advances it twice.
-    //
     // Property 3, isolated: a WORD write must place the high byte at 0x18F3.
     // Write one word, re-select, then read the two bytes SEPARATELY.
     acc_port=16'h18F0; acc_be=4'b0001; acc_wr=1'b1; acc_wdata=32'h0000_0015; access; rd_word=acc_rdata;

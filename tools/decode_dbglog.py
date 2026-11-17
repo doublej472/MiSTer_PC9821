@@ -38,7 +38,8 @@ Usage:
                                            result and the controller's last state at the end
   decode_dbglog.py --selftest              encode every record type, decode it, compare
 
-  --from S / --to S select a time range (seconds from the first record of the capture).
+  --from S / --to S select a time range: seconds from the first record of each source (the
+  sources have separate time bases), or of the sampler for --bins and --hist.
   --clk-mhz F is clk_sys (default 80), for the snoop/trace cycle counters.
 """
 from __future__ import annotations
@@ -111,14 +112,19 @@ class Capture:
 
 
 class Unwrap:
-    """A free-running counter of `bits` bits, made monotonic: a value far below the last one is a
-    wrap. A small step back is left alone (the snoop swaps a write and a read beat of one cycle)."""
+    """A free-running counter of `bits` bits, made monotonic: a step back of more than `reorder`
+    counts is a wrap, a smaller one is left alone (the snoop swaps a write and a read beat of one
+    cycle). The default `reorder` is half the range, for the dense snoop. The sparse timestamp
+    streams pass a small one: their records can sit 32.8 to 65.5 s apart (an idle CD log, the
+    display log of a static screen), and under the half-range rule such a gap reads as time going
+    backwards. The small tolerance is a decoder choice, not a hardware fact."""
 
-    def __init__(self, bits: int):
+    def __init__(self, bits: int, reorder: int | None = None):
         self.mod, self.base, self.prev = 1 << bits, 0, None
+        self.reorder = self.mod // 2 if reorder is None else reorder
 
     def __call__(self, v: int) -> int:
-        if self.prev is not None and self.prev - v > self.mod // 2:
+        if self.prev is not None and self.prev - v > self.reorder:
             self.base += self.mod
             self.prev = v
         elif self.prev is None or v > self.prev:
@@ -130,8 +136,10 @@ def parse(data: bytes, clk_mhz: float = 80.0) -> Capture:
     banners = data.count(BANNER)
     data = data.replace(BANNER, b"")
     recs, skipped, i, n = [], 0, 0, len(data)
-    uw = {"ms_cd": Unwrap(16), "ms_gdc": Unwrap(16), "ms_cpu": Unwrap(16), "cyc": Unwrap(32),
-          "t_fdc": Unwrap(24)}
+    # the 16-bit ms stamps and the FDC's 24-bit 10 us stamp: 256 counts of tolerance (256 ms,
+    # 2.56 ms); the snoop's 32-bit cycle counter keeps the half-range rule
+    uw = {"ms_cd": Unwrap(16, 256), "ms_gdc": Unwrap(16, 256), "ms_cpu": Unwrap(16, 256),
+          "cyc": Unwrap(32), "t_fdc": Unwrap(24, 256)}
     clk_hz = clk_mhz * 1e6
     while i < n:
         t = data[i + 1] if i + 1 < n else -1
@@ -283,7 +291,7 @@ def fdc_line(r: Rec) -> str:
 
 
 def cmd_fdc(cap: Capture, t0, t1) -> None:
-    rs = [r for r in cap.recs if r.src == "fdc" and in_range(r, t0, t1, {})]
+    rs = [r for r in cap.recs if r.src == "fdc" and in_range(r, t0, t1, first_times(cap.recs))]
     for r in rs:
         print(fdc_line(r))
     last = [r for r in rs if r.type in (0x50, 0x51, 0x53)]
@@ -319,6 +327,15 @@ def line_of(r: Rec, vtotal: int = 440, vactive: int = 400) -> str:
     if t == 0x43:
         return (f"TRACE  #{f['idx']:4d} {f['cs']:04X}:{f['eip']:08X} sp={f['sp']:04X} fl={f['flags']:04X}")
     return "TRIGGER " + trigger_text(f)
+
+
+def first_times(recs) -> dict:
+    """Each source's first record time: the sources run on different time bases (each its own
+    power-up clock), so a --from/--to window is measured from each source's own first record."""
+    base = {}
+    for r in recs:
+        base.setdefault(r.src, r.t)
+    return base
 
 
 def in_range(r: Rec, t0, t1, base) -> bool:
@@ -545,6 +562,20 @@ def selftest() -> int:
     if ts != [65.530, (65536 + 5) / 1000, (65536 + 40) / 1000]:
         print(f"SELFTEST FAIL: ms wrap: {ts}")
         bad += 1
+    # a sparse stream: 49 s, then a wrap 35.5 s later (a step back of only 30000 < 32768), then a
+    # 2 ms reorder that is not a wrap
+    sparse = b"".join(bytes([SYNC, 0x07]) + ms.to_bytes(2, "big") + b"\x00"
+                      for ms in (1000, 50000, 20000, 19998))
+    ts = [r.t for r in parse(sparse).recs]
+    if ts != [1.0, 50.0, (65536 + 20000) / 1000, (65536 + 19998) / 1000]:
+        print(f"SELFTEST FAIL: a sparse ms stream's wrap: {ts}")
+        bad += 1
+    # --from/--to are measured from each source's first record, not its power-up clock
+    cap = parse(sparse)
+    base = first_times(cap.recs)
+    if [r.t for r in cap.recs if in_range(r, 0.5, None, base)] != ts[1:]:
+        print("SELFTEST FAIL: --from is not measured from the source's first record")
+        bad += 1
     # a 5A tail that is missing is not a record
     broken = bytearray(data)
     off = next(r.off for r in parse(data).recs if r.type == 0x20)
@@ -614,12 +645,10 @@ def main() -> int:
         for r in cap.recs:
             print(json.dumps(dict(off=r.off, type=r.type, src=r.src, t=r.t, f=r.f)))
     else:
-        base = {}
-        for r in cap.recs:
-            base.setdefault(r.src, r.t)
+        base = first_times(cap.recs)
         shown = 0
         for r in cap.recs:
-            if in_range(r, a.t0, a.t1, {}):
+            if in_range(r, a.t0, a.t1, base):
                 print(line_of(r, a.vtotal, a.vactive))
                 shown += 1
         print(f"# {len(cap.recs)} records ({shown} shown), {cap.skipped} byte(s) outside records, "

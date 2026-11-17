@@ -98,28 +98,20 @@ module tb_pc9821_pcm86_irq_rearm;
   endtask
 
   // ---- the IRQ wire monitor -----------------------------------------------
-  // The wire is the interrupt the edge-latched PIC consumes (pc9821_pic.sv:168
-  // ir_set = ir_in & ~ir_prev), so the bench counts RISING EDGES, falling
-  // edges, and high cycles inside a stimulus-opened mask window. The
+  // The wire is the interrupt the edge-latched PIC consumes (pc9821_pic.sv:178
+  // ir_set = ir_in & ~ir_prev), so the bench counts its RISING EDGES. The
   // discipline that keeps both sides race-free: this monitor acts ONLY at
-  // posedges, while the stimulus drives the ports, opens/closes mask_window
-  // and reads these counters ONLY at negedges - every repeat(N)-then-assert
-  // block below re-aligns to a negedge first.
+  // posedges, while the stimulus drives the ports and reads the counter ONLY at
+  // negedges - every repeat(N)-then-assert block below re-aligns to a negedge
+  // first.
   localparam [15:0] P_FIFO = 16'h0A468;
   localparam [15:0] P_DAC  = 16'h0A46A;
   localparam [15:0] P_DATA = 16'h0A46C;
 
   reg     irq_q = 1'b0;
-  reg     mask_window = 1'b0;
-  integer irq_rises = 0, irq_falls = 0, masked_high = 0;
+  integer irq_rises = 0;
   always @(posedge clk) begin
     if (irq && !irq_q) irq_rises = irq_rises + 1;
-    if (!irq && irq_q) irq_falls = irq_falls + 1;
-    // masked_high is PER WINDOW: zero while the window is shut (the stimulus
-    // opens it at a negedge, after the masking write has settled), so it counts
-    // only cycles the wire is high INSIDE the current window.
-    if (!mask_window) masked_high = 0;
-    else if (irq)     masked_high = masked_high + 1;
     irq_q <= irq;
   end
 

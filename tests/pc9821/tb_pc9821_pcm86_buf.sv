@@ -8,7 +8,7 @@
 // This bench drives the buffer directly and checks exactly those.
 //
 // ==== WHAT THIS PROVES ====
-// The SDRAM-backed sample buffer is byte-addressed and lossless: a byte written at any of the 32768 addresses reads back from that same address, whatever byte lane of the 32-bit SDRAM word it occupies, and back-to-back writes are queued rather than dropped, so a 0xA46C stream from the guest survives the move out of block RAM.
+// The SDRAM-backed sample buffer is byte-addressed and lossless: a byte written reads back from that same address, whatever byte lane of the 32-bit SDRAM word it occupies, with every address bit 2-14 and the top address 0x7FFF each selecting its own byte; every SDRAM request lands inside the 32 KiB window at a non-zero 32 KiB-aligned buf_base; and back-to-back writes are queued rather than dropped - a write offered on every clk and held off by wr_wait (which the burst must meet) loses none of 24 bytes - so a 0xA46C stream from the guest survives the move out of block RAM.
 //
 // ==== DUT ====
 // pc9821_pcm86_buf with a behavioural stand-in for the SDRAM's third port.
@@ -21,7 +21,13 @@ module tb_pc9821_pcm86_buf;
   always #5 clk = ~clk;
   reg reset = 1;
 
+  // A non-zero, 32 KiB-aligned buffer base (the port's contract: bits [14:0] zero), so the
+  // {buf_base[31:15], offset} composition is exercised; the model below checks every
+  // request lands inside [BUF_BASE, BUF_BASE + 32 KiB).
+  localparam [31:0] BUF_BASE = 32'h0254_8000;
+
   // Guest write port
+  wire        wr_wait;
   reg         wr_en   = 0;
   reg  [14:0] wr_addr = 0;
   reg   [7:0] wr_data = 0;
@@ -39,8 +45,8 @@ module tb_pc9821_pcm86_buf;
   wire  [7:0] sdram_burstcount;
 
   pc9821_pcm86_buf dut (
-    .clk(clk), .reset(reset), .buf_base(32'd0),
-    .wr_en(wr_en), .wr_addr(wr_addr), .wr_data(wr_data),
+    .clk(clk), .reset(reset), .buf_base(BUF_BASE),
+    .wr_en(wr_en), .wr_addr(wr_addr), .wr_data(wr_data), .wr_wait(wr_wait),
     .rd_req(rd_req), .rd_addr(rd_addr), .rd_data(rd_data), .rd_valid(rd_valid),
     .sdram_valid(sdram_valid), .sdram_ready(sdram_ready), .sdram_write(sdram_write),
     .sdram_addr(sdram_addr), .sdram_din(sdram_din), .sdram_dout(sdram_dout),
@@ -51,7 +57,7 @@ module tb_pc9821_pcm86_buf;
   // pcm86_sdram_model: the SDRAM third-port handshake and a 32 KiB byte store. The real
   // controller answers a read after its CAS latency; this answers after one wait cycle, which
   // is enough to exercise the buffer's request/valid handshake.
-  pcm86_sdram_model u_sdram (
+  pcm86_sdram_model #(.BASE_HI(BUF_BASE[31:15])) u_sdram (
     .clk(clk), .reset(reset),
     .valid(sdram_valid), .ready(sdram_ready), .write(sdram_write),
     .addr(sdram_addr), .din(sdram_din), .dout(sdram_dout),
@@ -71,9 +77,11 @@ module tb_pc9821_pcm86_buf;
 
   // One guest write: wr_en high across exactly one posedge, which is the cycle the buffer
   // samples, matching the iobus's one-cycle device write strobe.
+  // Like the iobus, it holds the strobe while wr_wait (FIFO full) is up.
   task automatic wr(input [14:0] addr, input [7:0] data);
     begin
       @(negedge clk);
+      while (wr_wait) @(negedge clk);
       wr_addr = addr; wr_data = data; wr_en = 1'b1;
       @(posedge clk);
       #1 wr_en = 1'b0;
@@ -173,6 +181,50 @@ module tb_pc9821_pcm86_buf;
     rd(15'd200, got);
     if (got !== 8'hDE) begin $display("FAIL: addr 200: wanted 0xDE, got %02x", got); errors = errors + 1; end
 
+    // ---- CHK-5: every address bit, [14:0], selects its own byte ----
+    // One distinct byte at each single-bit address 1 << k (k = 2..14) plus the top address
+    // 0x7FFF, written first and read back after all of them: a stuck, swapped or dropped
+    // upper address bit aliases two of these and one read comes back wrong.
+    for (i = 2; i < 15; i = i + 1) wr(15'(1 << i), 8'h40 + i[7:0]);
+    wr(15'h7FFF, 8'hE7);
+    for (i = 2; i < 15; i = i + 1) begin
+      rd(15'(1 << i), got);
+      if (got !== (8'h40 + i[7:0]))
+        begin $display("FAIL: addr %04x: wrote %02x, read %02x", 1 << i, 8'h40 + i[7:0], got); errors = errors + 1; end
+    end
+    rd(15'h7FFF, got);
+    if (got !== 8'hE7) begin $display("FAIL: addr 7FFF: wanted 0xE7, got %02x", got); errors = errors + 1; end
+
+    // ---- CHK-6: a ONE-clk back-to-back burst, held off by wr_wait, loses nothing ----
+    // A write is offered on every clk; it is taken on a clk where wr_wait is low (the
+    // iobus holds the guest's access while it is high). 24 bytes this way fill the FIFO
+    // (wr_wait must be seen) and every one must land.
+    begin : burst1
+      integer n_ok, waits;
+      n_ok = 0; waits = 0;
+      @(negedge clk);
+      while (n_ok < 24) begin
+        if (wr_wait) begin
+          wr_en = 1'b0; waits = waits + 1;
+        end else begin
+          wr_addr = 15'h1000 + 15'(n_ok); wr_data = 8'h80 + n_ok[7:0]; wr_en = 1'b1;
+          n_ok = n_ok + 1;
+        end
+        @(posedge clk);
+        #1;
+        @(negedge clk);
+        wr_en = 1'b0;
+      end
+      wr_en = 1'b0;
+      if (waits == 0) fail("CHK-6: a one-clk burst never met wr_wait: the FIFO-full case was not reached");
+      repeat (300) @(posedge clk);
+      for (i = 0; i < 24; i = i + 1) begin
+        rd(15'h1000 + 15'(i), got);
+        if (got !== (8'h80 + i[7:0]))
+          begin $display("FAIL: one-clk burst %0d: wrote %02x, read %02x", i, 8'h80 + i[7:0], got); errors = errors + 1; end
+      end
+    end
+
     // ==== VERDICT ====
     if (errors == 0) begin
       $display("TB_PC9821_PCM86_BUF: PASS");
@@ -193,7 +245,7 @@ endmodule
 
 // pcm86_sdram_model: the SDRAM third-port handshake and a 32 KiB byte store. The real
 // controller answers a read after its CAS latency; this answers after one wait cycle.
-module pcm86_sdram_model (
+module pcm86_sdram_model #(parameter [16:0] BASE_HI = 17'd0) (
   input  wire        clk, reset,
   input  wire        valid,
   output reg         ready,
@@ -218,6 +270,9 @@ module pcm86_sdram_model (
       for (i = 0; i < 32768; i = i + 1) mem[i] <= 8'h00;
     end else case (st)
       2'd0: if (valid) begin
+              if (addr[31:15] !== BASE_HI)
+                $fatal(1, "TB_PC9821_PCM86_BUF: FAIL (an SDRAM request at %08x is outside the buffer at base %05x_xxxx)",
+                       addr, BASE_HI);
               ready    <= 1'b1;
               lat_addr <= addr;
               lat_wr   <= write;

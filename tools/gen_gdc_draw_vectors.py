@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate the graphics GDC's figure-drawing replay vectors from the REAL Xe10 capture.
 
-The oracle is `docs/probes/gdc-conformance/xe10-2.5MHz/{GDCDRAW,GDCGCHR,GDCROP}.CSV`:
+The oracle is `docs/probes/gdc-conformance/xe10-2.5MHz/{GDCDRAW,GDCGCHR,GDCROP}.CSV` and the
+PITCH/DGD chunks `GDPIT0..3.CSV`:
 a real PC-9821 Xe10 running `pc98-gdc-tests-v1.0-rc6` at GDC clock 2.5 MHz (see
 that directory's README.md). Every expected word and cursor below is a value the
 MACHINE wrote or reported - the CSV's `changes` and `curd` columns - never one derived
@@ -32,6 +33,17 @@ Inputs the CSV does not spell out, and where they come from:
     the other seven directions' rows then follow from it - so seven of the eight are
     predictions, not fits. GCHR_REPLACE's REPLACE_MIXED (pattern not recorded) is skipped.
 
+  * the GDPIT rows (the PITCH/DGD characterizer: PITCH 0..255, DGD 0/1, all eight
+    directions) all start at EAD 0x8800 (R:0800), dAD 3 - every row's untouched or
+    first-painted word is R:0800 and its one-hot dots start at D3 - and draw four units: a
+    `wdat` row is WDAT SET FFFF (WG 0) with DC 3 through the dAD one-hot mask, `wdat-full`
+    the same after MASK FFFF, `dot` a FIGD dot, `vline`/`hline` a FIGD line of DC 3
+    (D -3, D2 -6, D1 0: the axial walk), `gchrd` GCHRD of a solid 3 x 3 character (DC 2,
+    D 3, PRAM all FF). DGD is bit 6 of FIGS P3 (the DC high byte; uPD7220 FIGS, MAME
+    upd7220.cpp `m_figs.m_gd = (m_pr[3] & 0x40)`). The suite does not print these inputs;
+    the counts are the rows' own (four painted units, three GCHRD rows of three dots), and
+    one set reproduces every row of the 924.
+
 `gdc_draw_xe10_vectors.svh` is a GENERATED file: this tool is the only thing that writes
 it and `--check` compares the committed copy (AGENTS.md, "Generated files").
 
@@ -60,9 +72,13 @@ def rows(name: str):
     lines = [l for l in (CAP / name).read_text().splitlines() if not l.startswith("#")]
     rd = list(csv.reader(lines))
     hdr = rd[0]
-    for r in rd[1:]:
-        if len(r) >= len(hdr):
-            yield dict(zip(hdr, r))
+    for k, r in enumerate(rd[1:], 2):
+        if not r:
+            continue
+        if len(r) < len(hdr):
+            # A short row is a truncated capture: refuse it rather than drop an oracle row.
+            raise SystemExit(f"{name}: data row {k} has {len(r)} fields, the header {len(hdr)}")
+        yield dict(zip(hdr, r))
 
 
 def parse_changes(s: str):
@@ -92,9 +108,14 @@ def w14(v: int) -> int:
     return int(v) & 0x3FFF
 
 
+WDAT_SET = 0x23                                                # WDAT word, SET, data FFFF
+
+
 class Row:
-    def __init__(self, rid, cmd, p1, dc, d, d2, d1, dm, ead, dad, ra, zoom, rop, chg, curd):
+    def __init__(self, rid, cmd, p1, dc, d, d2, d1, dm, ead, dad, ra, zoom, rop, chg, curd,
+                 pitch=40, dgd=0, fullmask=0):
         self.rid, self.cmd, self.p1 = rid, cmd, p1
+        self.pitch, self.dgd, self.fullmask = pitch, dgd, fullmask
         self.dc, self.d, self.d2, self.d1, self.dm = map(w14, (dc, d, d2, d1, dm))
         self.ead, self.dad, self.ra, self.zoom, self.rop = ead, dad, ra, zoom, rop
         self.n, self.ch, self.complete = chg
@@ -169,6 +190,27 @@ def collect():
         row = Row(r["case"], GCHRD, p1, dc, d, d, -1, -1, 0x9000, 8, ra, zoom, rop,
                   parse_changes(r["changes"]), parse_curd(r["curd"]))
         out.append(row)
+    for name in ("GDPIT0.CSV", "GDPIT1.CSV", "GDPIT2.CSV", "GDPIT3.CSV"):
+        for r in rows(name):
+            if r["clock"] != "2.5MHz":
+                raise SystemExit(f"{name} {r['case']}: clock {r['clock']}")
+            op, dirn = r["op"], int(r["dir"])
+            pitch, dgd = int(r["pitch"]), int(r["dgd"])
+            ra, cmd, fm = [0xFF] * 8, FIGD, 0
+            if op in ("wdat", "wdat-full"):
+                cmd, p1, dc, d, d2, d1 = WDAT_SET, dirn, 3, 8, 8, -1
+                fm = 1 if op == "wdat-full" else 0
+            elif op == "dot":
+                p1, dc, d, d2, d1 = dirn, 0, 8, 8, -1
+            elif op in ("vline", "hline"):
+                p1, dc, d, d2, d1 = 0x08 | dirn, 3, -3, -6, 0
+            elif op == "gchrd":
+                cmd, p1, dc, d, d2, d1 = GCHRD, 0x10 | dirn, 2, 3, 3, -1
+            else:
+                raise SystemExit(f"{name} {r['case']}: op {op!r}")
+            out.append(Row(r["case"], cmd, p1, dc, d, d2, d1, -1, 0x8800, 3, ra, 0, 3,
+                           parse_changes(r["changes"]), parse_curd(r["curd"]),
+                           pitch, dgd, fm))
     for row in out:
         if not hasattr(row, "seeds"):
             row.seeds = [(p, w, o) for (p, w, o, _) in row.ch if o != 0]
@@ -179,15 +221,31 @@ def fmt_id(text: str) -> str:
     return text.encode("ascii")[:16].ljust(16, b" ").hex()
 
 
+def pack(vals, widths, what: str) -> int:
+    """Concatenate vals MSB-first into fields of widths; a value that does not fit its
+    field is an error, never a silent truncation of an oracle word."""
+    val = 0
+    for i, (f, w) in enumerate(zip(vals, widths, strict=True)):
+        if not 0 <= f < (1 << w):
+            raise SystemExit(f"{what}: field {i} = {f:#x} does not fit in {w} bits")
+        val = (val << w) | f
+    return val
+
+
 def render(vs) -> str:
     L = []
     L.append("// GENERATED by tools/gen_gdc_draw_vectors.py - do not edit.\n")
-    L.append("// Source: docs/probes/gdc-conformance/xe10-2.5MHz/{GDCDRAW,GDCROP,GDCGCHR}.CSV\n")
+    L.append("// Source: docs/probes/gdc-conformance/xe10-2.5MHz/{GDCDRAW,GDCROP,GDCGCHR,GDPIT0..3}.CSV\n")
     L.append("// (pc98-gdc-tests-v1.0-rc6, GDC clock 2.5 MHz, a real PC-9821 Xe10). Every\n")
     L.append("// expected word and cursor is the machine's own `changes`/`curd` column.\n\n")
     chs, seeds = [], []
     cfgs = []
+    ids = {}
     for v in vs:
+        key = fmt_id(v.rid)
+        if key in ids:
+            raise SystemExit(f"ids {ids[key]!r} and {v.rid!r} are the same in 16 characters")
+        ids[key] = v.rid
         ch = v.ch[:MAXCH]
         sd = v.seeds[:MAXCH]
         cfgs.append((v, len(chs), len(ch), len(seeds), len(sd)))
@@ -196,11 +254,11 @@ def render(vs) -> str:
     L.append(f"localparam int GDX_N = {len(vs)};\n")
     L.append(f"localparam int GDX_NCH = {len(chs)};\n")
     L.append(f"localparam int GDX_NSEED = {len(seeds)};\n")
-    L.append("// GDX_CFG: {cmd[7:0], p1[7:0], dc[13:0], d[13:0], d2[13:0], d1[13:0], dm[13:0],\n")
+    L.append("// GDX_CFG: {pitch[7:0], dgd, mask_ffff, cmd[7:0] (0x6C FIGD, 0x68 GCHRD, 0x23 WDAT SET FFFF), p1[7:0], dc[13:0], d[13:0], d2[13:0], d1[13:0], dm[13:0],\n")
     L.append("//   ead[15:0], dad[3:0], ra8..ra15[63:0], zoom[3:0], rop[1:0], n_changed[15:0],\n")
     L.append("//   complete, ch_off[15:0], n_listed[7:0], seed_off[15:0], n_seed[7:0],\n")
     L.append("//   curd_ead[15:0], curd_mask[15:0], curd_b2[7:0]}; GDX_ID: the row's id, 16 ASCII bytes\n")
-    fields_w = [8, 8, 14, 14, 14, 14, 14, 16, 4, 64, 4, 2, 16, 1, 16, 8, 16, 8, 16, 16, 8]
+    fields_w = [8, 1, 1, 8, 8, 14, 14, 14, 14, 14, 16, 4, 64, 4, 2, 16, 1, 16, 8, 16, 8, 16, 16, 8]
     width = sum(fields_w)
     L.append(f"localparam int GDX_CFGW = {width};\n")
     L.append("localparam [127:0] GDX_ID [0:GDX_N-1] = '{\n")
@@ -208,24 +266,22 @@ def render(vs) -> str:
     L.append("localparam [GDX_CFGW-1:0] GDX_CFG [0:GDX_N-1] = '{\n")
     elems = []
     for k, (v, choff, nch, sdoff, nsd) in enumerate(cfgs):
-        vals = [v.cmd, v.p1, v.dc, v.d, v.d2, v.d1, v.dm, v.ead, v.dad,
+        vals = [v.pitch, v.dgd, v.fullmask, v.cmd, v.p1, v.dc, v.d, v.d2, v.d1, v.dm, v.ead, v.dad,
                 sum(b << (8 * (7 - i)) for i, b in enumerate(v.ra)), v.zoom, v.rop, v.n,
                 1 if (v.complete and len(v.ch) <= MAXCH) else 0, choff, nch, sdoff, nsd,
                 v.curd_ead, v.curd_mask, v.curd_b2]
-        val = 0
-        for f, w in zip(vals, fields_w):
-            val = (val << w) | (f & ((1 << w) - 1))
+        val = pack(vals, fields_w, v.rid)
         comma = "," if k < len(vs) - 1 else ""
         elems.append(f"  {width}'h{val:0{(width + 3) // 4}X}{comma}  // {v.rid}")
     L.append("\n".join(elems) + "\n};\n\n")
     L.append("// GDX_CH[k]: {plane[1:0], word[13:0], new_cpu[15:0]} (the listed words, row by row)\n")
     L.append("localparam [31:0] GDX_CH [0:GDX_NCH-1] = '{\n")
-    L.append(",\n".join("  " + ", ".join(f"32'h{(p << 30) | (w << 16) | n:08X}"
+    L.append(",\n".join("  " + ", ".join(f"32'h{pack((p, w, n), (2, 14, 16), 'GDX_CH'):08X}"
                                           for (p, w, n) in chs[i:i + 8])
                         for i in range(0, len(chs), 8)) + "\n};\n\n")
     L.append("// GDX_SEED[k]: {plane[1:0], word[13:0], old_cpu[15:0]} (seeded before the row)\n")
     L.append("localparam [31:0] GDX_SEED [0:GDX_NSEED-1] = '{\n")
-    L.append(",\n".join("  " + ", ".join(f"32'h{(p << 30) | (w << 16) | o:08X}"
+    L.append(",\n".join("  " + ", ".join(f"32'h{pack((p, w, o), (2, 14, 16), 'GDX_SEED'):08X}"
                                           for (p, w, o) in seeds[i:i + 8])
                         for i in range(0, len(seeds), 8)) + "\n};\n")
     return "".join(L)

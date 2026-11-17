@@ -200,6 +200,8 @@ module pc9821_fdc #(
     // drops the event). The medium is then mid-sector with bytes owed that nobody will take;
     // without this it stayed there, `ready` never rose again and the next data command waited
     // forever. One consumer, pc9821_fdd_media (single-cycle-event-discipline R1).
+    // media_abort, media_adv and media_din are REGISTERED: each leaves one clk_sys after the
+    // strobe or I/O write that raised it (the registered handoff, see `adv_q`).
     output wire       media_abort,
     input  wire       media_ready,    // level: the media can accept a request
     input  wire       media_rdy,      // level: the requested sector's byte is available
@@ -336,6 +338,13 @@ module pc9821_fdc #(
   reg        res_rel;        // and/or releases its drive's busy bit
   reg        res_irq;        // this result's interrupt is raised with it (data path)
   reg [1:0]  res_drv;
+  // A SENSE INTERRUPT STATUS's drive got a NEW status while that SIS was in its result phase
+  // (a ready change, the loop at the end of the block). NP2kai takes the status and clears
+  // `fdc.stat[...]` when it accepts the command (io/fdc.c FDC_SenceintStatus, `fdc.stat[fdc.us]
+  // = 0;`), so a change assigned after that stays pending; this model pops the drive's flag when
+  // the result has been drained (that is what drops the level IRQ), and this flag keeps the
+  // drain from popping the newer status. Cleared at every SIS accept, set by the change loop.
+  reg        res_renewed;
 
   // The result byte the data port presents (ST2 is always 0; C/H/R/N are the sector registers).
   wire [7:0] res_byte = (res_idx == 3'd0) ? res0 :
@@ -447,8 +456,12 @@ module pc9821_fdc #(
   // both drives mark and [0x55C] = 0x03. The Xe10 captures read 0x01
   // (docs/probes/itf-paired-7287bed6/*/D2{COLD,WARM}.TXT), but drive 1 was
   // UNPOWERED when they were taken, so they measure a dead drive, not the machine; an earlier
-  // model copied them (unit 1 answering the IC0 class when empty). A capture with both drives
-  // powered is todo item 59.
+  // model copied them (unit 1 answering the IC0 class when empty). WITH BOTH DRIVES POWERED the
+  // machine does mark both ([0x55C] = 03, as here), but its RECALIBRATE of an empty drive ends
+  // with ST0 = 68|u (IC = 01, SE, NR), not NP2kai's 28|u: docs/probes/XE10T-XE10-FDC2A.TXT:32
+  // `UNIT da=91 cls=E st3=59 st3_spun=59 recal_st0=69`, and -FDC2B.TXT:31 / -FDC2C.TXT:31
+  // `UNIT da=90 cls=E st3=18 st3_spun=18 recal_st0=68`. The core keeps NP2kai's 28|u (rec_st0
+  // below) until the POST's own RECALIBRATE answer is known: a recorded divergence, todo item 59.
 
   // The command byte's parameter count, from NP2kai's FDCCMD_TABLE (fdc.c:30). THE
   // OPCODE IS THE LOW FIVE BITS: the uPD765 carries MF (bit 6) and the other flags
@@ -779,6 +792,9 @@ module pc9821_fdc #(
   //   ...with the guest's forced ready  -> us|SE|IC0|EC = 0x70|u (:604-611)
   //   equipped, no media               -> us|SE|NR     = 0x28|u (:613-621)
   // A unit with media never reaches this (it takes the ready path, SE|us = 0x20|u).
+  // THE MACHINE DIFFERS for the equipped empty drive: its RECALIBRATE ends 0x68|u, IC = 01
+  // (docs/probes/XE10T-XE10-FDC2A.TXT:32 `recal_st0=69`, -FDC2B.TXT:31 `recal_st0=68`); the
+  // NP2kai value is kept until the POST's own answer is captured (todo item 59).
   wire [7:0] rec_st0 =
         drv_media[cur_u]                           ? (8'h20 | {6'd0, cur_u}) :
         !drv_equipped[cur_u]                       ? ((ctrlreg[6] ? 8'h70 : 8'h68) |
@@ -813,8 +829,9 @@ module pc9821_fdc #(
                             (cmd == 5'h0F) ? seek_st0 : data_st0;
 
   // 128 << N, clamped at N >= 8 exactly as NP2kai does (`if (fdc.N < 8) ... else 128<<8`,
-  // fdd_d88.c:427-432).
-  wire [15:0] x_secbytes = (x_n[7:4] != 4'd0) ? 16'd32768 : (16'd128 << x_n[3:0]);
+  // diskimage/fd/fdd_d88.c fdd_read_d88 and fdd_write_d88): every N of 8..255 is 32768 bytes.
+  // (128 << 9 and up do not fit 16 bits, so the clamp must start at bit 3.)
+  wire [15:0] x_secbytes = (x_n[7:3] != 5'd0) ? 16'd32768 : (16'd128 << x_n[2:0]);
 
   // THE END-OF-SECTOR STEP, the uPD765's ID update after each sector of READ DATA / WRITE DATA
   // (uPD765A datasheet, the table of C/H/R/N at the end of a read/write command; MAME
@@ -872,7 +889,13 @@ module pc9821_fdc #(
   // present combinationally while they are. `rdy` is the media's own "the byte at the
   // pointer is available", so a stalled block fetch drops DRQ and the engine simply
   // waits - the transfer pauses, it never loses a byte.
-  wire xfer_now  = (x_st == X_XFER) && !x_wr && media_rdy;
+  // THE HANDOFF TO THE MEDIUM IS REGISTERED (`adv_q`, `din_q`, `abort_q` below; owner decision
+  // 2026-11-12, docs/trade-candidates.md T84): the medium sees a byte's `adv` one clk_sys after
+  // the strobe that took it, so for that one cycle its `rdy`/`dout` still describe the byte
+  // already taken. `m_rdy` is the medium's `rdy` with that in-flight cycle masked: no second
+  // byte can be taken (or offered on DRQ/RQM) until the medium has stepped past the first.
+  wire m_rdy     = media_rdy && !adv_q;
+  wire xfer_now  = (x_st == X_XFER) && !x_wr && m_rdy;
   wire xfer_dma  = (st == ST_IDLE) && dma_dack && dma_stb;
   wire xfer_pio  = cs && rd && (addr == A_DATA);
   wire xfer_go   = xfer_now && (xfer_dma || xfer_pio);
@@ -886,21 +909,48 @@ module pc9821_fdc #(
   // before (fdc_datawrite's `|| (fdc.tc)` arm, :952); keeping the medium's bytes is the one
   // value this model can name, and it is recorded as a divergence (no guest programs a count
   // that ends inside a sector).
-  wire wx_ok     = x_disc || media_rdy;
+  wire wx_ok     = x_disc || m_rdy;
   wire wx_dma    = xfer_dma && dma_we;
   wire wx_pio    = cs && wr && (addr == A_DATA);
   wire wx_go     = (x_st == X_XFER) && x_wr && wx_ok && (x_pad || wx_dma || wx_pio);
   wire wx_tcnow  = !x_pad && wx_dma && dma_tc;   // the guest's final byte, with its TC
+  wire [7:0] din_go  = x_fmt ? cmds[4] : x_pad ? media_dout : (wx_dma ? dma_din : din);
+  wire       adv_go  = xfer_go || (wx_go && !x_disc);
   assign media_wr  = x_wr;
-  assign media_din = x_fmt ? cmds[4] : x_pad ? media_dout : (wx_dma ? dma_din : din);
-  assign media_adv = xfer_go || (wx_go && !x_disc);
   assign dma_drq   = xfer_now || ((x_st == X_XFER) && x_wr && !x_pad && wx_ok);
   assign dma_dout  = xfer_now ? media_dout : 8'hFF;
   // The DOR write that resets the controller (fdc_o94's condition, the A_DOR arm below).
   wire dor_reset = cs && wr && (addr == A_DOR) &&
                    (|((ctrlreg ^ din) & 8'h10) || (|((ctrlreg ^ din) & 8'h80) && din[7]));
-  assign media_abort = (dor_reset && (x_st != X_IDLE)) ||
-                       (xfer_go && dma_tc && xfer_dma && (x_left != 16'd1));
+  wire abort_go  = (dor_reset && (x_st != X_IDLE)) ||
+                   (xfer_go && dma_tc && xfer_dma && (x_left != 16'd1));
+
+  // THE REGISTERED HANDOFF (a timing seam: the I/O decode of a PIO byte or a DOR write, and the
+  // DMA strobe, otherwise ran through this module into pc9821_fdd_media's write-back and abort
+  // logic in ONE clk_sys path). Each event leaves here as a flop, exactly once and in the order
+  // it was taken: `adv_q`/`din_q` carry the byte, `abort_q` the abandonment, both shifted by the
+  // SAME one cycle, so an abort still lands with (the TC case) or after (a later DOR write) the
+  // byte it follows, exactly as unregistered - and pc9821_fdd_media's abort still wins over an
+  // `adv` in its own cycle (its w_byte/w_last carry `!abort_now`). One consumer: pc9821_fdd_media
+  // (R1). The cost is the masked in-flight cycle (m_rdy above), which only a byte that follows
+  // its predecessor within one cycle can see - the pad and FORMAT filler bytes, one per cycle
+  // before, now one per two - and one cycle at a sector's end (the medium is `ready` a cycle
+  // later). A DMA byte cannot see it: the engine's next want is sampled in S_IDLE, at least two
+  // cycles after S_DEV (pc9821_dmac S_DEV -> S_FIN -> S_IDLE), nor a PIO byte: an I/O access's
+  // S_BYTE is at least three cycles after the previous one's (pc9821_iobus S_REPLY -> S_HOLD ->
+  // S_IDLE). Both are asserted below (R8). A reset clears them with pc9821_fdd_media, which the
+  // same reset holds (pc9821_system wires `reset || !cpu_run` to both).
+  reg       adv_q;
+  reg       abort_q;
+  reg [7:0] din_q;          // no reset: read only with adv_q
+  always @(posedge clk) begin
+    adv_q   <= !reset && adv_go;
+    abort_q <= !reset && abort_go;
+    din_q   <= din_go;
+  end
+  assign media_adv   = adv_q;
+  assign media_din   = din_q;
+  assign media_abort = abort_q;
 
   integer k;
 
@@ -926,6 +976,7 @@ module pc9821_fdc #(
       res_rel <= 1'b0;
       res_irq <= 1'b0;
       res_drv <= 2'd0;
+      res_renewed <= 1'b0;
       reg144_sel <= 2'd0;
       ctrlreg <= 8'h00;
       rpm <= 4'h0;
@@ -1002,7 +1053,7 @@ module pc9821_fdc #(
         res_idx <= res_idx + 3'd1;
         if (res_idx + 3'd1 >= res_len) begin
           st <= ST_IDLE;
-          if (res_pop) pend[res_drv] <= 1'b0;
+          if (res_pop && !res_renewed) pend[res_drv] <= 1'b0;
           if (res_rel) busy[res_drv] <= 1'b0;
           if (res_irq) begin
             res_irq <= 1'b0;
@@ -1025,6 +1076,7 @@ module pc9821_fdc #(
           // command write's poll unable to reach (MSR & 0xC0) == 0x80.
           if (|pend) begin
             res_drv <= pend_drv;
+            res_renewed <= 1'b0;
             res0 <= pend_st0[pend_drv];
             res1 <= treg[pend_drv];  // PCN = the present cylinder (NP2kai fdc.treg[us])
             res_len <= 3'd2;
@@ -1311,7 +1363,7 @@ module pc9821_fdc #(
             x_st <= X_NDW;
             nd_idx <= 1'b0;
             if (x_isid) crcn <= 8'h00;             // fdd_d88.c:545-546
-          end else if (x_isid ? media_hdrv : media_rdy) begin
+          end else if (x_isid ? media_hdrv : m_rdy) begin
             if (x_isid) begin
               // The header is found: C = the track register, H = the head (fdd_readid_d88
               // :522-526), R/N = the header's; crcn advances and wraps at the track's own
@@ -1530,6 +1582,9 @@ module pc9821_fdc #(
       // re-arms the drive and reloads its delay, so `ai_ready` is computed from the pre-change
       // state and the change's arm wins the same-cycle write below.
       for (k = 0; k < 2; k = k + 1) begin
+        // A new status for the drive whose SIS result is being read: its drain must not pop it.
+        if ((chg_ev[k] || rdy_ai[k]) && (st == ST_RESULT) && res_pop && (res_drv == k[1:0]))
+          res_renewed <= 1'b1;
         if (chg_ev[k]) begin
           pend[k]     <= 1'b1;
           pend_st0[k] <= 8'hC8 | k[7:0];          // FDCRLT_AI | FDCRLT_NR | drv (diskdrv.c:264)
@@ -1710,7 +1765,7 @@ module pc9821_fdc #(
   assign dbg_result = {res0, res1, 8'h00, exec_st0};
   assign dbg_chrn   = {x_c, x_h, x_r, x_n};
 
-`ifndef SYNTHESIS
+  // synthesis translate_off
   // R8: the INT flag never stands while a command executes. Every command reaches ST_EXEC through
   // its data-port bytes, which lower the flag, and a ready change meanwhile is deferred (int_def),
   // so a flag up in ST_EXEC is an interrupt presented inside a command (the ISR would read MSR CB
@@ -1718,7 +1773,18 @@ module pc9821_fdc #(
   always @(posedge clk)
     if (!reset && int_q && (st == ST_EXEC))
       $error("pc9821_fdc: the INT flag is up while a command executes");
-`endif
+  // R8: the registered handoff's in-flight cycle (adv_q) never meets a byte strobe. A DMA or PIO
+  // byte offered then would find m_rdy masked: a DMA read would store 0xFF and a PIO read return
+  // the byte already taken (a duplicate). tb_pc9821_fdc_handoff fires the neighbours.
+  always @(posedge clk)
+    if (!reset && adv_q && (x_st == X_XFER) && (xfer_dma || xfer_pio || wx_dma || wx_pio))
+      $fatal(1, "pc9821_fdc: a byte strobe in the registered handoff's in-flight cycle");
+  // R8: no request is issued while an abort is still on its way to the medium (it would be
+  // accepted in ST_READY and the abort, arriving after, would end it instead of the old one).
+  always @(posedge clk)
+    if (!reset && media_req && abort_q)
+      $fatal(1, "pc9821_fdc: a media request with an abort in flight");
+  // synthesis translate_on
 
 endmodule
 

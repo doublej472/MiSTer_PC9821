@@ -9,7 +9,7 @@
 // The real controller is not like that. `src/memory/sdram.v:7` states its own
 // read latency -- "T_RCD + CAS + 2*burst_cnt - 1 cycles from ACT to last data" --
 // and it serves ONE request at a time, accepting only in IDLE
-// (`sdram.v:1169`, `IDLE: if (~nce) begin`). So a responder defect that depends on the response
+// (`sdram.v:1193`, `IDLE: if (~nce) begin`). So a responder defect that depends on the response
 // arriving several cycles after the accept is INVISIBLE to every bench built on
 // a stub, which is not the same thing as absent. This module is the stub's
 // replacement: swap it in and the bench sees the timing the FPGA has.

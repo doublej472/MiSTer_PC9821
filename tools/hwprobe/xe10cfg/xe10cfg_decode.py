@@ -22,7 +22,8 @@ Facts used (docs/bios-setup.md): the configuration record is CG code 0x2056 rows
 zero (BANK3@0x21CB-0x21EC: row 0xA = -(rows 1..9)); rows 8/9 are AA 55 (BANK4@0x4677-0x46B5);
 record rows 0x13/0x14 are code 0x2156 rows 3/4; the software-DIP mirror is code 0x0156 rows
 0x00-0x0B (bank A) and 0x20-0x2B (bank B). The ITF writes the inverted record row 2 to port
-0x31 (BANK4@0x46A9); whether the port answers it is the dip-audit P2 question.
+0x31 (BANK4@0x46A9); what the port does with it is item 94 (a)
+(docs/probes/XE10CFG-XE10-CFGWR.TXT).
 """
 from __future__ import annotations
 
@@ -138,6 +139,27 @@ def flat(d: dict) -> dict:
     if d['cpu']:
         for k, v in d['cpu'].items():
             out[f'CPU {k}'] = v
+    # the /CG, /CGWR, /IDE, /W4A0 and kit-2 families (--diff left them out, so two captures
+    # that differed only there read 'no differences')
+    for fam in ('cgw', 'cgp'):
+        for (code, h), v in d[fam].items():
+            out[f'{fam.upper()} {code:04X} {h:02X}'] = v.hex().upper()
+    for (code, h), (n, first) in d['cgrep'].items():
+        out[f'CGREP {code:04X} {h:02X}'] = f'diff={n:04X} first={first:04X}'
+    for (code, h), r in d['cgword'].items():
+        for k, v in r.items():
+            out[f'CGWORD {code:04X} {h:02X} {k}'] = v
+    for key, r in d['cgx'].items():
+        for k, v in r.items():
+            out[f'CGX {key:04X} {k}'] = f'{v:04X}'
+    for key, v in d['cgxraw'].items():
+        out[f'CGXRAW {key:04X}'] = v.hex().upper()
+    for k, v in d['cgwr'].items():
+        out[f'CGWR {k}'] = v.hex().upper() if isinstance(v, bytes) else ' / '.join(v)
+    # line families without a key of their own: each distinct line is present or absent
+    for fam in ('ide', 'w4a0', 'kit2'):
+        for ln in d[fam]:
+            out[f'{fam.upper()} | {ln}'] = 'present'
     return out
 
 

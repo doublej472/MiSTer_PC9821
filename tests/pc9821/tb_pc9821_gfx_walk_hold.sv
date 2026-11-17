@@ -319,9 +319,20 @@ module tb_pc9821_gfx_walk_hold;
     if (dw !== 32'h1122_3344) fail("the plain dword read did not return what P1 stored");
 
     // ---- P2/P3: a word store is two lanes and a byte store is one ----
-    store_measured(PLANE, BASE, 32'h0000_3344, 4'h3, accesses[1], hold[1]);
-    store_measured(PLANE, BASE, 32'h0000_0044, 4'h1, accesses[2], hold[2]);
-    check(1); check(2);
+    // Distinct data from P1's, so each store's lanes are visible on readback: the word store
+    // replaces columns 0-1 only, the byte store column 0 only.
+    store_measured(PLANE, BASE, 32'h0000_A1B2, 4'h3, accesses[1], hold[1]);
+    check(1);
+    peek(2'd0, BASE + 0, bv); if (bv !== 8'hB2) fail("P2 column 0 byte is wrong");
+    peek(2'd0, BASE + 1, bv); if (bv !== 8'hA1) fail("P2 column 1 byte is wrong");
+    peek(2'd0, BASE + 2, bv); if (bv !== 8'h22) fail("P2 disturbed column 2");
+    peek(2'd0, BASE + 3, bv); if (bv !== 8'h11) fail("P2 disturbed column 3");
+    store_measured(PLANE, BASE, 32'h0000_00C5, 4'h1, accesses[2], hold[2]);
+    check(2);
+    peek(2'd0, BASE + 0, bv); if (bv !== 8'hC5) fail("P3 column 0 byte is wrong");
+    peek(2'd0, BASE + 1, bv); if (bv !== 8'hA1) fail("P3 disturbed column 1");
+    peek(2'd0, BASE + 2, bv); if (bv !== 8'h22) fail("P3 disturbed column 2");
+    peek(2'd0, BASE + 3, bv); if (bv !== 8'h11) fail("P3 disturbed column 3");
 
     // ---- P4: the GRCG RMW merge TH05's sprite erase issues, a MIXED datum. Every lane needs its
     // old word, so 8 accesses is the floor and the walk must not exceed it. ----
@@ -386,6 +397,13 @@ module tb_pc9821_gfx_walk_hold;
     grcg_w(8'h7E, 8'h44); grcg_w(8'h7E, 8'h88);
     store_measured(PLANE, BASE, 32'hFFFF_FFFF, 4'hF, accesses[6], hold[6]);
     check(6);
+    // A 0xFF datum merges to the tile byte in every plane: (old & ~FF) | (tile & FF) = tile.
+    for (i = 0; i < 4; i = i + 1) begin
+      peek(2'd0, BASE + i, bv); if (bv !== 8'h11) fail("P7 plane B must take the tile byte");
+      peek(2'd1, BASE + i, bv); if (bv !== 8'h22) fail("P7 plane R must take the tile byte");
+      peek(2'd2, BASE + i, bv); if (bv !== 8'h44) fail("P7 plane G must take the tile byte");
+      peek(2'd3, BASE + i, bv); if (bv !== 8'h88) fail("P7 plane E must take the tile byte");
+    end
 
     // ---- P8: a TDW store over a partial plane mask takes the WALK, not the burst (the burst
     // needs all four planes), and ignores the CPU datum entirely. ----

@@ -1,0 +1,159 @@
+# OSD I/O timing = Xe10: the class table. ONE row per class; tools/gen_xe10_table.py renders it into
+# src/pc9821/core/pc9821_xe10_timing_pkg.sv and tools/check_xe10_table.py re-derives every `ns` from
+# its `source`:`line` with tools/hwprobe/xe10t/xe10t_decode.py's arithmetic.
+#   device   gvram (pc9821_gvram_arb), tram (pc9821_window_responder), pegc (pc9821_pegc_xe10_pace)
+#   cls      direction, then the GRCG kind (plain, tcr, tdw, rmw) and the width: 1w = one 16-bit word,
+#            2w = an access whose byte enables reach both halves of its dword (a dword, a word at
+#            offset 1); a PEGC packed access costs the same at any width (MIS2RUN PKD/PKR_1 rows)
+#   mode     24 = 24 kHz; 31 = 31 kHz, 256-colour display off; 48 = 31 kHz with it on (XE10X's
+#            640x480 mode; its PEGC rows at 31 kHz 400 lines, also 256-colour, read the same);
+#            24P = 24 kHz with it on (XE10Y /CELLS's 2P: the text read on a graphics line costs
+#            759.0 ns net there, CELLS :31, against the 24 column's 692.2). The 24P cells measured
+#            are the text reads; the rest are declared fallback-24: the GVRAM is not reachable with
+#            the 256-colour display on (0xB8000 reads FFFF, 0xA8000-0xB7FFF are the packed banks),
+#            the PEGC 24 column IS the 24 kHz 256-colour state (XE10X ran its packed rows with the
+#            display on; the store's two states, CELLS :103 147.8 against :223's 182.8, stay the
+#            owner's question), and the text stores' CELLS rows sit inside the bimodal spread the
+#            table charges by its upper mode (the 3P rows read 162.1 at :427 against the 48
+#            column's 139.9 for the same state)
+#   phase    V = not on a graphics line (the captures' _V and _O rows agree), A = on one
+#   shape    latency (a read: the net, the nop-0 row less its control) or rate (a store: the
+#            sustained period, the nop-0 row's time per store)
+#   basis    measured, or fallback-24 / fallback-31: that cell is not in any capture and carries
+#            the named mode's row (the citation is that row's)
+#   quantity pit = PIT ns per unit; net = pit less the control's pit; art = ARTIC ns per unit;
+#            rwipe = an RWIPE STEP's fill, (F - S) ARTIC ticks over the 4000-word rep stosw;
+#            pair = pit / 2 of a word across a dword (two accesses of one word each): the per-access
+#            time of the pair the table charges as two. GV_WR_TDW_1W_24A takes it (194.9, MISAL1 :251
+#            TDW_W3_A) over the one-word stream's 193.5 (:233 TDW_W0_A): at 90 MHz 193.5 rounds to 17
+#            clk_sys and puts the pair 12 ns short of its 389.8; 194.9 rounds to 18, the count 194.5
+#            gives at 50/90/100/120 MHz (the earlier hand table's value, inside the same bracket)
+name,device,cls,dir,width,kind,mode,phase,shape,ns,basis,source,line,quantity
+GV_RD_PLAIN_1W_24V,gvram,rd_plain_1w,rd,1w,plain,24,V,latency,623.9,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,230,net
+GV_RD_PLAIN_1W_24A,gvram,rd_plain_1w,rd,1w,plain,24,A,latency,697.0,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,130,net
+GV_RD_PLAIN_1W_31V,gvram,rd_plain_1w,rd,1w,plain,31,V,latency,572.2,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,432,net
+GV_RD_PLAIN_1W_31A,gvram,rd_plain_1w,rd,1w,plain,31,A,latency,639.8,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,332,net
+GV_RD_PLAIN_1W_48V,gvram,rd_plain_1w,rd,1w,plain,48,V,latency,572.2,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,432,net
+GV_RD_PLAIN_1W_48A,gvram,rd_plain_1w,rd,1w,plain,48,A,latency,639.8,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,332,net
+GV_RD_PLAIN_1W_24PV,gvram,rd_plain_1w,rd,1w,plain,24P,V,latency,623.9,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,230,net
+GV_RD_PLAIN_1W_24PA,gvram,rd_plain_1w,rd,1w,plain,24P,A,latency,697.0,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,130,net
+GV_RD_PLAIN_2W_24V,gvram,rd_plain_2w,rd,2w,plain,24,V,latency,822.6,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,237,net
+GV_RD_PLAIN_2W_24A,gvram,rd_plain_2w,rd,2w,plain,24,A,latency,897.3,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,137,net
+GV_RD_PLAIN_2W_31V,gvram,rd_plain_2w,rd,2w,plain,31,V,latency,741.5,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,439,net
+GV_RD_PLAIN_2W_31A,gvram,rd_plain_2w,rd,2w,plain,31,A,latency,823.4,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,339,net
+GV_RD_PLAIN_2W_48V,gvram,rd_plain_2w,rd,2w,plain,48,V,latency,741.5,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,439,net
+GV_RD_PLAIN_2W_48A,gvram,rd_plain_2w,rd,2w,plain,48,A,latency,823.4,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,339,net
+GV_RD_PLAIN_2W_24PV,gvram,rd_plain_2w,rd,2w,plain,24P,V,latency,822.6,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,237,net
+GV_RD_PLAIN_2W_24PA,gvram,rd_plain_2w,rd,2w,plain,24P,A,latency,897.3,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,137,net
+GV_RD_TCR_1W_24V,gvram,rd_tcr_1w,rd,1w,tcr,24,V,latency,673.2,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,253,net
+GV_RD_TCR_1W_24A,gvram,rd_tcr_1w,rd,1w,tcr,24,A,latency,757.4,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,153,net
+GV_RD_TCR_1W_31V,gvram,rd_tcr_1w,rd,1w,tcr,31,V,latency,618.3,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,455,net
+GV_RD_TCR_1W_31A,gvram,rd_tcr_1w,rd,1w,tcr,31,A,latency,689.8,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,355,net
+GV_RD_TCR_1W_48V,gvram,rd_tcr_1w,rd,1w,tcr,48,V,latency,618.3,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,455,net
+GV_RD_TCR_1W_48A,gvram,rd_tcr_1w,rd,1w,tcr,48,A,latency,689.8,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,355,net
+GV_RD_TCR_1W_24PV,gvram,rd_tcr_1w,rd,1w,tcr,24P,V,latency,673.2,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,253,net
+GV_RD_TCR_1W_24PA,gvram,rd_tcr_1w,rd,1w,tcr,24P,A,latency,757.4,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,153,net
+GV_RD_TCR_2W_24V,gvram,rd_tcr_2w,rd,2w,tcr,24,V,latency,930.7,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,374,net
+GV_RD_TCR_2W_24A,gvram,rd_tcr_2w,rd,2w,tcr,24,A,latency,1035.6,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,269,net
+GV_RD_TCR_2W_31V,gvram,rd_tcr_2w,rd,2w,tcr,31,V,latency,827.3,measured,docs/probes/XE10Y-XE10-CELLS.TXT,337,net
+GV_RD_TCR_2W_31A,gvram,rd_tcr_2w,rd,2w,tcr,31,A,latency,910.8,measured,docs/probes/XE10Y-XE10-CELLS.TXT,257,net
+GV_RD_TCR_2W_48V,gvram,rd_tcr_2w,rd,2w,tcr,48,V,latency,827.3,fallback-31,docs/probes/XE10Y-XE10-CELLS.TXT,337,net
+GV_RD_TCR_2W_48A,gvram,rd_tcr_2w,rd,2w,tcr,48,A,latency,910.8,fallback-31,docs/probes/XE10Y-XE10-CELLS.TXT,257,net
+GV_RD_TCR_2W_24PV,gvram,rd_tcr_2w,rd,2w,tcr,24P,V,latency,930.7,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,374,net
+GV_RD_TCR_2W_24PA,gvram,rd_tcr_2w,rd,2w,tcr,24P,A,latency,1035.6,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,269,net
+GV_WR_PLAIN_1W_24V,gvram,wr_plain_1w,wr,1w,plain,24,V,rate,142.6,measured,docs/probes/XE10T-XE10.TXT,56,pit
+GV_WR_PLAIN_1W_24A,gvram,wr_plain_1w,wr,1w,plain,24,A,rate,165.3,measured,docs/probes/XE10V-XE10-MISAL1.TXT,282,pit
+GV_WR_PLAIN_1W_31V,gvram,wr_plain_1w,wr,1w,plain,31,V,rate,146.2,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,446,pit
+GV_WR_PLAIN_1W_31A,gvram,wr_plain_1w,wr,1w,plain,31,A,rate,166.1,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,346,pit
+GV_WR_PLAIN_1W_48V,gvram,wr_plain_1w,wr,1w,plain,48,V,rate,146.2,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,446,pit
+GV_WR_PLAIN_1W_48A,gvram,wr_plain_1w,wr,1w,plain,48,A,rate,166.1,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,346,pit
+GV_WR_PLAIN_1W_24PV,gvram,wr_plain_1w,wr,1w,plain,24P,V,rate,142.6,fallback-24,docs/probes/XE10T-XE10.TXT,56,pit
+GV_WR_PLAIN_1W_24PA,gvram,wr_plain_1w,wr,1w,plain,24P,A,rate,165.3,fallback-24,docs/probes/XE10V-XE10-MISAL1.TXT,282,pit
+GV_WR_PLAIN_2W_24V,gvram,wr_plain_2w,wr,2w,plain,24,V,rate,278.4,measured,docs/probes/XE10T-XE10.TXT,68,pit
+GV_WR_PLAIN_2W_24A,gvram,wr_plain_2w,wr,2w,plain,24,A,rate,321.9,measured,docs/probes/XE10V-XE10-MISAL2.TXT,318,pit
+GV_WR_PLAIN_2W_31V,gvram,wr_plain_2w,wr,2w,plain,31,V,rate,278.4,fallback-24,docs/probes/XE10T-XE10.TXT,68,pit
+GV_WR_PLAIN_2W_31A,gvram,wr_plain_2w,wr,2w,plain,31,A,rate,321.9,fallback-24,docs/probes/XE10V-XE10-MISAL2.TXT,318,pit
+GV_WR_PLAIN_2W_48V,gvram,wr_plain_2w,wr,2w,plain,48,V,rate,278.4,fallback-24,docs/probes/XE10T-XE10.TXT,68,pit
+GV_WR_PLAIN_2W_48A,gvram,wr_plain_2w,wr,2w,plain,48,A,rate,321.9,fallback-24,docs/probes/XE10V-XE10-MISAL2.TXT,318,pit
+GV_WR_PLAIN_2W_24PV,gvram,wr_plain_2w,wr,2w,plain,24P,V,rate,278.4,fallback-24,docs/probes/XE10T-XE10.TXT,68,pit
+GV_WR_PLAIN_2W_24PA,gvram,wr_plain_2w,wr,2w,plain,24P,A,rate,321.9,fallback-24,docs/probes/XE10V-XE10-MISAL2.TXT,318,pit
+GV_WR_TDW_1W_24V,gvram,wr_tdw_1w,wr,1w,tdw,24,V,rate,167.8,measured,docs/probes/XE10T-XE10.TXT,145,pit
+GV_WR_TDW_1W_24A,gvram,wr_tdw_1w,wr,1w,tdw,24,A,rate,194.9,measured,docs/probes/XE10V-XE10-MISAL1.TXT,251,pair
+GV_WR_TDW_1W_31V,gvram,wr_tdw_1w,wr,1w,tdw,31,V,rate,166.9,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,462,pit
+GV_WR_TDW_1W_31A,gvram,wr_tdw_1w,wr,1w,tdw,31,A,rate,197.1,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,362,pit
+GV_WR_TDW_1W_48V,gvram,wr_tdw_1w,wr,1w,tdw,48,V,rate,166.9,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,462,pit
+GV_WR_TDW_1W_48A,gvram,wr_tdw_1w,wr,1w,tdw,48,A,rate,197.1,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,362,pit
+GV_WR_TDW_1W_24PV,gvram,wr_tdw_1w,wr,1w,tdw,24P,V,rate,167.8,fallback-24,docs/probes/XE10T-XE10.TXT,145,pit
+GV_WR_TDW_1W_24PA,gvram,wr_tdw_1w,wr,1w,tdw,24P,A,rate,194.9,fallback-24,docs/probes/XE10V-XE10-MISAL1.TXT,251,pair
+GV_WR_TDW_2W_24V,gvram,wr_tdw_2w,wr,2w,tdw,24,V,rate,208.5,measured,docs/probes/XE10T-XE10.TXT,157,pit
+GV_WR_TDW_2W_24A,gvram,wr_tdw_2w,wr,2w,tdw,24,A,rate,247.2,measured,docs/probes/XE10V-XE10-MISAL1.TXT,269,pit
+GV_WR_TDW_2W_31V,gvram,wr_tdw_2w,wr,2w,tdw,31,V,rate,182.8,measured,docs/probes/XE10Y-XE10-CELLS.TXT,361,pit
+GV_WR_TDW_2W_31A,gvram,wr_tdw_2w,wr,2w,tdw,31,A,rate,222.5,measured,docs/probes/XE10Y-XE10-CELLS.TXT,281,pit
+GV_WR_TDW_2W_48V,gvram,wr_tdw_2w,wr,2w,tdw,48,V,rate,182.8,fallback-31,docs/probes/XE10Y-XE10-CELLS.TXT,361,pit
+GV_WR_TDW_2W_48A,gvram,wr_tdw_2w,wr,2w,tdw,48,A,rate,222.5,fallback-31,docs/probes/XE10Y-XE10-CELLS.TXT,281,pit
+GV_WR_TDW_2W_24PV,gvram,wr_tdw_2w,wr,2w,tdw,24P,V,rate,208.5,fallback-24,docs/probes/XE10T-XE10.TXT,157,pit
+GV_WR_TDW_2W_24PA,gvram,wr_tdw_2w,wr,2w,tdw,24P,A,rate,247.2,fallback-24,docs/probes/XE10V-XE10-MISAL1.TXT,269,pit
+GV_WR_RMW_1W_24V,gvram,wr_rmw_1w,wr,1w,rmw,24,V,rate,255.3,measured,docs/probes/XE10T-XE10.TXT,141,pit
+GV_WR_RMW_1W_24A,gvram,wr_rmw_1w,wr,1w,rmw,24,A,rate,299.5,measured,docs/probes/RWIPE-XE10.TXT,16,rwipe
+GV_WR_RMW_1W_31V,gvram,wr_rmw_1w,wr,1w,rmw,31,V,rate,221.7,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,469,pit
+GV_WR_RMW_1W_31A,gvram,wr_rmw_1w,wr,1w,rmw,31,A,rate,272.6,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,369,pit
+GV_WR_RMW_1W_48V,gvram,wr_rmw_1w,wr,1w,rmw,48,V,rate,221.7,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,469,pit
+GV_WR_RMW_1W_48A,gvram,wr_rmw_1w,wr,1w,rmw,48,A,rate,272.6,fallback-31,docs/probes/XE10X-XE10-RDLAT1.TXT,369,pit
+GV_WR_RMW_1W_24PV,gvram,wr_rmw_1w,wr,1w,rmw,24P,V,rate,255.3,fallback-24,docs/probes/XE10T-XE10.TXT,141,pit
+GV_WR_RMW_1W_24PA,gvram,wr_rmw_1w,wr,1w,rmw,24P,A,rate,299.5,fallback-24,docs/probes/RWIPE-XE10.TXT,16,rwipe
+GV_WR_RMW_2W_24V,gvram,wr_rmw_2w,wr,2w,rmw,24,V,rate,496.2,measured,docs/probes/XE10T-XE10.TXT,135,pit
+GV_WR_RMW_2W_24A,gvram,wr_rmw_2w,wr,2w,rmw,24,A,rate,583.3,measured,docs/probes/XE10V-XE10-MISAL1.TXT,218,pit
+GV_WR_RMW_2W_31V,gvram,wr_rmw_2w,wr,2w,rmw,31,V,rate,423.6,measured,docs/probes/XE10Y-XE10-CELLS.TXT,377,pit
+GV_WR_RMW_2W_31A,gvram,wr_rmw_2w,wr,2w,rmw,31,A,rate,505.5,measured,docs/probes/XE10Y-XE10-CELLS.TXT,297,pit
+GV_WR_RMW_2W_48V,gvram,wr_rmw_2w,wr,2w,rmw,48,V,rate,423.6,fallback-31,docs/probes/XE10Y-XE10-CELLS.TXT,377,pit
+GV_WR_RMW_2W_48A,gvram,wr_rmw_2w,wr,2w,rmw,48,A,rate,505.5,fallback-31,docs/probes/XE10Y-XE10-CELLS.TXT,297,pit
+GV_WR_RMW_2W_24PV,gvram,wr_rmw_2w,wr,2w,rmw,24P,V,rate,496.2,fallback-24,docs/probes/XE10T-XE10.TXT,135,pit
+GV_WR_RMW_2W_24PA,gvram,wr_rmw_2w,wr,2w,rmw,24P,A,rate,583.3,fallback-24,docs/probes/XE10V-XE10-MISAL1.TXT,218,pit
+TX_RD_1W_24V,tram,rd_1w,rd,1w,plain,24,V,latency,619.1,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,274,net
+TX_RD_1W_24A,tram,rd_1w,rd,1w,plain,24,A,latency,692.2,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,174,net
+TX_RD_1W_31V,tram,rd_1w,rd,1w,plain,31,V,latency,571.4,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,476,net
+TX_RD_1W_31A,tram,rd_1w,rd,1w,plain,31,A,latency,639.0,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,376,net
+TX_RD_1W_48V,tram,rd_1w,rd,1w,plain,48,V,latency,569.0,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,591,net
+TX_RD_1W_48A,tram,rd_1w,rd,1w,plain,48,A,latency,705.7,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,535,net
+TX_RD_1W_24PV,tram,rd_1w,rd,1w,plain,24P,V,latency,623.9,measured,docs/probes/XE10Y-XE10-CELLS.TXT,143,net
+TX_RD_1W_24PA,tram,rd_1w,rd,1w,plain,24P,A,latency,759.0,measured,docs/probes/XE10Y-XE10-CELLS.TXT,31,net
+TX_RD_2W_24V,tram,rd_2w,rd,2w,plain,24,V,latency,821.8,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,405,net
+TX_RD_2W_24A,tram,rd_2w,rd,2w,plain,24,A,latency,898.1,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,300,net
+TX_RD_2W_31V,tram,rd_2w,rd,2w,plain,31,V,latency,742.3,measured,docs/probes/XE10Y-XE10-CELLS.TXT,401,net
+TX_RD_2W_31A,tram,rd_2w,rd,2w,plain,31,A,latency,821.8,measured,docs/probes/XE10Y-XE10-CELLS.TXT,321,net
+TX_RD_2W_48V,tram,rd_2w,rd,2w,plain,48,V,latency,742.3,measured,docs/probes/XE10Y-XE10-CELLS.TXT,598,net
+TX_RD_2W_48A,tram,rd_2w,rd,2w,plain,48,A,latency,872.6,measured,docs/probes/XE10Y-XE10-CELLS.TXT,550,net
+TX_RD_2W_24PV,tram,rd_2w,rd,2w,plain,24P,V,latency,824.2,measured,docs/probes/XE10Y-XE10-CELLS.TXT,191,net
+TX_RD_2W_24PA,tram,rd_2w,rd,2w,plain,24P,A,latency,995.8,measured,docs/probes/XE10Y-XE10-CELLS.TXT,79,net
+TX_WR_1W_24V,tram,wr_1w,wr,1w,plain,24,V,rate,149.4,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,380,pit
+TX_WR_1W_24A,tram,wr_1w,wr,1w,plain,24,A,rate,169.3,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,275,pit
+TX_WR_1W_31V,tram,wr_1w,wr,1w,plain,31,V,rate,146.2,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,483,pit
+TX_WR_1W_31A,tram,wr_1w,wr,1w,plain,31,A,rate,163.7,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,383,pit
+TX_WR_1W_48V,tram,wr_1w,wr,1w,plain,48,V,rate,135.1,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,598,pit
+TX_WR_1W_48A,tram,wr_1w,wr,1w,plain,48,A,rate,139.9,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,542,pit
+TX_WR_1W_24PV,tram,wr_1w,wr,1w,plain,24P,V,rate,149.4,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,380,pit
+TX_WR_1W_24PA,tram,wr_1w,wr,1w,plain,24P,A,rate,169.3,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,275,pit
+TX_WR_2W_24V,tram,wr_2w,wr,2w,plain,24,V,rate,282.9,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,413,pit
+TX_WR_2W_24A,tram,wr_2w,wr,2w,plain,24,A,rate,321.9,measured,docs/probes/XE10W-XE10-MIS2RUN1.TXT,281,pit
+TX_WR_2W_31V,tram,wr_2w,wr,2w,plain,31,V,rate,282.9,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,413,pit
+TX_WR_2W_31A,tram,wr_2w,wr,2w,plain,31,A,rate,321.9,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,281,pit
+TX_WR_2W_48V,tram,wr_2w,wr,2w,plain,48,V,rate,282.9,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,413,pit
+TX_WR_2W_48A,tram,wr_2w,wr,2w,plain,48,A,rate,321.9,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,281,pit
+TX_WR_2W_24PV,tram,wr_2w,wr,2w,plain,24P,V,rate,282.9,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,413,pit
+TX_WR_2W_24PA,tram,wr_2w,wr,2w,plain,24P,A,rate,321.9,fallback-24,docs/probes/XE10W-XE10-MIS2RUN1.TXT,281,pit
+PK_RD_24V,pegc,rd,rd,any,packed,24,V,latency,622.3,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,316,net
+PK_RD_24A,pegc,rd,rd,any,packed,24,A,latency,761.4,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,216,net
+PK_RD_31V,pegc,rd,rd,any,packed,31,V,latency,573.0,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,518,net
+PK_RD_31A,pegc,rd,rd,any,packed,31,A,latency,703.4,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,418,net
+PK_RD_48V,pegc,rd,rd,any,packed,48,V,latency,573.0,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,633,net
+PK_RD_48A,pegc,rd,rd,any,packed,48,A,latency,702.6,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,577,net
+PK_RD_24PV,pegc,rd,rd,any,packed,24P,V,latency,622.3,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,316,net
+PK_RD_24PA,pegc,rd,rd,any,packed,24P,A,latency,761.4,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,216,net
+PK_WR_24V,pegc,wr,wr,any,packed,24,V,rate,142.3,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,323,pit
+PK_WR_24A,pegc,wr,wr,any,packed,24,A,rate,182.8,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,223,pit
+PK_WR_31V,pegc,wr,wr,any,packed,31,V,rate,138.3,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,525,pit
+PK_WR_31A,pegc,wr,wr,any,packed,31,A,rate,141.5,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,425,pit
+PK_WR_48V,pegc,wr,wr,any,packed,48,V,rate,136.7,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,640,pit
+PK_WR_48A,pegc,wr,wr,any,packed,48,A,rate,161.3,measured,docs/probes/XE10X-XE10-RDLAT1.TXT,584,pit
+PK_WR_24PV,pegc,wr,wr,any,packed,24P,V,rate,142.3,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,323,pit
+PK_WR_24PA,pegc,wr,wr,any,packed,24P,A,rate,182.8,fallback-24,docs/probes/XE10X-XE10-RDLAT1.TXT,223,pit

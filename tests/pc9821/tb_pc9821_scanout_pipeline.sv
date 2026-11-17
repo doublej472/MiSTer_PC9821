@@ -178,7 +178,7 @@ module tb_pc9821_scanout_pipeline;
   // analogue table's CPU write port comes from pc9821_gdc_text, exactly as pc9821_system
   // wires it.
   wire [7:0] r_out, g_out, b_out;
-  // The PEGC arm's inputs (pegc-scope-REPORT.md 4 row 4): tied off in the
+  // The PEGC arm's inputs: tied off in the
   // 16-colour benches; tb_pc9821_video_mixer drives them.
   reg        mix_pegc_256 = 1'b0;
   reg        mix_pal256_wr_en = 1'b0;

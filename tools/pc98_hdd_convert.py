@@ -80,7 +80,8 @@ The disk is all zeros: no IPL and no partition table. The BIOS does not boot fro
 the floppy instead); NEC MS-DOS's FORMAT, run from a DOS boot floppy, partitions it, formats
 it and writes the system. An image over 4 GiB - 1 byte (more than 61,680 cylinders) does not
 fit on a FAT32-formatted SD card (exFAT holds it); the tool says so. A `.hdi` DST gets the
-4096-byte HDI header, any other name a raw image. The image is written to a temporary file
+4096-byte HDI header, any other name a raw image. An HDI holds at most 61,680 cylinders
+(4112 MB): its DataSize field is 32 bits, so a larger `.hdi` is refused (a raw image holds it). The image is written to a temporary file
 beside DST and renamed only when complete; an existing DST is refused without --force. The
 zeros are not held in memory (the file is extended, not written byte by byte), so any size
 runs in a few MB of RAM.
@@ -93,6 +94,7 @@ Usage:
   tools/pc98_hdd_convert.py --info IMG [IMG...]    # header, partition table, BPBs
   tools/pc98_hdd_convert.py --survey IMG [IMG...]  # one classification line per image
   tools/pc98_hdd_convert.py --verify SRC DST       # every file in every FAT partition matches
+                                                   # (a raw DST: 512-byte sectors, --heads x --spt)
   tools/pc98_hdd_convert.py --selftest             # synthetic SASI/IDE images round-trip
 
 Inputs: HDI (Anex86/NP2), NHD (T98-NEXT), or a raw image with --src-geometry SS,H,S. An
@@ -161,7 +163,20 @@ def load_image(path, src_geometry=None):
     return Image(raw, ss, heads, spt, len(raw) // (ss * heads * spt), "raw")
 
 
+# An HDI's DataSize (+0x0C) is a 32-bit field: "DataSize + HeaderSize == file size" (the HDI
+# description src/pc9821/storage/pc9821_hdd_image.sv cites; NP2kai fdd/sxsihdd.h `HDIHDR`:
+# `UINT8 hddsize[4];`). NP2kai's newdisk_hdi_ex_CHS stores a larger size through
+# STOREINTELDWORD, which keeps its low 32 bits; such a field states a wrong size, so a disk
+# whose data does not fit is refused as an HDI here (a raw image holds it).
+HDI_DATA_MAX = 2 ** 32 - 1
+
+
 def hdi_header(datasize, ss, spt, heads, cyls):
+    if datasize > HDI_DATA_MAX:
+        raise ConvertError("an HDI holds at most %d data bytes (its DataSize field is 32 bits; "
+                           "%d cylinders of 8 x 17 x 512): this disk is %d bytes. Write a raw "
+                           "image instead (a name not ending in .hdi, or --format raw)"
+                           % (HDI_DATA_MAX, HDI_MAX_CYLS, datasize))
     hdr = struct.pack("<8I", 0, 0, HDI_HEADER, datasize, ss, spt, heads, cyls)
     return hdr + b"\0" * (HDI_HEADER - len(hdr))
 
@@ -575,15 +590,22 @@ def write_verified(src, dst_img, dst_path, fmt, log=print):
 
 
 def fat_listing(img):
-    """{(partition index, path): digest} over every FAT partition."""
+    """{(partition rank, path): digest} over every FAT partition.
+
+    The rank is the partition's position by start byte among every partition in the table:
+    convert() writes the partitions in that order (its table slots follow it), so a partition
+    has the same rank in SRC and DST. The 16-byte name is not an identity - PC-98 DOS tools
+    default several partitions to one name, and keying by it let one partition's files
+    overwrite another's, so corruption in the first was masked by the second's copy."""
     out = {}
-    for p in read_ptable(img):
+    parts = sorted(read_ptable(img), key=lambda q: part_extent(img, q)[0])
+    for rank, p in enumerate(parts):
         start, end = part_extent(img, p)
         b = BPB(img.data[start:start + 512])
         if not b.ok:
             continue
         for k, v in Fat(img.data[start:end]).walk().items():
-            out[(p.name, k)] = v
+            out[(rank, k)] = v
     return out
 
 
@@ -591,7 +613,7 @@ def verify(src, dst, log=print):
     a, b = fat_listing(src), fat_listing(dst)
     bad = [k for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
     for k in bad[:20]:
-        log("MISMATCH %s:%s %s != %s" % (k[0], k[1], a.get(k), b.get(k)))
+        log("MISMATCH partition %d:%s %s != %s" % (k[0], k[1], a.get(k), b.get(k)))
     log("verify: %d entries, %d mismatches" % (len(a), len(bad)))
     return not bad and len(a) > 0
 
@@ -683,6 +705,7 @@ NEW_CYLS_PER_MB = 15        # NP2kai fdd/newdisk.c hddsize2CHS: `size = (FILELEN
 NEW_MIN_MB, NEW_MAX_MB = 1, 4351                    # newdisk.c: `(hddsize < 1)`, `<= 4351`
 NEW_MIN_CYLS, NEW_MAX_CYLS = NEW_MIN_MB * NEW_CYLS_PER_MB, 65535   # the 16-bit cylinder
 FAT32_FILE_MAX = 2 ** 32 - 1
+HDI_MAX_CYLS = HDI_DATA_MAX // NEW_CYL_BYTES         # 61,680 (4,294,901,760 bytes)
 
 
 def parse_new_size(text):
@@ -807,6 +830,28 @@ def selftest_new(quiet):
             fails.append("--new 4352: not refused")
         if main_quiet(["--new", "1", os.path.join(td, "geo.img"), "--heads", "16"]) == 0:
             fails.append("--new with --heads 16: not refused")
+        # an HDI's DataSize is a 32-bit field: 61,680 cylinders (4,294,901,760 bytes) is the
+        # largest HDI; one more, or 4351 MB, is refused with a message (not a traceback), and
+        # the same size as a raw image is not refused by the HDI limit
+        try:
+            hdi_header(HDI_MAX_CYLS * NEW_CYL_BYTES, 512, 17, 8, HDI_MAX_CYLS)
+        except (ConvertError, struct.error, NameError) as e:
+            fails.append("HDI header of 61,680 cylinders refused: %s" % e)
+        for size in ("61681c", "4351"):
+            try:
+                rc = main_quiet(["--new", size, os.path.join(td, "big.hdi")])
+            except Exception as e:      # noqa: BLE001 - the failure this case exists to catch
+                rc = None
+                fails.append("--new %s big.hdi: uncaught %s: %s" % (size, type(e).__name__, e))
+            if rc == 0:
+                fails.append("--new %s big.hdi: not refused" % size)
+        try:
+            hdi_header((HDI_MAX_CYLS + 1) * NEW_CYL_BYTES, 512, 17, 8, HDI_MAX_CYLS + 1)
+            fails.append("HDI header of 61,681 cylinders: not refused")
+        except ConvertError:
+            pass
+        except (struct.error, NameError) as e:
+            fails.append("HDI header of 61,681 cylinders: %s, not a ConvertError" % e)
         if sorted(os.listdir(td)) != ["blank.hdi", "blank.img"]:
             fails.append("--new: unexpected files left: %s" % sorted(os.listdir(td)))
     return fails
@@ -891,12 +936,50 @@ def selftest():
         pass
     fails += selftest_fat32(payload, quiet) + selftest_safe_output(payload)
     fails += selftest_short_header(payload)
+    fails += selftest_verify_keys(payload, quiet)
     fails += selftest_new(quiet)
     for f in fails:
         print("FAIL: " + f)
     print("selftest: %s (%d layouts, FAT32 refusal, safe output, blank disk)"
           % ("PASS" if not fails else "FAIL", len(cases)))
     return 1 if fails else 0
+
+
+def selftest_verify_keys(payload, quiet):
+    """verify() tells partitions apart by position, not by their 16-byte name (two partitions
+    named alike, as PC-98 DOS tools default them, must not mask each other), and --verify reads
+    a raw DST, the converter's default output, in the geometry it was written in."""
+    fails = []
+    specs = []
+    for c0, c1 in ((1, 15), (16, 30)):
+        fs, _ = build_fat(1024, 4, payload, (c1 - c0 + 1) * 4 * 33 * 256 // 1024 - 3)
+        specs.append((c0, c1, fs, "MS-DOS", True))
+    src = build_disk(256, 4, 33, 40, specs)
+    dst = convert(src, log=quiet)
+    if not verify(src, dst, log=quiet):
+        fails.append("two same-named partitions: a faithful conversion does not verify")
+    bad = bytearray(dst.data)
+    first = min(part_extent(dst, p)[0] for p in read_ptable(dst))
+    bad[first + 0x400 * 50] ^= 0xFF          # a file in the FIRST of the two, same path in both
+    if verify(src, Image(bytes(bad), 512, dst.heads, dst.spt, dst.cyls, "raw"), log=quiet):
+        fails.append("two same-named partitions: corruption in the first is masked by the "
+                     "second's copy of the same path")
+    with tempfile.TemporaryDirectory() as td:
+        sp, dp = os.path.join(td, "src.hdi"), os.path.join(td, "out.img")
+        write_image(src, sp, "hdi")
+        with open(os.devnull, "w") as null:
+            saved, sys.stdout = sys.stdout, null
+            try:
+                made = main([sp, dp])
+                checked = main(["--verify", sp, dp]) if made == 0 else None
+            finally:
+                sys.stdout = saved
+        if made != 0:
+            fails.append("--verify keys: converting to a raw DST failed")
+        elif checked != 0:
+            fails.append("--verify SRC.hdi OUT.img: a raw DST written by this tool does not "
+                         "verify (exit %r)" % checked)
+    return fails
 
 
 def selftest_short_header(payload):
@@ -1131,7 +1214,14 @@ def main(argv=None):
                     print("error\t-\t%s\t%s" % (e, p))
             return 0
         if args.verify:
-            ok = verify(load_image(args.verify[0], args.src_geometry), load_image(args.verify[1]))
+            # DST is what this tool writes: an HDI, or (the default for a name not ending in
+            # .hdi) a raw image of 512-byte sectors in --heads x --spt, read back here the way
+            # write_verified reads it.
+            try:
+                dst_img = load_image(args.verify[1])
+            except ConvertError:
+                dst_img = load_image(args.verify[1], (512, args.heads, args.spt))
+            ok = verify(load_image(args.verify[0], args.src_geometry), dst_img)
             return 0 if ok else 1
         if not (args.src and args.dst):
             ap.error("SRC and DST are required (or --info/--survey/--verify/--selftest)")

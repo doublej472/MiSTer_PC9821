@@ -73,11 +73,18 @@ def read_d88(blob):
         if not o:
             tracks.append(None)
             continue
+        if o + D88_SEC.size > len(blob):
+            raise ValueError('truncated D88: track %d offset 0x%X is past the end (%d bytes)'
+                             % (t, o, len(blob)))
         secs = []
         p = o
         n = struct.unpack_from('<H', blob, p + 4)[0]
-        for _ in range(n):
+        for i in range(n):
+            if p + D88_SEC.size > len(blob):
+                raise ValueError('truncated D88 at track %d, sector %d of %d' % (t, i, n))
             c, h, r, nn, ns, dens, dele, st, res, sz = D88_SEC.unpack_from(blob, p)
+            if p + 16 + sz > len(blob):
+                raise ValueError('truncated D88 at track %d, sector %d of %d (data)' % (t, i, n))
             secs.append({'c': c, 'h': h, 'r': r, 'n': nn, 'sectors': ns, 'fm': dens & 0x40,
                          'dens': dens, 'del': dele, 'stat': st, 'res': res, 'size': sz,
                          'data': blob[p + 16:p + 16 + sz]})
@@ -89,6 +96,8 @@ def read_d88(blob):
 def track_problems(t, secs):
     """Why FDWRITE could not write this track exactly; [] when it can."""
     cyl, head = t >> 1, t & 1
+    if not secs:
+        return ['no sectors (a track entry with a sector count of 0)']
     out = []
     ns = set(s['n'] for s in secs)
     fm = set(s['fm'] for s in secs)
@@ -120,9 +129,12 @@ def track_problems(t, secs):
 
 
 def cmd_info(path):
-    hdr, tracks = read_d88(open(path, 'rb').read())
+    blob = open(path, 'rb').read()
+    hdr, tracks = read_d88(blob)
     print('%s: name=%r protect=%02X media=%02X size=%d' % (path, hdr['name'], hdr['protect'],
                                                         hdr['media'], hdr['size']))
+    if hdr['size'] != len(blob):
+        print('  header size %d differs from the file length %d' % (hdr['size'], len(blob)))
     present = [t for t, s in enumerate(tracks) if s is not None]
     print('tracks present: %d (index %d..%d), unformatted slots: %d' % (
         len(present), present[0] if present else -1, present[-1] if present else -1,
@@ -130,6 +142,8 @@ def cmd_info(path):
     shapes = {}
     for t in present:
         secs = tracks[t]
+        if not secs:
+            continue                     # reported below as an irregular track
         key = ('FM' if secs[0]['fm'] else 'MFM', len(secs), secs[0]['n'], 128 << secs[0]['n'],
                tuple(s['r'] for s in secs))
         shapes.setdefault(key, []).append(t)
@@ -299,6 +313,25 @@ def selftest():
     assert track_problems(3, tracks[3])
     tracks[3][5]['del'] = 0
     assert track_problems(2, tracks[2][:25])
+    # a zero-sector track and a truncated image: info reports, read_d88 refuses cleanly
+    raw = bytearray(open(src, 'rb').read())
+    o1 = struct.unpack_from('<I', raw, 0x20 + 4)[0]
+    struct.pack_into('<H', raw, o1 + 4, 0)              # track 1: sector count 0
+    zs = os.path.join(d, 'z.d88')
+    open(zs, 'wb').write(bytes(raw))
+    assert read_d88(bytes(raw))[1][1] == []
+    assert track_problems(1, []) == ['no sectors (a track entry with a sector count of 0)']
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()) as o:
+        assert cmd_info(zs) == 1
+    assert 'IRREGULAR track 1' in o.getvalue() and 'differs from the file length' not in o.getvalue()
+    cut = bytes(raw[:o1 + 100])
+    try:
+        read_d88(cut)
+        raise AssertionError('a truncated D88 was read')
+    except ValueError as e:
+        assert 'truncated D88' in str(e), e
     import shutil
     shutil.rmtree(d)
     print('d88tofdw selftest: PASS')
@@ -313,7 +346,11 @@ def main(a):
     if not a or a[0] not in cmds or len(a) != cmds[a[0]][0] + 1:
         print(__doc__)
         return 2
-    r = cmds[a[0]][1](*a[1:])
+    try:
+        r = cmds[a[0]][1](*a[1:])
+    except ValueError as e:              # a malformed image: say what, not a traceback
+        print('%s: %s' % (a[1], e), file=sys.stderr)
+        return 1
     return r if isinstance(r, int) and a[0] == 'compare' else 0
 
 

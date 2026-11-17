@@ -7,7 +7,11 @@
 // trivia: the ITF requires an I/O access to outlast one PIT tick (50e6/2.4576e6 = 20.34
 // cycles at clk_sys), which is why io_access_cycles has a floor rather than a minimum.
 //
-// The main BIOS programs channel 0 as mode 3 with a divisor for ~100 Hz.
+// Channel 0 as the Xe10's BIOS leaves it under DOS reads back status 30h (LSB+MSB, mode 0)
+// and counts down by one through a 65536-tick wrap, 19 wraps in 0.5 s (a mode-3 count of 0
+// would wrap its counting element twice as often):
+//   docs/probes/XE10Y-XE10-RUN3-KATA.TXT:37 `PIT_CH0_STATUS was=30`
+//   docs/probes/XE10T-XE10.TXT:20 `PITEDGE edges=19 art=155647 vmax=65535 vmin=0`
 
 `default_nettype none
 
@@ -377,6 +381,18 @@ module pc9821_pit #(
               // word-read byte phase (NP2kai's pit_setflag clears
               // PIT_FLAG_R|W, io/pit.c:246-249).
               read_hi[ch] <= 1'b0;
+              // ...and it drops what the channel still holds for the reader: a pending count
+              // latch, its outstanding second byte and a pending read-back status. NP2kai's
+              // pit_setflag clears them with the byte phase (io/pit.c:248-249
+              // `pitch->flag &= ~(PIT_FLAG_R | PIT_FLAG_W | PIT_FLAG_L |` /
+              // `PIT_FLAG_S | PIT_FLAG_C);`), and the 8254 holds a latched count "until it is
+              // read by the CPU (or until the counter is reprogrammed)". QEMU
+              // (hw/timer/i8254.c pit_ioport_write) keeps count_latched across a control
+              // word; it ranks below NP2kai and no Xe10 capture decides it
+              // (tb_pc9821_pit_modeset_latch).
+              read_latched[ch]   <= 1'b0;
+              read_latch_2nd[ch] <= 1'b0;
+              read_stat_pend[ch] <= 1'b0;
               // A mode-set control word arms NULL COUNT: the 8254 flags the
               // count register as not loaded until a count write completes it
               // (NP2kai pit_setflag's `(value & 0x3f) | PIT_STAT_CMD`,
@@ -400,15 +416,25 @@ module pc9821_pit #(
           // channel data write
           ch = {30'd0, addr[1:0]};
           case (rw_mode[ch])
+            // A one-byte count write ZEROES the byte it does not write. The Xe10 times
+            // it: a mode-0 count of 1234h, then control 10h (LSB only) and 56h, raises
+            // OUT after 10 ARTIC ticks, the 0056h control's 11 and not the 1256h one's
+            // 588; 12F0h, then control 20h (MSB only) and 01h, after 33, the 0100h
+            // control's 33 and not the 01F0h one's 63:
+            //   docs/probes/XE10Y-XE10-K3M.TXT:33 `case=L1234_56 st0=10 irr0=0 out_art=10`
+            //   docs/probes/XE10Y-XE10-K3M.TXT:36 `case=M12F0_01 st0=20 irr0=0 out_art=33`
+            // (again in XE10Y-XE10-K3M2.TXT and XE10Y-XE10-RUN3-KATA.TXT, rows 33 and 36). QEMU
+            // (`pit_load_count(s, val << 8)`, hw/timer/i8254.c) and NP2kai
+            // (`pitch->value = value << 8`, io/pit.c) load the same way.
             2'd1: begin  // LSB only
-              reload[ch][7:0] <= din;
-              write_load       = 1'b1;
-              write_val        = {reload[ch][15:8], din};
+              reload[ch] <= {8'h00, din};
+              write_load  = 1'b1;
+              write_val   = {8'h00, din};
             end
             2'd2: begin  // MSB only
-              reload[ch][15:8] <= din;
-              write_load        = 1'b1;
-              write_val         = {din, reload[ch][7:0]};
+              reload[ch] <= {din, 8'h00};
+              write_load  = 1'b1;
+              write_val   = {din, 8'h00};
             end
             2'd3: begin  // LSB then MSB
               if (!lsb_written[ch]) begin

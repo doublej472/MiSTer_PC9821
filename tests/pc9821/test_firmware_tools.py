@@ -325,6 +325,21 @@ def main() -> None:
         assert one_command_mem.read_bytes() == real_mem.read_bytes(), "mem differs"
         assert "ITF=BANK4.BIN IDE=BANK3.BIN" in result.stdout, result.stdout
 
+        # Dumps.discover matches names case-insensitively, so a directory of lower-case
+        # names must build the same pack AND pass check_pack's identity checks: the
+        # bank loop once re-opened literal "BANK{i}.BIN" names, which a case-sensitive
+        # filesystem does not have.
+        lower_dir = work / "dumps-lower"
+        lower_dir.mkdir()
+        for entry in dumps_dir.iterdir():
+            (lower_dir / entry.name.lower()).write_bytes(entry.read_bytes())
+        lower_pack = work / "lower-pack.bin"
+        run(ROOT / "tools/build_pack.py", "--dumps", lower_dir, "--out", lower_pack)
+        assert lower_pack.read_bytes() == real_pack.read_bytes(), \
+            "the lower-case dump directory built a different pack"
+        result = run(ROOT / "tools/check_pack.py", "--pack", lower_pack, "--dumps", lower_dir)
+        assert "identity checked against the dumps" in result.stdout, result.stdout
+
         # --dumps with a file missing names the file rather than raising a traceback
         partial = work / "partial-dumps"
         partial.mkdir()

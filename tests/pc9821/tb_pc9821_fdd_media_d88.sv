@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// pc9821_fdd_media reads a D88 and a raw sector image through the HPS block protocol and serves them over the byte seam pc9821_fdc drives: the D88 header is parsed where d88head.h puts its fields (fd_type at 0x1B, fd_size at 0x1C, trackp[164] at 0x20 as little-endian 32-bit offsets), a sector's file offset is found by walking the track's [16-byte _D88SEC][data] run and testing (c,h,r,n) as NP2kai's searchsector_d88 does, so a header that matches C/H/R with a different N is not the sector, a sector whose stored size is shorter than 128<<N still delivers the full 128<<N bytes with a ZERO tail, READ ID answers the requested ordinal with the track's own sector count, a raw image maps CHRN straight onto its geometry row's file offset and refuses an N that is not the row's N, and a missing sector, a missing track, an ordinal past the track's headers and an unknown image size are each reported as not available. The host side is a model of the MiSTer block reader: sd_ack held for the transfer, one 16-bit word per clk_sys at sd_buff_addr with (sd_blk_cnt+1) sectors per handshake. A RE-MOUNT MOVES THE MEDIUM, which is what lets the platform stop resetting the machine on a floppy change: mounting a second image of the same geometry answers the SECOND image's sector bytes (so neither a cached block nor a parsed track table may survive the swap), an eject - a mount of a sub-sector image - clears present and answers no byte out of the ejected medium, and remounting the first image serves it byte-exact again. THE RAW SIZE GUESSER IS NP2kai's fdd_xdf.c supportxdf rows (headersize 0) AND THE GEOMETRY IS PER DRIVE: the 512-byte rows (2DD 9x512 and 8x512, 2HD 15x512/18x512/21x512), the 256-byte 26x256 row and the 9x1024 row mount and each answers READ ID with ITS OWN N and sector count (fdd_readid_common, diskimage/fddfile.c:319-345) while refusing a request whose N is not the row's (fdd_read_xdf's 0xC0, fdd_xdf.c:341-343); the double-claimed 655,360-byte body answers the DD6 row's 8x512 geometry, fdd_set_xdf's first size match in table order (:41 before the same-sized DDB row :47, whose .ddb extension tiebreak :129-133 does not exist at this seam), and a D88 whose fd_type major is 2D or 2DD (0 or 1) mounts beside the 2HD classes and answers its geometry from the walked per-track headers (fdd_d88.c:92-118 takes majors 0/1/2). Each medium answers only in its own media mode (the controller's 0x00BE bit 1 and the unit's 0x04BE rpm bit): a 2DD class read in 2HD mode, a 2HD class in 2DD mode or a minor-0 2HD at 360 rpm misses (NP2kai fdd_d88.c d88trk_read, fddfile.c fdd_seeksector_common). A 2HD D88 whose fd_type minor is non-zero matches each header's rpm_flg (byte 13) against the unit's rpm bit as NP2kai's rpmcheck does (fdd_d88.c `if (sec->rpm_flg != rpm) return(FAILURE);`, applied in searchsector_d88 and fdd_readid_d88): of two headers with the same C/H/R/N the one recorded at the drive's rpm answers, a sector recorded at the other rpm misses, a READ ID ordinal whose header fails the test has no ID, and a minor-0 2HD never reads the flag.
+// pc9821_fdd_media reads a D88 and a raw sector image through the HPS block protocol and serves them over the byte seam pc9821_fdc drives: the D88 header is parsed where d88head.h puts its fields (fd_type at 0x1B, fd_size at 0x1C, trackp[164] at 0x20 as little-endian 32-bit offsets), a sector's file offset is found by walking the track's [16-byte _D88SEC][data] run and testing (c,h,r,n) as NP2kai's searchsector_d88 does, so a header that matches C/H/R with a different N is not the sector, a sector whose stored size is shorter than 128<<N still delivers the full 128<<N bytes with a ZERO tail, READ ID answers the requested ordinal with the track's own sector count, a raw image maps CHRN straight onto its geometry row's file offset and refuses an N that is not the row's N, and a missing sector, a missing track, an ordinal past the track's headers and an unknown image size are each reported as not available. The host side is a model of the MiSTer block reader: sd_ack held for the transfer, one 16-bit word per clk_sys at sd_buff_addr with (sd_blk_cnt+1) sectors per handshake. A RE-MOUNT MOVES THE MEDIUM, which is what lets the platform stop resetting the machine on a floppy change: mounting a second image of the same geometry answers the SECOND image's sector bytes (so neither a cached block nor a parsed track table may survive the swap), an eject - a mount of a sub-sector image - clears present and answers no byte out of the ejected medium, and remounting the first image serves it byte-exact again. THE RAW SIZE GUESSER IS NP2kai's fdd_xdf.c supportxdf rows (headersize 0) AND THE GEOMETRY IS PER DRIVE: the 512-byte rows (2DD 9x512 and 8x512, 2HD 15x512/18x512/21x512), the 256-byte 26x256 row and the 9x1024 row mount and each answers READ ID with ITS OWN N and sector count (fdd_readid_common, diskimage/fddfile.c:319-345) while refusing a request whose N is not the row's (fdd_read_xdf's 0xC0, fdd_xdf.c:341-343); the double-claimed 655,360-byte body answers the DD6 row's 8x512 geometry, fdd_set_xdf's first size match in table order (:41 before the same-sized DDB row :47, whose .ddb extension tiebreak :129-133 does not exist at this seam), and a D88 whose fd_type major is 2D or 2DD (0 or 1) mounts beside the 2HD classes and answers its geometry from the walked per-track headers (fdd_d88.c:92-118 takes majors 0/1/2). Each medium answers only in its own media mode (the controller's 0x00BE bit 1 and the unit's 0x04BE rpm bit): a 2DD class read in 2HD mode, a 2HD class in 2DD mode or a minor-0 2HD at 360 rpm misses (NP2kai fdd_d88.c d88trk_read, fddfile.c fdd_seeksector_common). A 2HD D88 whose fd_type minor is non-zero matches each header's rpm_flg (byte 13) against the unit's rpm bit as NP2kai's rpmcheck does (fdd_d88.c `if (sec->rpm_flg != rpm) return(FAILURE);`, applied in searchsector_d88 and fdd_readid_d88): of two headers with the same C/H/R/N the one recorded at the drive's rpm answers, a sector recorded at the other rpm misses, a READ ID ordinal whose header fails the test has no ID, and a minor-0 2HD never reads the flag. A header with N = 9 is a 32768-byte sector, NP2kai fdd_read_d88's 128 << 8 for every N >= 8: its stored bytes, then zeroes to 32768; so are N = 8, 15, 16, 128 and 255, while N = 7 answers 128 << 7 = 16384.
 //
 // pc9821_fdd_media reads a D88 and a raw sector image through the HPS block protocol and
 // serves them over the byte seam pc9821_fdc drives, with every layout taken from NP2kai's
@@ -254,6 +254,7 @@ module tb_pc9821_fdd_media_d88;
   integer i, n;
   reg [7:0] got [0:4095];
   integer   nget;
+  integer   nz_tail;                // D21: non-zero bytes past got[]'s 4096
 
   initial begin
     #400_000_000;
@@ -861,6 +862,76 @@ module tb_pc9821_fdd_media_d88;
     expect8(err, 1'b0, "D20 minor 0 ignores rpm_flg");
     drain_bytes(4096);
     check_sector(8'h01, 1024);                       // the first CHRN match
+
+    // ---------------- D21: a header with N >= 8 is a 32768-byte sector ----------------------
+    // NP2kai fdd_read_d88: `if (fdc.N < 8) size = 128 << fdc.N; else size = 128 << 8;`, then the
+    // stored bytes (`size > secsize` -> secsize) and ZEROES for the rest. Track 0's third header
+    // becomes C0 H0 R3 N9 with its 256 stored bytes: a read with N = 9 answers 32768 bytes, the
+    // first 256 the file's and the rest 00.
+    // FAIL-FIRST: the size was clamped only at N >= 16, so 128 << 9 truncated to 0 in 16 bits and
+    // the request was never answered (no byte, no error).
+    alt_image = 1'b0;
+    build_d88;
+    img[T0_OFF + 2080 + 3] = 8'h09;                 // header 2: N = 9, stored size still 256
+    mount(IMG_BYTES);
+    do_req(0, 2'd0, 8'h00, 8'h00, 8'h03, 8'h09, 8'h00);
+    expect8(err, 1'b0, "D21 N=9 no error");
+    nget = 0; nz_tail = 0;
+    n = 0;
+    while (!err && !ready && n < 4000000) begin
+      n = n + 1;
+      if (rdy) begin
+        if (nget < 4096) got[nget] = dout;
+        else if (dout !== 8'h00) nz_tail = nz_tail + 1;
+        nget = nget + 1;
+        adv = 1'b1;
+        @(posedge clk);
+        @(negedge clk); adv = 1'b0;
+      end
+      @(negedge clk);
+    end
+    expecti(nget, 32768, "D21 an N=9 sector is 128 << 8 bytes");
+    for (i = 0; i < 4096; i = i + 1)
+      if (got[i] !== ((i < 256) ? secpat(8'h03, i) : 8'h00)) begin
+        $display("  FAIL: D21 byte %0d is %02x", i, got[i]);
+        fails = fails + 1;
+      end
+    expecti(nz_tail, 0, "D21 bytes 4096.. are the zero fill");
+
+    // D21b: the clamp's edges by the same rule - N = 7 answers 128 << 7 = 16384 bytes, N = 8,
+    // 15, 16, 128 and 255 each 32768 (fdd_read_d88 `fdc.N < 8`), the 256 stored bytes first.
+    begin : d21b
+      integer k, want, bad;
+      reg [7:0] nn;
+      for (k = 0; k < 6; k = k + 1) begin
+        nn = (k == 0) ? 8'd7 : (k == 1) ? 8'd8 : (k == 2) ? 8'd15 : (k == 3) ? 8'd16 :
+             (k == 4) ? 8'd128 : 8'd255;
+        want = (nn < 8) ? (128 << nn) : 32768;
+        alt_image = 1'b0;
+        build_d88;
+        img[T0_OFF + 2080 + 3] = nn;
+        mount(IMG_BYTES);
+        do_req(0, 2'd0, 8'h00, 8'h00, 8'h03, nn, 8'h00);
+        expect8(err, 1'b0, "D21b no error");
+        nget = 0; bad = 0;
+        n = 0;
+        while (!err && !ready && n < 4000000) begin
+          n = n + 1;
+          if (rdy) begin
+            if (dout !== ((nget < 256) ? secpat(8'h03, nget) : 8'h00)) bad = bad + 1;
+            nget = nget + 1;
+            adv = 1'b1;
+            @(posedge clk);
+            @(negedge clk); adv = 1'b0;
+          end
+          @(negedge clk);
+        end
+        if (nget != want || bad != 0) begin
+          $display("  FAIL: D21b N=%0d answered %0d bytes (%0d wrong), want %0d", nn, nget, bad, want);
+          fails = fails + 1;
+        end
+      end
+    end
 
   // ==== VERDICT ====
     if (fails == 0) begin

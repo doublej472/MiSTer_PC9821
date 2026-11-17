@@ -41,7 +41,7 @@ module pc9821_trace #(
     // The SECOND requester into the same SDRAM controller. It is the pack's font port, and it is
     // the one way mem0 can go unanswered while nothing in the GVRAM looks wrong: a font transfer
     // stuck in flight holds the controller. pc9821_system exports it as ext_mem1_valid, which IS
-    // fmem_valid (pc9821_system.sv:1195, `.fmem_valid(ext_mem1_valid)`).
+    // fmem_valid (pc9821_system.sv:1248, `.fmem_valid(ext_mem1_valid)`).
     input  wire        ctx_fmem_valid,
     // One-cycle freeze request (pc9821_system trace_trig): once armed, commit the current PC
     // with its dwell so far and dump exactly as a stall does, so the ring holds the transitions
@@ -206,7 +206,7 @@ module pc9821_trace #(
     end
   endfunction
 
-  // THE STALL CONTEXT LINE, 32 characters plus CR and LF, printed once between the header and the
+  // THE STALL CONTEXT LINE, 34 characters plus CR and LF (36 bytes), printed once between the header and the
   // first record. Every field is labelled in the output itself, because an operator reading a raw
   // capture through `cat /dev/ttyS1` has nothing else to tell them what a bare hex run means.
   //

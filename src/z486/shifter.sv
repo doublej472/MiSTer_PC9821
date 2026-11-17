@@ -420,7 +420,10 @@ always_ff @(posedge clk) begin
                 endcase
                 if (count_raw_r == 5'd1) begin
                     case (operation)
-                        SHL: begin
+                        // /6 is SAL, the same instruction as /4 SHL (Intel486
+                        // PRM, SAL/SAR/SHL/SHR; tests/programs/sal6_count1_of).
+                        SHL,
+                        SAL: begin
                             flags_we_of <= 1'b1;
                             flags_of <= count1_shifted_sign ^
                                         count1_last_out_msb;

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// pc9821_fdc's Phase-1 data path against NP2kai io/fdc.c: with media mounted, READ DATA (0x02/0x06/0x0C and their MF variants) takes its eight parameters, walks R..EOT, and is ended either by the DMA engine's TERMINAL COUNT, whose result carries the uPD765's end-of-sector step of the last sector (the real Xe10 answers C=01 H=00 R=01 for a C0 READ DATA whose count ends on R = EOT, both R1 with EOT=1 and R1..R8 with EOT=8, docs/probes/XE10T-XE10-FDC.TXT READ1/READ8, where NP2kai forces R=1 with C unchanged; a count ending before EOT answers R+1, and with MT a count ending at side 0's EOT answers H flipped with C unchanged and at side 1's EOT H flipped with C+1, the datasheet's table and MAME upd765.cpp), or at EOT with no terminal count, which the real Xe10 ends ABNORMALLY - ST0 IC=01 with the last sector's head, ST1 EN, C/H/R the last sector's (docs/probes/XE10T-XE10-FDC2A.TXT EOT_NT/EOT_MT), where NP2kai advances C - always answering the seven-byte result {ST0,ST1,ST2,C,H,R,N}; with MT the head flips and the other side of the SAME cylinder is read; a missing sector answers ST0 IC0 with ST1 ND; a write against this read-only medium answers IC0 with ST1 NW; READ ID reports the crcn-th header of the track with C from the track register and R/N from the header; in DMA mode the MSR reads CB alone (10: RQM low, no drive-busy bit) through the transfer and D0 in the result phase, the Xe10's DMA_MSR row where NP2kai shows D1, and returns to idle at the result drain; and a data command on a drive with NO media answers the seven-byte result with its interrupt, ST0 = IC0|NR|hd|us (0x48|u, READ ID too, where NP2kai's READ ID has no NR), C/H/R/N the command's (READ ID: what the previous command left), SENSE INTERRUPT STATUS then 80, inside the Xe10's timing windows (its NRRD/NRID/NRID_U2 rows), and that answer is its ONE command's: a later SEEK or RECALIBRATE of the ready unit still ends through SENSE INTERRUPT STATUS with SE|us and its PCN, no result phase (the Windows 95 floppy driver's RECALIBRATE after the BIOS's READ ID of an empty drive had replayed the stale not-ready result: device not ready on B:). The DMA model strobes one byte per DRQ with TC coincident with the final strobe, exactly pc9821_dmac's S_DEV. A non-DMA (ND) READ DATA read by polling MSR delivers exactly the medium's bytes even when each sector's bytes arrive after a fetch delay: RQM is shown only while a byte is there (NP2kai fdc_dataread drops RQM between sectors). While RQM is dropped between a PIO read's bytes the MSR keeps CB beside DIO (0x50, never DIO alone: NP2kai fdc_dataread clears only RQM and NDM).
+// pc9821_fdc's Phase-1 data path against NP2kai io/fdc.c: with media mounted, READ DATA (0x02/0x06/0x0C and their MF variants) takes its eight parameters, walks R..EOT, and is ended either by the DMA engine's TERMINAL COUNT, whose result carries the uPD765's end-of-sector step of the last sector (the real Xe10 answers C=01 H=00 R=01 for a C0 READ DATA whose count ends on R = EOT, both R1 with EOT=1 and R1..R8 with EOT=8, docs/probes/XE10T-XE10-FDC.TXT READ1/READ8, where NP2kai forces R=1 with C unchanged; a count ending before EOT answers R+1, and with MT a count ending at side 0's EOT answers H flipped with C unchanged and at side 1's EOT H flipped with C+1, the datasheet's table and MAME upd765.cpp), or at EOT with no terminal count, which the real Xe10 ends ABNORMALLY - ST0 IC=01 with the last sector's head, ST1 EN, C/H/R the last sector's (docs/probes/XE10T-XE10-FDC2A.TXT EOT_NT/EOT_MT), where NP2kai advances C - always answering the seven-byte result {ST0,ST1,ST2,C,H,R,N}; with MT the head flips and the other side of the SAME cylinder is read; a missing sector answers ST0 IC0 with ST1 ND; a write against a write-protected medium answers IC0 with ST1 NW; READ ID reports the crcn-th header of the track with C from the track register and R/N from the header; in DMA mode the MSR reads CB alone (10: RQM low, no drive-busy bit) through the transfer and D0 in the result phase, the Xe10's DMA_MSR row where NP2kai shows D1, and returns to idle at the result drain; and a data command on a drive with NO media answers the seven-byte result with its interrupt, ST0 = IC0|NR|hd|us (0x48|u, READ ID too, where NP2kai's READ ID has no NR), C/H/R/N the command's (READ ID: what the previous command left), SENSE INTERRUPT STATUS then 80, inside the Xe10's timing windows (its NRRD/NRID/NRID_U2 rows), and that answer is its ONE command's: a later SEEK or RECALIBRATE of the ready unit still ends through SENSE INTERRUPT STATUS with SE|us and its PCN, no result phase (the Windows 95 floppy driver's RECALIBRATE after the BIOS's READ ID of an empty drive had replayed the stale not-ready result: device not ready on B:). The DMA model strobes one byte per DRQ with TC coincident with the final strobe, exactly pc9821_dmac's S_DEV. A non-DMA (ND) READ DATA read by polling MSR delivers exactly the medium's bytes even when each sector's bytes arrive after a fetch delay: RQM is shown only while a byte is there (NP2kai fdc_dataread drops RQM between sectors). While RQM is dropped between a PIO read's bytes the MSR keeps CB beside DIO (0x50, never DIO alone: NP2kai fdc_dataread clears only RQM and NDM). A READ DATA with N = 9 moves one 32768-byte sector (every byte compared), as do N = 8, 15, 16, 128 and 255, while N = 7 moves 16384: NP2kai's 128 << N below 8 and 128 << 8 for every N >= 8 (diskimage/fd/fdd_d88.c `if (fdc.N < 8) size = 128 << fdc.N; else size = 128 << 8;`).
 //
 // pc9821_fdc's Phase-1 DATA PATH against NP2kai io/fdc.c, driven through the real ports
 // with a media that answers the sector seam and a DMA engine that answers the device
@@ -108,6 +108,9 @@ module tb_pc9821_fdc_read;
   assign media_hs    = 8'd2;
 
   reg miss_en = 0;             // answer "sector not found" for a data request
+  // The index of the sector's last byte: 1023 (N = 3) for every row but T16, whose N = 9
+  // sector is NP2kai's clamped 128 << 8 = 32768 bytes (fdd_d88.c fdd_read_d88).
+  integer sec_last = 1023;
   // T13: the medium's byte arrives rdy_delay clocks after the request (0 = the next clock,
   // every earlier case): a real block fetch is not instant, and a PIO reader must wait it out.
   integer rdy_delay = 0;
@@ -145,7 +148,7 @@ module tb_pc9821_fdc_read;
         if (rdy_cnt == 0) sim_xfer <= 1'b1;
       end
       if (sim_xfer && media_adv) begin
-        if (sim_ptr == 16'd1023) sim_xfer <= 1'b0;
+        if (sim_ptr == sec_last[15:0]) sim_xfer <= 1'b0;
         sim_ptr <= sim_ptr + 16'd1;
       end
     end
@@ -155,7 +158,7 @@ module tb_pc9821_fdc_read;
   reg [15:0] dm_left;
   reg        dm_run;
   integer    dm_n;
-  reg  [7:0] dm_bytes [0:4095];
+  reg  [7:0] dm_bytes [0:32767];
 
   // Two cycles per byte, exactly pc9821_dmac's S_FIRST -> S_DEV: the request cycle arms
   // the strobe, the NEXT cycle is the strobe (dack and dev_stb high together, and the
@@ -169,7 +172,7 @@ module tb_pc9821_fdc_read;
     if (reset) begin
       dm_left <= 16'd0; dm_run <= 1'b0; dm_n = 0; armed <= 1'b0;
     end else if (armed) begin
-      if (dm_n < 4096) dm_bytes[dm_n] = dma_dout;
+      if (dm_n < 32768) dm_bytes[dm_n] = dma_dout;
       dm_n     = dm_n + 1;
       dm_left <= dm_left - 16'd1;
       if (dm_left == 16'd1) dm_run <= 1'b0;
@@ -449,7 +452,9 @@ module tb_pc9821_fdc_read;
     expect8(g_rs[5], 8'h02, "T6b R = header 2");
     expecti(nrec, 2, "T6b two header requests");
 
-    // ---------------- T7: a write against this medium answers NW --------------------
+    // ---------------- T7: a write against this write-protected medium answers NW ------
+    // (writeprotect = 0001 for unit 0 here; the unprotected write path is tb_pc9821_fdc_handoff's
+    // and tb_pc9821_fdd_write's.)
     reset_dut();
     wr8(3'd1, 8'h05);
     wr8(3'd1, 8'h00); wr8(3'd1, 8'h00); wr8(3'd1, 8'h00); wr8(3'd1, 8'h01);
@@ -458,7 +463,7 @@ module tb_pc9821_fdc_read;
     get_result;
     expecti(g_rlen, 7, "T7 result length");
     expect8(g_rs[0], 8'h40, "T7 ST0 = IC0 (FDC_DriveCheck(TRUE))");
-    expect8(g_rs[1], 8'h02, "T7 ST1 = NW (the medium has no write port)");
+    expect8(g_rs[1], 8'h02, "T7 ST1 = NW (the medium is write-protected)");
     expect8(g_rs[5], 8'h01, "T7 R");
     expecti(nrec, 0, "T7 no media request at all");
 
@@ -773,6 +778,66 @@ module tb_pc9821_fdc_read;
     expect8(g_rs[4], 8'h00, "T15b MT side-1 EOT + TC: H flipped back");
     expect8(g_rs[5], 8'h01, "T15b MT side-1 EOT + TC: R = 1");
     expecti(dm_n, 4096, "T15b four sectors moved");
+
+    // ---------------- T16: N >= 8 is a 32768-byte sector (NP2kai's clamp) ---------------------
+    // NP2kai sizes every data sector as `if (fdc.N < 8) size = 128 << fdc.N; else size = 128 << 8;`
+    // (diskimage/fd/fdd_d88.c fdd_read_d88, fdd_write_d88 and the other sector readers), so an
+    // N of 8..255 moves 32768 bytes. One sector R=1, EOT=1, N=9, with a DMA count larger than the
+    // sector: exactly 32768 bytes move and the command ends at EOT as T2 does (EOT_NT).
+    // FAIL-FIRST: the size was clamped only at N >= 16, so 128 << 9 truncated to 0 in 16 bits and
+    // the transfer never reached the sector's end: no result, no interrupt.
+    reset_dut();
+    sec_last = 32767;
+    arm_dma(40000);
+    read_cmd(8'h06, 8'h00, 8'h00, 8'h00, 8'h01, 8'h09, 8'h01);
+    wait_irq(400000);
+    get_result;
+    expecti(g_rlen, 7, "T16 result length");
+    expect8(g_rs[0], 8'h40, "T16 ST0 IC=01 at EOT without TC");
+    expect8(g_rs[1], 8'h80, "T16 ST1 EN");
+    expect8(g_rs[5], 8'h01, "T16 R = the last sector");
+    expect8(g_rs[6], 8'h09, "T16 N");
+    expecti(dm_n, 32768, "T16 an N=9 sector is 32768 bytes (fdd_d88.c 128 << 8)");
+    expecti(nrec, 1, "T16 one sector request");
+    for (i = 0; i < 32768; i = i + 1)
+      if (dm_bytes[i] !== pat(8'h01, i)) begin
+        $display("  FAIL: T16 byte %0d is %02x, the medium's pattern is %02x", i, dm_bytes[i], pat(8'h01, i));
+        fails = fails + 1;
+        i = 32768;
+      end
+
+    // T16b: the clamp's edges, the same rule (fdd_d88.c: `fdc.N < 8` -> 128 << N, else 128 << 8):
+    // N = 7 moves 16384 bytes, and N = 8, 15, 16, 128 and 255 each move 32768. The medium
+    // offers 32768 bytes every time, so the count the transfer stops at is the controller's.
+    begin : t16b
+      integer k, want;
+      reg [7:0] nn;
+      for (k = 0; k < 6; k = k + 1) begin
+        nn = (k == 0) ? 8'd7 : (k == 1) ? 8'd8 : (k == 2) ? 8'd15 : (k == 3) ? 8'd16 :
+             (k == 4) ? 8'd128 : 8'd255;
+        want = (nn < 8) ? (128 << nn) : 32768;
+        reset_dut();
+        sec_last = 32767;
+        arm_dma(40000);
+        read_cmd(8'h06, 8'h00, 8'h00, 8'h00, 8'h01, nn, 8'h01);
+        wait_irq(400000);
+        get_result;
+        expecti(g_rlen, 7, "T16b result length");
+        expect8(g_rs[0], 8'h40, "T16b ST0 IC=01 at EOT without TC");
+        expect8(g_rs[6], nn, "T16b N");
+        if (dm_n != want) begin
+          $display("  FAIL: T16b N=%0d moved %0d bytes, want %0d (fdd_d88.c)", nn, dm_n, want);
+          fails = fails + 1;
+        end
+        for (i = 0; i < want && i < dm_n; i = i + 1)
+          if (dm_bytes[i] !== pat(8'h01, i)) begin
+            $display("  FAIL: T16b N=%0d byte %0d is %02x, the medium's pattern is %02x", nn, i, dm_bytes[i], pat(8'h01, i));
+            fails = fails + 1;
+            i = want;
+          end
+      end
+    end
+    sec_last = 1023;
 
   // ==== VERDICT ====
     if (fails == 0) begin

@@ -1621,7 +1621,7 @@ lbl_datword:    .ascii "DATWORD $"
 lbl_tstamp:     .ascii "TSTAMP  $"
 
 msg_banner:
-    .ascii "IDELAT - PC-9821 real-machine IDE READ latency probe (tools/hwprobe/idelat.s)\r\n"
+    .ascii "IDELAT - PC-9821 real-machine IDE READ latency probe (tools/hwprobe/idelat/idelat.s)\r\n"
     .ascii "Measures command issue -> first DRQ, per-sector PIO transfer, single- vs\r\n"
     .ascii "multi-sector READ SECTORS, word throughput and the status-poll cost shape.\r\n"
     .ascii "READ-ONLY on disk: the only ATA commands are IDENTIFY 0xEC and READ SECTORS\r\n"

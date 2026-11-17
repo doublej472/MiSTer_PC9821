@@ -12,6 +12,7 @@ Y0-Y40) by dominant owner. --json prints the per-group numbers for tables.
 """
 from __future__ import annotations
 
+import argparse
 import collections
 import gzip
 import json
@@ -38,20 +39,25 @@ MAP_GROUPS = {
 
 def load(d: Path):
     loc: dict[str, tuple[str, int, int]] = {}
-    for line in gzip.open(d / "cells.txt.gz", "rt"):
-        where, _, name = line.rstrip("\n").partition(" ")
-        m = LOC_RE.match(where)
-        if m and name:
-            loc[name] = (m.group(1), int(m.group(2)), int(m.group(3)))
+    gz = d / "cells.txt.gz"
+    if not gz.is_file():
+        raise SystemExit(f"hdmi_place: {gz} is missing (hdmi_place.tcl prints why its gzip failed)")
+    with gzip.open(gz, "rt") as f:
+        for line in f:
+            where, _, name = line.rstrip("\n").partition(" ")
+            m = LOC_RE.match(where)
+            if m and name:
+                loc[name] = (m.group(1), int(m.group(2)), int(m.group(3)))
     return loc
 
 
 def keepers(d: Path, tag: str, loc) -> list[tuple[str, tuple[str, int, int]]]:
     out = []
-    for line in open(d / f"regs_{tag}.txt"):
-        name = ENTITY_RE.sub(r"\1", line.strip())
-        if name in loc:
-            out.append((name, loc[name]))
+    with open(d / f"regs_{tag}.txt") as f:
+        for line in f:
+            name = ENTITY_RE.sub(r"\1", line.strip())
+            if name in loc:
+                out.append((name, loc[name]))
     return out
 
 
@@ -103,7 +109,7 @@ def corner_map(loc) -> list[str]:
     return rows
 
 
-def analyse(d: Path) -> dict:
+def analyse(d: Path) -> tuple[dict, dict]:
     loc = load(d)
     hdmi, vid = keepers(d, "hdmi", loc), keepers(d, "vid", loc)
     res = {"hdmi": spread(hdmi), "vid": spread(vid)}
@@ -121,12 +127,14 @@ def analyse(d: Path) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    if not argv or argv[0] in ("-h", "--help"):
-        print(__doc__)
-        return 0 if argv else 2
-    d = Path(argv[0])
-    res, loc = analyse(d)
-    if "--json" in argv:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("dir", type=Path, help="the fit's output_files/hplace directory")
+    ap.add_argument("--map", action="store_true", help="the 2x2-bin owner map")
+    ap.add_argument("--json", action="store_true", help="the per-group numbers as JSON")
+    a = ap.parse_args(argv)
+    res, loc = analyse(a.dir)
+    if a.json:
         print(json.dumps(res, sort_keys=True))
         return 0
     for k, v in res.items():
@@ -135,7 +143,7 @@ def main(argv: list[str]) -> int:
                   f"Y {v['y'][0]:2d}-{v['y'][1]:2d}-{v['y'][2]:2d}  p5-p95 box {v['area']} LAB sites")
     print(f"worst paths: {res['worst_paths']}, max span dx {res.get('worst_dx_max')} "
           f"dy {res.get('worst_dy_max')}; first {res.get('worst_first')}")
-    if "--map" in argv:
+    if a.map:
         print("\n".join(corner_map(loc)))
     return 0
 

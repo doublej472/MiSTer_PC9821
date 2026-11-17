@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 // ==== WHAT THIS PROVES ====
-// A masked IRQ0 request does NOT stay latched: the master IRR bit 0 follows the PIT channel-0 OUT pin and clears on the falling edge (pc9821_pic's WD_MASK), so the STEELGUN master-IRR falling-edge poll terminates. Expected from the real Xe10 (docs/probes/IRQWD.TXT: with ch0 forced to mode 3, 'IRQ0 masked poll ... falls 2826 rises 2826') and NP2kai's masked-timer clear (io/pic.c:217-225, :240-252). FAIL-FIRST: the pre-change pure edge latch never fell. The positive control delivers exactly one IRQ0 (vector 0x08) when unmasked, and an unmasked request is not lost.
+// A masked IRQ0 request does NOT stay latched: the master IRR bit 0 follows the PIT channel-0 OUT pin and clears on the falling edge (pc9821_pic's WD_MASK), so the STEELGUN master-IRR falling-edge poll terminates. Expected from the real Xe10 (docs/probes/IRQWD.TXT: with ch0 forced to mode 3, 'IRQ0 masked poll ... falls 2826 rises 2826') and NP2kai's masked-timer clear (io/pic.c:217-225, :240-252). FAIL-FIRST: the pre-change pure edge latch never fell. The positive control delivers IRQ0 (vector 0x08) when unmasked, and a request latched while masked is delivered when the mask opens, once per rising edge.
 //
 // ---- where the expectation comes from ----
 //   docs/probes/IRQWD.TXT - the real Xe10: while IRQ0 is masked the master IRR
@@ -96,9 +96,15 @@ module tb_pc9821_pit_irq_clear;
 
   // One x86 acknowledge is two INTA assertions, as the bridge's state machine needs.
   task automatic one_inta;
+    integer inta_guard;
     begin
       @(negedge clk); cpu_inta = 1;
-      while (!cpu_inta_ready) @(negedge clk);
+      inta_guard = 0;
+      while (!cpu_inta_ready) begin
+        @(negedge clk);
+        inta_guard = inta_guard + 1;
+        if (inta_guard > 1000) $fatal(1, "TB_PC9821_PIT_IRQ_CLEAR: FAIL (INTA never answered cpu_inta_ready)");
+      end
       @(negedge clk); cpu_inta = 0;
       repeat (2) @(negedge clk);
     end
@@ -186,16 +192,57 @@ module tb_pc9821_pit_irq_clear;
     if (!iok) fail("an unmasked IRQ0 did not reach the CPU");
     else if (rv !== 8'h08) fail("IRQ0 vector not 0x08 (master ICW2 0x08 + 0)");
 
-    // ---- 4. a masked falling edge must not lose an UNMASKED request: with
-    //         IRQ0 unmasked the request is delivered, not withdrawn ----
+    // ---- 4. unmask while pending: a request latched while IRQ0 was MASKED is
+    //         delivered as soon as the mask opens, with no new OUT0 edge, and
+    //         the still-held level does not request a second interrupt after
+    //         the EOI. 8259A rule: INT follows IRR & ~IMR, and an edge-triggered
+    //         IR line needs a new rising edge to request again (NP2kai io/pic.c
+    //         pic_setirq sets IRR on the edge; the IMR write re-evaluates). ----
     reset_all();
-    init_master(8'hFF);
+    init_master(8'hFF);                     // IRQ0 masked
     write_port(16'h0077, 8'h36);
     write_port(16'h0071, 8'h40);
     write_port(16'h0071, 8'h00);
-    write_port(16'h0002, 8'hFE);            // unmask IRQ0
-    service_irq(rv, iok);
-    if (!iok) fail("the unmasked IRQ0 did not deliver after the mask test");
+    begin
+      integer guard, lat, hold;
+      bit second;
+      // align to the START of an OUT0 high half, so the whole ~671-cycle half
+      // period is left for the checks below
+      guard = 0;
+      while (pit_out0 !== 1'b0 && guard < 20000) begin @(posedge clk); guard = guard + 1; end
+      while (pit_out0 !== 1'b1 && guard < 20000) begin @(posedge clk); guard = guard + 1; end
+      repeat (4) @(posedge clk);
+      if (guard >= 20000) fail("the PIT OUT0 square wave never rose");
+      else if (dbg_irr[0] !== 1'b1) fail("the masked IRQ0 rising edge did not latch IRR bit 0");
+      else if (cpu_intr) fail("a MASKED IRQ0 reached the CPU");
+      else begin
+        write_port(16'h0002, 8'hFE);        // unmask IRQ0 while its request is pending
+        lat = 0;
+        while (!cpu_intr && lat < 32) begin @(posedge clk); lat = lat + 1; end
+        if (!cpu_intr)
+          fail("unmasking a pending IRQ0 did not raise INT: the latched request was lost");
+        else if (pit_out0 !== 1'b1)
+          fail("INT came only after OUT0 left its high half: not the pending request");
+        else begin
+          service_irq(rv, iok);
+          if (!iok || rv !== 8'h08)
+            fail("the pending IRQ0 did not deliver vector 0x08 after the unmask");
+          // the level is still high (same half period): no second request
+          second = 0;
+          hold = 0;
+          while (pit_out0 === 1'b1 && hold < 200000) begin
+            @(posedge clk);
+            if (cpu_intr) second = 1;
+            hold = hold + 1;
+          end
+          if (pit_out0 === 1'b1)
+            fail("OUT0 never left its high half after the unmask: the channel stopped");
+          if (second)
+            fail("a held IRQ0 level requested a second interrupt with no new edge");
+          else $display("ok       unmask_while_pending latency=%0d one_delivery", lat);
+        end
+      end
+    end
 
     // ==== VERDICT ====
     if (errors == 0) begin
@@ -203,6 +250,14 @@ module tb_pc9821_pit_irq_clear;
       $finish;
     end
     else $fatal(1, "TB_PC9821_PIT_IRQ_CLEAR: FAIL (%0d errors)", errors);
+  end
+
+  // In-bench watchdog: the run takes well under 1 ms of simulated time, so a stalled
+  // INTA bridge or a frozen OUT0 ends here with a named failure, not at the runner's
+  // wall-clock timeout.
+  initial begin
+    #20_000_000;
+    $fatal(1, "TB_PC9821_PIT_IRQ_CLEAR: FAIL (watchdog)");
   end
 
 endmodule

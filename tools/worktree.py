@@ -12,7 +12,7 @@ Commands:
     status <name>
     diff   <name>          diff of the lane branch vs its fork point
     merge  <name> [--apply] [--message MSG]
-    rm     <name> [--force]
+    rm     <name> [--force]  (refuses an unmerged branch without --force)
 
 Examples:
     tools/worktree.py new gfx-fix
@@ -132,8 +132,9 @@ def cmd_diff(args):
     p = sh("git", "diff", "--stat", f"{base}...{branch}", check=False)
     print(f"lane '{args.name}' ({branch}) vs merge-base {base[:12]}\n")
     print(p.stdout or "  (no changes)")
-    print("\nfull diff:")
-    sh("git", "diff", f"{base}...{branch}")
+    print("\nfull diff:", flush=True)
+    # Not sh(): that captures the output. Streamed, so the diff reaches the terminal or a pipe.
+    subprocess.run(["git", "diff", f"{base}...{branch}"], cwd=REPO)
 
 
 def cmd_merge(args):
@@ -160,12 +161,23 @@ def cmd_rm(args):
     branch = lane_branch(args.name)
     path = worktree_path(args.name, args.root)
     flags = ["--force"] if args.force else []
+    has_branch = bool(sh("git", "branch", "--list", branch).stdout.strip())
+    # A branch whose commits the current branch does not hold is refused before anything is
+    # removed: `rm` on a lane that was never merged would otherwise drop committed work.
+    if has_branch and not args.force:
+        merged = sh("git", "merge-base", "--is-ancestor", branch, "HEAD", check=False)
+        if merged.returncode != 0:
+            tip = sh("git", "rev-parse", "--short", branch).stdout.strip()
+            sys.stderr.write(f"{branch} (tip {tip}) is not merged into {main_branch()}; "
+                             f"merge it first, or pass --force to delete it anyway\n")
+            sys.exit(1)
     if os.path.exists(path):
         sh("git", "worktree", "remove", *flags, path)
         print(f"removed worktree {path}")
-    if sh("git", "branch", "--list", branch).stdout.strip():
-        sh("git", "branch", "-D", branch)
-        print(f"deleted branch {branch}")
+    if has_branch:
+        tip = sh("git", "rev-parse", "--short", branch).stdout.strip()
+        sh("git", "branch", "-D" if args.force else "-d", branch)
+        print(f"deleted branch {branch} (was {tip})")
 
 
 def main():
@@ -201,7 +213,8 @@ def main():
     p = sub.add_parser("rm", help="remove a lane worktree + branch")
     p.add_argument("name")
     p.add_argument("--root", help="worktree root dir (default <repo>/.worktrees)")
-    p.add_argument("--force", action="store_true")
+    p.add_argument("--force", action="store_true",
+                   help="remove a dirty worktree and delete an unmerged branch")
     p.set_defaults(fn=cmd_rm)
 
     args = ap.parse_args()

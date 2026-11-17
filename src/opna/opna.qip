@@ -1,9 +1,10 @@
 # PC-9801-86 sound: the vendored YM2608 (OPNA) and this core's glue.
 #
-# Every file under jt12/ and jt49/ plus jtopna.v is a byte-identical copy of
+# Every file under jt12/ and jt49/ plus jtopna.v is a copy of
 # MiSTer-devel/PC88_MiSTer rtl/sound/, commit
-# 09e56f54b6d36b23a154fd3390d3f36160fce661; each keeps its own licence
-# header. See LICENSE-SCOPE.md in this directory for what carries what.
+# 09e56f54b6d36b23a154fd3390d3f36160fce661, byte-identical but for the twelve
+# files with marked local changes that LICENSE-SCOPE.md lists; each keeps its
+# own licence header. See LICENSE-SCOPE.md for what carries what.
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) jtopna.v ]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) jt12/hdl/jt08_acc.v ]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) jt12/hdl/jt08.v ]

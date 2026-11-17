@@ -131,3 +131,8 @@ where the old preload missed ESP and the run timed out at the first CALL.
 The re-vendor to `d5cf5bd` (IDTR and GDTR reset to limit FFFFh, `docs/probes/KIT1-XE10-CFG0.TXT:78`)
 leaves both lines unchanged (242611 / 121837 / 1.991, 271807): the bench forces the IDTR and GDTR
 before the loop, so it cannot see a reset value.
+The re-vendor to `fc27b19` (SAL by a count of one writes OF as SHL does, the paging unit's
+three lookup-slot wait states removed, a folded Jcc check, test and runner corrections) leaves
+both lines unchanged (242611 / 121837 / 1.991, 271807), and the boot golden at 1706091 and
+1706106 (real controller), all measured on the re-vendored tree. The loop runs no SAL by one; the
+paging change moved no cycle count in either line.

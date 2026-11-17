@@ -44,12 +44,11 @@ module tb_pc9821_osd;
 
   integer errors = 0;
 
-  // The other half of the contract: a size CODE to the guest size it means. This is
-  // pc9821_system.sv's own code-to-bytes table (src/pc9821/core/pc9821_system.sv,
-  // the `case (ram_size_sel)` block), spelled out here ON PURPOSE so that this bench
-  // pins both ends - the list position that picks a code, and the code that means a
-  // size. If either end moves without the other, one of the two checks below fails,
-  // and that is the drift this bench exists to catch.
+  // A size CODE to the guest size it means, used only to NAME sizes in the messages and in
+  // check 3. It is a hand copy of pc9821_system.sv's code-to-bytes table (size_code_bytes);
+  // this bench does not elaborate the system, so it cannot catch that table drifting -
+  // tools/check_osd_contract.py holds CONF_STR's labels, this module's decode and
+  // size_code_bytes together. What this bench pins is the list position -> code decode.
   function automatic integer code_mib(input [2:0] code);
     case (code)
       3'd0:    code_mib = 1;
@@ -86,19 +85,13 @@ module tb_pc9821_osd;
     want_code[6] = 3'd2; want_mib[6] = 4;    // entry 6 = 4M
     want_code[7] = 3'd3; want_mib[7] = 8;    // entry 7 = 8M
 
-    // 1. Every list position selects the size code its label names, and that code
-    //    means the size the label says.
+    // 1. Every list position selects the size code its label names.
     for (i = 0; i < 8; i = i + 1) begin
       osd_ram_size = i[2:0];
       #1;
       if (ram_size_code !== want_code[i]) begin
         $display("FAIL RAM Size entry %0d selects size code %0d, want %0d (its label says %0d MB)",
                  i, ram_size_code, want_code[i], want_mib[i]);
-        errors = errors + 1;
-      end
-      else if (code_mib(ram_size_code) != want_mib[i]) begin
-        $display("FAIL RAM Size entry %0d -> code %0d -> %0d MB, but its label says %0d MB",
-                 i, ram_size_code, code_mib(ram_size_code), want_mib[i]);
         errors = errors + 1;
       end
       seen[i] = ram_size_code;

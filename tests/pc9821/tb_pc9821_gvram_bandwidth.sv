@@ -1,21 +1,20 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_BANDWIDTH: measures, against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, the two bandwidths the flicker and the intro slowdown are made of - the CPU plane-window WRITE path (a stream of DWORD stores, one byte-lane read-modify-write per enabled lane on the DQM-less MiSTer module) and the scanout's 80-column line fetch, both alone and with the write stream saturating the shared controller - and reports each as an effective MB/s plus the worst-case line-fetch time against the 2014 clk_sys raster-line budget. It also ASSERTS the two defects are closed: the scanout issues bursts wider than one dword and no line misses its deadline under a saturating CPU write stream, and the ping-pong display swap only ever follows a COMPLETE fetch (a window too short to fetch the line holds the previous one instead of blending it).
+// TB_PC9821_GVRAM_BANDWIDTH: measures, on the REAL pc9821_gvram datapath over its block-RAM array (no SDRAM controller: the scanout reads its own port), the two bandwidths the flicker and the intro slowdown were made of - the CPU plane-window WRITE path (a stream of DWORD stores) and the scanout's 80-column line fetch, both alone and with the write stream saturating the CPU port - and reports each as an effective MB/s plus the worst-case line-fetch time against the 2014 clk_sys raster-line budget (reported, not asserted, beyond completion). It ASSERTS that every line under a saturating CPU write stream fetches all 80 columns inside its budget (counted on the scanout's fetch strobe), and that the ping-pong display swap only ever follows a COMPLETE fetch (a window too short to fetch the line holds the previous one instead of blending it) and resumes once a line fits its window. It does not read the fetched line data back (tb_pc9821_gvram and tb_pc9821_gvram_coherence do).
 //
-// WHY THIS EXISTS. The GVRAM moved out of block RAM onto SDRAM as two
-// requesters: the CPU's D1 accesses on the memory_subsystem's mem_* port (here port 0) and the
-// scanout's line fetch on the controller's fourth (here port 3). The two defects this bench
-// measures against are: the intro running slow (the write path's per-access cost) and the
-// sprites flickering when many objects are on screen (the scanout's line fetch losing its
-// deadline to the write stream). An earlier study modelled the scanout against the controller and said
-// the model was not pc9821_gvram_dut itself; this bench drives the real FSM.
+// WHY THIS EXISTS. The GVRAM once lived on SDRAM, where the CPU's plane accesses and the
+// scanout's line fetch competed for one controller. The two defects this bench was written
+// against are the intro running slow (the write path's per-access cost) and the sprites
+// flickering when many objects are on screen (the scanout's line fetch losing its deadline to
+// the write stream). The GVRAM is block RAM again (pc9821_gvram_mem, the scanout on its own
+// port), so this bench drives the real pc9821_gvram_dut with no SDRAM controller behind it.
 //
 // The 2014 clk_sys line budget is the machine's
 // own: 848 dots x 440 lines at the 21.0526 MHz dot clock is a 24.825 kHz line rate, 40.28 us.
 //
-// The bench ASSERTS the two defects it exists for are FIXED - the scanout fetches a line in
-// BURSTS and completes it under a saturating CPU write stream, and the ping-pong display swap
+// The bench ASSERTS the two defects it exists for are FIXED - the scanout fetches all 80 columns
+// of a line inside the line budget under a saturating CPU write stream, and the ping-pong display swap
 // only ever follows a COMPLETE fetch - and it REPORTS the write MB/s and the worst line-fetch
 // time without gating on the write path, which is still 3.6x the machine's and is not this
 // lane's lever.
@@ -70,14 +69,6 @@ module tb_pc9821_gvram_bandwidth;
   wire        line_sel, line_ready;
 
 
-  // Two saturating 1-dword read streams on the controller's second and third requesters, standing
-  // in for the backend's other traffic (the font glyph fetch and the 86-PCM buffer drain) when the
-  // arbiter's worst case is wanted. They are OFF for the machine-shaped phases.
-  reg        ram_en = 1'b0, pcm_en = 1'b0;
-  reg [26:0] ram_addr = 27'h0040_0000;
-  reg [26:0] pcm_addr = 27'h0080_0000;
-  reg        ram_valid = 1'b0, pcm_valid = 1'b0;
-  wire       ram_ready, pcm_ready;
 
   pc9821_gvram_dut dut (
       .clk(clk), .reset(reset),
@@ -111,13 +102,6 @@ module tb_pc9821_gvram_bandwidth;
   integer    cb_txns = 0;
 
   // The GVRAM is block RAM now: there is no backend transaction to count.
-
-  // The two saturating port-1/2 streams were the SDRAM arbiter's worst case; the controller is
-  // gone with the GVRAM's SDRAM backing, so the streams are idle placeholders.
-  always @(posedge clk) begin
-    ram_valid <= ram_en;
-    pcm_valid <= pcm_en;
-  end
 
   always @(posedge clk) begin
     if (reset) begin
@@ -158,7 +142,7 @@ module tb_pc9821_gvram_bandwidth;
   // deadline and the display buffer keeps the previous line's tail in the columns not fetched.
   integer scan_lines_run = 0, scan_misses = 0, scan_min_cols = 999, scan_worst = 0;
 
-  integer i, no_load_worst, loaded_worst, no_load_misses, loaded_misses;
+  integer i, no_load_worst, loaded_worst, no_load_misses, loaded_misses, loaded_min_cols;
 
   // ---- THE INSTRUMENTS THE TWO FIXED DEFECTS ARE JUDGED BY ----
   // The columns a line window delivered, and whether the ping-pong select moved in it. The array
@@ -289,25 +273,13 @@ module tb_pc9821_gvram_bandwidth;
     for (i = 0; i < 12; i = i + 1) scan_line(15'(15'h1000 + i * LINE_COLS));
     loaded_worst  = scan_worst;
     loaded_misses = scan_misses;
+    loaded_min_cols = scan_min_cols;
     cpu_stream_en = 1'b0;
     $display("NOTE gvram_bandwidth: scanout line fetch, CPU WRITE stream saturating: worst %0d clk_sys of the %0d budget (%0d%%), %0d/%0d lines missed, min columns fetched %0d/%0d",
              loaded_worst, LINE_BUDGET, (loaded_worst * 100) / LINE_BUDGET,
              loaded_misses, scan_lines_run, scan_min_cols, LINE_COLS);
     $display("NOTE gvram_bandwidth: BUDGET 2014 clk_sys = 848 dots x 440 lines at 21.0526 MHz = 40.28 us");
     $display("NOTE gvram_bandwidth: the swap is guarded on a COMPLETE fetch: a missed line holds the previous line instead of blending it with the one from two lines ago");
-
-    // ---- PHASE B3: the arbiter's worst case - the scanout has no priority, so it misses when the
-    // other three slots are busy. All four requesters saturated: port 0 the GVRAM write stream,
-    // ports 1/2 the saturating read streams, port 3 the scanout. The game does not saturate ports
-    // 1/2, so this bounds the fault rather than reproducing the frame that shakes.
-    cpu_stream_en = 1'b1; ram_en = 1'b1; pcm_en = 1'b1;
-    repeat (2000) @(posedge clk);
-    scan_worst = 0; scan_misses = 0; scan_min_cols = 999; scan_lines_run = 0;
-    for (i = 0; i < 12; i = i + 1) scan_line(15'(15'h2000 + i * LINE_COLS));
-    cpu_stream_en = 1'b0; ram_en = 1'b0; pcm_en = 1'b0;
-    $display("NOTE gvram_bandwidth: scanout line fetch, ALL FOUR requesters saturating: worst %0d clk_sys of the %0d budget (%0d%%), %0d/%0d lines missed, min columns fetched %0d/%0d",
-             scan_worst, LINE_BUDGET, (scan_worst * 100) / LINE_BUDGET,
-             scan_misses, scan_lines_run, scan_min_cols, LINE_COLS);
 
     // ---- PHASE B4: the ping-pong swap may only follow a COMPLETE fetch. A window shorter than
     // the fetch takes cannot complete a line, so the display must HOLD the previous line rather
@@ -338,7 +310,7 @@ module tb_pc9821_gvram_bandwidth;
     // "bursts wider than one dword" instrument was the SDRAM fetch's, and is gone with it.
     if (loaded_misses != 0)
       fail("a scanout line MISSED its deadline under a saturating CPU write stream: the flicker's cause is still open");
-    if (scan_min_cols != LINE_COLS)
+    if (loaded_min_cols != LINE_COLS)
       fail("a line fetched fewer than 80 columns under the CPU write stream");
 
     // ---- CHECKS: FIX 3 - the swap never follows an incomplete fetch ----

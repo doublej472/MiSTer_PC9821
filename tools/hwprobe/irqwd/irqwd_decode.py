@@ -9,6 +9,7 @@ already knows it waives the PIT channel-0 clear (tb_pc9821_pit_ref), so IRQ0 is
 the confirmed one; this capture settles the rest.
 
     python3 tools/hwprobe/irqwd/irqwd_decode.py IRQWD.TXT
+    python3 tools/hwprobe/irqwd/irqwd_decode.py --selftest
 
 Rows read (all printed by the probe):
 
@@ -26,6 +27,7 @@ Verdicts:
                                  row's control; a static OUT voids it)
     IRQ0   falls>0            -> CLEARS the masked timer request (STEELGUN works)
            falls=0 + PITOUT   -> HOLDS
+           no PITOUT row      -> UNKNOWN (the control is missing, not static)
     PITCH0 before bit0 set and after bit0 clear -> CLEARS (the ch0 write withdraws)
     LINE   trig=0             -> NO-TRIGGER (device absent / banking wrong)
            postack_irr bit SET -> HOLDS (keep the latch)
@@ -53,8 +55,13 @@ def get(pattern, text):
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "-"
+    if path == "--selftest":
+        return selftest()
     text = sys.stdin.read() if path == "-" else open(path, "r", errors="replace").read()
+    return decode(text)
 
+
+def decode(text):
     if "BEGIN:IRQWD" not in text and "IRQWD - PC-9821" not in text:
         print("IRQWD DECODE: REFUSED - this is not an IRQWD capture", file=sys.stderr)
         return 1
@@ -92,13 +99,19 @@ def main():
         mode = (int(st, 16) >> 1) & 7
         if falls > 0:
             v = "CLEARS"
+        elif pitout is None:
+            v = "UNKNOWN"
         elif pitout:
             v = "HOLDS"
         else:
             v = "NO-PIT"
+        note = ""
+        if v == "UNKNOWN":
+            note = "  (no PITOUT row: the control is missing - row void)"
+        elif v == "NO-PIT":
+            note = "  (the PIT was not toggling - row void)"
         print(f"  {v:12} IRQ0   ch0_status={st} mode={mode} falls={falls} rises={rises} "
-              f"lo={lo} hi={hi}"
-              + ("" if falls > 0 or pitout else "  (the PIT was not toggling - row void)"))
+              f"lo={lo} hi={hi}" + note)
     else:
         missing.append("IRQ0")
 
@@ -138,7 +151,41 @@ def main():
         print(f"  MISSING rows: {' '.join(missing)}")
         print("IRQWD DECODE: INCOMPLETE - a probe that hung leaves its section without a row")
         return 1
+    if torn:
+        print("IRQWD DECODE: INCOMPLETE - no END:IRQWD (torn capture); the verdicts above are not a run")
+        return 1
     print("IRQWD DECODE: OK - one verdict per line")
+    return 0
+
+
+def selftest():
+    """Plants: the committed shape decodes OK; a torn copy (END:IRQWD cut) and a copy without
+    the PITOUT row are refused, the latter's IRQ0 verdict UNKNOWN (not NO-PIT)."""
+    import contextlib
+    import io
+    good = "\n".join([
+        "IRQWD - PC-9821 masked-IRQ withdraw probe", "BEGIN:IRQWD",
+        "  PITOUT ch0_status lo hi falls rises = 36 10 20 3 3",
+        "  IRQ0 masked poll ch0_status lo hi falls rises = 36 0 65532 0 0",
+        "  PITCH0 IRR before ch0-write after = 01 00",
+        "  IRQ1  keyboard 0x41 ack trig=01 latch_irr=02 postack_irr=02 delivered=0",
+        "  IRQ9  IDE 0x64E ack trig=01 latch_irr=02 postack_irr=00 delivered=0",
+        "  IRQ12 OPNA reg 0x27 ack trig=01 latch_irr=10 postack_irr=10 delivered=0",
+        "  IRQ15 calendar 0x128 ack trig=01 latch_irr=80 postack_irr=80 delivered=0",
+        "END:IRQWD", ""])
+
+    def run(t):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = decode(t)
+        return rc, out.getvalue()
+    rc, o = run(good)
+    assert rc == 0 and "OK - one verdict" in o and "HOLDS        IRQ0" in o, o
+    rc, o = run(good.replace("END:IRQWD", ""))
+    assert rc == 1 and "INCOMPLETE - no END:IRQWD" in o, o
+    rc, o = run("\n".join(l for l in good.split("\n") if "PITOUT" not in l))
+    assert rc == 1 and "UNKNOWN      IRQ0" in o and "NO-PIT" not in o, o
+    print("irqwd_decode selftest: PASS")
     return 0
 
 

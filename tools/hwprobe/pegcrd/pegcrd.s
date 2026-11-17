@@ -1,6 +1,6 @@
 /* pegcrd.s - the PEGC 256-colour palette READ-BACK, measured on a real PC-9821.
  *
- *   PEGCRD > PEGCRD.TXT          (or RUNPEGC.BAT)
+ *   PEGCRD > PEGCRD.TXT          (or RUNPEGCR.BAT)
  *
  * WHY. In PEGC 256-colour mode (`0x6A` dat `0x21`, NP2kai's GDCANALOG_256) the guest
  * programs a 256-entry palette through 0xA8 (index), 0xAA (green), 0xAC (red) and

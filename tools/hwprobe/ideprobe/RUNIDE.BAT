@@ -6,8 +6,8 @@ REM  Send back IDE.TXT (or the raw capture if a section hung).
 REM
 REM  IDEPROBE measures the machine's own IDE/ATA behaviour so the
 REM  core's pc9821_ata.sv can be diffed against it:
-REM    PORTMAP  the 0432 bank behaviour (the core gates the block on
-REM             bit 7; the machine answers with bit 7 CLEAR)
+REM    PORTMAP  the 0432 bank behaviour (a write with bit 7 set and
+REM             clear; the machine answers with bit 7 CLEAR)
 REM    REG      the task-file register read-back
 REM    TIME     the I/O wait-state per IDE port (base vs the 005F
 REM             600 ns reference, so the core's class table can be

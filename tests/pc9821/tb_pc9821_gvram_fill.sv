@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_GVRAM_FILL:
-// A 32 KiB fill of the GVRAM plane window completes against a backend that answers the way src/memory/sdram.v documents - a one-cycle accept pulse, several cycles to the first read beat, one response per beat, and a controller that serves one request at a time - and the read-back returns the fill value, so the ITF's stage-0x1B graphics VRAM test is not wedging in the route; and a cache-line read to normal RAM completes as FOUR WORD BEATS with no line producer anywhere, the beat-uniform fill (tb_pc9821_fill_beat_uniform diffs every beat against the bytes its route holds and pins the streaming cadence) - the old 128-bit line path is deleted end to end now, not merely dead.
+// A 32 KiB fill of the GVRAM plane window (the ITF's stage-0x1B graphics VRAM test shape, 8192 dword stores of distinct values) completes through the memory route, is served by the block-RAM GVRAM with no request reaching the memory backend, and every dword reads back as its own store's value; and a cache-line read to normal RAM, against a backend that answers the way src/memory/sdram.v documents (a one-cycle accept pulse, several cycles to the first read beat, one response per beat, one request at a time), completes as FOUR WORD BEATS with no line producer anywhere, the beat-uniform fill (tb_pc9821_fill_beat_uniform diffs every beat against the bytes its route holds and pins the streaming cadence) - the old 128-bit line path is deleted end to end now, not merely dead.
 
 // ==== DUT ====
 // pc9821_memory_subsystem, with its backend answered by sdram_backend_model
@@ -77,7 +77,7 @@ module tb_pc9821_gvram_fill;
   // paced by design and leaving it off makes the fill's own behaviour the only
   // variable. A scanout-inclusive run is the natural follow-up.
   reg        scan_enable = 0;
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -178,32 +178,12 @@ module tb_pc9821_gvram_fill;
 
   // ==== CHECKS ====
   //
-  // SEEN TO FAIL, which is this tree's standard for trusting a test. Planting
-  // the fixed defect -- making `backend_owner` in
-  // pc9821_memory_subsystem.sv a ONE-CYCLE record again -- produces:
-  //
-  //   PASS fill: 8192 stores, 32769 backend writes ... finished at tb_cycle=229397
-  //   FAIL read-back: dword 0 returned deadbeef (ok=0)
-  //   PASS stub-fill: 256 stores completed against the immediate stub too
-  //   FAIL line-with-producer: a cache-line read did not complete even WITH a
-  //        line response producer -- the stimulus is wrong
-  //
-  // and the plant was reverted before this file was committed (the RTL is
-  // untouched). Two things are worth reading out of that transcript:
-  //
-  //   * the FILL still passes with the defect planted, and the READ-BACK does
-  //     not, which is the mechanism rather than a coincidence: a GVRAM write is
-  //     completed by the accept alone, so the expired ownership record never
-  //     enters its path, while a read waits in B_RESP for a `mem_resp_valid`
-  //     that the expired record has gated off forever.
-  //   * check 4's "the stimulus is wrong" message fires in that world, so check
-  //     4 doubles as a tripwire for the very defect the fill is indifferent to.
-
-  // 1 fill       : 8192 stores (the ITF's own cx=0x2000, 32 KiB) complete against
-  //                a backend with a one-cycle accept pulse, 5 cycles to the
-  //                first read beat, 3 busy cycles per write and one response
-  //                per beat -- and at least 2 * 8192 backend writes were accepted.
-  // 2 read-back  : dwords read back through the same route return the fill value.
+  // 1 fill       : 8192 stores (the ITF's own cx=0x2000, 32 KiB) through the plane
+  //                window complete, each with a distinct address-derived value, and
+  //                the memory backend accepts NO request while they run (the GVRAM is
+  //                block RAM: a store that reached the backend is a misroute).
+  // 2 read-back  : every one of the 8192 dwords reads back through the same route as
+  //                the value its own store wrote, so an alias or a dropped store fails.
   // 3 stub-fill  : the same stores pass against the immediate stub, so the bench
   //                is measuring the route and not its own stimulus.
   // 4 line-read  : a cache-line read (burstcount 4, z486 bus_unit.sv:301 `assign line_read`) to
@@ -243,6 +223,7 @@ module tb_pc9821_gvram_fill;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -264,10 +245,10 @@ module tb_pc9821_gvram_fill;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -477,6 +458,12 @@ module tb_pc9821_gvram_fill;
   reg [31:0] c_rd;          // data returned by the last cpu_load
   reg c_q_ok;               // whether a cache-line read ever completed
   integer fill_timeout_at;
+  integer acc_before;
+  // A distinct value per dword, so a store that lands on the wrong dword (an alias) or is
+  // dropped reads back wrong.
+  function automatic [31:0] fill_val(input integer n);
+    fill_val = {n[15:0] ^ 16'hA55A, ~n[15:0]};
+  endfunction
 
   initial begin
     nfail = 0;
@@ -491,8 +478,9 @@ module tb_pc9821_gvram_fill;
 
     ok_count = 0;
     fill_timeout_at = -1;
+    acc_before = slow_accepts;
     for (i = 0; i < FILL_DWORDS; i = i + 1) begin
-      cpu_store(FILL_BASE + (i * 4), 32'hFFFF_FFFF, 4'hF);
+      cpu_store(FILL_BASE + (i * 4), fill_val(i), 4'hF);
       if (c_ok) ok_count = ok_count + 1;
       else if (fill_timeout_at < 0) begin
         fill_timeout_at = i;
@@ -511,9 +499,14 @@ module tb_pc9821_gvram_fill;
       nfail = nfail + 1;
     end else begin
       // The GVRAM is block RAM now: the fill is served ENTIRELY by the array and owes
-      // the backend nothing, so the wedge tripwire is the STORE COUNT alone - every one of the
-      // ITF's 8192 stores must complete - not a backend-write count. The count is still printed
-      // so a future regression that puts the GVRAM back on the backend shows up here.
+      // the backend nothing, so every one of the ITF's 8192 stores must complete AND the
+      // backend must accept nothing while they run.
+      if (slow_accepts != acc_before) begin
+        $display("FAIL fill-misroute: the backend accepted %0d request(s) during a GVRAM plane-window fill",
+                 slow_accepts - acc_before);
+        errors = errors + 1;
+        nfail = nfail + 1;
+      end
       $display("PASS fill: %0d stores served from the M10K array, %0d backend writes seen (the GVRAM owes none), %0d backend beats, finished at tb_cycle=%0d",
                FILL_DWORDS, slow_accepts, slow_beats, tb_cycle);
     end
@@ -521,17 +514,20 @@ module tb_pc9821_gvram_fill;
     // ---- 2. THE READ-BACK: does the fill value come back? ----
     if (nfail == 0) begin
       ok_count = 0;
-      for (i = 0; i < 16; i = i + 1) begin
+      for (i = 0; i < FILL_DWORDS; i = i + 1) begin
         cpu_load(FILL_BASE + (i * 4));
-        if (c_ok && c_rd === 32'hFFFF_FFFF) ok_count = ok_count + 1;
-        else if (ok_count == i) begin
-          $display("FAIL read-back: dword %0d returned %08x (ok=%b)", i, c_rd, c_ok);
-          errors = errors + 1;
-          nfail = nfail + 1;
+        if (c_ok && c_rd === fill_val(i)) ok_count = ok_count + 1;
+        else if (ok_count + 8 > i) begin   // report the first few, count them all
+          $display("FAIL read-back: dword %0d returned %08x want %08x (ok=%b)", i, c_rd, fill_val(i), c_ok);
         end
       end
-      if (ok_count == 16)
-        $display("PASS read-back: all 16 sampled dwords returned the fill value");
+      if (ok_count == FILL_DWORDS)
+        $display("PASS read-back: all %0d dwords returned their own store's value", FILL_DWORDS);
+      else begin
+        $display("FAIL read-back: %0d of %0d dwords wrong", FILL_DWORDS - ok_count, FILL_DWORDS);
+        errors = errors + 1;
+        nfail = nfail + 1;
+      end
     end
 
     // ---- 3. THE SAME FILL against the immediate stub ----

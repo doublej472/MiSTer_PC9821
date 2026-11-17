@@ -10,15 +10,24 @@ occupies pack offsets `0x30000-0x30FFF`, separate from both BIOS banks.
 ./firmware/diagnostic/build.py --out /tmp/pc9821-diagnostic.bin
 ```
 
-POST port `0x0EE0` values are:
+POST port `0x0EE0` values, in the order `post.s` emits them (a failure code parks the
+payload in its idle loop, so the last code written names the stage that broke):
 
 | Code | Meaning |
 |---|---|
-| `10` | reset vector and real-mode entry reached |
-| `20` | low-RAM DWORD write/read passed |
+| `E6` | the triple-fault shutdown (absent-selector `#GP` -> `#DF` -> shutdown) did not reset the CPU |
+| `10` | real-mode entry reached; emitted twice, once after the triple-fault reset and once after the `out 0xF0` reset, each re-entering through the reset vector |
+| `E3` | the A20 control failed: with A20 masked, a write at physical 1 MiB did not wrap to `0x00000` (with either PPI port-C bit-0 direction) |
+| `5E` | the A20 wrap control and the PPI stage passed; `out 0xF0` (CPU-mode reset) follows |
+| `70` | the second pass after the `out 0xF0` reset (only reachable with the 1 MiB wrap in place) |
+| `E5` | after that reset, port `0x9894` bit 3 (the CPU-mode report) was set |
+| `71` | port `0x9894` bit 3 is clear after the reset, as the ITF's own gate expects |
+| `E1` | the low-RAM DWORD write/read failed |
+| `20` | the low-RAM DWORD write/read passed |
 | `30` | text-GDC start and TRAM banner writes completed |
-| `5A` | diagnostic completed; firmware is in its idle loop |
-| `E1` | low-RAM test failed |
+| `5A` | the banner stage is complete; the interrupt self-test follows |
+| `E2` | no VSYNC interrupt (IRQ2, `INT 0Ah`) arrived within the wait |
+| `60` | the VSYNC interrupt self-test passed: the final code, the payload is in its idle loop |
 
 The full-system regression builds and loads this pack through the real ioctl
 loader:
@@ -27,8 +36,8 @@ loader:
 ./tests/pc9821/run_boot.sh
 ```
 
-It verifies POST progression, low-RAM signature `5A3C0BAD`, and the first TRAM
-character/attribute bytes after z486 execution.
+It verifies POST progression, low-RAM signature `5A3C0BAD`, the first TRAM
+character/attribute bytes and the VSYNC interrupt stage after z486 execution.
 
 These are **test programs, not firmware**: they exist to drive the CPU, memory
 and I/O paths from a known stimulus, and they never stand in for the machine's

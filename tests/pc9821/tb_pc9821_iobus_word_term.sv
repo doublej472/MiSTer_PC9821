@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_IOBUS_WORD_TERM: a 16- or 32-bit IN at a byte port answers as the real Xe10 does (docs/probes/XE10T-XE10-AUDIT.TXT, the W/P/D rows of XE10T /AUDIT), through the real pc9821_iobus: at an even port of the terminated set (0x30-0x36/0x40-0x46 even and 0x7C with high byte 0xFF; 0x20, 0x22, 0x26, 0x60-0x7A and 0xA0-0xAC even with high byte 0x00, while 0x24 splits: docs/probes/KIT2-XE10-AUDIT2.TXT W0024 `b0=FF b1=0E w1=0EFF`) port P is read and P+1 is never fetched (`in ax,40h` does not read the keyboard's 0x41, `in ax,70h` leaves the PIT's 0x71 alone, `in ax,7Ch` answers 0xFF:P, `in ax,20h` answers 0x00:P, `in eax,70h` is two terminated words); every other word read is two byte reads P and P+1 with their side effects (`in ax,01h` and `in ax,00h` each toggle the DMAC byte flip-flop, `in ax,71h` reads 0x71 and 0x72, `in ax,0F6h`, `in ax,0D0h` and `in ax,0ADh` answer their two bytes), the set applies only when port bits 11:10 are clear (`in ax,1070h` is terminated, `in ax,0470h` byte-splits), and byte reads are never terminated.
+// TB_PC9821_IOBUS_WORD_TERM: a 16- or 32-bit IN at a byte port answers as the real Xe10 does (docs/probes/XE10T-XE10-AUDIT.TXT, the W/P/D rows of XE10T /AUDIT), through the real pc9821_iobus: at an even port of the terminated set (0x30-0x36/0x40-0x46 even and 0x7C with high byte 0xFF; 0x20, 0x22, 0x26, 0x60, 0x62, 0x64, 0x68, 0x6A, 0x6C, 0x70-0x76 even, 0x7A and 0xA0-0xA8 even and 0xAC with high byte 0x00 - every one of them asserted against its capture row's high byte, with P+1 never strobed - while 0x24 splits: docs/probes/KIT2-XE10-AUDIT2.TXT W0024 `b0=FF b1=0E w1=0EFF`) port P is read and P+1 is never fetched (`in ax,40h` does not read the keyboard's 0x41, `in ax,70h` leaves the PIT's 0x71 alone, `in ax,7Ch` answers 0xFF:P, `in ax,20h` answers 0x00:P, `in eax,70h` is two terminated words); every other word read is two byte reads P and P+1 with their side effects (`in ax,01h` and `in ax,00h` each toggle the DMAC byte flip-flop, `in ax,71h` reads 0x71 and 0x72, `in ax,0F6h`, `in ax,0D0h` and `in ax,0ADh` answer their two bytes), and the capture's split even ports (W0090, W00F0, W00F2, W00F6, W00D0, W0188, W018A, AUDIT2 W0024) answer P+1's own byte; the set applies only when port bits 11:10 are clear, which is NP2kai's decode (`in ax,1070h` is terminated, `in ax,0470h` byte-splits) and which the machine's WA460 row supports (low byte 0x60, bit 10 set, `w1=FF40`: not the 0x00 term); and byte reads are never terminated.
 //
 // The expected SHAPES are the machine's (the capture's b0/b1 byte reads of P and P+1 beside
 // `in ax,P` with EAX preloaded A55AC33C): W0040 `b0=00 b1=9C w1=FF00` and W0030 `b0=FF b1=F3
@@ -147,6 +147,7 @@ module tb_pc9821_iobus_word_term;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -398,10 +399,10 @@ module tb_pc9821_iobus_word_term;
   // ==== CHECKS ====
   // Every device-bus read the DUT strobes, in order (the device stub answers 0xC3 to each).
   integer    dev_rd_n = 0;
-  reg [15:0] dev_rd_log [0:63];
+  reg [15:0] dev_rd_log [0:1023];
   always @(posedge clk) begin
     if (device_io_rd) begin
-      if (dev_rd_n < 64) dev_rd_log[dev_rd_n] <= device_io_addr;
+      if (dev_rd_n < 1024) dev_rd_log[dev_rd_n] <= device_io_addr;
       dev_rd_n <= dev_rd_n + 1;
     end
   end
@@ -439,6 +440,78 @@ module tb_pc9821_iobus_word_term;
   integer n0;
   integer u0;
   reg [7:0] b_lo, b_hi;
+
+  // `in ax,P` returning the word (no expectation).
+  task automatic read_word_get(input [15:0] portnum, output [15:0] got);
+    begin
+      @(negedge clk);
+      cpu_addr = {16'd0, portnum[15:2], 2'b00};
+      cpu_be = 4'b0011 << portnum[1:0];
+      cpu_write = 0;
+      cpu_valid = 1;
+      while (!cpu_ready) @(negedge clk);
+      #1;
+      got = cpu_dout[{portnum[1:0], 3'b000} +: 16];
+      if (!cpu_resp_valid) begin
+        $display("FAIL read16 %04x: no response", portnum);
+        errors = errors + 1;
+      end
+      @(negedge clk);
+      cpu_valid = 0;
+      cpu_be = 0;
+      while (dut.state != 0) @(negedge clk);
+    end
+  endtask
+
+  // Was port p strobed on the device bus at or after log index from?
+  function automatic bit fetched_since(input integer from, input [15:0] p);
+    integer k;
+    begin
+      fetched_since = 1'b0;
+      for (k = from; k < dev_rd_n && k < 1024; k = k + 1)
+        if (dev_rd_log[k] == p) fetched_since = 1'b1;
+    end
+  endfunction
+
+  // A TERMINATED port from the capture: `in ax,P` answers the capture's high byte (cap_hi, the
+  // w1 row's AH) whatever P+1 holds, and P+1 is never strobed. The P+1 byte this bench's devices
+  // answer is read afterwards, so the case is only counted as discriminating when it differs
+  // from cap_hi (a split would then show).
+  integer term_disc = 0, split_disc = 0;
+  task automatic term_case(input [15:0] p, input [7:0] cap_hi, input string row);
+    reg [15:0] w;
+    reg [7:0]  nb;
+    begin
+      n0 = dev_rd_n;
+      read_word_get(p, w);
+      if (w[15:8] !== cap_hi) begin
+        $display("FAIL %0s: in ax,%04xh high byte %02x, the machine's %02x (terminated)", row, p, w[15:8], cap_hi);
+        errors = errors + 1;
+      end
+      if (fetched_since(n0, p + 16'd1)) begin
+        $display("FAIL %0s: in ax,%04xh strobed port %04x (terminated: P+1 is never fetched)", row, p, p + 16'd1);
+        errors = errors + 1;
+      end
+      read_raw(p + 16'd1, nb);
+      if (nb !== cap_hi) term_disc = term_disc + 1;
+    end
+  endtask
+
+  // A SPLIT port from the capture (an even port whose low byte is in the table's range but which
+  // the machine reads as two bytes): the high byte is P+1's own, fetched.
+  task automatic split_case(input [15:0] p, input string row);
+    reg [15:0] w;
+    reg [7:0]  nb;
+    begin
+      read_raw(p + 16'd1, nb);
+      read_word_get(p, w);
+      if (w[15:8] !== nb) begin
+        $display("FAIL %0s: in ax,%04xh high byte %02x, but port %04x reads %02x (the machine splits it)", row, p, w[15:8], p + 16'd1, nb);
+        errors = errors + 1;
+      end
+      if (nb !== 8'hFF && nb !== 8'h00) split_disc = split_disc + 1;
+    end
+  endtask
 
   initial begin
     repeat (3) @(posedge clk);
@@ -530,6 +603,39 @@ module tb_pc9821_iobus_word_term;
     u0 = unmapped_reads;
     read_word(16'h0470, 16'hFFFF);
     chk(unmapped_reads == u0 + 2, "in ax,0470h did not split into two byte reads");
+
+    // ---- every captured even port, table-driven ------------------------------------------
+    // docs/probes/XE10T-XE10-AUDIT.TXT (X AUDIT rows) and docs/probes/KIT2-XE10-AUDIT2.TXT
+    // (X AUDIT2 rows): `in ax,P`'s w1 high byte. A terminated port answers it whatever P+1 holds
+    // (W0032 `b1=F9 w1=FF45`, W0042 `b1=85 w1=FF94`, AUDIT2 W0034 `b1=B8 w1=FFFF`, W0072 `b1=CC
+    // w1=000F`, W0074 `b1=74 w1=0010`, W00A0 `b1=2F w1=0004`, AUDIT2 W00A2 `b1=57 w1=00FF`, and
+    // every 0x6x/0x7x/0xAx row whose b1=FF reads AH=00).
+    term_case(16'h0030, 8'hFF, "W0030");  term_case(16'h0032, 8'hFF, "W0032");
+    term_case(16'h0034, 8'hFF, "AUDIT2 W0034");  term_case(16'h0036, 8'hFF, "AUDIT2 W0036");
+    term_case(16'h0040, 8'hFF, "W0040");  term_case(16'h0042, 8'hFF, "W0042");
+    term_case(16'h0044, 8'hFF, "AUDIT2 W0044");  term_case(16'h0046, 8'hFF, "AUDIT2 W0046");
+    term_case(16'h007C, 8'hFF, "W007C");
+    term_case(16'h0020, 8'h00, "W0020");  term_case(16'h0022, 8'h00, "W0022");
+    term_case(16'h0026, 8'h00, "AUDIT2 W0026");
+    term_case(16'h0060, 8'h00, "W0060");  term_case(16'h0062, 8'h00, "W0060 d (0x62)");
+    term_case(16'h0064, 8'h00, "W0064");  term_case(16'h0068, 8'h00, "W0068");
+    term_case(16'h006A, 8'h00, "W006A");  term_case(16'h006C, 8'h00, "W006C");
+    term_case(16'h0070, 8'h00, "P0070");  term_case(16'h0072, 8'h00, "AUDIT2 W0072");
+    term_case(16'h0074, 8'h00, "AUDIT2 W0074");  term_case(16'h0076, 8'h00, "AUDIT2 W0076");
+    term_case(16'h007A, 8'h00, "W007A");
+    term_case(16'h00A0, 8'h00, "W00A0");  term_case(16'h00A2, 8'h00, "AUDIT2 W00A2");
+    term_case(16'h00A4, 8'h00, "W00A4");  term_case(16'h00A6, 8'h00, "W00A6");
+    term_case(16'h00A8, 8'h00, "W00A8");  term_case(16'h00AC, 8'h00, "W00AC");
+    // The machine's split even ports (b1 is P+1's byte, AH = b1): W0090 `w1=FF80`, W00F0,
+    // W00F2, W00F6, W00D0, W0188, W018A, AUDIT2 W0024 `b1=0E w1=0EFF`, and the bits-11:10
+    // qualifier's machine row WA460 `b0=40 b1=FF w1=FF40` (low byte 0x60, a 0x00-term entry, yet
+    // AH = FF: bit 10 set, so the table does not apply).
+    split_case(16'h0090, "W0090");  split_case(16'h00F0, "W00F0");  split_case(16'h00F2, "W00F2");
+    split_case(16'h00F6, "W00F6");  split_case(16'h00D0, "W00D0");  split_case(16'h0188, "W0188");
+    split_case(16'h018A, "W018A");  split_case(16'h0024, "AUDIT2 W0024");
+    split_case(16'hA460, "WA460");
+    $display("  word terms: %0d terminated rows tell a split apart here, %0d split rows tell a term apart",
+             term_disc, split_disc);
 
     // ---- byte reads are never terminated -----------------------------------------------
     n0 = dev_rd_n;

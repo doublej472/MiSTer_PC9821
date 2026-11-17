@@ -282,9 +282,27 @@ class Iso:
         out = bytearray()
         n = lba
         while len(out) < size:
-            out += self.sector(n)
+            s = self.sector(n)
+            if len(s) < 2048:                  # past the end of a short or corrupt image
+                raise SystemExit(f"ISO image ends inside the extent at sector {lba} "
+                                 f"(sector {n} short, {len(out)} of {size} bytes read)")
+            out += s
             n += 1
         return bytes(out[:size])
+
+    def find(self, path: str):
+        """The Entry for a path on the disc (case-insensitive, '\\' or '/'), or None."""
+        want = path.upper().replace('/', '\\').strip('\\')
+        for e in self.walk():
+            if e.path.upper() == want:
+                return e
+        return None
+
+    def cat(self, path: str, limit: int = 1 << 30) -> bytes:
+        e = self.find(path)
+        if e is None:
+            raise SystemExit(f"not on the disc: {path}")
+        return self.read(e.start, min(e.size, limit))
 
     @staticmethod
     def _rec(r: bytes):
@@ -319,16 +337,82 @@ class Iso:
 
 
 
+def _iso_dirrec(lba: int, size: int, name: bytes, is_dir: bool) -> bytes:
+    """One ISO 9660 directory record (ECMA-119 9.1), both-endian extent and size."""
+    ln = 33 + len(name) + (len(name) + 1) % 2
+    r = bytearray(ln)
+    r[0] = ln
+    struct.pack_into('<I', r, 2, lba)
+    struct.pack_into('>I', r, 6, lba)
+    struct.pack_into('<I', r, 10, size)
+    struct.pack_into('>I', r, 14, size)
+    r[25] = 2 if is_dir else 0
+    r[32] = len(name)
+    r[33:33 + len(name)] = name
+    return bytes(r)
+
+
+def iso_test_image():
+    """A hand-built ISO for selftests (PVD at 16, terminator at 17, root at 18, SUB at 19, A.BIN
+    at 20-21, SUB\\B.TXT at 22). Returns (image, {path: data})."""
+    a = bytes((i * 13 + 5) & 0xFF for i in range(3000))
+    b = b'hello disc\r\n'
+    img = bytearray(23 * 2048)
+    pvd = bytearray(2048)
+    pvd[0], pvd[1:6], pvd[6] = 1, b'CD001', 1
+    pvd[156:190] = _iso_dirrec(18, 2048, b'\x00', True)
+    img[16 * 2048:17 * 2048] = pvd
+    img[17 * 2048:17 * 2048 + 6] = b'\xffCD001'
+    root = (_iso_dirrec(18, 2048, b'\x00', True) + _iso_dirrec(18, 2048, b'\x01', True)
+            + _iso_dirrec(20, len(a), b'A.BIN;1', False) + _iso_dirrec(19, 2048, b'SUB', True))
+    img[18 * 2048:18 * 2048 + len(root)] = root
+    sub = (_iso_dirrec(19, 2048, b'\x00', True) + _iso_dirrec(18, 2048, b'\x01', True)
+           + _iso_dirrec(22, len(b), b'B.TXT;1', False))
+    img[19 * 2048:19 * 2048 + len(sub)] = sub
+    img[20 * 2048:20 * 2048 + len(a)] = a
+    img[22 * 2048:22 * 2048 + len(b)] = b
+    return bytes(img), {'A.BIN': a, 'SUB\\B.TXT': b}
+
+
+def _iso_selftest() -> int:
+    """Iso over iso_test_image(): walk, find, cat, and a truncated copy that must fail instead of
+    looping."""
+    import io
+    img, files = iso_test_image()
+    a, b = files['A.BIN'], files['SUB\\B.TXT']
+    rc = 0
+    fs = Iso(io.BytesIO(bytes(img)), 'iso')
+    paths = sorted(e.path for e in fs.walk())
+    if paths != ['A.BIN', 'SUB\\B.TXT']:
+        print(f"FAIL: iso: walk gives {paths}")
+        rc = 1
+    if fs.cat('a.bin') != a or fs.cat('sub/b.txt') != b or fs.find('NOPE.TXT') is not None:
+        print("FAIL: iso: find/cat")
+        rc = 1
+    short = Iso(io.BytesIO(bytes(img[:21 * 2048])), 'iso')   # A.BIN's second sector cut off
+    try:
+        short.cat('A.BIN')
+        print("FAIL: iso: a truncated extent was read without an error")
+        rc = 1
+    except SystemExit as e:
+        if 'ends inside the extent' not in str(e):
+            print(f"FAIL: iso: truncated extent: {e}")
+            rc = 1
+    print(f"iso: {'OK' if rc == 0 else 'FAIL'}")
+    return rc
+
+
 def selftest() -> int:
-    """Round-trip against mtools: what Fat.put writes, mtools reads (and dosfstools' fsck accepts)."""
+    """Round-trip against mtools: what Fat.put writes, mtools reads (and dosfstools' fsck accepts);
+    and a hand-built ISO for Iso (find, cat, a truncated extent)."""
     import os
     import shutil
     import subprocess
     import tempfile
+    rc = _iso_selftest()
     if not shutil.which('mformat'):
         print("SKIP: mtools not installed")
-        return 2
-    rc = 0
+        return 2 if rc == 0 else 1
     with tempfile.TemporaryDirectory() as d:
         for name, fmt in (('f16', ['-t', '400', '-h', '4', '-s', '32']), ('f12', ['-f', '1440'])):
             img = os.path.join(d, name + '.img')

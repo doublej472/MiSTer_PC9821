@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_OPNA_WRQ:
-// The PC-9801-86 command buffer (the WRQ in pc9821_opna) delivers its queued select/data writes to the vendored JT12 chip in guest order with every data write seeing its select latched first, captures a single worst-phase 1-clk fire into every operator register class (the pending latches persist and the sample-rate scan commits them, so no bus hold is needed), still lets jt12_kon sample a 0x28 key-on with the next write queued right behind it, reads 0x188 bit 7 clear at the first poll after a write (the real Xe10's XE10T /OPNA rows) and set only while the queue holds 64 words or more (half full), clearing once a word drains below that, gates 0x18C/0x18E writes away from the chip while the 0xA460 extension bit is clear, loses zero of 48 back-to-back no-poll writes across all 24 operator slots in both banks, answers a 0x18E read after a 0x18C select write with the select byte just written (NP2kai's opna_o18c s.data shadow) rather than the previous data byte, and pins the drop boundary at the reduced write cadence: a 160-write no-poll burst at 5 clk_sys per access overflows the 128-deep queue and loses writes, while the same burst behind the guest's WAITREADY poll loses none.
+// The PC-9801-86 command buffer (the WRQ in pc9821_opna) delivers its queued select/data writes to the vendored JT12 chip in guest order with every data write seeing its select latched first, captures a single worst-phase 1-clk fire into every operator register class it writes - 0x3x DT1 and MUL each, 0x4x TL, 0x5x AR, 0x6x AM enable and D1R each, 0x7x SR, 0x9x SSG-EG - (the pending latches persist and the sample-rate scan commits them, so no bus hold is needed), still lets jt12_kon sample a 0x28 key-on with the next write queued right behind it, reads 0x188 bit 7 clear at the first poll after a write (the real Xe10's XE10T /OPNA rows) and set only while the queue holds 64 words or more (half full), clearing once a word drains below that, gates 0x18C/0x18E writes away from the chip while the 0xA460 extension bit is clear, loses zero of 48 back-to-back no-poll writes across all 24 operator slots in both banks, answers a 0x18E read after a 0x18C select write with the select byte just written (NP2kai's opna_o18c s.data shadow) rather than the previous data byte, and, with the bus driver holding each write while io_wr_wait is up as pc9821_iobus does, loses no write when a guest ignores BUSY: a 240-write burst at the 186-clk class and a 160-write burst at 5 clk_sys per access both fill the 128-deep queue, are held off by io_wr_wait (the stall is counted, so the full case is reached) and reach the chip whole, as on the reference boards that put no FIFO in front of the YM2608 (MAME pc9801_86.cpp, NP2kai board86.c), and the 160-write burst behind the guest's WAITREADY poll loses none either.
 //
 // The WRQ is probed against the vendored JT12 chip; the test sequence T0-T8:
 //  T1  in-order delivery: queued select/data pairs reach the chip's own pins in the
@@ -19,11 +19,11 @@
 //  T3  the key-on race the queue closed: 0x28 (key-on) paced by DRAIN_GAP, with the
 //      next data write queued right behind — jt12_kon must still sample it.
 //  T4  overflow: a guest burst faster than the drain (no WAITREADY poll) fills the
-//      128-deep queue; measure how many writes the chip never sees, and whether the
-//      board's select shadow (sel_lo) then diverges from the chip's select latch.
-//      The reference models (MAME pc9801_86.cpp, NP2kai board86.c) attach the
-//      YM2608 to the ports with NO FIFO in front of it, so every write is latched
-//      by the chip; the drop is a model-only divergence.
+//      128-deep queue. The reference models (MAME pc9801_86.cpp, NP2kai board86.c)
+//      attach the YM2608 to the ports with NO FIFO in front of it, so every write is
+//      latched by the chip: with the bus driver honouring io_wr_wait as pc9821_iobus
+//      does, the full queue must hold the guest off (the stall is counted, so the
+//      case is reached) and the chip must see every one of the writes.
 //  T5  BUSY semantics: 0x188 bit 7 is the queue's back-pressure only - clear at the
 //      first poll after a write (the machine's XE10T /OPNA rows), set while the queue
 //      is full, clear again once one word drains (the games' WAITREADY).
@@ -32,9 +32,9 @@
 //  T7  extension gate: 0x18C/0x18E writes must not reach the chip while 0xA460 bit 0
 //      is clear, and reads answer 0xFF.
 //  T9  the reduced iobus write cadence (class 4 = 5 clk_sys per access,
-//      the FSM floor): a 160-write no-poll burst overflows the 128-deep queue and loses
-//      writes, while the same burst behind a WAITREADY poll loses none -- so the
-//      drop is a function of the guest's handshake, not of the shortened wait.
+//      the FSM floor): a 160-write no-poll burst fills the 128-deep queue and is held
+//      off by io_wr_wait without losing a write, and the same burst behind a WAITREADY
+//      poll loses none either.
 
 module tb_pc9821_opna_wrq;
   reg clk = 0;
@@ -47,6 +47,10 @@ module tb_pc9821_opna_wrq;
   reg  [7:0]  io_din = 0;
   wire [7:0]  io_dout;
   wire        io_rd_wait;
+  // The board's write back-pressure: pc9821_iobus holds the lane in S_BYTE while it is up
+  // and strobes the write only once it drops, so this bench's bus driver does the same.
+  wire        io_wr_wait;
+  integer     wr_wait_clks = 0;   // clks a write was held off by io_wr_wait
   wire        irq;
   wire signed [19:0] snd_l, snd_r;
   reg         extend = 0;
@@ -61,7 +65,7 @@ module tb_pc9821_opna_wrq;
   pc9821_opna #(.SYS_CLOCK_HZ(100_000_000)) u_dut (
     .clk(clk), .reset(reset),
     .io_addr(io_addr), .io_wr(io_wr), .io_rd(io_rd), .io_din(io_din),
-    .io_dout(io_dout), .io_rd_wait(io_rd_wait),
+    .io_dout(io_dout), .io_rd_wait(io_rd_wait), .io_wr_wait(io_wr_wait),
     .extend(extend), .joystick(joystick),
     .snd_l(snd_l), .snd_r(snd_r), .irq(irq),
     .rhythm_we(rhythm_we), .rhythm_waddr(rhythm_waddr), .rhythm_wdata(rhythm_wdata)
@@ -136,7 +140,9 @@ module tb_pc9821_opna_wrq;
   // access (io_access_cycles for this port class). Reads are answered one
   // cycle later (the S_DEVWAIT cycle the board's io_rd_wait buys).
   // drop_flag comes back as the push gate saw it: the wrq_cnt[7] value on the
-  // strobe edge, i.e. 1 when the queue was full and the byte was swallowed.
+  // strobe edge, i.e. 1 when the queue was full and the byte was swallowed. Like the
+  // iobus, the driver holds the strobe while io_wr_wait is up, so a full queue stalls
+  // the guest instead of dropping its write.
   // ------------------------------------------------------------------
   task automatic bus_write(input [15:0] port, input [7:0] data, output reg drop_flag);
     begin
@@ -144,6 +150,8 @@ module tb_pc9821_opna_wrq;
       io_din  <= data;
       drop_flag = 1'b0;
       @(posedge clk);
+      #1;
+      while (io_wr_wait) begin @(posedge clk); #1; wr_wait_clks++; end
       io_wr <= 1'b1;
       drop_flag = wrq_cnt[7];
       @(posedge clk);
@@ -175,6 +183,8 @@ module tb_pc9821_opna_wrq;
       io_din  <= data;
       drop_flag = 1'b0;
       @(posedge clk);
+      #1;
+      while (io_wr_wait) begin @(posedge clk); #1; wr_wait_clks++; end
       io_wr <= 1'b1;
       drop_flag = wrq_cnt[7];
       @(posedge clk);
@@ -391,22 +401,29 @@ module tb_pc9821_opna_wrq;
       // 0x34 @ (op1, ch0): DT1 is class I, MUL class II (0x34 is in the 0x30 block).
       wait_just_passed(2'd1, 3'd0);
       bus_write(16'h0188, 8'h34, drop);
-      bus_write(16'h018A, 8'h45, drop);   // dt1=010, mul=0101
+      bus_write(16'h018A, 8'h45, drop);   // 0x45 = 0100_0101: dt1 (bits 6:4) = 100 = 4, mul = 0101 = 5
       wait_clk_en(60);
-      seen = 0;
-      for (w = 0; w < 24 && !seen; w++) begin
-        if (dist_to(2'd1, 3'd0) <= 2 && (o_dt1 === 3'd2 || o_mul === 5'd5)) seen = 1;
-        wait_clk_en(1);
-      end
-      if (!seen) begin
-        fail($sformatf("T2 0x34 DROPPED: dt1/mul=%0d/%0d, 0x45 never appeared near (op1,ch0)", o_dt1, o_mul));
-        misses++;
+      // DT1 and MUL sit in different CSR classes, so each field is looked for on its own
+      // visit: both must appear, not either.
+      begin
+        reg seen_dt1, seen_mul;
+        seen_dt1 = 0; seen_mul = 0;
+        for (w = 0; w < 24 && !(seen_dt1 && seen_mul); w++) begin
+          if (dist_to(2'd1, 3'd0) <= 2 && o_dt1 === 3'd4) seen_dt1 = 1;
+          if (dist_to(2'd1, 3'd0) <= 2 && o_mul === 4'd5) seen_mul = 1;
+          wait_clk_en(1);
+        end
+        if (!(seen_dt1 && seen_mul)) begin
+          fail($sformatf("T2 0x34 DROPPED: dt1 seen=%0d mul seen=%0d, 0x45 never fully appeared near (op1,ch0)",
+                         seen_dt1, seen_mul));
+          misses++;
+        end
       end
 
       // 0x41 @ (op0, ch1): TL is class IV (loads three visits after the target).
       wait_just_passed(2'd1, 3'd0);
       bus_write(16'h0188, 8'h41, drop);
-      bus_write(16'h018A, 8'hD5, drop);   // amen=1, tl=1010101
+      bus_write(16'h018A, 8'hD5, drop);   // tl=1010101 (bit 7 is unused in 0x4x; AM is 0x6x bit 7)
       wait_clk_en(60);
       seen = 0;
       for (w = 0; w < 24 && !seen; w++) begin
@@ -431,6 +448,27 @@ module tb_pc9821_opna_wrq;
       if (!seen) begin
         fail($sformatf("T2 0x51 DROPPED: ar=%0d, 0xC3 never appeared near (op0,ch1)", o_ar));
         misses++;
+      end
+
+      // 0x61 @ (op0, ch1): the 0x6x class - AM enable (bit 7, amsen, class IV) and the
+      // decay rate D1R (bits 4:0, class I). Each field on its own visit.
+      wait_just_passed(2'd1, 3'd0);
+      bus_write(16'h0188, 8'h61, drop);
+      bus_write(16'h018A, 8'h8B, drop);   // amen=1, d1r=01011 = 11
+      wait_clk_en(60);
+      begin
+        reg seen_am, seen_dr;
+        seen_am = 0; seen_dr = 0;
+        for (w = 0; w < 24 && !(seen_am && seen_dr); w++) begin
+          if (dist_to(2'd0, 3'd1) <= 5 && o_amen === 1'b1) seen_am = 1;
+          if (dist_to(2'd0, 3'd1) <= 2 && o_dr === 5'd11) seen_dr = 1;
+          wait_clk_en(1);
+        end
+        if (!(seen_am && seen_dr)) begin
+          fail($sformatf("T2 0x61 DROPPED: amen seen=%0d d1r seen=%0d, 0x8B never fully appeared near (op0,ch1)",
+                         seen_am, seen_dr));
+          misses++;
+        end
       end
 
       // 0x71 @ (op0, ch1): SR (sustain rate -> d2r) is class I.
@@ -496,6 +534,7 @@ module tb_pc9821_opna_wrq;
 
       log_n = 0;
       pushed = 0; dropped = 0;
+      wr_wait_clks = 0;
       // 120 select/data pairs of stretched (0x3x) writes at the bus's fastest rate.
       for (i = 0; i < 120; i++) begin
         bus_write(16'h0188, 8'h30 + i[2:0], drop);
@@ -511,8 +550,18 @@ module tb_pc9821_opna_wrq;
       delivered = log_n;
       note($sformatf("T4: burst of %0d host writes: %0d dropped at the full queue, %0d delivered",
                     pushed, dropped, delivered));
-      if (dropped === 0)
-        fail("T4: expected the 128-deep queue to drop at least one burst write");
+      // The reference boards have no FIFO in front of the chip (MAME pc9801_86.cpp, NP2kai
+      // board86.c): every write the guest makes is latched. So the queue may not lose one;
+      // when it is full the guest's write waits (io_wr_wait) and the stall must have
+      // happened here, or this burst never reached the full queue it is about.
+      if (dropped !== 0)
+        fail($sformatf("T4: the full queue dropped %0d of %0d burst writes instead of holding them off", dropped, pushed));
+      if (delivered !== pushed)
+        fail($sformatf("T4: the chip saw %0d of %0d burst writes", delivered, pushed));
+      if (wr_wait_clks == 0)
+        fail("T4: the burst never met io_wr_wait: the full-queue case was not reached");
+      else
+        note($sformatf("T4: io_wr_wait held the burst off for %0d clk", wr_wait_clks));
       if (delivered + dropped !== pushed)
         fail($sformatf("T4: accounting hole - %0d delivered + %0d dropped != %0d pushed",
                       delivered, dropped, pushed));
@@ -715,7 +764,8 @@ module tb_pc9821_opna_wrq;
     // instead of 186; a stretched FM write drains over DRAIN_GAP=216 cen, so the
     // 128-deep queue can fill. Does the faster guest lose FM register writes, and
     // does the guest's WAITREADY poll cover it?
-    //   (a) 80 select/data pairs with NO poll -> the queue fills and writes drop;
+    //   (a) 80 select/data pairs with NO poll -> the queue fills and io_wr_wait holds
+    //       the guest off: no write is lost;
     //   (b) the same pairs WITH a WAITREADY poll before every write -> zero drops.
     // ----------------------------------------------------------------
     begin : t9
@@ -726,6 +776,7 @@ module tb_pc9821_opna_wrq;
       // (a) no WAITREADY, the class-4 cadence.
       wait_drain(20000);
       log_n = 0; dropped_np = 0; pushed = 0;
+      wr_wait_clks = 0;
       for (i = 0; i < 80; i++) begin
         bus_write_fast(16'h0188, 8'h30 + 8'(i % 64), drop);
         pushed = pushed + 1; if (drop) dropped_np = dropped_np + 1;
@@ -735,8 +786,13 @@ module tb_pc9821_opna_wrq;
       wait_drain(20000);
       note($sformatf("T9a: class-4 no-poll burst: %0d host writes, %0d dropped at the full queue, %0d delivered",
                     pushed, dropped_np, log_n));
-      if (dropped_np === 0)
-        fail("T9a: expected the 128-deep queue to drop at least one class-4 no-poll burst write");
+      if (dropped_np !== 0)
+        fail($sformatf("T9a: the class-4 no-poll burst lost %0d of %0d writes instead of waiting on io_wr_wait",
+                       dropped_np, pushed));
+      if (log_n !== pushed)
+        fail($sformatf("T9a: the chip saw %0d of %0d class-4 no-poll burst writes", log_n, pushed));
+      if (wr_wait_clks == 0)
+        fail("T9a: the class-4 no-poll burst never met io_wr_wait: the full-queue case was not reached");
 
       // (b) the same burst behind the guest's WAITREADY, at the same cadence.
       wait_drain(20000);

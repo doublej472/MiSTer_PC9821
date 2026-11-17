@@ -23,6 +23,7 @@ module jt12_div(
     input           rst,
     input           clk,
     input           cen /* synthesis direct_enable */,
+    input           cen_nx,      // LOCAL PATCH (cen_nx seam, PC-98 core): cen one cycle early (below)
     input     [1:0] div_setting,
     output reg      clk_en,      // after prescaler
     output reg      clk_en_2,    // cen divided by 2
@@ -38,7 +39,8 @@ reg [3:0] opn_pres, opn_cnt=4'd0;
 reg [2:0] ssg_pres, ssg_cnt=3'd0;
 reg [4:0] adpcm_cnt666  = 5'd0;
 reg [2:0] adpcm_cnt111 = 3'd0, adpcm_cnt55=3'd0;
-reg cen_int, cen_ssg_int, cen_adpcm_int, cen_adpcm3_int;
+// LOCAL PATCH (see below): upstream's negedge stage registers cen_int, cen_ssg_int,
+// cen_adpcm_int, cen_adpcm3_int and cen_55_int are not needed by the posedge form.
 
 // prescaler values for FM
 // reset: 1/3
@@ -77,15 +79,50 @@ end
 initial clk_en_666 = 1'b0;
 `endif
 
-reg cen_55_int;
 reg [1:0] div2=2'b0;
 
-always @(negedge clk) begin
-    cen_int        <= opn_cnt      == 4'd0;
-    cen_ssg_int    <= ssg_cnt      == 3'd0;
-    cen_adpcm_int  <= adpcm_cnt666 == 5'd0;
-    cen_adpcm3_int <= adpcm_cnt111 == 3'd0;
-    cen_55_int     <= adpcm_cnt55  == 3'd0;
+// LOCAL PATCH (PC-98 core, timing; src/opna/LICENSE-SCOPE.md): the six clock enables are
+// registered on the RISING edge from the next cycle's values, instead of on the FALLING edge.
+// WHY. Upstream samples `cen & cen_int` on negedge clk: the whole chip's enable (`cen`, which
+// Quartus implements as one direct clock-enable net, IMPLEMENT_AS_CLOCK_ENABLE, ~1000 loads)
+// reaches these six flip-flops in HALF a clk_sys period (5.55 ns at 90 MHz). That half-cycle
+// path was negative on 2 of 6 seeds of the timing-hygiene lane's base sweep
+// (thbase-62d0897b: seed 2, 2 endpoints at -0.21 ns; seed 4, 4 at -0.81 ns, u_div|clk_en*),
+// as on the th05 release+fixes sweep's seed 4 (-1.64 ns), and a missed enable desynchronises
+// the whole YM2608 at once.
+// WHAT. Every reader of these outputs is a posedge register, so only the value present at each
+// rising edge matters. Upstream's negedge in cycle t latches cen(t) & (cnt(t-1) == 0) (cen_int
+// was latched from the counter one negedge earlier) and the rising edge t+1 reads it. Here the
+// rising edge t loads cen_nx & (cnt == 0) in cycle t-1, where cen_nx is cen(t) (pc9821_opna's
+// registered DDS carry, one step ahead) and cnt is cnt(t-1): the same value, read at the same
+// rising edge, from a full-cycle path. clk_en_2's `div2 == 0` uses div2's next value the same
+// way. tb_pc9821_opna_cen holds the six enables against upstream's negedge form every cycle.
+// The upstream block this replaces:
+//   always @(negedge clk) begin
+//       cen_int        <= opn_cnt      == 4'd0;
+//       cen_ssg_int    <= ssg_cnt      == 3'd0;
+//       cen_adpcm_int  <= adpcm_cnt666 == 5'd0;
+//       cen_adpcm3_int <= adpcm_cnt111 == 3'd0;
+//       cen_55_int     <= adpcm_cnt55  == 3'd0;
+//       `ifdef FASTDIV
+//       // always enabled for fast sims (use with GYM output, the timers will not work well)
+//       clk_en     <= 1'b1;
+//       clk_en_2   <= 1'b1;
+//       clk_en_ssg <= 1'b1;
+//       clk_en_666 <= 1'b1;
+//       clk_en_55  <= 1'b1;
+//       `else
+//       clk_en     <= cen & cen_int;
+//       clk_en_2   <= cen && (div2==2'b00);
+//       clk_en_ssg <= use_ssg ? (cen & cen_ssg_int) : 1'b0;
+//       clk_en_666 <= cen & cen_adpcm_int;
+//       clk_en_111 <= cen & cen_adpcm_int & cen_adpcm3_int;
+//       clk_en_55  <= cen & cen_adpcm_int & cen_adpcm3_int & cen_55_int;
+//       `endif
+//   end
+wire [1:0] div2_nx = cen ? (div2==2'b10 ? 2'b00 : (div2+2'b01)) : div2;
+
+always @(posedge clk) begin
     `ifdef FASTDIV
     // always enabled for fast sims (use with GYM output, the timers will not work well)
     clk_en     <= 1'b1;
@@ -94,14 +131,15 @@ always @(negedge clk) begin
     clk_en_666 <= 1'b1;
     clk_en_55  <= 1'b1;
     `else
-    clk_en     <= cen & cen_int;
-    clk_en_2   <= cen && (div2==2'b00);
-    clk_en_ssg <= use_ssg ? (cen & cen_ssg_int) : 1'b0;
-    clk_en_666 <= cen & cen_adpcm_int;
-    clk_en_111 <= cen & cen_adpcm_int & cen_adpcm3_int;
-    clk_en_55  <= cen & cen_adpcm_int & cen_adpcm3_int & cen_55_int;
+    clk_en     <= cen_nx & (opn_cnt == 4'd0);
+    clk_en_2   <= cen_nx && (div2_nx==2'b00);
+    clk_en_ssg <= use_ssg ? (cen_nx & (ssg_cnt == 3'd0)) : 1'b0;
+    clk_en_666 <= cen_nx & (adpcm_cnt666 == 5'd0);
+    clk_en_111 <= cen_nx & (adpcm_cnt666 == 5'd0) & (adpcm_cnt111 == 3'd0);
+    clk_en_55  <= cen_nx & (adpcm_cnt666 == 5'd0) & (adpcm_cnt111 == 3'd0) & (adpcm_cnt55 == 3'd0);
     `endif
 end
+// END LOCAL PATCH
 
 // Div/2
 always @(posedge clk)

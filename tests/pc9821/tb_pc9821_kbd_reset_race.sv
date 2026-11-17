@@ -12,8 +12,8 @@
 // byte and left the queue indices at head+1 / tail+1 instead of zeroed. The
 // first post-reset read then returned stale pre-reset data.
 //
-// The fold follows the Single-Cycle Event Discipline (race-idiom-report.md
-// section 4): every affected register has ONE next-state per cycle,
+// The fold follows the Single-Cycle Event Discipline
+// (docs/single-cycle-event-discipline.md R2): every affected register has ONE next-state per cycle,
 // `reset_event ? clear : normal_update`, so the outcome is a boolean and not
 // the NBA order. The coincident event is discarded WITH the rest of what the
 // receive side is holding - exactly what NP2kai's keyboard_resetsignal() clears

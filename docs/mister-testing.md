@@ -221,7 +221,16 @@ created.
 - **`speeds`** (in the default set): one core load per OSD CPU Speed in `--speeds` (list
   positions, default `1,2,3` = 33, 25 and 16 MHz), each with that setting written into the card's
   `config/PC9821.CFG` (status bits 17:14) before the load, and the boot check after each (one more
-  row per load). The file is backed up first and restored afterwards, also when a load fails. A
+  row per load). The file is backed up first and restored afterwards, also when a load fails.
+  After each boot the item runs `SPEED.COM` (`tools/hwprobe/speed`, built by the runner; booted
+  in profile 0, no EMM386, as `cpusuite` is, unless the scenarios file's `speeds.config_default`
+  says otherwise) into `ZSPD<n>.TXT`, and its `LOOP` row (a dec/jnz loop, interrupts off, timed
+  with the ARTIC) is the load's measured speed. The item PASSes only when every capture is
+  complete and problem-free (`speed_decode.py`'s checks), the speeds are strictly ordered as the
+  settings are, and each rated speed relative to the fastest rated one is within 10% of the
+  nominal rate ratio (`src/z486/cpu_throttle.sv` `rate_khz()`); the detail gives each load's
+  `LOOP` ns/iteration, its measured MHz and its Dhrystone/s. A load that booted but whose setting
+  did not take effect FAILs. `--speeds` needs two or more different positions. A
   speed below Full gates the CPU's clock, which a Full-speed run never exercises: fits whose
   clock-gate enable route was too long booted at Full and stayed black at every lower speed
   ([`clock-domains.md`](clock-domains.md), "The enable into the clock-control block"), so no other
@@ -263,8 +272,12 @@ created.
   `--out` (default `.build/mister-regress/<time>`), and for the boot check and the loop
   `--boot-check-timeout`, `--no-boot-check`, `--boot-count`, `--osd-reset-downs`, `--osd-verify`,
   and `--speeds` for `speeds`.
-  `--selftest` exercises the hardware-free logic, including the boot check and the loop on a
-  scripted card.
+  `--selftest` exercises the hardware-free logic, including the boot check, the loop and the
+  speed judgement on a scripted card.
+- **Exit status**: 0 only when every requested item (`--items`, or the default plan) PASSed. A
+  FAIL, a requested item that ended `SKIP` or `SKIP-FRAME`, or a plan in which nothing ran exits 1,
+  with a line after the summary table naming each; the table itself is unchanged. A plan-only run
+  (no `--go`) exits 1 when its plan skips an item.
 - **The release card run** includes `boot-loop` with `--boot-count 6` or more on every test card,
   besides the default items: `--items boot-loop,keymap,probe,...`; and `speeds` (33, 25 and 16 MHz)
   on every test card, which the default set already holds - an `--items` list must name it.

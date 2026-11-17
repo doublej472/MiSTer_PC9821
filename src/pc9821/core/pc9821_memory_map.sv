@@ -189,7 +189,7 @@ module pc9821_memory_map (
   // exactly cpu_addr[16:0], and win0_sel << 16 lands the page in [23:16], so the 32-bit
   // `cpu_addr + {8'd0,win0_sel,16'd0} - 0x80000` is a 9-bit add over a wired-through low half.
   // win0_sel[0] is always 0 (pc9821_iobus masks 0xFE); the cpu_addr[16] carry term keeps the
-  // odd-value arithmetic identical anyway. The carry chain it replaces was 2.3 ns of
+  // odd-value arithmetic identical anyway.
   wire [8:0] win0_hi = {1'b0, win0_sel} + {8'd0, cpu_addr_raw[16]};   // [16] is never translated
   assign d_addr = win0_moved ? {7'd0, win0_hi, cpu_addr[15:0]} : cpu_addr;
   // THE REGION DECODE IS MUXED LATE. Every window flag below is a pure function of
@@ -217,7 +217,7 @@ module pc9821_memory_map (
         first && (a[19:16] == 4'hC) && a[15] && a[14],                  // 10 CC000-CFFFF
         first && (a[19:16] == 4'hD) && a[15] && !a[14] && a[13],        //  9 DA000-DBFFF
         first && (a[19:16] == 4'hD) && a[15] && a[14],                  //  8 DC000-DFFFF
-        first && (a[19:17] == 3'b110) && (!a[16] || !a[15]),            //  7 C0000-D7FFF
+        first && (a[19:17] == 3'b110) && (!a[16] || !a[15]),            //  7 C0000-D7FFF: block C, or D with bit 15 clear
         (a[19:16] == 4'hA) && a[15],                                    //  6 A8000-AFFFF
         (a[19:16] == 4'hB) && !a[15],                                   //  5 B0000-B7FFF
         (a[19:16] == 4'hB) && a[15],                                    //  4 B8000-BFFFF
@@ -340,15 +340,12 @@ module pc9821_memory_map (
 
   wire [14:0] fw_offset = d_addr[14:0];
 
-            // ================= ABSENT ROM AREA: 0xC0000-0xD7FFF ======================
+            // ================= ABSENT ROM AREA: 0xC0000-0xD7FFF (dv[7], absent_area) ===========
             // Measured: 0xFF throughout, and stores discarded. Decoded on d_addr and left
             // UNCLAIMED, not identity RAM: the BIOS's option-ROM scan walks this range and absent != 0xAA55.
-            // ONE 16 KiB OF IT IS NOT ABSENT ON THE MACHINE: the fitted PC-9801-86 banks its 16 KiB
-            // SOUND.ROM at 0xCC000-0xCFFFF, and the machine answers real code there - the +C000..+F800
-            // rows of docs/probes/SHADOW.TXT:150-199 hold it and every other 2 KiB block of the area
-            // reads 0xFF (ffblocks=0028 of blocks=0030). That window is decoded below
-            // (sound_rom_window, the PC-9801-86 SOUND.ROM) and carved out of this area; the rest stays absent.
-  // 0xC0000-0xD7FFF is block C anywhere, or block D with bit 15 clear (see the slice note above).
+            // Every 2 KiB block of the area but the -86 SOUND.ROM window reads 0xFF
+            // (docs/probes/SHADOW.TXT:199 `blocks=0030 ... ffblocks=0028`); that window is decoded
+            // next and carved out of this area.
             // ================= THE PC-9801-86 SOUND.ROM WINDOW: 0xCC000-0xCFFFF =================
             // The fitted -86 card banks its 16 KiB option ROM here and the machine answers real
             // code: docs/probes/SHADOW.TXT:150-199 samples all eight 2 KiB blocks of the window and
@@ -486,19 +483,23 @@ module pc9821_memory_map (
                                   // which is what keeps the sum's second pass (run after 0x043F=0x80, BANK4@0x1D2) on
                                   // pristine ROM instead of the previous boot's stored byte.
   assign fw_shadow_store  = fw_window && cpu_write && bios_ram_gate;
-  // The writable shadow backs the BIOS-TOP bank ONLY. QEMU's mem_apply_top_bank
-  // (qemu-pc98 hw/i386/pc98-mem.c) enables f8000_ram exactly when
-  // `top_bank == BANK_BIOS_TOP && bios_ram_gate`, and only then does the window
-  // read RAM instead of ROM. This core reaches that same content as top_bank 7
-  // (0x043F's 0xE nibble, bank_offset 0x20000) or 9 (BANK_BIOS_TOP, 0x043D), so
-  // the read is gated on those. Reading the shadow for EVERY bank is a defect:
+  // The writable shadow backs the BIOS-TOP bank ONLY, and only with the 0x053D bit-1 gate set.
+  // QEMU's mem_apply_top_bank (qemu-pc98 hw/i386/pc98-mem.c) enables f8000_ram exactly when
+  // `top_bank == BANK_BIOS_TOP && bios_ram_gate`, and the Xe10 agrees on both terms
+  // (docs/probes/SHADOWW.TXT, the stored byte is 04 and BANK7.BIN's own byte at 0x0E90 is 00):
+  // the shadow is shown only in the 0x043D = 0x02 state - `st05 043D=00 043F=EE 053D=1F
+  // F8000:0000=A1 F8E8F/90=00/00`, bank 7's ROM through 0x043F under 0x043D = 0x00, not the
+  // shadow - and only with the gate set - `st07 043D=02 043F=EE 053D=1D F8000:0000=A1
+  // F8E8F/90=00/00`. top_bank 7 (0x043F's 0xE nibble) shares bank 9's pack slot but is the
+  // plain ROM bank; pc9821_iobus holds top_bank at 9 while 0x043D = 0x02 is latched
+  // (next_bank_043f), so 9 alone is the shadow's state. Reading the shadow for EVERY bank is a defect:
   // the ITF executes its OWN bank (bank 8) out of 0xF8000, so the instant its
   // drive-bitmap store set fw_shadow_dirty the window started serving the
   // BIOS-top bank's bytes where the ITF's own code belongs. The fetch at
   // physical 0xF9A10 then decoded as a memory-operand transfer to 0000:0000 and
   // the CPU ran away in low RAM (s5; the site is NOT the jmp 0:0).
-  wire   fw_bios_top_visible = (top_bank == 4'd7) || (top_bank == 4'd9);
-  wire   fw_shadow_read   = fw_window && !cpu_write && top_shadow_en &&
+  wire   fw_bios_top_visible = (top_bank == 4'd9);
+  wire   fw_shadow_read   = fw_window && !cpu_write && top_shadow_en && bios_ram_gate &&
                             fw_shadow_dirty && fw_bios_top_visible;
   wire   fw_shadow_access = fw_shadow_store || fw_shadow_read;
   // THE BACKEND ADDRESS IS A SPLICE OF {upper 12 bits, low 20 bits}, NOT A CHAIN OF 32-BIT ADDS.

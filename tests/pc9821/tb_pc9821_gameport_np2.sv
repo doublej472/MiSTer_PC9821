@@ -307,8 +307,9 @@ module tb_pc9821_gameport_np2;
     dig_1 = 14'd0; #1;
 
     // ---- 5. the DIVERGENCES, reported and not asserted ------------------------------
-    // They are the places the core and NP2kai genuinely answer differently; none is an RTL
-    // defect, so a fix would be a decision rather than a repair.
+    // 5a-5c and 5e are the places the core and NP2kai genuinely answer differently; none is an
+    // RTL defect, so a fix would be a decision rather than a repair. 5d is the exception: a
+    // FIXED defect, so it is an asserted check, not a divergence.
 
     // 5a. the axis one-shot's length. NP2kai's full scale is clkmax ~= 0.7 ms and its near
     // end clkmax/100 ~= 7 us; this core's is the IBM formula 24.2 us..1.124 ms. A game that
@@ -378,12 +379,12 @@ module tb_pc9821_gameport_np2;
 
     // 5d. a disabled stick in 4-button mode. FIXED: dis=2'b01 disables
     // stick 1, and in 4-button mode bits 6/7 are stick 1's buttons 3/4, so the mask now
-    // covers them and the disabled stick reads absent. On the pre-fix RTL this diverge
-    // fired (bit 6 read 0); it must not now.
+    // covers them and the disabled stick reads absent (NP2kai's 0xFF for no pad,
+    // board118.c:383-386, and the module's dis contract). On the pre-fix RTL bit 6 read 0.
     dis = 2'b01; mode = 2'd1; dig_1 = 14'b0000_0000_0100_0000; dig_2 = 14'd0; #1;
     checks = checks + 1;
     if (io_dout[6] !== 1'b1)
-      diverge("disabled stick 1, 4-button mode: its button 3 (dig_1[6]) still shows in bit 6; the module's contract and NP2kai's 0xFF say a disabled stick is absent");
+      fail("disabled stick 1, 4-button mode: its button 3 (dig_1[6]) shows in bit 6");
 
     // 5e. the OPNA register 0x0E with a 4-button pad. fmboard_getjoy composes the rapid and
     // non-rapid lines of each button (`ret &= ((ret >> 2) | ~0x30)`, sound/fmboard.c:82), so

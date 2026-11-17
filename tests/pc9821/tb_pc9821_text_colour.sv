@@ -102,7 +102,7 @@ module tb_pc9821_text_colour;
   wire       unused_dma_ready, unused_dma_resp;
   wire [7:0] unused_dma_dout;
   pc9821_window_responder u_bridge (
-      .clk(clk), .reset(reset), .route_cg(1'b0),
+      .clk(clk), .reset(reset), .route_cg(1'b0), .timing_xe10(1'b0), .gfx_scan_on(1'b0),
       .cpu_addr(cpu_addr), .cpu_din(cpu_din), .cpu_be(cpu_be),
       .cpu_line_read(cpu_line_read), .cpu_valid(cpu_valid),
       .cpu_write(cpu_write), .cpu_dout(cpu_dout),

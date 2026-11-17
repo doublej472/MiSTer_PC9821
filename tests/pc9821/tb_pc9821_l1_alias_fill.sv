@@ -1,10 +1,10 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The z486 L1s hold no line for the platform's unmapped addresses and high alias windows (aliases.md A1/F6): the tags carry phys[26:0] only, so X and X + k*0x0800_0000 share tag+set and one cached line served both encodings - a cached open-bus fill at 0x0800_1000 poisoned (or was poisoned by) the RAM line at 0x0000_1000, and the I-cache's fw_high/peg_high windows at 0xFFFF8000/0xFFF00000 shared lines with 0x07FF8000/0x07F00000. The fix keeps open-bus and the high alias windows OUT of the fill path (ram_cache_top = the end of guest RAM; D served direct, I by a pass-through line fill that installs nothing), so every cached encoding has a unique [26:0] key - the property widened 32-bit tags provide, without growing the tag arrays. FAIL-FIRST: the RAM read-back after an open-bus fill, the twin's read after a cached store, and both directions of the fw_high/peg_high pairs fail on the pre-fix behaviour.
+// The z486 L1s hold no line for the platform's unmapped addresses and high alias windows: the tags carry phys[26:0] only, so X and X + k*0x0800_0000 share tag+set and one cached line served both encodings - a cached open-bus fill at 0x0800_1000 poisoned (or was poisoned by) the RAM line at 0x0000_1000, and the I-cache's fw_high/peg_high windows at 0xFFFF8000/0xFFF00000 shared lines with 0x07FF8000/0x07F00000. The fix keeps open-bus and the high alias windows OUT of the fill path (ram_cache_top = the end of guest RAM; D served direct, I by a pass-through line fill that installs nothing), so every cached encoding has a unique [26:0] key - the property widened 32-bit tags provide, without growing the tag arrays. FAIL-FIRST: the RAM read-back after an open-bus fill, the twin's read after a cached store, and both directions of the fw_high/peg_high pairs fail on the pre-fix behaviour.
 //
 // The z486 L1s hold no line for the platform's unmapped addresses and high alias windows,
-// so one 27-bit-keyed line can never serve two physical encodings (aliases.md A1/F6).
+// so one 27-bit-keyed line can never serve two physical encodings.
 // The tags carry phys[26:0] only, so X and X + k*0x0800_0000 share tag+set: before the
 // fill exclusion a cached open-bus read at 0x0800_1000 filled the line that IS the RAM
 // line at 0x0000_1000 (and vice versa), and the instruction cache's fw_high/peg_high

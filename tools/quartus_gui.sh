@@ -68,7 +68,10 @@ COMMAND=(/opt/intelFPGA/quartus/bin/quartus "$PROJECT.qpf" "${PASSTHRU[@]}")
 
 # HOME=/tmp so the GTK/Qt config cache lives in the (throwaway) container, not the host.
 # XDG_CACHE_HOME follows HOME, so theme caches stay isolated too.
-RUNARGS=(--rm -it --name "pc9821-gui-$$" -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache)
+RUNARGS=(--rm --name "pc9821-gui-$$" -e HOME=/tmp -e XDG_CACHE_HOME=/tmp/.cache)
+# The GUI runs detached (the launcher returns, --rm removes the container when the GUI quits);
+# the shell is interactive and must stay attached to this terminal.
+if [ "$MODE" = shell ]; then RUNARGS+=(-it); else RUNARGS+=(-d); fi
 
 # The image is X11-only (see header), so this is the one transport. No Wayland fallback: a
 # Wayland socket with no Qt platform plugin is a guaranteed "could not find the wayland
@@ -100,6 +103,5 @@ echo "==> transport: X11"
 exec "$RUNTIME" run "${RUNARGS[@]}" \
   -v "$REPO_ROOT:/work" \
   -w /work \
-  -d \
   "$IMAGE" \
   "${COMMAND[@]}"

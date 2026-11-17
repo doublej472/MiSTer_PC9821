@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_DBG_MUX: The debug-UART mux (pc9821_dbg_mux) puts three record sources onto one byte stream without ever interleaving two records: every output record is one source's next record, byte for byte, in that source's order, whatever the mix of CD-log, display-log and CPU-instrument record types (including payload bytes equal to the 0xA5 sync), with sources that pause between bytes and an output that stalls at random; with all sources always ready the grant rotates round-robin (no source starves); and a stray non-sync byte passes through as a record of its own without taking the grant.
+// TB_PC9821_DBG_MUX: The debug-UART mux (pc9821_dbg_mux) puts three record sources onto one byte stream without ever interleaving two records: every output record is one source's next record, byte for byte, in that source's order, whatever the mix of CD-log, display-log, floppy-log (0x50-0x56, 0x5E, 0x5F) and CPU-instrument record types (including payload bytes equal to the 0xA5 sync), with sources that pause between bytes and an output that stalls at random; with all sources always ready the grant rotates round-robin (no source starves); and a stray non-sync byte passes through as a record of its own (driven with one source active, so whether it would take the grant from another source is not observed here).
 //
 // The bench carries its own record-length table, written from the record definitions (the CD log's
 // 4-byte header plus payload; pc9821_gdc_log; pc9821_dbg_cpu), not read from the DUT, and the
@@ -42,6 +42,9 @@ module tb_pc9821_dbg_mux;
       8'h19: tlen = 9;   8'h1E: tlen = 7;   8'h1F: tlen = 7;
       8'h20, 8'h21: tlen = 34;
       8'h30, 8'h31: tlen = 15;  8'h32: tlen = 8;  8'h43: tlen = 15;  8'h44: tlen = 13;
+      // the floppy log (--dbg-fdc): tools/decode_dbglog.py `**{t: 7 for t in range(0x50, 0x57)},
+      // 0x5E: 7, 0x5F: 7`
+      8'h50, 8'h51, 8'h52, 8'h53, 8'h54, 8'h55, 8'h56, 8'h5E, 8'h5F: tlen = 7;
       default: tlen = 0;
     endcase
   endfunction
@@ -51,7 +54,12 @@ module tb_pc9821_dbg_mux;
     begin
       r = rnd() % 8;
       case (s)
-        0: pick_type = (r < 5) ? 8'(1 + r) : (r == 5 ? 8'h09 : (r == 6 ? 8'h0B : 8'h0A));
+        0: begin
+             r = rnd() % 12;
+             pick_type = (r < 5) ? 8'(1 + r) : (r == 5 ? 8'h09 : (r == 6 ? 8'h0B : (r == 7 ? 8'h0A :
+                         // the floppy log's types share this source's menu
+                         (r == 8 ? 8'(8'h50 + (rnd() % 7)) : (r == 9 ? 8'h5E : (r == 10 ? 8'h5F : 8'h55))))));
+           end
         1: pick_type = (r < 6) ? 8'(8'h10 + r) : (r == 6 ? 8'h19 : 8'h1E);
         default: pick_type = (r < 2) ? 8'h20 : (r < 4 ? 8'h30 : (r == 4 ? 8'h32 : (r == 5 ? 8'h43 : (r == 6 ? 8'h44 : 8'h21))));
       endcase

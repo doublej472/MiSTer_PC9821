@@ -4,7 +4,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_DMAC_AUTOINIT:
-// The uPD71071's autoinitialize reload returns each channel to the values the guest PROGRAMMED, whatever the transfer has walked since: for each of the four channels a block is programmed with a distinct address (low byte, high byte and the 0x21-0x27 bank byte, whose port-to-channel map is NP2kai's ((port >> 1) + 1) & 3) and a count, the block is run through its terminal count and the next block starts again at exactly the programmed 24-bit address with the programmed length (checked on the bus addresses the engine presents, not on a register readback), a channel's reload is independent of the other three channels' programming, and re-programming only ONE byte lane of a channel afterwards (the address low byte, the count low byte, the bank byte) changes only that lane of its reload - the other lanes keep what was programmed before.
+// The uPD71071's autoinitialize reload returns each channel to the values the guest PROGRAMMED, whatever the transfer has walked since: for each of the four channels a block is programmed with a distinct address (low byte, high byte and the 0x21-0x27 bank byte, whose port-to-channel map is NP2kai's ((port >> 1) + 1) & 3) and a count, the block is run through its terminal count and the next block starts again at exactly the programmed 24-bit address with the programmed length (checked on the bus addresses the engine presents, not on a register readback), a channel's reload is independent of the other three channels' programming, and re-programming only ONE byte lane of a channel afterwards (the address low byte, the count low byte, the bank byte) changes only that lane of its reload - the other lanes keep what was programmed before; and a count with a non-zero HIGH byte (0x0100, a 257-byte block) reloads whole, also after its low lane alone is re-programmed (0x0102, 259 bytes).
 
 // ==== DUT ====
 module tb_pc9821_dmac_autoinit;
@@ -44,10 +44,10 @@ module tb_pc9821_dmac_autoinit;
   always @(posedge clk) mem_resp_valid <= mem_req && !mem_we;
 
   // every address the engine presented, in order
-  reg [23:0] log [0:63];
+  reg [23:0] log [0:1023];
   integer    log_n = 0;
   always @(posedge clk) if (mem_req && mem_ready) begin
-    if (log_n < 64) log[log_n[5:0]] <= mem_addr[23:0];   // the first 64 only: a level request never stops
+    if (log_n < 1024) log[log_n[9:0]] <= mem_addr[23:0];   // the first 1024 only: a level request never stops
     log_n <= log_n + 1;
   end
 
@@ -80,7 +80,6 @@ module tb_pc9821_dmac_autoinit;
       reg_wr(5'd13, 8'h00);              // master clear
       reg_wr(5'd12, 8'h00);              // clear the byte flip-flop
       reg_wr(5'd11, {6'b000110, c});     // mode: read (bits 3:2 = 10) with autoinitialize (bit 4)
-      reg_wr(5'd11, 8'h18 | {6'd0, c});
       reg_wr({2'b00, c, 1'b0}, a[7:0]);  // address low, then high
       reg_wr({2'b00, c, 1'b0}, a[15:8]);
       reg_wr(bank_idx(c), b);
@@ -116,7 +115,7 @@ module tb_pc9821_dmac_autoinit;
     end
   endtask
 
-  integer c;
+  integer c, j0, first_reload;
   initial begin
     repeat (8) @(negedge clk);
     reset = 0;
@@ -151,6 +150,33 @@ module tb_pc9821_dmac_autoinit;
     reg_wr(5'd5, 8'h01);                                            // count 3 -> 1: two bytes
     run(2'd2, 500);
     expect_blocks(2'd2, 24'hA94377, 2, "re-programming the count low byte moved another lane");
+
+    // ---- a count with a HIGH byte: channel 1, count 0x0100 = 257 bytes per block ----
+    // The 8237 family reloads the whole 16-bit base count at terminal count; a block longer than
+    // 256 bytes (a sound ring buffer) depends on the high lane coming back too.
+    prog(2'd1, 16'h2000, 8'h41, 16'h0100);
+    run(2'd1, 12000);
+    expect_blocks(2'd1, 24'h412000, 257, "a count with a non-zero high byte did not reload whole");
+
+    // the count LOW byte alone, with the high byte non-zero: 0x0100 -> 0x0102, 259 bytes. The
+    // channel was stopped mid-block, so its current address and count are mid-block too: the
+    // blocks are judged from the first reload on (the first return to the base address).
+    reg_wr(5'd12, 8'h00);
+    reg_wr(5'd3, 8'h02);
+    run(2'd1, 40000);
+    first_reload = -1;
+    for (j0 = 1; j0 < log_n && j0 < 1024 && first_reload < 0; j0 = j0 + 1)
+      if (log[j0] === 24'h412000 && log[j0 - 1] !== 24'h411FFF) first_reload = j0;
+    check(first_reload >= 0 && first_reload + 2 * 259 <= log_n && first_reload + 2 * 259 <= 1024,
+          "the channel did not reload and run two blocks after its count low byte was re-programmed");
+    if (first_reload >= 0)
+      for (j0 = 0; j0 < 2 * 259 && first_reload + j0 < 1024; j0 = j0 + 1)
+        if (log[first_reload + j0] !== 24'h412000 + 24'(j0 % 259)) begin
+          $display("  re-programming the count low byte lost the count high byte: request %0d after the reload at %06x, want %06x",
+                   j0, log[first_reload + j0], 24'h412000 + 24'(j0 % 259));
+          fails = fails + 1;
+          j0 = 2 * 259;
+        end
 
     // ==== VERDICT ====
     if (fails == 0) begin

@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 
 def main() -> int:
@@ -32,18 +33,35 @@ def main() -> int:
     if start != 0:
         print('mkblob: _start is not at 0', file=sys.stderr)
         return 1
-    subprocess.run(['objcopy', '-O', 'binary', elf, out], check=True)
-    raw = bytearray(open(out, 'rb').read())
+    if end > 0xE000:
+        print('mkblob: image over 56 KiB (the loader puts the stack at 0xFFF0)', file=sys.stderr)
+        return 1
+    # objcopy -O binary starts the file at the lowest loaded section, so a file offset is an
+    # address only when that section is at 0 (the patch below indexes the file by address).
+    hdrs = subprocess.run(['objdump', '-h', elf], capture_output=True, text=True, check=True).stdout
+    loaded = [int(m.group(1), 16) for m in re.finditer(
+        r'^\s*\d+\s+\S+\s+[0-9a-f]+\s+([0-9a-f]+)\s+[0-9a-f]+\s+[0-9a-f]+\s+\S+\n\s+([^\n]*)', hdrs, re.M)
+        if 'LOAD' in m.group(2)]
+    if not loaded or min(loaded) != 0:
+        print(f'mkblob: the lowest loaded section is not at 0 ({loaded})', file=sys.stderr)
+        return 1
+    # Everything is checked before OUT exists: a refused image leaves no plausible blob behind.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(out)), suffix='.tmp')
+    os.close(fd)
+    try:
+        subprocess.run(['objcopy', '-O', 'binary', elf, tmp], check=True)
+        raw = bytearray(open(tmp, 'rb').read())
+    finally:
+        os.unlink(tmp)
     if len(raw) > end:
         print('mkblob: image longer than __end', file=sys.stderr)
         return 1
     for s in sites:
-        assert raw[s:s + 2] == b'\xe7\xe4'
+        if raw[s:s + 2] != b'\xe7\xe4':
+            print(f'mkblob: the file does not hold E7 E4 at {s:#x} (offset != address)', file=sys.stderr)
+            return 1
         raw[s:s + 2] = b'\xcd\x40'
     raw += bytes(end - len(raw))
-    if end > 0xE000:
-        print('mkblob: image over 56 KiB (the loader puts the stack at 0xFFF0)', file=sys.stderr)
-        return 1
     open(out, 'wb').write(raw)
     print(f'mkblob: {out} {end} bytes, markers at {sites[0]:#x} {sites[1]:#x}')
     return 0

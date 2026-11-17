@@ -34,6 +34,7 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARB = "src/pc9821/core/pc9821_gvram_arb.sv"
+XPKG = "src/pc9821/core/pc9821_xe10_timing_pkg.sv"
 SUBSYS = "src/pc9821/core/pc9821_memory_subsystem.sv"
 OTHERS = ["tests/pc9821/pc9821_gvram_dut.sv", "src/pc9821/core/pc9821_gvram_share.sv",
           "src/pc9821/video/pc9821_grcg.sv", "src/pc9821/core/pc9821_egc.sv",
@@ -114,9 +115,16 @@ def prove(plant=None):
                  ("pc9821_egc_pkg::egc_state_e state;", "reg [3:0] state;")):
         assert texts[egc].count(a) == 1, a
         texts[egc] = texts[egc].replace(a, b)
+    # The Xe10 class table's package, read ahead of the arbiter, and the arbiter's import of it
+    # hoisted to file scope (the same parser limit as the EGC's).
+    ximp = "  import pc9821_xe10_timing_pkg::*;\n"
+    assert texts[ARB].count(ximp) == 1
+    texts[ARB] = (open(os.path.join(REPO, XPKG)).read() + "\n" + ximp.strip() + "\n" +
+                  texts[ARB].replace(ximp, ""))
     arb = texts[ARB]
     k = arb.rindex("endmodule")
     texts[ARB] = arb[:k] + PROPS + arb[k:]
+    os.makedirs(os.path.join(REPO, ".build"), exist_ok=True)   # git-ignored: absent on a clean checkout
     with tempfile.TemporaryDirectory(dir=os.path.join(REPO, ".build")) as tmp:
         names = []
         for i, rel in enumerate([ARB] + OTHERS):

@@ -37,7 +37,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-PIN_RE = re.compile(r"\b([0-9a-f]{40})\b")
+# The pin is taken ONLY from a labelled line, never from the first 40-hex token in the text:
+# a commit hash cited in prose must not become the baseline.
+PIN_RE = re.compile(r"^Pinned baseline: `?([0-9a-f]{40})`?\s*$", re.M)
 MAP_HEADER = "Verified diff map"
 MARKER_RE = re.compile(r"LOCAL PATCH|LOCAL CHANGE|LOCAL FIX|LOCAL ADD|PORT CONTRACT \(entry")
 SKIP_DIRS = {".git", "__pycache__"}
@@ -52,9 +54,10 @@ def read_doc(doc: Path) -> tuple[str, dict[str, str], set[str], set[str]]:
 
     The pin is OPTIONAL since src/z486/ became a plain copy of the fork: this repo
     no longer names the baseline's provenance (self-containment - an out-of-repo
-    path in a citation is a defect), so the document normally carries no 40-hex pin
-    and the baseline is whatever `--upstream`/`$Z486_UPSTREAM` supplies. When a pin
-    IS named it is still verified against that checkout's HEAD.
+    path in a citation is a defect), so the document normally carries no pin and the
+    baseline is whatever `--upstream`/`$Z486_UPSTREAM` supplies. A pin is a line
+    `Pinned baseline: <40-hex sha>`; when one is named it is verified against that
+    checkout's HEAD.
 
     "only in upstream" is the fork-tracked set this repo deliberately does not
     carry; "only in tree" is the PC-98 test/infrastructure set this repo carries
@@ -257,10 +260,25 @@ def selftest(upstream: Path, tree: Path, rows: dict[str, str], upstream_only: se
             print("  selftest D: a row for an unmodified file -> caught")
         else:
             print("  selftest D: FAILED to catch a stale map row"); failures += 1
+
+    # The pin comes from its labelled line only: a hash cited in prose is not a pin.
+    with tempfile.TemporaryDirectory() as tmp:
+        sha_a, sha_b = "a" * 40, "b" * 40
+        body = (f"Prose citing commit {sha_a}.\n\n### {MAP_HEADER}\n\n| file | entries |\n"
+                f"|---|---|\n| (none) | |\n")
+        d = Path(tmp) / "patch-map.txt"
+        d.write_text(body, encoding="utf-8")
+        unlabelled = read_doc(d)[0]
+        d.write_text(body + f"\nPinned baseline: {sha_b}\n", encoding="utf-8")
+        labelled = read_doc(d)[0]
+        if unlabelled is None and labelled == sha_b:
+            print("  selftest E: a prose hash is not the pin; the labelled line is -> caught")
+        else:
+            print(f"  selftest E: FAILED (pin read as {unlabelled} / {labelled})"); failures += 1
     return 1 if failures else 0
 
 
-def default_upstream(start: Path) -> Path | None:
+def default_upstream() -> Path | None:
     """The comparison baseline is SUPPLIED, never guessed.
 
     It comes from `$Z486_UPSTREAM` (or `--upstream`) and from nothing else: this
@@ -288,7 +306,7 @@ def main() -> int:
         return 2
     pin, rows, upstream_only, tree_only = read_doc(doc)
 
-    upstream = Path(args.upstream) if args.upstream else default_upstream(tree)
+    upstream = Path(args.upstream) if args.upstream else default_upstream()
     have_upstream = upstream is not None and (upstream / ".git").exists()
     head = None
     if not have_upstream:

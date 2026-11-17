@@ -17,7 +17,9 @@ nothing else in the gates reads a sentence, so this resolver does it:
     with an optional `, ` between - it requires that fragment (whitespace collapsed; a
     `...` inside it splits it into pieces that must each appear) on the cited lines or
     within +-WINDOW lines of them. A parenthesised text counts as a fragment only when it
-    looks like code (holds one of CODE_CHARS), so prose in brackets is not a quote.
+    looks like code (holds one of CODE_CHARS), so prose in brackets is not a quote;
+  * it COUNTS the citations that quote no fragment (only the line's existence is checked for
+    them) and fails when the count passes UNQUOTED_CEILING, so new citations quote their line.
 
 Citing files: tracked text files outside the vendored trees (src/z486, sys, src/opna,
 which may be CITED) and outside docs/probes (raw captures, evidence, never edited).
@@ -41,6 +43,13 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 WINDOW = 3
 SKIP_CITING_PREFIX = ("sys/", "src/z486/", "src/opna/", "docs/probes/")
 SELF = "tools/check_line_citations.py"
+# Citations that quote no fragment are checked only for the line's existence, so they go stale
+# silently when the cited file moves. They are COUNTED: the count may not grow past this
+# ceiling (a new citation must quote its line); lower it as old ones are given a fragment.
+# Citations of raw captures (docs/probes) and of the frozen sys/ tree are exempt.
+UNQUOTED_CEILING = 87
+UNQUOTED_EXEMPT = ("docs/probes/", "sys/")
+SH_APOS = "'\"'\"'"   # a single quote inside a single-quoted shell string
 CODE_CHARS = set("=;[]<>_`'{}|&!") | {"(", "->", "::"}
 
 # path:LINE, path:A-B, path:N,M,... / path:N/:M. The path ends in a name with an
@@ -132,7 +141,7 @@ def check_one(res: Resolver, target: str, ranges, frag: str | None) -> str | Non
 def scan(root: pathlib.Path, files: list[str] | None = None):
     files = files if files is not None else tracked(root)
     res = Resolver(root, files)
-    results = []  # (citing, lineno, cite_text, target_or_None, verdict_or_None)
+    results = []  # (citing, lineno, cite_text, target_or_None, verdict_or_None, quoted)
     for f in files:
         if f.startswith(SKIP_CITING_PREFIX) or f == SELF:
             continue
@@ -170,38 +179,54 @@ def scan(root: pathlib.Path, files: list[str] | None = None):
                 if frag is not None and (re.fullmatch(r":\d+(?:-\d+)?", frag)
                                          or CITE.search(frag)):
                     frag = None  # the next citation, not a quote
+                if frag is not None:
+                    # a generated shell file (bench_sources.sh) single-quotes its text, so an
+                    # apostrophe inside a quoted fragment arrives as '"'"'
+                    frag = frag.replace(SH_APOS, "'")
                 ranges = parse_ranges(m.group(2))
                 why = [check_one(res, t, ranges, frag) for t in targets]
                 verdict = None if any(w is None for w in why) else why[0]
                 results.append((f, ln, m.group(0) + (f" {frag!r}" if frag else ""),
-                                targets[0], verdict))
+                                targets[0], verdict, frag is not None))
                 # a bare `:N` right after this one cites the same file
                 for bm in BARE.finditer(tail[:80]):
                     rng = parse_ranges(bm.group(1))
                     why = [check_one(res, t, rng, None) for t in targets]
                     verdict = None if any(w is None for w in why) else why[0]
                     results.append((f, ln, f"{m.group(1)}:{bm.group(1)}", targets[0],
-                                    verdict))
+                                    verdict, False))
     return results
+
+
+def unquoted_of(results) -> list:
+    """The passing citations of editable files (not docs/probes, not sys/) that quote no
+    fragment: their line exists, but nothing says it still carries the fact."""
+    return [r for r in results
+            if not r[4] and not r[5] and not r[3].startswith(UNQUOTED_EXEMPT)]
 
 
 def run(root: pathlib.Path, list_all: bool) -> int:
     results = scan(root)
     bad = [r for r in results if r[4]]
-    for f, ln, cite, tgt, why in (results if list_all else bad):
+    for f, ln, cite, tgt, why, _q in (results if list_all else bad):
         print(f"{'FAIL' if why else 'ok  '} {f}:{ln}: {cite} -> {tgt}"
               + (f": {why}" if why else ""))
-    print(f"check_line_citations: {len(results)} in-repo citations, {len(bad)} failing")
-    return 1 if bad else 0
+    nq = len(unquoted_of(results))
+    over = nq > UNQUOTED_CEILING
+    print(f"check_line_citations: {len(results)} in-repo citations, {len(bad)} failing; "
+          f"{nq} quote no fragment (ceiling {UNQUOTED_CEILING}; --unquoted lists them)")
+    if over:
+        print(f"FAIL: {nq} unquoted citations exceed the ceiling {UNQUOTED_CEILING}: quote a "
+              f"fragment of the cited line on each new one (--unquoted lists them)")
+    elif nq < UNQUOTED_CEILING:
+        print(f"note: the ceiling can be lowered to {nq} (UNQUOTED_CEILING)")
+    return 1 if bad or over else 0
 
 
 def unquoted(root: pathlib.Path) -> int:
     res = Resolver(root, tracked(root))
     n = 0
-    for f, ln, cite, tgt, why in scan(root):
-        if why or "'" in cite.split(" ", 1)[-1] and " " in cite or tgt.startswith(
-                ("docs/probes/", "sys/")):
-            continue
+    for f, ln, cite, tgt, why, _q in unquoted_of(scan(root)):
         spec = cite.rsplit(":", 1)[1]
         ranges = parse_ranges(spec)
         lines = res.lines(tgt) or []
@@ -228,13 +253,18 @@ def selftest() -> int:
             "// io/pit.c:378 is NP2kai, external",
             "// `a.sv:2`, `:3`",
             "// src/a.sv:3 (the reset branch)",
+            "echo 'the reset a.sv:3 `foo_r <= 1'\"'\"'b0` in a shell string'",
         ]
+        # of the good citations, these quote no fragment: `a.sv:2` before `:3`, the bare
+        # `:3`, and the prose-bracketed src/a.sv:3
+        good_unquoted = 3
         planted = {
             "bad line": "// src/a.sv:0",
             "out of range": "// `src/a.sv:9`",
             "inverted range": "// src/a.sv:4-2",
             "wrong fragment": "// `src/a.sv:2`, `foo_r <= 1'b1`",
             "bare past end": "// `a.sv:2`, `:7`",
+            "wrong shell fragment": "echo 'a.sv:3 `foo_r <= 1'\"'\"'b1`'",
         }
         cases = {"good": good, **{k: [v] for k, v in planted.items()}}
         failures = []
@@ -244,9 +274,13 @@ def selftest() -> int:
             nbad = sum(1 for r in res if r[4])
             ncite = sum(1 for r in res if r[0] == "t.txt")
             if name == "good":
-                if nbad or ncite != len(good):
+                if nbad or ncite != len(good):   # the external one is skipped, the bare `:3` added
                     failures.append(f"good: {nbad} failing, {ncite} found "
                                     f"(want 0, {len(good)}): {res}")
+                nq = len(unquoted_of(res))
+                if nq != good_unquoted:
+                    failures.append(f"good: {nq} counted as unquoted, want {good_unquoted}: "
+                                    f"{[r[2] for r in unquoted_of(res)]}")
             elif nbad == 0:
                 failures.append(f"{name}: not caught")
         for f in failures:

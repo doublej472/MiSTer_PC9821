@@ -1,7 +1,11 @@
 // pc9821_atapi_ref - the ATAPI CD-ROM drive AS IT WAS before its area restructuring (284a2442), kept as the
 // golden model of tb_pc9821_atapi_equiv: every restructuring of src/pc9821/storage/pc9821_atapi.sv is
 // proven against it by running the same random command stream through both and comparing every value
-// the guest reads. It is a byte-for-byte copy of that file with the module renamed. Do NOT edit it.
+// the guest reads. Its code is that file's with the module renamed, plus ONE BEHAVIOURAL SYNC marked
+// `SYNC`, so it is a lockstep copy now (tools/check_ref_copies.py LOCKSTEP): the MSF converter's
+// minute is 8 bits, its frame count 21 bits, and a BCD time past 99 minutes reads FF:59:74, as in the
+// shipped drive (NP2kai storemsf; tb_pc9821_atapi C19b). The restructuring this copy proves does not
+// touch the converter's formatting. Edit it only to mirror a deliberate behaviour change.
 //
 // PC-98 ATAPI CD-ROM on the built-in IDE: ALWAYS bank 1's MASTER (IDE unit 2), the hard disk
 // always bank 0's master (unit 0) - the stock CD-equipped Xe10's layout and NP2kai's default (HDD
@@ -141,7 +145,8 @@ module pc9821_atapi_ref #(
   wire [19:0] totals = !loaded ? 20'd0 : (is_pcd ? leadout : iso_cap);
   reg        damsfbcd;         // atapicmd.c: NEC mode (BCD MSF), set by MODE SENSE page 0x0F
   // The lead-out MSF of an ISO (for its synthesised TOC), from the MSF converter at mount.
-  reg [6:0]  lo_m = 7'd0; reg [5:0] lo_s = 6'd0; reg [6:0] lo_f = 7'd0;
+  reg [7:0]  lo_m = 8'd0;   // SYNC: 8 bits
+  reg [5:0] lo_s = 6'd0; reg [6:0] lo_f = 7'd0;
   reg [7:0]  lo_mb = 8'd0, lo_sb = 8'd0, lo_fb = 8'd0;   // the same in BCD
 
   // ---- CD-DA player state (atapicmd.c drv->daflag/dacurpos/dalength) ----
@@ -214,9 +219,9 @@ module pc9821_atapi_ref #(
 
   // ---- MSF converter (frames -> M:S:F), sequential ----
   reg        cv_busy = 1'b0, cv_ph = 1'b0, cv_owner_mount = 1'b0, iso_msf_pend = 1'b0;
-  reg [19:0] cv_x = 20'd0;
-  reg [6:0]  cv_m = 7'd0; reg [5:0] cv_s = 6'd0;
-  wire       cv_done = cv_busy && cv_ph && (cv_x < 20'd75);
+  reg [20:0] cv_x = 21'd0;                      // SYNC: 21 bits
+  reg [7:0]  cv_m = 8'd0; reg [5:0] cv_s = 6'd0;  // SYNC: 8 bits
+  wire       cv_done = cv_busy && cv_ph && (cv_x < 21'd75);
 
   function automatic [7:0] bcd(input [6:0] v);
     reg [3:0] t;
@@ -229,8 +234,12 @@ module pc9821_atapi_ref #(
   endfunction
   // The converter's result, the one place an M:S:F is formatted: BCD, and the form NEC mode
   // asks for (atapicmd.c storemsf's isBCD).
-  wire [7:0] cv_mb = bcd(cv_m), cv_sb = bcd({1'b0, cv_s}), cv_fb = bcd(cv_x[6:0]);
-  wire [7:0] cv_mf = damsfbcd ? cv_mb : {1'b0, cv_m};
+  // SYNC: past 99 minutes the BCD form is FF:59:74 (NP2kai storemsf), the binary minute whole.
+  wire       cv_m99 = (cv_m > 8'd99);
+  wire [7:0] cv_mb = cv_m99 ? 8'hFF : bcd(cv_m[6:0]);
+  wire [7:0] cv_sb = cv_m99 ? 8'h59 : bcd({1'b0, cv_s});
+  wire [7:0] cv_fb = cv_m99 ? 8'h74 : bcd(cv_x[6:0]);
+  wire [7:0] cv_mf = damsfbcd ? cv_mb : cv_m;
   wire [7:0] cv_sf = damsfbcd ? cv_sb : {2'b00, cv_s};
   wire [7:0] cv_ff = damsfbcd ? cv_fb : {1'b0, cv_x[6:0]};
   function automatic [7:0] unbcd(input [7:0] b);
@@ -357,7 +366,7 @@ module pc9821_atapi_ref #(
   // in the PCD header's layout (tools/cue2pcd.py) so READ TOC / READ SUB-CHANNEL read one form.
   // (Every value it reads is an ARGUMENT: Quartus 17 elaborated the module-scope lo_m/lo_s/lo_f
   // a function body read as "assigned a value but never read" (warning 10036) and dropped them.)
-  function automatic [15:0] iso_word(input [9:0] a, input [19:0] cap, input [6:0] m,
+  function automatic [15:0] iso_word(input [9:0] a, input [19:0] cap, input [7:0] m,
                                      input [5:0] sec, input [6:0] fr,
                                      input [7:0] mb, input [7:0] sb, input [7:0] fb);
     case (a)
@@ -368,7 +377,7 @@ module pc9821_atapi_ref #(
       10'd258: iso_word = {4'd0, cap[19:16], 8'h00};     // lead-out LBA, big-endian
       10'd259: iso_word = {cap[7:0], cap[15:8]};
       10'd513, 10'd769: iso_word = 16'h0002;                 // 00:02:00
-      10'd514: iso_word = {1'b0, m, 8'h00};
+      10'd514: iso_word = {m, 8'h00};   // SYNC
       10'd515: iso_word = {1'b0, fr, 2'b00, sec};
       10'd770: iso_word = {mb, 8'h00};
       10'd771: iso_word = {fb, sb};
@@ -391,7 +400,8 @@ module pc9821_atapi_ref #(
   // paused or completed drive reports a position that wanders by up to 7 frames from poll to
   // poll. Policenauts depends on it: ITP.EXE's wait for the end of a CD-DA clip leaves only when
   // the Q channel's relative position goes BACKWARDS, so a position that stands still at 0x13
-  // keeps it at the Konami logo for good (cdrom-REPORT sec.10.9). rand() is an 8-bit LFSR here,
+  // keeps it at the Konami logo for good (observed on the core; the CD-ROM report that traced
+  // it is not kept in the tree). rand() is an 8-bit LFSR here,
   // stepped once per positioned report, as NP2kai calls rand() once per report.
   reg [19:0] sc_pos;
   reg [7:0]  sc_rnd = 8'h5A;
@@ -977,18 +987,18 @@ module pc9821_atapi_ref #(
 
     // ---- the MSF converter: one start per cycle, else step / finish ----
     if (cv_start_abs || cv_start_rel || cv_start_iso) begin
-      cv_busy <= 1'b1; cv_ph <= 1'b0; cv_m <= 7'd0; cv_s <= 6'd0;
+      cv_busy <= 1'b1; cv_ph <= 1'b0; cv_m <= 8'd0; cv_s <= 6'd0;
       cv_owner_mount <= cv_start_iso;
-      cv_x <= cv_start_iso ? iso_cap + 20'd150 :
-              cv_start_abs ? sc_pos + 20'd150 : sc_pos - sc_rpos;
+      cv_x <= cv_start_iso ? {1'b0, iso_cap} + 21'd150 :          // SYNC: 21 bits
+              cv_start_abs ? {1'b0, sc_pos} + 21'd150 : {1'b0, sc_pos - sc_rpos};
       if (cv_start_iso) iso_msf_pend <= 1'b0;
     end else if (cv_done) begin cv_busy <= 1'b0; cv_owner_mount <= 1'b0; end
     else if (cv_busy) begin
       if (!cv_ph) begin
-        if (cv_x >= 20'd4500) begin cv_x <= cv_x - 20'd4500; cv_m <= cv_m + 7'd1; end
+        if (cv_x >= 21'd4500) begin cv_x <= cv_x - 21'd4500; cv_m <= cv_m + 8'd1; end
         else cv_ph <= 1'b1;
       end else begin
-        cv_x <= cv_x - 20'd75; cv_s <= cv_s + 6'd1;
+        cv_x <= cv_x - 21'd75; cv_s <= cv_s + 6'd1;
       end
     end
 

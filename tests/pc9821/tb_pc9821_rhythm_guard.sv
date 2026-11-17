@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_RHYTHM_GUARD:
-// The rhythm loader's region bounds, which is where its own arithmetic can alias: waddr is offset[12:1], so a write one word past the region's end computes a word index that truncates to 0 -- it would overwrite ROM word 0, the first byte of the first percussion sample, on every pack download, using data from a region the loader does not own. The pack download walks the whole 1 MiB pack during the same stream, so the addresses on both sides of the region really do pass this module. The bench drives writes below the region, at its first and last words, one word past its end, and far past it, and requires that only the in-region words land; the source of the layout is tools/build_pack.py's RHYTHM_OFFSET/RHYTHM_SIZE and its region tuple, which places the slot at 0x49000, 8192 bytes, between the extended banks ending at 0x49000 and the option-ROM slot at 0x70000.
+// The rhythm loader's region bounds, which is where its own arithmetic can alias: waddr is offset[12:1], so a write one word past the region's end computes a word index that truncates to 0 -- it would overwrite ROM word 0, the first byte of the first percussion sample, on every pack download, using data from a region the loader does not own. The pack download walks the whole 1 MiB pack during the same stream, so the addresses on both sides of the region really do pass this module. The bench drives writes below the region, at its first and last words, one word past its end, and far past it, and requires that only the in-region words land, also while the loader's reset is held (as Main holds it while the pack streams: a region word written under reset lands at its own address and word 0 keeps its byte); the source of the layout is tools/build_pack.py's RHYTHM_OFFSET/RHYTHM_SIZE and its region tuple, which places the slot at 0x49000, 8192 bytes, between the extended banks ending at 0x49000 and the option-ROM slot at 0x70000.
 
 // The DUT is the loader plus the ROM it fills, the same pair
 // tb_pc9821_rhythm_rom drives: RHYTHM_ROM is the module jtopna instantiates
@@ -234,6 +234,28 @@ module tb_pc9821_rhythm_guard;
     read_rom(13'd0, v);
     if (v !== lo_byte(REGION))
       fail("a foreign-index write at an in-region address landed in the ROM");
+
+    // ---- 5. the pack lands WHILE the loader's reset is held ----------------
+    // That is how the pack really loads: Main holds the core's reset bit while it streams the
+    // pack (tb_pc9821_raster_hold models the same hold), and the loader's reset copy is the raw
+    // one, not gated by the pack-load hold. So a region word written under reset must land at
+    // its own address with its own bytes, and must not leave a zero word behind at word 0.
+    @(negedge clk);
+    reset = 1'b1;
+    push_word(REGION + 27'h100, lo_byte(REGION + 27'h100), hi_byte(REGION + 27'h100));
+    settle;
+    @(negedge clk);
+    reset = 1'b0;
+    settle;
+    read_rom(13'h100, v);
+    if (v !== lo_byte(REGION + 27'h100))
+      fail("a region word written while reset is held did not land (low byte)");
+    read_rom(13'h101, v);
+    if (v !== hi_byte(REGION + 27'h100))
+      fail("a region word written while reset is held did not land (high byte)");
+    read_rom(13'd0, v);
+    if (v !== lo_byte(REGION))
+      fail("a download under reset overwrote ROM word 0");
 
   // ==== VERDICT ====
 

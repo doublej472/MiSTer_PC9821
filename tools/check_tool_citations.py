@@ -86,19 +86,9 @@ ARTIFACT_SOURCE = {".com": ".s"}
 
 # THE TOLERATED LEDGER: (citing file, cited path, why it is still there, who owes the fix).
 # Nothing here is a tools/ file -- those are fixed, not tolerated.
-TOLERATED = (
-    # PRINTED PATH STRINGS inside a probe, not prose about one: the banner is a `.ascii`
-    # in the source, so changing it changes the built `.com` that the kept captures in
-    # docs/probes/ identify themselves by.
-    ("tools/hwprobe/idelat/idelat.s", "tools/hwprobe/idelat.s",
-     "printed by the probe's banner; the path moved under idelat/ and the fix carries a "
-     "binary hash refresh", "hwprobe"),
-    ("tools/hwprobe/ideprobe/ideprobe.s", "tools/hwprobe/ideprobe.s",
-     "printed by the probe's banner; the path moved under ideprobe/ and the fix carries "
-     "a binary hash refresh", "hwprobe"),
-    ("tools/hwprobe/ioprobe/ioprobe.s", "tools/hwprobe/ioprobe.s",
-     "printed by the probe's banner; the path moved under ioprobe/ and the fix carries a "
-     "binary hash refresh", "hwprobe"),
+TOLERATED: tuple = (
+    # (the three probe banners that printed their pre-move path, idelat.s/ideprobe.s/ioprobe.s,
+    # now print tools/hwprobe/<tool>/<tool>.s: the ledger is empty)
 )
 
 

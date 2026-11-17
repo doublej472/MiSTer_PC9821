@@ -12,9 +12,7 @@
 // DAC. The real Xe10's DAC takes a write at once, mid-line: XE10T /RASTER's TOGGLE phase
 // (docs/probes/XE10T-XE10-RASTER.TXT:27 `P RASTER TOGGLE frames=283`) filmed dashes about one
 // `out` long (~7.8 dots), staggered from line to line, inside the toggled band.
-// tb_pc9821_raster_palette asserts the lines both references agree on. (An earlier form kept a
-// live table and copied it into this one at the frame boundary, which showed a whole frame in
-// the table written last in the vertical blank.)
+// tb_pc9821_raster_palette asserts the lines both references agree on.
 //
 // The read is ASYNCHRONOUS, so no dot of the pixel path moves, and the table is 192 flops: an
 // asynchronous read is refused by every block type with a defined read-during-write
@@ -30,14 +28,16 @@
 // apply them to a whole frame (NP2kai draws a raster split in 16-colour analogue mode only,
 // `(gdc.analog & 3) != 1` takes the plain draw in vram/scrndraw.c, and MAME's digital write in
 // pc9801_v.cpp sets the pens with no partial update). The mode latch is still pc9821_crtc's
-// frame-coherent snapshot. Owns the READ only; separate from pc9821_plane_fold so PEGC's packed mode can
-// bypass the fold. Output is {R,G,B} nibbles. Derivation: corrections
+// frame-coherent snapshot. Owns the displayed palette tables and their write ports; the guest's
+// read-back mirror (ports 0xAA/0xAC/0xAE) is pc9821_crtc's pal_rd_q/pal256_rd_q. Separate from
+// pc9821_plane_fold so PEGC's packed mode can bypass the fold. Output is {R,G,B} nibbles.
 
 `default_nettype none
 
 module pc9821_gfx_palette (
-    // clk_sys and clk_vid are the same net at the top level (pc9821_system), so one clock
-    // port serves the CPU write ports and the registered 256-colour read.
+    // clk_sys: the CPU write ports and the registered 256-colour read are both on it (the
+    // scanout runs on clk_sys under the dot enable). clk_vid is a separate clock; the picture
+    // reaches it only through pc9821_video_out's FIFO (docs/clock-domains.md, V1/V2).
     input  wire        clk,
     // The index: the plane fold {E,G,R,B}, or {G,R,B} in digital mode. Eight bits to
     // match the packed PEGC path in pc9821_video_mixer; only the low nibble resolves

@@ -2,7 +2,7 @@
 
 // ==== WHAT THIS PROVES ====
 // TB_PC9821_PRAM:
-// The PC-9821's battery-backed BIOS settings store -- the two-bank software-DIP switch at 0x841E-0x8F1E with its 0x8F1F address/control latch -- against NP2kai's io/dipsw.c and qemu-pc98, with the machine's own captures deciding where they disagree (docs/probes/PORTS.TXT's read-only sweep and docs/probes/RDBACK.TXT:162, the one write-then-read round): the power-up image is the measured bank A, the latch selects bank A (the twelve data ports 0x841E-0x8F1E) or bank B (12..23, off by +12 and not +16), a write stores the guest byte verbatim except 0x84's bit 1 (the one unmeasured strap) - the bench used to MASK each register's PARITY bit too and was inverted here on the machine's evidence, because the firmware writes those bits (BANK3@0xFA219's parity idiom; the ITF's `or al,0x80 / out 0x8E1E`) and the ITF's repair installs its factory tables BANK4@0x480C/0x4818 through these ports, so a frozen parity bit composed its 0x7F over the machine image 0xBF into an EVEN 0xFF - the SET THE SOFTWARE DIP-SWITCH loop (the Xa7C9W capture holds the factory 0x7F at that cell; NP2kai's write mask is OVERRULED by the machine, same adjudication as the read side; the falsifier is probe2 /RDBACK at 0x8B1E/0x881E on the machine), a READ RETURNS THE STORED BYTE VERBATIM (the machine reads back the EVEN-parity 0x0C it wrote at 0x871E, `port=871E before=3E wrote=0C after=0C back=3E`, and qemu-pc98's pc98_sdip_read/pc98_sdip_write store and return it verbatim too, so the capture and qemu agree against NP2kai's odd-parity recompute on read), the authentic ITF's own read-back verifier passes, the MACHINE-RESET strobe RE-SEEDS the store to the power-up image (without a reset path a platform reset leaves whatever the previous run had written, which brings the software-DIP message back; a guest SETUP change therefore does not survive a platform reset any more, where the machine's own battery-backed store would keep it - the deliberate divergence item 94 records), and the ports outside 0x841E-0x8F1E answer open bus. NP2kai's FOUR divergent behaviours on this store -- it treats 0x871E/0x8E1E as PC-9801 control ports, it recomputes an odd-parity bit on every read, it refuses a write whose byte is not already odd-parity, and it masks each register's parity bit on write -- are printed as WAIVED lines rather than asserted, because the machine's own capture reads 0x871E=0x3E and 0x8E1E=0x49 as stored bytes and returns an even-parity write verbatim, which resolves all four for this RTL. And the ITF's own REPAIR is replayed byte for byte (BANK4@0xFC7B2-0xFC8DE: the factory tables out the ports, 0x8B's bit 6 saved and ORed back) and must leave an image the ITF's own predicate accepts and that a second repair cannot move - FAIL-FIRST, because with the old frozen parity bits the install composed EVEN 0x5C/0xFF at 0x881E/0x8B1E over the machine image and the message loop formed.
+// The PC-9821's battery-backed BIOS settings store -- the two-bank software-DIP switch at 0x841E-0x8F1E with its 0x8F1F address/control latch -- against NP2kai's io/dipsw.c and qemu-pc98, with the machine's own captures deciding where they disagree (docs/probes/PORTS.TXT's read-only sweep and docs/probes/RDBACK.TXT:162, the one write-then-read round): the power-up image is the measured bank A, the latch selects bank A (the twelve data ports 0x841E-0x8F1E) or bank B (12..23, off by +12 and not +16), a write stores the guest byte verbatim, 0x841E's bits 1 and 0 included in both banks (the Xe10 stores them: docs/probes/XE10Z-XE10.TXT:208-211, bank A 7C -> 7E and 7D, bank B 8F -> 8D and 8E, where NP2kai withholds them; FAIL-FIRST, the core withheld bit 1) - the bench used to MASK each register's PARITY bit too and was inverted here on the machine's evidence, because the firmware writes those bits (BANK3@0xFA219's parity idiom; the ITF's `or al,0x80 / out 0x8E1E`) and the ITF's repair installs its factory tables BANK4@0x480C/0x4818 through these ports, so a frozen parity bit composed its 0x7F over the machine image 0xBF into an EVEN 0xFF - the SET THE SOFTWARE DIP-SWITCH loop (the Xa7C9W capture holds the factory 0x7F at that cell; NP2kai's write mask is OVERRULED by the machine, same adjudication as the read side; the falsifier is probe2 /RDBACK at 0x8B1E/0x881E on the machine), a READ RETURNS THE STORED BYTE VERBATIM (the machine reads back the EVEN-parity 0x0C it wrote at 0x871E, `port=871E before=3E wrote=0C after=0C back=3E`, and qemu-pc98's pc98_sdip_read/pc98_sdip_write store and return it verbatim too, so the capture and qemu agree against NP2kai's odd-parity recompute on read), the authentic ITF's own read-back verifier passes, the MACHINE-RESET strobe RE-SEEDS the store to the power-up image (without a reset path a platform reset leaves whatever the previous run had written, which brings the software-DIP message back; a guest SETUP change therefore does not survive a platform reset any more, where the machine's own battery-backed store would keep it - the deliberate divergence item 94 records), and the ports outside 0x841E-0x8F1E answer open bus. NP2kai's FOUR divergent behaviours on this store -- it treats 0x871E/0x8E1E as PC-9801 control ports, it recomputes an odd-parity bit on every read, it refuses a write whose byte is not already odd-parity, and it masks each register's parity bit on write -- are printed as WAIVED lines rather than asserted, because the machine's own capture reads 0x871E=0x3E and 0x8E1E=0x49 as stored bytes and returns an even-parity write verbatim, which resolves all four for this RTL. And the ITF's own REPAIR is replayed byte for byte (BANK4@0xFC7B2-0xFC8DE: the factory tables out the ports, 0x8B's bit 6 saved and ORed back) and must leave an image the ITF's own predicate accepts and that a second repair cannot move - FAIL-FIRST, because with the old frozen parity bits the install composed EVEN 0x5C/0xFF at 0x881E/0x8B1E over the machine image and the message loop formed.
 
 module tb_pc9821_pram;
   reg clk = 0;
@@ -113,6 +113,7 @@ module tb_pc9821_pram;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -223,15 +224,15 @@ module tb_pc9821_pram;
   // pc98_sdip_write). The straps are not "parity bits": they are the machine's
   // non-writable bits, supplied by the power-up image, and they are already part
   // of the stored byte.
-  // The one bit a write does not own: 0x84's bit 1 (NP2kai's unmeasured strap). Every
-  // other bit - the per-register PARITY bits (bit 0 of 0x84, bit 4 of 0x85, bit 7 of the
-  // rest) included - is stored as written, because the firmware writes those bits
+  // A write owns every bit of index 0 (0x841E): the Xe10 stores bits 1 and 0 there in both
+  // banks (docs/probes/XE10Z-XE10.TXT:208-211); NP2kai withholds them and the core used to
+  // withhold bit 1. Every other bit - the per-register PARITY bits (bit 0 of 0x84, bit 4 of
+  // 0x85, bit 7 of the rest) included - is stored as written, because the firmware writes those bits
   // (BANK3@0xFA219's parity idiom; the ITF's `or al,0x80 / out 0x8E1E`) and the ITF's
   // repair installs its factory tables through these ports (BANK4@0xFC7E4). See the
   // RTL's sdip_data_mask comment for the adjudication and its falsifier.
   function automatic [7:0] data_mask(input [3:0] idx);
     case (idx)
-      4'h0: data_mask = 8'hFD;
       // Bank A 0x851E stores its bit 4 alone; the write's other bits go to port 0x31 (the
       // Xe10: docs/probes/XE10CFG-XE10-CFGWR.TXT `RT 851E was=02 wrote=12 got=12 p31=12`, and
       // 0x851E reads 02 after the ITF's E3 merge, XE10CFG-XE10-CFG0.TXT).
@@ -362,19 +363,32 @@ module tb_pc9821_pram;
     // Select bank B with 0xC0 and confirm the SAME port reads the OTHER cell.
     write_byte(16'h8F1F, 8'hC0);
     read_byte(16'h841E, 8'h8F);           // bank B index 0 power-up seed
-    // Bank B index 0 starts at 0x8F, so its withheld bit 1 (the one unmeasured strap,
-    // NP2kai io/dipsw.c) is SET and is kept; every other bit - bit 0, the register's
-    // parity bit, included - is stored as written. A write of 0x0C therefore stores
-    // 0x0E. Storing the written byte is what the machine does at the one measured port
+    // Bank B index 0 starts at 0x8F; EVERY bit is stored as written, bit 1 (which NP2kai
+    // io/dipsw.c withholds) and bit 0, the register's parity bit, included. A write of
+    // 0x0C therefore stores 0x0C. Storing the written byte is what the machine does here
+    // (docs/probes/XE10Z-XE10.TXT:210-211) and at 0x871E
     // (`wrote=0C after=0C`, docs/probes/RDBACK.TXT:162) and what the ITF's own repair
     // REQUIRES (BANK4@0xFC7E4 installs BANK4@0x480C/0x4818 through these ports; the
     // Xa7C9W capture holds the factory byte 0x7F at the cell a frozen parity bit
     // trapped). NP2kai masks the parity bit on write and was overruled by the machine.
     write_byte(16'h841E, 8'h0C);
-    read_byte(16'h841E, 8'h0E);
+    read_byte(16'h841E, 8'h0C);
+    // The Xe10's own rows, each from the bank's power-up byte (docs/probes/XE10Z-XE10.TXT:208-211):
+    // bank B `was=8F wrote=8D got=8D`, `was=8F wrote=8E got=8E`.
+    write_byte(16'h841E, 8'h8D);
+    read_byte(16'h841E, 8'h8D);
+    write_byte(16'h841E, 8'h8E);
+    read_byte(16'h841E, 8'h8E);
+    write_byte(16'h841E, 8'h0C);
     // Bank A kept its own byte: the two banks are separate cells.
     write_byte(16'h8F1F, 8'h80);
     read_byte(16'h841E, 8'h04);
+    // Bank A's rows: `was=7C wrote=7E got=7E`, `was=7C wrote=7D got=7D` (bit 1 and bit 0).
+    write_byte(16'h841E, 8'h7E);
+    read_byte(16'h841E, 8'h7E);
+    write_byte(16'h841E, 8'h7D);
+    read_byte(16'h841E, 8'h7D);
+    write_byte(16'h841E, 8'h04);
     // Bank B occupies indices 12..23. Concatenating the bank bit onto the index
     // gave index+16, so bank B's 0x8C1E..0x8F1E addressed sdip[24..27], OUTSIDE
     // the 24-byte store; those four ports must answer bank B's 8..11 (0x80).
@@ -396,7 +410,7 @@ module tb_pc9821_pram;
     begin
       reg [7:0] want, base;
       for (integer n = 0; n < 12; n = n + 1) begin
-        // Start from the power-up byte so 0x84's withheld bit 1 stays the machine's.
+        // Start from the power-up byte so bank A 0x851E's withheld bits stay the machine's.
         base = machine_banka[n];
         // Everything the write owns is stored as written (index 1: bit 4 only).
         want = (base & ~data_mask(n[3:0])) | (8'h55 & data_mask(n[3:0]));
@@ -505,9 +519,11 @@ module tb_pc9821_pram;
           // now asserts the DATA bits (each register's parity bit masked off); the
           // parity-bit write itself is the recorded divergence, and its falsifier is
           // `probe2 /RDBACK` at 0x8B1E/0x881E on the machine (if the machine masks the
-          // bit there, the RTL change reverses).
-          if ((rtl_read & (n == 0 ? 8'hFE : (n == 1 ? 8'hEF : 8'h7F))) !==
-              (np     & (n == 0 ? 8'hFE : (n == 1 ? 8'hEF : 8'h7F)))) begin
+          // bit there, the RTL change reverses). 0x84's bit 1, which NP2kai withholds
+          // too, is a second recorded divergence, MEASURED: the Xe10 stores it
+          // (docs/probes/XE10Z-XE10.TXT:208-211), so 0x84 compares bits 7:2.
+          if ((rtl_read & (n == 0 ? 8'hFC : (n == 1 ? 8'hEF : 8'h7F))) !==
+              (np     & (n == 0 ? 8'hFC : (n == 1 ? 8'hEF : 8'h7F)))) begin
             $display("FAIL NP2kai differential 0x%02x1E write=%02x rtl=%02x np2kai_stored=%02x (data bits)",
                      8'h84 + n, v == 0 ? 8'h54 : (v == 1 ? 8'h7F : 8'h01), rtl_read, np);
             errors = errors + 1;

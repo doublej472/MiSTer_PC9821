@@ -41,5 +41,5 @@ foreach {tag pat} {
   close $fh
   puts "regs $tag: $k"
 }
-catch {exec gzip -f $out/cells.txt}
+if {[catch {exec gzip -f $out/cells.txt} err]} { puts "hdmi_place: gzip cells.txt failed: $err" }
 project_close

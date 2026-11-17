@@ -1,8 +1,8 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_SPRITE: TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:647,1061), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1169 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the two observed symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
-// TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:647,1061), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1169 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the two observed symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
+// TB_PC9821_SPRITE: TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:801 `.cpu_addr({z_addr, 2'b00})` and pc9821_system.sv:1235 `.cpu_addr({z_addr, 2'b00})`), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1169 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the two observed symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
+// TH01's sprite ERASE / BACKGROUND-RESTORE makes the machine's own bus shape, and the EGC's byte LANE comes from the CPU's BYTE ENABLES, not from the address: z486's address output is 30 bits ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address as {z_addr, 2'b00} (pc9821_system.sv:801 `.cpu_addr({z_addr, 2'b00})` and pc9821_system.sv:1235 `.cpu_addr({z_addr, 2'b00})`), so every access arrives DWORD-ALIGNED with the operand's byte lane carried only in cpu_be (z486_pkg.sv:1169 calc_be). Deriving the EGC's lane from the address's low bits yields 0 for every access, so a 16-bit unit on lanes 2:3 (be = 1100) became a BYTE unit on lane 0: one byte written, the two intended bytes untouched. The two sequences asserted here are the two observed symptoms, driven exactly as th01 uses them (op_01.cpp:257 whiteline_put, th01/hardware/egcrect.cpp:3 egc_copy_rect_1_to_0_16, th01/formats/ptn_main.cpp ptn_put_quarter_8 / ptn_sloppy_unput_quarter_16): the whiteline row is drawn with the GRCG RMW and restored from page 1 by the EGC (the row must come back as the background, not stay white), and a 16x16 sprite is erased, drawn and restored (the footprint must come back as the background, not stay black). Every restoring chunk is a 16-bit access at an even plane offset, so HALF of them (offset & 3 == 2) are on lanes 2:3; the bench checks all 80 bytes of the row in all four planes, and both lane-0:1 and lane-2:3 sprite positions.
 
 module tb_pc9821_sprite;
   // pc9821_memory_subsystem's pack-download hold: no boot-ROM download under the OSD Reset
@@ -132,7 +132,7 @@ module tb_pc9821_sprite;
 
   reg        scan_enable = 0;
 
-  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0;   // OSD I/O timing Fast
+  reg        gvram_timing_xe10 = 0, gvram_gfx_scan_on = 0, gvram_crt31k = 0;   // OSD I/O timing Fast
   reg        scan_line_tick = 0;
   reg        scan_page = 0;
   reg        scan_walk_page = 0;
@@ -170,6 +170,7 @@ module tb_pc9821_sprite;
   wire [31:0] dma_snoop_addr;   // the DMA byte's post-map name, for the external snoop (unused here)
   wire [31:0] dma_addr_nx = 32'd0;   // the DMAC's address load (idle here)
   wire        dma_load    = 1'b0;
+  wire        dma_load_write = 1'b0;   // the loading byte's direction (pc9821_dmac mem_load_we)
   wire [31:0] dma_din  = 32'd0;
   wire [3:0]  dma_be   = 4'd0;
   wire        dma_valid = 1'b0;
@@ -191,10 +192,10 @@ module tb_pc9821_sprite;
   wire        gdc_mem_ready;
   wire        gdc_mem_resp;
   wire [31:0] gdc_mem_rdata;
-  // The PEGC view select (pc9821_crtc's mode2_256col, pegc-scope-REPORT.md 4 row 2):
+  // The PEGC view select (pc9821_crtc's mode2_256col):
   // 0 = the pre-PEGC decode this bench drives; the PEGC arms are tb_pc9821_memmap_ref's.
   wire pegc_256 = 1'b0;
-  // PEGC packed scanout's fourth-requester port (pegc-scope-REPORT.md 4 rows 3/6),
+  // PEGC packed scanout's fourth-requester port,
   // tied off: pegc_256 is 0 here, so the packed fetch never runs and the fourth
   // SDRAM requester stays idle (tb_pc9821_pegc_scanout drives this path).
   wire pegc_256e = 1'b0;
@@ -387,7 +388,7 @@ module tb_pc9821_sprite;
   // ==== CPU ACCESS, in the shape z486 actually puts on the bus ====
   // THE ADDRESS'S LOW TWO BITS ARE NOT ON THE BUS. z486's address output is 30 bits
   // ("Physical address [31:2]", z486.sv:78) and pc9821_system forms the guest address
-  // as {z_addr, 2'b00} (pc9821_system.sv:647,1061), so every access arrives
+  // as {z_addr, 2'b00} (pc9821_system.sv:801 `.cpu_addr({z_addr, 2'b00})` and pc9821_system.sv:1235 `.cpu_addr({z_addr, 2'b00})`), so every access arrives
   // dword-aligned with the operand's byte lane carried ONLY by cpu_be -- z486's
   // calc_be(op_size, addr_low) (z486_pkg.sv:1169) and shift_write_data() (:1193).
   // This is the shape the subsystem and pc9821_gvram see on the machine; it is the

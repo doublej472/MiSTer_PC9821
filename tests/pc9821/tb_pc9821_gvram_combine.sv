@@ -1,20 +1,14 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_GVRAM_COMBINE: measures, against the REAL src/memory/sdram.v controller and the REAL pc9821_gvram, what the word-keyed write-combining buffer does to the plane-write path - the FOUR-PLANE column write in the two shapes the sprite put/restore makes (four single-lane stores to one column, and four 16-bit stores to one column, both of which the buffer merges into ONE word read and ONE full-word write-back) against the single-plane DWORD-store fill (four fresh words per store, which the buffer cannot merge) - and it ASSERTS the coalesced shapes issue no more than three backend transactions per four plane bytes where a read-modify-write needed four, and that the coalesced bytes reach the SCANOUT rather than only the buffer. It also pins the read-after-write forwarding: a plane-window read of a column whose four planes were coalesced returns all four bytes. Phase E is TH01's CROSS-PAGE restore shape - four plane lanes per column re-written over the same words with the access page (0xA6) toggled per column-visit - and asserts that neither the restored bytes nor the scanout's view of either page changes while the write-backs do: the access-page change is not a fetch boundary, so it must not flush the buffer the coalescer exists for.
+// TB_PC9821_GVRAM_COMBINE: the plane-write shapes a sprite put/restore makes, on the REAL pc9821_gvram datapath over its block-RAM array (no SDRAM controller is in this bench): four single-lane stores to one column, four 16-bit stores to one column and the single-plane DWORD fill each complete stores through the plane windows (their plane-byte rate is MEASURED and REPORTED, not asserted - the plain client's own accept cadence bounds it); a line painted one plane lane at a time reads back through the plane windows with all four bytes of each of its first 8 columns (read-after-write) and reaches the SCANOUT's line fetch as the four plane bytes of every one of its 80 columns; and Phase E, TH01's CROSS-PAGE restore shape - four plane lanes per column re-written over the same words with the access page (0xA6) toggled per column-visit, eight rounds - leaves the restored bytes of both pages and the scanout's view of both pages exactly what was written. Phases A-C fail only if a shape completes no store at all; no backend transaction is counted (there is no backend).
 //
-// WHY THIS EXISTS. A one-lane store on a DQM-less MiSTer
-// module is a ~13 clk_sys read-modify-write, and the measured plane-window stream is
-// 3.8 MB/s. The mergeable object is the WORD - one column's four planes - because the four
-// bytes of a CPU dword are four CONSECUTIVE plane offsets and so four DIFFERENT words. The
-// buffer this bench measures holds up to eight words, merges a store into a held word with no
-// SDRAM access, and writes each held word back ONCE as a full word (be = 4'hF).
-//
-// WHAT THE END-TO-END NUMBER IS AND IS NOT. The four plane stores are four separate CPU
-// accesses through the plane windows, and the plain path's own client FSM costs ~10 clk_sys
-// per access whether the backend is fast or slow, so the four-plane rate is bounded by the
-// CLIENT, not by SDRAM: the backend evidence (transactions per column) is the coalescer's
-// claim, and the MB/s is reported next to it, not instead of it.
+// HISTORY. This bench was written to measure a word-keyed write-combining buffer in front of an
+// SDRAM-backed GVRAM (a one-lane store on a DQM-less module was a ~13 clk_sys read-modify-write)
+// and to assert its backend transaction counts. The GVRAM moved to block RAM and the buffer was
+// removed, so each store is its own access and there is nothing to count; what survives, and is
+// asserted, is the data path in the shapes the buffer was built for (phases D and E) and that each
+// measurement phase still completes stores. The MB/s figures are reported only.
 
 `default_nettype none
 
@@ -95,11 +89,6 @@ module tb_pc9821_gvram_combine;
     end
   endtask
 
-  // The GVRAM is block RAM now, so there is no backend transaction to count: the
-  // counters the cost columns print stay at zero and the columns read as clk_sys alone.
-  integer cb_txns = 0;
-  integer cb_fullwr = 0;
-
   // ---- The plane writers, on the client port ----
   // drv_mode 0: four SINGLE-LANE stores to one column   (1 plane byte/access, 1 word/column)
   // drv_mode 1: four 16-BIT stores to one column        (2 plane bytes/access, 2 words/column)
@@ -142,9 +131,9 @@ module tb_pc9821_gvram_combine;
 
   // ==== CHECKS ====
   real    multi_mbps, word_mbps, fill_mbps;
-  integer a_cyc0, a_cyc1, a_st0, a_st1, a_tx0, a_tx1, a_win;
-  integer w_cyc0, w_cyc1, w_st0, w_st1, w_tx0, w_tx1, w_win;
-  integer b_cyc0, b_cyc1, b_st0, b_st1, b_tx0, b_tx1, b_win;
+  integer a_cyc0, a_cyc1, a_st0, a_st1, a_win;
+  integer w_cyc0, w_cyc1, w_st0, w_st1, w_win;
+  integer b_cyc0, b_cyc1, b_st0, b_st1, b_win;
 
   task automatic read_line_col(input sel, input [6:0] a, output [31:0] v);
     begin
@@ -244,19 +233,18 @@ module tb_pc9821_gvram_combine;
   endtask
 
   task automatic run_phase(input [1:0] mode, input integer win,
-                           output integer st, output integer txn, output real mbps,
+                           output integer st, output real mbps,
                            input real bytes_per_store);
-    integer c0, s0, x0;
+    integer c0, s0;
     begin
       drv_mode = mode;
       drv_plane = 2'd0;
       drv_col = 15'd0;
       drv_on = 1'b1;
       repeat (4000) @(posedge clk);
-      c0 = cyc; s0 = drv_stores; x0 = cb_txns;
+      c0 = cyc; s0 = drv_stores;
       repeat (win) @(posedge clk);
       st  = drv_stores - s0;
-      txn = cb_txns - x0;
       mbps = (st * bytes_per_store) * (FREQ / 1_000_000.0) / (cyc - c0);
       drv_on = 1'b0;
       // The driver owns the port while dron is up, so its last `cpu_valid`/`cpu_write` would
@@ -281,29 +269,22 @@ module tb_pc9821_gvram_combine;
     // ---- PHASE A: FOUR single-lane stores to one column. Four stores carry four plane bytes into
     // ONE word, and the buffer must merge them: the read-modify-write the same four bytes cost
     // before the combiner existed is FOUR backend transactions.
-    run_phase(2'd0, 40000, a_st1, a_tx1, multi_mbps, 1.0);
+    run_phase(2'd0, 40000, a_st1, multi_mbps, 1.0);
     $display("NOTE gvram_combine: A four single-lane stores to ONE column: %0d stores in %0d clk_sys = %0.1f MB/s of plane bytes",
              a_st1, 40000, multi_mbps);
-    $display("NOTE gvram_combine:   coalesced: %0d backend transaction(s) for %0d store(s) = %0.2f per FOUR-plane column (a read-modify-write per byte was 4.00)",
-             a_tx1, a_st1, (a_st1 == 0) ? 0.0 : (a_tx1 * 4.0) / a_st1);
 
     // ---- PHASE B: FOUR 16-bit stores to one column. The same coalescing, two plane bytes per
     // access - the shape th01/formats/ptn_main.cpp's ptn_put_quarter_8 actually issues.
-    run_phase(2'd1, 40000, w_st1, w_tx1, word_mbps, 2.0);
+    run_phase(2'd1, 40000, w_st1, word_mbps, 2.0);
     $display("NOTE gvram_combine: B four 16-bit stores to one column: %0d stores in %0d clk_sys = %0.1f MB/s of plane bytes",
              w_st1, 40000, word_mbps);
-    $display("NOTE gvram_combine:   coalesced: %0d backend transaction(s) for %0d store(s) = %0.2f per FOUR-plane column",
-             w_tx1, w_st1, (w_st1 == 0) ? 0.0 : (w_tx1 * 4.0) / w_st1);
 
     // ---- PHASE C: the single-plane DWORD fill. Four FRESH words per store, which the combiner
     // cannot merge: it must read each word for its other three planes and write it back once.
     // This is the measured baseline shape (3.8 MB/s, 52 clk_sys/store, 4 transactions).
-    run_phase(2'd2, 40000, b_st1, b_tx1, fill_mbps, 4.0);
+    run_phase(2'd2, 40000, b_st1, fill_mbps, 4.0);
     $display("NOTE gvram_combine: C single-plane DWORD fill (four fresh words per store): %0d stores in %0d clk_sys = %0.1f MB/s of plane bytes",
              b_st1, 40000, fill_mbps);
-    $display("NOTE gvram_combine:   uncoalesced: %0d backend transaction(s) for %0d store(s) = %0.1f per store",
-             b_tx1, b_st1, (b_st1 == 0) ? 0.0 : (b_tx1 * 1.0) / b_st1);
-    $display("NOTE gvram_combine: an earlier measurement read 3.8 MB/s / 52 clk_sys / 4 txns for the fill, and predicted a column coalescing four planes into one read + one write");
 
     // ---- PHASE D: the coalesced bytes must reach the SCANOUT, and a plane read must forward ----
     // Paint a line at 0x2000 through the four plane windows, ONE lane at a time, so every column
@@ -352,33 +333,21 @@ module tb_pc9821_gvram_combine;
     end
     scan_enable = 1'b0;
 
-    // ---- PHASE E: the CROSS-PAGE restore, and the access page's flush ----
+    // ---- PHASE E: the CROSS-PAGE restore ----
     // TH01's sprite background-restore walks its columns with the access page (port 0xA6) toggled
-    // between the source and destination halves, so a restore over a region comes round the same
-    // words repeatedly. Nothing about that pattern changes what the SCANOUT reads - it reads
-    // scan_page, and a flush exists only to put the CPU's dirty words in front of that fetch - and
-    // the buffer's tag already carries the page ({page, plane_offset}), so a held word from one
-    // access page cannot be confused with the same offset in the other. Flushing on the access-page
-    // change therefore writes back what was just written, at every chunk boundary, and stalls the
-    // client behind the write-backs (`cc_ready` is gated on `!flush_pending`).
-    //
-    // The shape below is that pattern in miniature: TWO columns x two pages, each column's four
-    // plane lanes in four stores, and the four-word set re-visited eight times with the page
-    // toggling once per column-visit. Two columns keep the working set inside the eight slots -
-    // each page's first miss prefetches four consecutive words, so both pages' runs fit and no
-    // later visit evicts anything - which is what makes the WRITE-BACK count the flush's own and
-    // not an eviction artefact. It asserts the restored bytes and the scanout's view of both
-    // pages, and it counts the FULL-WORD WRITE-BACKS the phase issued: with the access-page flush
-    // term every column-visit's dirt is written back at the page change (one write-back per
-    // visit), and it must not be.
+    // between the source and destination halves, so a restore comes round the same words
+    // repeatedly with the page changing under it. The shape below is that pattern in miniature:
+    // TWO columns x two pages, each column's four plane lanes in four stores, the four-word set
+    // re-visited eight times with the page toggling once per column-visit. It asserts the restored
+    // bytes of both pages through the plain path and the scanout's view of both pages. (When the
+    // GVRAM sat behind a write-combining buffer this phase also counted the buffer's write-backs on
+    // a page change; that instrument went with the buffer.)
     begin : phase_e
-      integer e_round, e_col, e_pg, e_lane, e_visits, e_txn0, e_txn1, e_wr0, e_wr1;
+      integer e_round, e_col, e_pg, e_lane, e_visits;
       reg [7:0]  e_got, e_want, e_base;
       reg [31:0] e_exp;
       e_visits = 0;
       repeat (200) @(posedge clk);
-      e_txn0 = cb_txns;
-      e_wr0  = cb_fullwr;
       for (e_round = 0; e_round < 8; e_round = e_round + 1) begin
         for (e_col = 0; e_col < 2; e_col = e_col + 1) begin
           for (e_pg = 0; e_pg < 2; e_pg = e_pg + 1) begin
@@ -390,9 +359,8 @@ module tb_pc9821_gvram_combine;
         end
       end
 
-      // The scanout's view of both pages. The line tick is the boundary that MAKES the dirty words
-      // visible to it (`fetch_req` is gated on `!wcb_flushing`), so this is the part that must not
-      // change: a page change alone is not a fetch boundary.
+      // The scanout's view of both pages: a line fetch of each page after the restore must read
+      // exactly the bytes written to that page.
       for (e_pg = 0; e_pg < 2; e_pg = e_pg + 1) begin
         scan_enable = 1'b0;
         repeat (4) @(posedge clk);          // the scanout off is what clears line_ready
@@ -419,10 +387,8 @@ module tb_pc9821_gvram_combine;
         scan_enable = 1'b0;
       end
 
-      e_txn1 = cb_txns;
-      e_wr1  = cb_fullwr;
-      $display("NOTE gvram_combine: E cross-page restore: %0d column-visits (2 columns x 2 access pages x 8 rounds) in %0d backend transaction(s), %0d of them full-word write-backs",
-               e_visits, e_txn1 - e_txn0, e_wr1 - e_wr0);
+      $display("NOTE gvram_combine: E cross-page restore: %0d column-visits (2 columns x 2 access pages x 8 rounds)",
+               e_visits);
 
       // The restored bytes, page by page, through the plain path.
       for (e_pg = 0; e_pg < 2; e_pg = e_pg + 1) begin
@@ -449,8 +415,7 @@ module tb_pc9821_gvram_combine;
 
     $display("NOTE gvram_combine: coalesced column / uncoalesced fill plane-byte rate = %0.2fx (four plane stores to one word vs four fresh words per store)",
              multi_mbps / ((fill_mbps == 0.0) ? 1.0 : fill_mbps));
-    $display("NOTE gvram_combine: full-word write-backs to the controller: %0d", cb_fullwr);
-    $display("NOTE gvram_combine: the four-plane rate is bounded by the plain client's own accept cadence (C_IDLE + C_RESP for a write: the write arm has no C_RESP2/C_HOLD), not by SDRAM: the backend transaction count above is the coalescer's claim");
+    $display("NOTE gvram_combine: the four-plane rate is bounded by the plain client's own accept cadence (C_IDLE + C_RESP for a write: the write arm has no C_RESP2/C_HOLD), not by the GVRAM");
 
     // ==== VERDICT ====
     if (errors == 0) begin

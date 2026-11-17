@@ -5,7 +5,8 @@
 # the TOOL a hardware session reads them with. It builds tb_pc9821_dbg_cpu and tb_pc9821_dbg_system
 # (tools/bench.py), runs each with +DBGLOG_OUT so it writes what its UART captured, and requires
 # decode_dbglog.py to frame every byte (0 outside records) and to find the records the stimulus
-# drove: the CPU bench's trace (16 entries, then a stage-2 trigger), snoop events, samples and a
+# drove: the CPU bench's trace (16 entries, then a stage-2 trigger), snoop events (and the
+# snoop replay flagging exactly the read beats at written dwords), samples and a
 # LOST record; the system bench's ALIVE record, samples and the forced OUT 0xA4, the floppy
 # log's ALIVE and its forced FDC write, and the I/O trigger that write fires.
 #
@@ -49,15 +50,25 @@ need("cpu.0: trace entries are consecutive instructions", all(ent[i + 1]["eip"] 
 need("cpu.0: snoop writes and read beats present", c[0x30] > 0 and c[0x31] > 0)
 need("cpu.0: a collision LOST record", c[0x32] == 1)
 need("cpu.0: samples present", c[0x20] > 50)
-rc = d.parse(open(f"{out}/cpu.0", "rb").read())
-# the snoop replay finds no read that disagrees with the writes (the bench's reads return a hash
-# of the address, never a written value, so only dwords no write defined are read)
+# the snoop replay (--snoop-check) flags exactly the in-window read beats at dwords a write defined:
+# the bench's read beats return a hash of the address, never the written value, so each such beat
+# disagrees with the replayed writes. From the stimulus (tb_pc9821_dbg_cpu.sv section 2): FA10,
+# FA14 (byte 1 only, be=2), FA20, FA24 (be=2), FA40, FA50 (the 0xFA00 + 4k loop) and FBFC
+# (0xCAFE0001); FA80, FB00, FB10 and FBF8 were never written, and FC00 is past the window.
+import contextlib, io, re
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    mism = d.cmd_snoop_check(a, [], 1000)
+flagged = sorted({int(m, 16) for m in re.findall(r"^MISMATCH .*? read ([0-9A-F]{8})=", buf.getvalue(), re.M)})
+want = [0x2FA10, 0x2FA14, 0x2FA20, 0x2FA24, 0x2FA40, 0x2FA50, 0x2FBFC]
+need(f"cpu.0: the snoop replay flags {mism} read beat(s) at {[f'{x:05X}' for x in flagged]}, "
+     f"want the 7 at written dwords {[f'{x:05X}' for x in want]}", mism == 7 and flagged == want)
 # DUT D: the overrun
 dd = load("cpu.3")
 cd = count(dd)
 need("cpu.3: events delivered and LOST records, samples after skips", cd[0x30] > 0 and cd[0x32] > 0 and cd[0x21] > 0)
-need("cpu.3: LOST totals plus delivered events = the 972 events driven",
-     sum(r.f["lost"] for r in dd.recs if r.type == 0x32) + cd[0x30] + cd[0x31] == 972)
+need("cpu.3: LOST totals plus delivered events = the 3972 events driven (900 writes and 72 read beats while stalled, 3000 writes while draining)",
+     sum(r.f["lost"] for r in dd.recs if r.type == 0x32) + cd[0x30] + cd[0x31] == 3972)
 # the system bench: the display log, a sampler and the forced OUT
 s = load("system.bin")
 cs = count(s)

@@ -20,8 +20,9 @@
  *                              mode flip-flop's memory-switch write enable (0x68 <- 0x0D,
  *                              store, 0x68 <- 0x0C, as the ITF's own init does at
  *                              BANK4@0x5BA0-0x5BDC) and prints was -> now. This write is
- *                              MEANT to persist (dip-audit P6: does SETUP's "memory switch:
- *                              keep" keep it across a reboot); `XE10CFG /MSW5 01` puts the
+ *                              MEANT to persist (the question: does SETUP's "memory switch:
+ *                              keep" keep it across a reboot; the -P6* captures in
+ *                              docs/probes/README.md are its runs); `XE10CFG /MSW5 01` puts the
  *                              measured value back (docs/probes/MEMSW.TXT cells 48 05 0C 00 01
  *                              00 00 81), and SETUP's "initialise" rewrites every cell at the
  *                              next POST (BANK4@0x5B9A-0x5BE0).
@@ -703,7 +704,7 @@ msw5_write:
     mov     dx, 0x0068
     in      al, dx
     mov     [m68_a], al
-    mov     al, 0x0D            /* memory-switch write enable (dip-audit P6) */
+    mov     al, 0x0D            /* memory-switch write enable */
     out     dx, al
     call    io_delay
     in      al, dx
@@ -893,7 +894,7 @@ s_wrote:    .ascii " wrote=$"
 s_now:      .ascii " now=$"
 s_m68w:     .ascii "MODE68 before/after-0D/after-0C $"
 
-/* The read-only port set: item 172 (1), dip-audit P4 (0x7FDB/0x7FDD/0x7FDF), item 36
+/* The read-only port set: item 172 (1), item 99 (0x7FDB/0x7FDD/0x7FDF), item 36
  * (0x66/0x67/0x6C/0x6D), item 21 (0x0432/0x0433), 0x68, and the 0x9A8 width. 0xA46C is
  * the -86 FIFO data port; XE10T /AUDIT read it on the machine (docs/probes/XE10T-XE10-AUDIT.TXT
  * BA46C v=EE v2=EE), so a read with the FIFO idle is known to be harmless. */

@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// The graphics GDC's area rewrite (the draw engine's unit count held as leng-1 in 16 bits, the cursor advance summed in one adder) is cycle-for-cycle identical to the pre-rewrite module (pc9821_gdc2_ref.sv, the module as of 3b134fe4, with the two changes the figure engine makes to what the WRITE slice shows mirrored into it: CSRW's third byte loads the mask with its dAD one-hot, and 0xA0 status bit 3 reads DRAWING): over several hundred thousand clk_sys cycles of random well-formed and cut-short command streams on the 0xA0/0xA2 ports (SCROLL/TEXTW, SYNC, CSRW, CSRFORM, VECTW in all eight directions, MASK, every WRITE width and ROP, START/STOP, CSRR/LPEN read-back, and random command bytes except the figure engine's ZOOM/GCHRD/FIGD, which the pre-rewrite module never had) against a randomly-stalling GVRAM visit port, with a raster that wraps and snapshots, and one 65,536-unit draw, on streams that leave each WRITE job to finish before their next byte (the shipped module queues a byte written during a walk in its command FIFO, which the pre-rewrite module did not have; tb_pc9821_gdc2_write CHECK 8 pins that order), every output (io_dout, the scanout address and enables, the draw engine's visit port) matches on every cycle.
+// The graphics GDC's area rewrite (the draw engine's unit count held as leng-1 in 16 bits, the cursor advance summed in one adder) is cycle-for-cycle identical to the pre-rewrite module (pc9821_gdc2_ref.sv, the module as of 3b134fe4, with the two changes the figure engine makes to what the WRITE slice shows mirrored into it: CSRW's third byte loads the mask with its dAD one-hot, and 0xA0 status bit 3 reads DRAWING; and the Xe10 GDCADDR/GDCWDAT/GDPIT WRITE-walk fixes mirrored too: the x step rotates the mask, the walk carries into the plane bits and on into EAD[18:16], the y step is the PITCH byte at 2.5 MHz and half of it under DGD, DC is 14 bits, and a WDAT re-arms for each further data word): over several hundred thousand clk_sys cycles of random well-formed and cut-short command streams on the 0xA0/0xA2 ports (SCROLL/TEXTW, SYNC, CSRW, CSRFORM, VECTW in all eight directions, MASK, every WRITE width and ROP, START/STOP, CSRR/LPEN read-back, and random command bytes except the figure engine's ZOOM/GCHRD/FIGD, which the pre-rewrite module never had) against a randomly-stalling GVRAM visit port, with a raster that wraps and snapshots, and one maximum-length draw (DC bytes FF FF: 16,384 units, the 14-bit DC's boundary, with DGD set), on streams that leave each WRITE job to finish before their next byte (the shipped module queues a byte written during a walk in its command FIFO, which the pre-rewrite module did not have; tb_pc9821_gdc2_write CHECK 8 pins that order), every output (io_dout, the scanout address and enables, the draw engine's visit port) matches on every cycle.
 
 // ==== DUT ====
 // pc9821_gdc2 vs pc9821_gdc2_ref, same inputs. The reference is the pre-change text, not a model of
@@ -192,7 +192,8 @@ module tb_pc9821_gdc2_equiv;
       rst_n = 0; repeat (4) @(posedge clk); rst_n = 1;
       repeat (150000) @(posedge clk);
     end
-    // one maximum-length draw (VECTW length 0xFFFF = 65,536 units): the 16-bit count's boundary
+    // one maximum-length draw (VECTW DC bytes FF FF): DC is 14 bits and bit 6 is DGD, so 16,384
+    // units at half the PITCH - the count's boundary
     long_mode = 1;
     rst_n = 0; repeat (4) @(posedge clk); rst_n = 1;
     q_n = 0; q_i = 0;

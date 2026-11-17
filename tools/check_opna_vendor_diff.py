@@ -2,7 +2,7 @@
 """Hold src/opna/ and its pinned upstream together (the vendor-diff gate).
 
 src/opna/LICENSE-SCOPE.md pins PC88_MiSTer `rtl/sound/` at one commit and says every file of
-jt12/, jt49/ and jtopna.v is a byte-identical copy of it except TEN files with documented, marked
+jt12/, jt49/ and jtopna.v is a byte-identical copy of it except THIRTEEN files with documented, marked
 local changes.  This check proves that against a real checkout:
 
   * the files that differ from upstream are EXACTLY the recorded list (LOCAL_FILES below);
@@ -40,6 +40,9 @@ LOCAL_FILES = frozenset({
     "jt12/hdl/adpcm/jt08_adpcm_cnt.v",
     "jt12/hdl/jt12_timers.v",
     "jt12/hdl/jt12_mmr.v",
+    "jt12/hdl/jt12_div.v",      # LOCAL PATCH: the clock enables on the rising edge (timing)
+    "jt12/hdl/jt12_rst.v",      # LOCAL PATCH: the ADPCM reset synchroniser on the rising edge (timing)
+    "jt12/hdl/adpcm/jt08_adpcm_drvB.v",  # LOCAL FIX: BRDY stays clear after a flag reset (XE10T /OPNA2)
     "jt49/hdl/jt49.v",
 })
 VENDORED = ("jt12", "jt49", "jtopna.v")      # the vendored trees; the rest of src/opna is ours
@@ -89,7 +92,7 @@ def compare(up_base: Path, tree: Path, doc: Path, local: frozenset[str]) -> list
         if f not in scope and Path(f).name not in scope:
             problems.append(f"UNDOCUMENTED: {f} is not named in {doc.name}")
     n = len(local)
-    words = {10: "ten"}
+    words = {10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen"}
     if f"**{words.get(n, n)}** files" not in scope:
         problems.append(f"{doc.name} does not state the recorded count ({words.get(n, n)}) of modified files")
     return problems

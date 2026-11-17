@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_OPNA_KIT1: the real Xe10's kit-1 OPNA rows hold on the core's 86-board glue, driven with the probes' own port sequences: READMAP, with 0xA460 bit 0 closed every base-bank select 0x00-0x2F and 0xFF read through 0x18A answers the machine's byte (0x00-0x0D 00, 0x0E/0x0F FF, 0x10-0x1F FF, 0x20-0x2F the select except 0x22 and 0x29 FF, 0xFF the chip ID 01; docs/probes/KIT1-XE10-YM29.TXT READMAP), RD29, 0x29 reads FF just before and just after each write of 1F, 03, 02, 01, 00 and 1F (`RD29 v29=.. pre=FF post=FF`), so a read-modify-write of 0x29 starts from FF as on the machine; STATUS3, with Timer B running (0x26 = 00, 0x27 = 2A) and its flag set, 0x110 <- 1F clears the flag in 0x188 and 0x18C at once and holds it clear for 100 ms while the timer keeps overflowing, and 0x110 <- 00 brings it back only at the next overflow (docs/probes/KIT1-XE10-OPNA.TXT `S3 A0 ... 018C=0A`, `B0 ... 018C=00`, `B1 0188=00 018C=00`, `C0 0188=00 018C=08`, `C1 0188=0A 018C=0A`; the 0x188 rows compared without bit 3, a +0 status bit the core does not model, item 155). Kit 2's rows (docs/probes/KIT2-XE10-OPNA4.TXT, XE10T /OPNA4): RMAP_C, with the extension closed every select 0x30-0xFE echoes except 0xB4-0xB7, which read FF; RMAP_O, with it open every select 0x10-0xFE echoes (0x00-0x0D 00, 0x0E/0x0F FF, 0xFF 01); S3A, the STATUS3 rows with Timer A running (NA = 0, 0x27 = 15): 0x110 <- 1F clears Timer A's flag in 0x188 and 0x18C at once and holds it clear for 100 ms, and 0x110 <- 00 brings it back only at the next overflow (`S3A_A0 st188=29 st18C=09`, `B0 st188=88 st18C=80`, `B1 00 00`, `C0 st188=80 st18C=88`, `C1 st188=09 st18C=09`; 0x188 compared without bits 7, 5 and 3, 0x18C without BUSY).
+// TB_PC9821_OPNA_KIT1: the real Xe10's kit-1 OPNA rows hold on the core's 86-board glue, driven with the probes' own port sequences: READMAP, with 0xA460 bit 0 closed every base-bank select 0x00-0x2F and 0xFF read through 0x18A answers the machine's byte (0x00-0x0D 00, 0x0E/0x0F FF, 0x10-0x1F FF, 0x20-0x2F the select except 0x22 and 0x29 FF, 0xFF the chip ID 01; docs/probes/KIT1-XE10-YM29.TXT READMAP), RD29, 0x29 reads FF just before and just after each write of 1F, 03, 02, 01, 00 and 1F (`RD29 v29=.. pre=FF post=FF`), so a read-modify-write of 0x29 starts from FF as on the machine; STATUS3, with Timer B running (0x26 = 00, 0x27 = 2A) and its flag set, 0x110 <- 1F clears the flag in 0x188 and 0x18C at once and holds it clear for 100 ms while the timer keeps overflowing, and 0x110 <- 00 brings it back only at the next overflow (docs/probes/KIT1-XE10-OPNA.TXT `S3 A0 ... 018C=0A`, `B0 ... 018C=00`, `B1 0188=00 018C=00`, `C0 0188=00 018C=08`, `C1 0188=0A 018C=0A`; the 0x188 rows compared without bit 3, a +0 status bit the core does not model, item 155). Kit 2's rows (docs/probes/KIT2-XE10-OPNA4.TXT, XE10T /OPNA4): RMAP_C, with the extension closed every select 0x30-0xFE echoes except 0xB4-0xB7, which read FF; RMAP_O, with it open every select 0x10-0xFE echoes (0x00-0x0D 00, 0x0E/0x0F FF, 0xFF 01); RD29_O, with it open 0x29 reads 29 just before and just after each write of 1F, 03, 02, 01, 00 and 1F (`RD29_O v29=.. pre=29 post=29`); S3A, the STATUS3 rows with Timer A running (NA = 0, 0x27 = 15): 0x110 <- 1F clears Timer A's flag in 0x188 and 0x18C at once and holds it clear for 100 ms, and 0x110 <- 00 brings it back only at the next overflow (`S3A_A0 st188=29 st18C=09`, `B0 st188=88 st18C=80`, `B1 00 00`, `C0 st188=80 st18C=88`, `C1 st188=09 st18C=09`; 0x188 compared without bits 7, 5 and 3, 0x18C without BUSY).
 //
 // WHERE THE EXPECTED VALUES COME FROM: the real Xe10's kit-1 runs, never this core.
 //   * READMAP and RD29: docs/probes/KIT1-XE10-YM29.TXT (YM29 v3, tools/hwprobe/ym29/ym29.s
@@ -210,6 +210,19 @@ module tb_pc9821_opna_kit1;
     end
     opn_get(8'hFF, v);
     if (v !== 8'h01) fail("RMAP_O: rFF is not the machine's chip ID 01");
+
+    // ---- RD29_O: the same 0x29 read-write-read with the extension open (kit 2) ----
+    // docs/probes/KIT2-XE10-OPNA4.TXT `RD29_O v29=1F pre=29 post=29` and the five rows
+    // after it: with 0xA460 bit 0 set, 0x29 reads the select byte 29 before and after each
+    // write of 1F, 03, 02, 01, 00 and 1F - the open map's echo, not the closed map's FF.
+    for (i = 0; i < 6; i = i + 1) begin
+      opn_get(8'h29, pre);
+      opn_put(8'h29, v29[i]);
+      opn_get(8'h29, post);
+      $display("  RD29_O v29=%02x pre=%02x post=%02x (machine 29 29)", v29[i], pre, post);
+      if (pre !== 8'h29)  fail("RD29_O: 0x29 before the write is not the machine's 29 (extension open)");
+      if (post !== 8'h29) fail("RD29_O: 0x29 after the write is not the machine's 29 (extension open)");
+    end
 
     // ---- STATUS3: the 0x110 mask with Timer B's flag held set ----
     ext_put(8'h10, 8'h00);

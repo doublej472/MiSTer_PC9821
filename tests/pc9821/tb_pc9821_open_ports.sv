@@ -34,7 +34,7 @@
 // about timing, and nothing here distinguishes a decoded port from an undecoded
 // one. The accounting side (unmapped_reads, last_unmapped_port) is asserted by
 // tb_pc9821_iobus.sv's own open-bus case, and the access-time contract is
-// tb_pc9821_io_wait.sv's.
+// tb_pc9821_io_class.sv's and tb_pc9821_io_5f.sv's.
 
 `timescale 1ns/1ps
 
@@ -158,6 +158,7 @@ module tb_pc9821_open_ports;
   wire [31:0] dma_mem_addr, dma_mem_din;
   wire [31:0] dma_mem_addr_nx;   // the address dma_mem_addr loads next, and its load cycle (unused here)
   wire        dma_mem_load;
+  wire        dma_mem_load_we;   // pc9821_iobus dma_mem_load_we (the loading byte is a store); unread here
   wire [3:0]  dma_mem_be;
   wire        dma_mem_req, dma_mem_we;
   wire        dma_mem_ready = 1'b0;
@@ -190,9 +191,9 @@ module tb_pc9821_open_ports;
   // One byte read of `port`, using the request idiom the bus actually takes:
   // cpu_addr carries the BASE address with the low two bits forced to zero and
   // the LANE rides in cpu_be. Passing the port number as the address instead
-  // makes the bus answer a different port - tb_pc9821_io_wait.sv's first version
-  // measured nothing that way, which is why the idiom is spelled out here too.
-  // The task takes NO arguments, mirroring tb_pc9821_io_wait.sv's measure_port,
+  // makes the bus answer a different port - the first version of the old
+  // per-class wait bench measured nothing that way, which is why the idiom is spelled out here too.
+  // The task takes NO arguments, mirroring tb_pc9821_io_class.sv's measure_port,
   // which is the pattern in this tree that verilator accepts. The port goes in
   // through `probe_port` and the byte comes back in `got`.
   reg [15:0] probe_port = 16'h0000;

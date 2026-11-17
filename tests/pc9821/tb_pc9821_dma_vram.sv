@@ -339,7 +339,8 @@ module tb_pc9821_dma_vram;
     mem[24'h000700] = 8'hE1; mem[24'h000701] = 8'hE2;
     setup_ch(2'd0, 24'h000700, 16'h0001, 8'h18);  // type 10, autoinitialize
     got_n = 0;
-    run(4'b0001, 120);
+    // 12 bytes x the byte's 11 clk_sys (10 before T89's S_SEL state, when this window was 120).
+    run(4'b0001, 132);
     check(got_n >= 4 && (got_n % 2) == 0,
           $sformatf("A1: autoinitialize moved %0d bytes, expected whole two-byte blocks (>=4)", got_n));
     check(got[0] === 8'hE1 && got[1] === 8'hE2 && got[2] === 8'hE1,
@@ -355,7 +356,8 @@ module tb_pc9821_dma_vram;
     mem[24'h0AFFFF] = 8'hD1; mem[24'h0B0000] = 8'hD2;
     setup_ch(2'd0, 24'h0AFFFF, 16'h0001, 8'h18);  // mem->I/O, autoinitialize
     got_n = 0;
-    run(4'b0001, 160);
+    // 16 bytes x the byte's 11 clk_sys (10 before T89's S_SEL state, when this window was 160).
+    run(4'b0001, 176);
     check(got_n >= 4 && (got_n % 2) == 0,
           $sformatf("A2: the banked autoinitialize moved %0d bytes, expected whole two-byte blocks", got_n));
     check(got[0] === 8'hD1 && got[1] === 8'hD2 && got[2] === 8'hD1 && got[3] === 8'hD2,
@@ -423,7 +425,7 @@ module tb_pc9821_dma_vram;
     cold();
     reg_wr(5'd20, 8'h0C);   // MAME dmapg8_w: field = (data>>2)&3 = 3, channel 0
     reg_rd(5'd20);
-    check(rd_val === 8'h03, $sformatf("P2: 0x29 readback after mode 3 is %02x, the RTL returns ch_bound[0] = 3", rd_val));
+    check(rd_val === 8'h03, $sformatf("P2: 0x29 readback after mode 3 is %02x, channel 0's bound 3 in bits 1:0", rd_val));
     divergence("P2: 0x29's address-mode field is latched into ch_bound but never read by the engine, so modes 1 (increment the 20-bit nibble only) and 3 (increment the bank byte) and 0/2 (freeze it) all produce the same carry. MAME pc9801.cpp:1298/1324 applies it; NP2kai dmax86 ignores it and the RTL matches NP2kai.");
 
     // ---- V4: verify mode touches no memory and consumes a device byte ------------

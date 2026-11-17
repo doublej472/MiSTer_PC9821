@@ -335,19 +335,14 @@ def main():
     # BIOS tick only as a cross-check, so this asserts no absolute rate: it
     # checks that art/bio is CONSTANT across segments (the two counters track
     # the same clock) and reports the implied tick period for the reader.
-    ratios = [(s['idx'], s['art'] / s['bio']) for s in segs
-              if s.get('bio') and s.get('art')]
-    if args.no_pacing:
-        ratios = []
-        worst = max((abs(s['art'] / ARTIC_HZ - expected_s(s)), s['idx'])
-                    for s in segs if s['art'] is not None and expected_s(s))
-        print('pacing: SKIPPED (--no-pacing; the emulator fixture clock is a '
-              'model - worst segment %02X is %.3f s off its design)'
-              % (worst[1], worst[0]))
-        print('BIOS tick: SKIPPED (--no-pacing)')
-        return 1 if errors else 0
+    # --no-pacing skips only this check and the duration checks above: the failure list, the
+    # segment table and the --csv/--wav outputs below still run.
+    ratios = [] if args.no_pacing else [(s['idx'], s['art'] / s['bio']) for s in segs
+                                        if s.get('bio') and s.get('art')]
     bio_note = 'BIOS tick: not usable (a zero delta in this capture)'
-    if ratios and len(ratios) == len(segs):
+    if args.no_pacing:
+        bio_note = 'BIOS tick: SKIPPED (--no-pacing)'
+    elif ratios and len(ratios) == len(segs):
         vals = sorted(r[1] for r in ratios)
         med = vals[len(vals) // 2]
         spread = (vals[-1] - vals[0]) / med
@@ -385,17 +380,26 @@ def main():
                   (r[0], r[1], r[2], r[3], r[4], r[5], r[6]))
         print('%d segments, total %.1f s' % (len(rows), off / ARTIC_HZ))
         print(bio_note)
-        worst = max((abs(s['art'] / ARTIC_HZ - expected_s(s)), s['idx'])
-                    for s in segs if s['art'] is not None and expected_s(s))
-        print('pacing: worst segment is %02X, %.3f s off its designed hold+gap '
-              '(tolerance %.3f s)' % (worst[1], worst[0], args.dur_tol))
-        if errors:
-            print('\n%d CHECK FAILURE(S):' % len(errors))
-            for e in errors:
-                print('  ' + e)
+        worst = max(((abs(s['art'] / ARTIC_HZ - expected_s(s)), s['idx'])
+                     for s in segs if s['art'] is not None and expected_s(s)),
+                    default=None)
+        if worst is None:
+            print('pacing: no segment carries both an ARTIC delta and a designed duration')
+        elif args.no_pacing:
+            print('pacing: SKIPPED (--no-pacing; the emulator fixture clock is a '
+                  'model - worst segment %02X is %.3f s off its design)'
+                  % (worst[1], worst[0]))
         else:
-            print('\nall %d segments: header <-> write log <-> reference law agree'
-                  % len(rows))
+            print('pacing: worst segment is %02X, %.3f s off its designed hold+gap '
+                  '(tolerance %.3f s)' % (worst[1], worst[0], args.dur_tol))
+    # The failure list prints even with --quiet: an exit code alone does not say what failed.
+    if errors:
+        print('\n%d CHECK FAILURE(S):' % len(errors))
+        for e in errors:
+            print('  ' + e)
+    elif not args.quiet:
+        print('\nall %d segments: header <-> write log <-> reference law agree'
+              % len(rows))
 
     if args.csv:
         with open(args.csv, 'w') as f:

@@ -55,9 +55,10 @@ module pc9821_rom_loader #(
 
   // The three flags below deliberately survive reset, so they have no reset arm in the
   // clocked block - which leaves them undriven until the first download in a 4-state
-  // simulation, where they power up as X and propagate it to cpu_run/cpu_reset_n
-  // Power-on determinism comes from here instead, matching the
-  // persistent registers' `initial` blocks in pc9821_block_io.sv:341 and pc9821_iobus.sv:1318.
+  // simulation, where they power up as X and propagate it to cpu_run/cpu_reset_n.
+  // Power-on determinism comes from here instead, matching the persistent registers'
+  // `initial` blocks in storage/pc9821_block_io.sv (the `mounted`/`capacity` block after
+  // `readonly_r`) and core/pc9821_iobus.sv (`msw_init`).
   initial begin
     rom_ready    = 1'b0;
     load_error   = 1'b0;

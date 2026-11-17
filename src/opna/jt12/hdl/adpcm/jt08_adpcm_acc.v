@@ -44,7 +44,8 @@
 // rather than shifting an 18-bit sign-extended copy. The two are the same arithmetic,
 // but the 18-bit-variable-shift form is miscompiled where it is bound into the
 // accumulator (Verilator 5.052 emits a value near the 18-bit rail for any non-zero
-// shift, which makes the SUM louder as the volume is lowered); see the r13/257 report.
+// shift, which makes the SUM louder as the volume is lowered; measured, the report is not
+// kept in the tree).
 // Keep the shift on the narrow signed signal.
 
 module jt08_adpcm_acc(
@@ -79,7 +80,7 @@ reg  signed [15:0] acc;
 always @(posedge clk or negedge rst_n)
     if( !rst_n ) begin
         acc     <= 16'd0;
-        pcm_out <= 20'd0;   // reset state hygiene (was unreset upstream, r13/265 note)
+        pcm_out <= 20'd0;   // reset state hygiene (was unreset upstream)
     end else if(cen) begin
         // Each round replaces the sum on the first drum slot (the die's `rss_cnt2 == 0` reload)
         // and adds the other five; the 16-bit signed add WRAPS, as the die's does.

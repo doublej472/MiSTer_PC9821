@@ -1,6 +1,8 @@
 /* a20map.s - how the PC-98 A20 mask treats PHYSICAL addresses above 1 MiB.
  *
- * THE QUESTION. With the gate MASKED (OUT 0xF6,0x03; read 0xF6 bit 0 = 1), does the
+ * THE QUESTION. With the gate MASKED (OUT 0xF6,0x03; read back in 0xF2 bit 0 = 1: the Xe10
+ * reads F2=FE open and FF masked while F6 reads 5E in both states, docs/probes/A20MAP-XE10.TXT
+ * `initial A20: F6=5E F2=FE` / `after masking: F6=5E F2=FF`), does the
  * hardware clear ONLY physical address bit 20 (a 486 A20M# pin: 0x200000 stays 0x200000,
  * 0x100000 -> 0x000000, 0x300000 -> 0x200000), or does it wrap EVERYTHING into the first
  * MiB (0x200000 -> 0x000000, the way NP2kai models it)? And does the answer change above
@@ -227,7 +229,8 @@ so_skip:
     mov     al, 1
     call    measure_pass
 
-    test    byte ptr [f6_init], 1       /* A20 back as found: bit 0 = 1 was masked */
+    test    byte ptr [f2_init], 1       /* A20 back as found: F2 bit 0 = 1 was masked (F6 does
+                                           not change with the mask on the Xe10, see the header) */
     jz      fin_open
     call    a20_mask
     jmp     fin_a20
@@ -372,7 +375,9 @@ ra_store:
     jb      ra_next
     ret
 
-a20_open:                               /* the ITF's own enable sequence (probe3 /H16) */
+a20_open:                               /* 0xF2 <- any opens A20, 0xF6 <- 0x02 releases the mask
+                                           (NP2kai cpuio_of2/cpuio_of6; pc9821_iobus.sv's
+                                           HX_00F2/HX_00F6 write decode) */
     push    ax
     push    dx
     xor     al, al
@@ -396,7 +401,8 @@ a20_mask:
     ret
 
 /* Flat 4 GiB descriptor into FS and GS, then back to real mode. 0x66 on LGDT: a 16-bit
- * LGDT loads only 24 base bits and CS*16+offset can exceed them (probe3 /H16). */
+ * LGDT loads only 24 base bits (Intel 80386 Programmer's Reference Manual, LGDT) and
+ * CS*16+offset can exceed them. */
 unreal_on:
     xor     eax, eax
     mov     ax, cs

@@ -2,7 +2,7 @@
 `include "sdram_sync_bench.svh"   // the SDRAM bench clock: the controller on clk_sys
 
 // ==== WHAT THIS PROVES ====
-// TB_PC9821_PEGC_STORE_RATE: the PEGC posted store buffer sustains the packed-store rates the DOOM path needs (trade-candidates T21 / T23): a back-to-back byte store stream (rep movsb's shape: one byte lane per dword address, walking the lanes) and a dword store stream, driven through the real pc9821_pegc_storebuf onto the REAL sdram_sync_bridge (the controller on clk_sys at the shipping 90 MHz) at the deployed settings (ADQM=1, FAST_GRADE=0) and the REAL src/memory/sdram.v against sdram_chip_model on port 0 while the packed scanout line fetch runs on port 3 the whole time, sustain at least 25 MB/s of byte stores and at least the 14.44 MB/s frame need in dword stores into SDRAM (the 55 MB/s dword budget, set for the 50/100 split-clock build, is REPORTED since the SDRAM moved onto clk_sys - trade T36), the byte stream's four neighbouring bytes of a dword collapse into ONE backend write (write transactions <= bytes/4 + 4), the dword stream drains through port 0's TWO-WORD write (din0_hi real data, read back byte-exact), a read issued right behind a store sees the buffered bytes (drain-before-read), and dirty dwords never linger: the buffer reports empty within 2 us of the last store's accept and a scanout line fetched 4 us after stores that fill its first 64 bytes shows the new bytes (P2-6, the horizontal-stripe class). THE COLUMN STREAM IS ASSERTED NOW, not raised: one byte lane per step at stride 640 (the shape a packed-mode game draws its frame with) must sustain at least the RATE MODEL's own floor for the shape - the GD gather-session cost 7+s clk_sdram per session of s byte stores (the G3 7+2s less one per store for the read the mask eliminates) over the stream's run distribution 4,3,3,3,3 stores per 2 KiB SDRAM row, its effective band minus the model allowance, at the CONTROLLER's clock (21.30 MB/s at this bench's 90 MHz same-clock controller and GATHER_K=4, measured 29.92; 11.83 at the 50 MHz clock this bench ran before, 23.66 at the old 100 MHz clk_sdram) and never below the 14.44 MB/s a 640x400 frame at 56.42 Hz needs, because same-row stores now drain as GATHER sessions (up to GATHER_K entries per request: one ACT, NO half reads, one masked half write per touched half with the byte mask on A[12:11], one precharge) instead of one controller read-modify-write per byte; FAIL-FIRST: this leg measured 5.8-6.7 MB/s before G3 and 5.87 MB/s on HEAD's un-posted path. THE SCANOUT'S OWN CAPACITY IS MEASURED THROUGHOUT: with either stream running the packed line fetch still completes inside its raster line (worst 594-604 of the 3627-clk_sys line) and the fourth requester keeps feeding the line buffer at 149-173 response beats per line against 160 owed (at least 128 asserted), so the store stream does NOT starve the packed scanout (an earlier form that gated each burst on the buffer being empty measured 2 beats per line - a held line on the display - and is NOT shipped). RESIDENCY BOUND (FAIL-FIRST): a SKIPPED-TO-SAME-DWORD byte stream driven at one store per clk_sys holds one PARTIAL entry for the whole stream under a window that ages only on idle cycles, so the backend received 0 writes in six hold windows and the fetched line read the replaced dword; every entry's window now ages from its OWN allocation (the 1aacf864 fix generalised) and the same run measures 5 writes in 540 clk_sys, six windows (>= 4 = the bound at HOLD_CYCLES 90, 1 us). FROZEN PRESENTATION (the pair-drain payload freeze): with the backend's accept held off while a pair drain is presented, a store to the pair's SECOND dword posts as its own entry - the presented payload mem_din_hi included does not move, and the store's bytes reach the backend in a later request (pre-fix the merge landed in the presented word and vanished at the drain's pop). FULL-BUFFER COMBINE (FAIL-FIRST): in_ready is count < DEPTH alone, so a store that could only combine into a FULL buffer waits for one drain and then merges (8 backend writes, not 9); the pre-change buffer accepted it at once.
+// TB_PC9821_PEGC_STORE_RATE: the PEGC posted store buffer sustains the packed-store rates the DOOM path needs (trade-candidates T21 / T23): a back-to-back byte store stream (rep movsb's shape: one byte lane per dword address, walking the lanes) and a dword store stream, driven through the real pc9821_pegc_storebuf onto the REAL sdram_sync_bridge (the controller on clk_sys at the shipping 90 MHz) at the deployed settings (ADQM=1, FAST_GRADE=0) and the REAL src/memory/sdram.v against sdram_chip_model on port 0 while the packed scanout line fetch runs on port 3 the whole time, sustain at least 25 MB/s of byte stores and at least the 14.44 MB/s frame need in dword stores into SDRAM (the 55 MB/s dword budget, set for the 50/100 split-clock build, is REPORTED since the SDRAM moved onto clk_sys - trade T36), the byte stream's four neighbouring bytes of a dword collapse into ONE backend write (write transactions <= bytes/4 + 4), the dword stream drains through port 0's TWO-WORD write (din0_hi real data, read back byte-exact), a read issued right behind a store sees the buffered bytes (drain-before-read), and dirty dwords never linger: the buffer reports empty within 2 us of the last store's accept and a scanout line fetched 4 us after stores that fill its first 64 bytes shows the new bytes (P2-6, the horizontal-stripe class). THE COLUMN STREAM IS ASSERTED NOW, not raised: one byte lane per step at stride 640 (the shape a packed-mode game draws its frame with) must sustain at least the RATE MODEL's own floor for the shape - the GD gather-session cost 7+s clk_sdram per session of s byte stores (the G3 7+2s less one per store for the read the mask eliminates) over the stream's run distribution 4,3,3,3,3 stores per 2 KiB SDRAM row, its effective band minus the model allowance, at the CONTROLLER's clock (21.30 MB/s at this bench's 90 MHz same-clock controller and GATHER_K=4, measured 29.92; 11.83 at the 50 MHz clock this bench ran before, 23.66 at the old 100 MHz clk_sdram) and never below the 14.44 MB/s a 640x400 frame at 56.42 Hz needs, because same-row stores now drain as GATHER sessions (up to GATHER_K entries per request: one ACT, NO half reads, one masked half write per touched half with the byte mask on A[12:11], one precharge) instead of one controller read-modify-write per byte; FAIL-FIRST: this leg measured 5.8-6.7 MB/s before G3 and 5.87 MB/s on HEAD's un-posted path. Every column-stream byte reads back in lane 0 of its dword with the dword's other three (seeded) lanes intact, and a lone byte store over a dword, or into zeros, leaves the other three lanes as they were (a byte store writes one byte: NP2kai's vramex is a byte array). THE SCANOUT'S OWN CAPACITY IS MEASURED THROUGHOUT: with either stream running the packed line fetch still completes inside its raster line (worst 594-604 of the 3627-clk_sys line) and the fourth requester keeps feeding the line buffer at 149-173 response beats per line against 160 owed (at least 128 asserted), so the store stream does NOT starve the packed scanout (an earlier form that gated each burst on the buffer being empty measured 2 beats per line - a held line on the display - and is NOT shipped). RESIDENCY BOUND (FAIL-FIRST): a SKIPPED-TO-SAME-DWORD byte stream driven at one store per clk_sys holds one PARTIAL entry for the whole stream under a window that ages only on idle cycles, so the backend received 0 writes in six hold windows and the fetched line read the replaced dword; every entry's window now ages from its OWN allocation (the 1aacf864 fix generalised) and the same run measures 5 writes in 540 clk_sys, six windows (>= 4 = the bound at HOLD_CYCLES 90, 1 us). FROZEN PRESENTATION (the pair-drain payload freeze): with the backend's accept held off while a pair drain is presented, a store to the pair's SECOND dword posts as its own entry - the presented payload mem_din_hi included does not move, and the store's bytes reach the backend in a later request (pre-fix the merge landed in the presented word and vanished at the drain's pop). FULL-BUFFER COMBINE (FAIL-FIRST): in_ready is count < DEPTH alone, so a store that could only combine into a FULL buffer waits for one drain and then merges (8 backend writes, not 9); the pre-change buffer accepted it at once.
 
 // ==== DUT ====
 // The store path is the seam: CPU-side valid/ready store and read ports of this bench
@@ -121,7 +121,7 @@ module tb_pc9821_pegc_store_rate;
   // ==== THE STORE-PATH SEAM ====
   // The fixed form: the CPU-side request goes through pc9821_pegc_storebuf - the
   // posted, byte-combining, pair-draining buffer pc9821_memory_subsystem puts on
-  // the PEGC route (trade-candidates T21; pegc-perf-REPORT.md P0-1). Every check
+  // the PEGC route (docs/trade-candidates.md T21). Every check
   // below is written against the CPU-side ports only, so the same run measured
   // both this form and HEAD's direct (un-posted) path.
   pc9821_pegc_storebuf #(.HOLD_CYCLES(HOLD_CLK), .GATHER_K(GK)) storebuf (
@@ -562,12 +562,20 @@ module tb_pc9821_pegc_store_rate;
       cpu_read32(PEG_BASE + 32'h0007_0000 + 32'(k * 16), rd);
       $display("MICRO byte-after-dword %0d: read %08x want 112233e0%s", k, rd,
                (rd === 32'h1122_33E0) ? "" : "   <-- CORRUPTED");
+      if (rd !== 32'h1122_33E0) begin
+        $display("FAIL a lone byte store did not preserve the dword's other three lanes");
+        errors = errors + 1;
+      end
     end
     // ... and a byte store into an address that was never dword-written (zeros).
     store_sync(PEG_BASE + 32'h0007_1000, 32'h0000_00E0, 4'h1);
     cpu_read32(PEG_BASE + 32'h0007_1000, rd);
     $display("MICRO byte into zeros: read %08x want 000000e0%s", rd,
              (rd === 32'h0000_00E0) ? "" : "   <-- CORRUPTED");
+    if (rd !== 32'h0000_00E0) begin
+      $display("FAIL a lone byte store into zeros did not read back 000000e0");
+      errors = errors + 1;
+    end
 
     // ---- the background scanout: preload its 16 lines plus the coherence line ----
     for (k = 0; k < 17; k = k + 1) begin
@@ -680,6 +688,12 @@ module tb_pc9821_pegc_store_rate;
     // took ~44 ms. The drain now groups same-row stores into GATHER sessions, and
     // the rate is ASSERTED at the rate model's own floor for this shape (at the controller's
     // clock) and at the frame need.
+    // Seed every column dword first (untimed), so the read-back below can see a gather-drained
+    // byte that lands in the wrong lane or clobbers its dword's other three.
+    for (k = 0; k < COLUMN_BYTES; k = k + 1)
+      cpu_store32(COL_BASE + 32'(k * 640), 32'hC3C2_C100 | 32'(k[7:0]), 4'hF);
+    s_valid = 1'b0;
+    repeat (200 * SYS_MHZ) @(posedge clk_sys);
     w0 = wr_accepts;
     column_stream(COLUMN_BYTES, col_mbps);
     w1 = wr_accepts;
@@ -696,6 +710,18 @@ module tb_pc9821_pegc_store_rate;
       $display("FAIL column rate %.2f MB/s under the packed frame's %.2f MB/s need",
                col_mbps, FRAME_NEED_MBPS);
       errors = errors + 1;
+    end
+
+    // ---- read-back: every column-stream byte (lane 0 of its dword) is the stored pattern
+    // byte and the dword's other three lanes keep the seed (a byte store writes ONE byte:
+    // NP2kai's vramex is a byte array) ----
+    for (k = 0; k < COLUMN_BYTES; k = k + 1) begin
+      cpu_read32(COL_BASE + 32'(k * 640), rd);
+      if (rd !== {24'hC3C2C1, pat_byte(COL_BASE + 32'(k * 640))}) begin
+        $display("FAIL column-stream read-back at %08x: got %08x want %08x",
+                 COL_BASE + 32'(k * 640), rd, {24'hC3C2C1, pat_byte(COL_BASE + 32'(k * 640))});
+        errors = errors + 1;
+      end
     end
 
     // ---- read-back: the streams' bytes are byte-exact in SDRAM (dword-aligned
